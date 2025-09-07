@@ -156,7 +156,7 @@ class EnrichmentService:
                         # Calculate estimated travel time (assuming 40 km/h average speed in city)
                         # Formula: time_minutes = (distance_km * 60) / speed_kmh
                         if distance_m:
-                            travel_time_min = round((distance_m / 1000) * 60 / 40)
+                            travel_time_min = max(1, round((distance_m / 1000) * 60 / 40))
                             infrastructure_extended[f'{amenity}_travel_time'] = travel_time_min
                         
                         # Get average rating for services
@@ -177,7 +177,7 @@ class EnrichmentService:
                         # Calculate estimated travel time
                         if distance_m:
                             # Use higher speed for transport hubs (50 km/h average)
-                            travel_time_min = round((distance_m / 1000) * 60 / 50)
+                            travel_time_min = max(1, round((distance_m / 1000) * 60 / 50))
                             transport[f'{amenity}_travel_time'] = travel_time_min
                     else:
                         transport[f'{amenity}_available'] = False
@@ -191,7 +191,7 @@ class EnrichmentService:
                                 transport[f'{amenity}_available'] = True
                                 if distance_m:
                                     # Highway speed for long distance (80 km/h average)
-                                    travel_time_min = round((distance_m / 1000) * 60 / 80)
+                                    travel_time_min = max(1, round((distance_m / 1000) * 60 / 80))
                                     transport[f'{amenity}_travel_time'] = travel_time_min
             
             land.infrastructure_extended = infrastructure_extended
