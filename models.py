@@ -15,6 +15,7 @@ class Land(db.Model):
     municipality = db.Column(db.String(255))
     location_lat = db.Column(db.Numeric(10, 7))
     location_lon = db.Column(db.Numeric(10, 7))
+    location_accuracy = db.Column(db.String(20), default='unknown')  # 'precise', 'approximate', 'unknown'
     land_type = db.Column(db.String(20), CheckConstraint("land_type IN ('developed', 'buildable')"))
     description = db.Column(db.Text)
     
@@ -46,6 +47,7 @@ class Land(db.Model):
             'municipality': self.municipality,
             'location_lat': float(self.location_lat) if self.location_lat else None,
             'location_lon': float(self.location_lon) if self.location_lon else None,
+            'location_accuracy': self.location_accuracy,
             'land_type': self.land_type,
             'description': self.description,
             'infrastructure_basic': self.infrastructure_basic or {},
