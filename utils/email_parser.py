@@ -284,10 +284,15 @@ class EmailParser:
         
         # Try to extract meaningful content
         if 'Hello' in description:
-            # Extract from "Hello" to end of property details
-            hello_match = re.search(r'Hello.*?(?:Contact|See all listings|Does this listing)', description, re.DOTALL)
+            # Extract from "Hello" to end of property details - be more specific about end markers
+            hello_match = re.search(r'Hello.*?(?:Contact us|See all listings from|From Your searches|With the idealista app)', description, re.DOTALL)
             if hello_match:
                 description = hello_match.group(0)
+            else:
+                # If no clear end marker found, take all text after "Hello" but limit length
+                hello_start = description.find('Hello')
+                if hello_start >= 0:
+                    description = description[hello_start:]
         
         # Clean up common Idealista footer text
         description = re.sub(r'Does this listing match.*', '', description, flags=re.IGNORECASE)
