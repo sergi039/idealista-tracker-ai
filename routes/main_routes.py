@@ -69,7 +69,7 @@ def lands():
             lands=lands,
             municipalities=municipalities,
             current_filters={
-                'sort': sort_by,
+                'sort_by': sort_by,
                 'order': sort_order,
                 'land_type': land_type_filter,
                 'municipality': municipality_filter,

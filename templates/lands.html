@@ -13,7 +13,7 @@
             </h1>
             
             <div>
-                <a href="{{ url_for('main.export_csv', sort=current_filters.sort, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" class="btn btn-success">
+                <a href="{{ url_for('main.export_csv', sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" class="btn btn-success">
                     <i class="fas fa-download me-1"></i>Export CSV
                 </a>
             </div>
@@ -70,16 +70,16 @@
                             <label for="sort" class="form-label">Sort By</label>
                             <div class="input-group">
                                 <select class="form-select" id="sort" name="sort">
-                                    <option value="score_total" {{ 'selected' if current_filters.sort == 'score_total' }}>
+                                    <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
                                         Score Total
                                     </option>
-                                    <option value="price" {{ 'selected' if current_filters.sort == 'price' }}>
+                                    <option value="price" {{ 'selected' if current_filters.sort_by == 'price' }}>
                                         Price
                                     </option>
-                                    <option value="area" {{ 'selected' if current_filters.sort == 'area' }}>
+                                    <option value="area" {{ 'selected' if current_filters.sort_by == 'area' }}>
                                         Area
                                     </option>
-                                    <option value="created_at" {{ 'selected' if current_filters.sort == 'created_at' }}>
+                                    <option value="created_at" {{ 'selected' if current_filters.sort_by == 'created_at' }}>
                                         Date Added
                                     </option>
                                 </select>
@@ -113,10 +113,10 @@
                             <thead class="table-dark">
                                 <tr>
                                     <th>
-                                        <a href="{{ url_for('main.lands', sort='score_total', order='desc' if current_filters.sort == 'score_total' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" 
+                                        <a href="{{ url_for('main.lands', sort='score_total', order='desc' if current_filters.sort_by == 'score_total' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" 
                                            class="text-white text-decoration-none d-flex align-items-center">
                                             Score
-                                            {% if current_filters.sort == 'score_total' %}
+                                            {% if current_filters.sort_by == 'score_total' %}
                                                 <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
                                             {% else %}
                                                 <i class="fas fa-sort ms-1 opacity-50"></i>
@@ -125,10 +125,10 @@
                                     </th>
                                     <th>Title</th>
                                     <th>
-                                        <a href="{{ url_for('main.lands', sort='price', order='desc' if current_filters.sort == 'price' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" 
+                                        <a href="{{ url_for('main.lands', sort='price', order='desc' if current_filters.sort_by == 'price' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" 
                                            class="text-white text-decoration-none d-flex align-items-center">
                                             Price
-                                            {% if current_filters.sort == 'price' %}
+                                            {% if current_filters.sort_by == 'price' %}
                                                 <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
                                             {% else %}
                                                 <i class="fas fa-sort ms-1 opacity-50"></i>
@@ -136,10 +136,10 @@
                                         </a>
                                     </th>
                                     <th>
-                                        <a href="{{ url_for('main.lands', sort='area', order='desc' if current_filters.sort == 'area' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" 
+                                        <a href="{{ url_for('main.lands', sort='area', order='desc' if current_filters.sort_by == 'area' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" 
                                            class="text-white text-decoration-none d-flex align-items-center">
                                             Area
-                                            {% if current_filters.sort == 'area' %}
+                                            {% if current_filters.sort_by == 'area' %}
                                                 <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
                                             {% else %}
                                                 <i class="fas fa-sort ms-1 opacity-50"></i>
