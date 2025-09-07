@@ -65,23 +65,25 @@
                 </div>
 
                 <!-- Location -->
-                {% if land.municipality or (land.location_lat and land.location_lon) %}
+                {% if land.location_lat and land.location_lon %}
                     <div class="mb-4">
                         <strong>Location:</strong><br>
                         <i class="fas fa-map-marker-alt me-2"></i>
-                        {% if land.municipality %}
-                            {{ land.municipality }}
-                            <a href="https://www.google.com/maps/search/{{ land.municipality|urlencode }},+Spain" 
-                               target="_blank" class="btn btn-sm btn-outline-primary ms-2">
-                                <i class="fas fa-external-link-alt me-1"></i>View on Maps
-                            </a>
-                        {% elif land.location_lat and land.location_lon %}
-                            {{ "%.6f"|format(land.location_lat) }}, {{ "%.6f"|format(land.location_lon) }}
-                            <a href="https://www.google.com/maps/@{{ land.location_lat }},{{ land.location_lon }},15z" 
-                               target="_blank" class="btn btn-sm btn-outline-primary ms-2">
-                                <i class="fas fa-external-link-alt me-1"></i>View on Maps
-                            </a>
-                        {% endif %}
+                        {{ "%.6f"|format(land.location_lat) }}, {{ "%.6f"|format(land.location_lon) }}
+                        <a href="https://www.google.com/maps/search/?api=1&query={{ land.location_lat }},{{ land.location_lon }}" 
+                           target="_blank" class="btn btn-sm btn-outline-primary ms-2">
+                            <i class="fas fa-external-link-alt me-1"></i>View on Maps
+                        </a>
+                    </div>
+                {% elif land.municipality %}
+                    <div class="mb-4">
+                        <strong>Location:</strong><br>
+                        <i class="fas fa-map-marker-alt me-2"></i>
+                        {{ land.municipality }}
+                        <a href="https://www.google.com/maps/search/{{ land.municipality|urlencode }},+Spain" 
+                           target="_blank" class="btn btn-sm btn-outline-primary ms-2">
+                            <i class="fas fa-external-link-alt me-1"></i>View on Maps
+                        </a>
                     </div>
                 {% endif %}
 

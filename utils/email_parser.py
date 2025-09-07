@@ -207,13 +207,8 @@ class EmailParser:
         # Remove HTML comments
         description = re.sub(r'<!--.*?-->', '', description, flags=re.DOTALL)
         
-        # Extract text from specific patterns in Idealista emails
-        # Look for property details between common markers
-        property_match = re.search(r'(Land|Detached house|Terreno|Solar|Parcela).*?€.*?m[²2].*?Contact', description, re.DOTALL | re.IGNORECASE)
-        if property_match:
-            description = property_match.group(0)
-        
-        # Remove all HTML tags
+        # Remove all HTML tags including links
+        description = re.sub(r'<a\s+[^>]*href[^>]*>.*?</a>', '', description, flags=re.DOTALL | re.IGNORECASE)
         description = re.sub(r'<[^>]+>', ' ', description)
         
         # Decode HTML entities
