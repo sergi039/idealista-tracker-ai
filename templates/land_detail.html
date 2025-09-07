@@ -418,20 +418,13 @@
             <div class="card-body">
                 <div class="small">
                     <div class="mb-2">
-                        <strong>Legal Status:</strong><br>
-                        {{ land.legal_status or 'Unknown' }}
+                        <strong>Legal Status:</strong> {{ land.legal_status or 'Unknown' }}
                     </div>
                     <div class="mb-2">
-                        <strong>Added:</strong><br>
-                        {% if land.created_at %}
-                            {{ land.created_at.strftime('%B %d, %Y at %H:%M') }}
-                        {% else %}
-                            Unknown
-                        {% endif %}
+                        <strong>Added:</strong> {% if land.created_at %}{{ land.created_at.strftime('%B %d, %Y at %H:%M') }}{% else %}Unknown{% endif %}
                     </div>
                     <div>
-                        <strong>Email ID:</strong><br>
-                        <code>{{ land.source_email_id }}</code>
+                        <strong>Email ID:</strong> <code>{{ land.source_email_id }}</code>
                     </div>
                 </div>
             </div>
