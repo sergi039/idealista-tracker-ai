@@ -294,8 +294,8 @@ class EmailParser:
                 if hello_start >= 0:
                     description = description[hello_start:]
         
-        # Clean up common Idealista footer text
-        description = re.sub(r'Does this listing match.*', '', description, flags=re.IGNORECASE)
+        # Clean up common Idealista footer text - be more flexible with "Does this listing" patterns
+        description = re.sub(r'Does this listing.*', '', description, flags=re.IGNORECASE | re.DOTALL)
         description = re.sub(r'From Your searches.*', '', description, flags=re.IGNORECASE)
         description = re.sub(r'With the idealista app.*', '', description, flags=re.IGNORECASE)
         description = re.sub(r'If you.re no longer interested.*', '', description, flags=re.IGNORECASE)
