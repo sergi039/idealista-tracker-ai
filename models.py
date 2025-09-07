@@ -71,3 +71,20 @@ class ScoringCriteria(db.Model):
     
     def __repr__(self):
         return f'<ScoringCriteria {self.criteria_name}: {self.weight}>'
+
+class SyncHistory(db.Model):
+    __tablename__ = 'sync_history'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    sync_type = db.Column(db.String(20), nullable=False)  # 'full', 'incremental'
+    backend = db.Column(db.String(20), nullable=False)    # 'imap', 'gmail'
+    total_emails_found = db.Column(db.Integer, default=0)
+    new_properties_added = db.Column(db.Integer, default=0)
+    sync_duration = db.Column(db.Integer)  # Duration in seconds
+    status = db.Column(db.String(20), default='completed')  # 'completed', 'failed', 'partial'
+    error_message = db.Column(db.Text)
+    started_at = db.Column(db.DateTime, default=datetime.utcnow)
+    completed_at = db.Column(db.DateTime)
+    
+    def __repr__(self):
+        return f'<SyncHistory {self.sync_type} - {self.new_properties_added} properties>'
