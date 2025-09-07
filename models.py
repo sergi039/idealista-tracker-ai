@@ -30,6 +30,13 @@ class Land(db.Model):
     legal_status = db.Column(db.String(50))
     property_details = db.Column(db.Text)  # Full property description from Idealista
     score_total = db.Column(db.Numeric(5, 2))
+    
+    # Travel times by car (in minutes)
+    travel_time_oviedo = db.Column(db.Integer)  # Time to Oviedo in minutes
+    travel_time_gijon = db.Column(db.Integer)   # Time to Gijon in minutes
+    travel_time_nearest_beach = db.Column(db.Integer)  # Time to nearest beach in minutes
+    nearest_beach_name = db.Column(db.String(255))     # Name of nearest beach
+    
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     def __repr__(self):
@@ -58,6 +65,10 @@ class Land(db.Model):
             'services_quality': self.services_quality or {},
             'legal_status': self.legal_status,
             'score_total': float(self.score_total) if self.score_total else None,
+            'travel_time_oviedo': self.travel_time_oviedo,
+            'travel_time_gijon': self.travel_time_gijon,
+            'travel_time_nearest_beach': self.travel_time_nearest_beach,
+            'nearest_beach_name': self.nearest_beach_name,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
 
