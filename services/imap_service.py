@@ -190,7 +190,18 @@ class IMAPService:
                             'Resumen semanal',
                             'Update your preferences',
                             'Actualiza tus preferencias',
-                            'Respuesta de'  # Skip user responses/replies
+                            'Respuesta de',  # Skip user responses/replies
+                            'Price change',  # Skip price change notifications
+                            'Cambio de precio',
+                            'detached house',  # Skip house listings
+                            'casa adosada',
+                            'vivienda',
+                            'chalet',
+                            'piso',
+                            'apartamento',
+                            'ático',
+                            'dúplex',
+                            'Bilbao homes'
                         ]
                         
                         if any(skip_text in subject for skip_text in skip_subjects):
