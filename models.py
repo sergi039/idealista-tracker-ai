@@ -43,6 +43,12 @@ class Land(db.Model):
     travel_time_hospital = db.Column(db.Integer)    # Time to nearest hospital
     travel_time_police = db.Column(db.Integer)      # Time to nearest police station
     
+    # Priority infrastructure distances (in kilometers)
+    distance_airport = db.Column(db.Integer)        # Distance to nearest airport in km
+    distance_train_station = db.Column(db.Integer)  # Distance to nearest train station in km
+    distance_hospital = db.Column(db.Integer)       # Distance to nearest hospital in km
+    distance_police = db.Column(db.Integer)         # Distance to nearest police station in km
+    
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     def __repr__(self):
