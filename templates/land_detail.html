@@ -200,18 +200,59 @@
                 </div>
                 <div class="card-body">
                     {% for key, value in land.infrastructure_extended.items() %}
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span class="small">{{ key.replace('_', ' ').title() }}</span>
-                            {% if value is sameas true %}
-                                <i class="fas fa-check-circle text-success"></i>
-                            {% elif value is sameas false %}
-                                <i class="fas fa-times-circle text-danger"></i>
-                            {% elif value is number %}
-                                <span class="badge bg-secondary">{{ "%.0f"|format(value/1000) }}km</span>
-                            {% else %}
-                                <span class="text-muted small">{{ value }}</span>
-                            {% endif %}
-                        </div>
+                        {% if key == 'osm_amenities' and value is mapping %}
+                            <div class="mb-3">
+                                <span class="small fw-bold">Nearby Amenities:</span>
+                                <div class="mt-2">
+                                    {% for amenity, count in value.items() %}
+                                        <div class="d-flex justify-content-between align-items-center mb-1">
+                                            <span class="small text-capitalize">
+                                                {% if amenity == 'cafe' %}
+                                                    <i class="fas fa-coffee me-1"></i> Cafes
+                                                {% elif amenity == 'restaurant' %}
+                                                    <i class="fas fa-utensils me-1"></i> Restaurants
+                                                {% elif amenity == 'school' %}
+                                                    <i class="fas fa-graduation-cap me-1"></i> Schools
+                                                {% elif amenity == 'hospital' %}
+                                                    <i class="fas fa-hospital me-1"></i> Hospitals
+                                                {% elif amenity == 'fuel' %}
+                                                    <i class="fas fa-gas-pump me-1"></i> Gas Stations
+                                                {% elif amenity == 'bank' %}
+                                                    <i class="fas fa-university me-1"></i> Banks
+                                                {% elif amenity == 'pharmacy' %}
+                                                    <i class="fas fa-pills me-1"></i> Pharmacies
+                                                {% elif amenity == 'supermarket' %}
+                                                    <i class="fas fa-shopping-cart me-1"></i> Supermarkets
+                                                {% else %}
+                                                    <i class="fas fa-map-marker-alt me-1"></i> {{ amenity.replace('_', ' ').title() }}
+                                                {% endif %}
+                                            </span>
+                                            <span class="badge bg-primary">{{ count }}</span>
+                                        </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        {% else %}
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="small">{{ key.replace('_', ' ').title() }}</span>
+                                {% if value is sameas true %}
+                                    <i class="fas fa-check-circle text-success"></i>
+                                {% elif value is sameas false %}
+                                    <i class="fas fa-times-circle text-danger"></i>
+                                {% elif value is number %}
+                                    <span class="badge bg-secondary">{{ "%.0f"|format(value/1000) }}km</span>
+                                {% elif value is mapping %}
+                                    <!-- Handle other dictionary values -->
+                                    <div class="small">
+                                        {% for k, v in value.items() %}
+                                            <div>{{ k }}: {{ v }}</div>
+                                        {% endfor %}
+                                    </div>
+                                {% else %}
+                                    <span class="text-muted small">{{ value }}</span>
+                                {% endif %}
+                            </div>
+                        {% endif %}
                     {% endfor %}
                 </div>
             </div>
