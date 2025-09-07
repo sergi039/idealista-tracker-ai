@@ -209,21 +209,21 @@
                                             {% if land.location_lat and land.location_lon %}
                                                 <a href="https://www.google.com/maps/search/?api=1&query={{ land.location_lat }},{{ land.location_lon }}" 
                                                    target="_blank" class="text-decoration-none" 
-                                                   title="{% if land.location_accuracy == 'precise' %}Точное местоположение{% elif land.location_accuracy == 'approximate' %}Приблизительное местоположение{% else %}Неизвестная точность местоположения{% endif %}">
+                                                   title="{% if land.location_accuracy == 'precise' %}Precise location{% elif land.location_accuracy == 'approximate' %}Approximate location{% else %}Unknown accuracy{% endif %}">
                                                     {% if land.location_accuracy == 'precise' %}
-                                                        <i class="fas fa-map-marker-alt me-1 text-success" title="Точное местоположение"></i>
+                                                        <i class="fas fa-map-marker-alt me-1 text-success" title="Precise location"></i>
                                                     {% elif land.location_accuracy == 'approximate' %}
-                                                        <i class="fas fa-map-marker me-1 text-warning" title="Приблизительное местоположение"></i>
+                                                        <i class="fas fa-map-marker me-1 text-warning" title="Approximate location"></i>
                                                     {% else %}
-                                                        <i class="fas fa-question-circle me-1 text-secondary" title="Неизвестная точность"></i>
+                                                        <i class="fas fa-question-circle me-1 text-secondary" title="Unknown accuracy"></i>
                                                     {% endif %}
                                                     <small>{{ "%.4f"|format(land.location_lat) }}, {{ "%.4f"|format(land.location_lon) }}</small>
                                                     {% if land.location_accuracy == 'approximate' %}
-                                                        <small class="text-muted d-block">~{{ land.municipality or 'область' }}</small>
+                                                        <small class="text-muted d-block">~{{ land.municipality or 'region' }}</small>
                                                     {% endif %}
                                                 </a>
                                             {% else %}
-                                                <span class="text-muted" title="Координаты недоступны">
+                                                <span class="text-muted" title="Coordinates unavailable">
                                                     <i class="fas fa-map-marker-slash me-1"></i>
                                                     {% if land.municipality %}
                                                         <small>{{ land.municipality }}</small>
