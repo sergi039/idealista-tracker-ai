@@ -368,13 +368,22 @@
                     {% for key, value in land.environment.items() %}
                         {% if key != 'score_breakdown' %}
                             <div class="d-flex justify-content-between align-items-center mb-2">
-                                <span class="small">{{ key.replace('_', ' ').title() }}</span>
-                                {% if value is sameas true %}
-                                    <i class="fas fa-check-circle text-success"></i>
-                                {% elif value is sameas false %}
-                                    <i class="fas fa-times-circle text-danger"></i>
+                                {% if key in ['sea_view', 'forest_view', 'mountain_view'] %}
+                                    <span class="small">{{ key.replace('_view', '').replace('_', ' ').title() }} View</span>
+                                    {% if value is sameas true %}
+                                        <i class="fas fa-check-circle text-success"></i>
+                                    {% else %}
+                                        <span class="text-muted small">no data</span>
+                                    {% endif %}
                                 {% else %}
-                                    <span class="text-muted small">{{ value }}</span>
+                                    <span class="small">{{ key.replace('_', ' ').title() }}</span>
+                                    {% if value is sameas true %}
+                                        <i class="fas fa-check-circle text-success"></i>
+                                    {% elif value is sameas false %}
+                                        <i class="fas fa-times-circle text-danger"></i>
+                                    {% else %}
+                                        <span class="text-muted small">{{ value }}</span>
+                                    {% endif %}
                                 {% endif %}
                             </div>
                         {% endif %}
