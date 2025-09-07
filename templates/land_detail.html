@@ -349,6 +349,7 @@
                     <!-- Regular Transport Data -->
                     {% if land.transport %}
                         {% for key, value in land.transport.items() %}
+                            {% if not (key.endswith('_travel_time') and (key.replace('_travel_time', '_distance') in land.transport)) %}
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 <span class="small">{{ key.replace('_', ' ').title() }}</span>
                                 {% if value is sameas true %}
@@ -356,17 +357,24 @@
                                 {% elif value is sameas false %}
                                     <i class="fas fa-times-circle text-danger"></i>
                                 {% elif value is number and 'distance' in key %}
-                                    {% if value < 1000 %}
-                                        <span class="badge bg-secondary">{{ "%.1f"|format(value/1000) }}km</span>
-                                    {% else %}
-                                        <span class="badge bg-secondary">{{ "%.0f"|format(value/1000) }}km</span>
-                                    {% endif %}
+                                    <div>
+                                        {% set transport_type = key.replace('_distance', '') %}
+                                        {% if land.transport.get(transport_type + '_travel_time') %}
+                                            <span class="badge bg-info me-1">{{ land.transport[transport_type + '_travel_time'] }}min</span>
+                                        {% endif %}
+                                        {% if value < 1000 %}
+                                            <span class="badge bg-secondary">{{ "%.1f"|format(value/1000) }}km</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">{{ "%.0f"|format(value/1000) }}km</span>
+                                        {% endif %}
+                                    </div>
                                 {% elif value is number and 'duration' in key %}
                                     <span class="badge bg-info">{{ "%.0f"|format(value/60) }}min</span>
                                 {% else %}
                                     <span class="text-muted small">{{ value }}</span>
                                 {% endif %}
                             </div>
+                            {% endif %}
                         {% endfor %}
                     {% endif %}
                 </div>
