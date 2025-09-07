@@ -9,12 +9,16 @@ class EmailParser:
         # Regex patterns for extracting data from Idealista emails
         self.patterns = {
             'price': [
-                r'(\d{1,3}(?:\.\d{3})*)\s*€',
-                r'Precio:?\s*(\d{1,3}(?:\.\d{3})*)\s*€'
+                r'(\d{1,3}(?:,\d{3})*)\s*€',  # English format: 59,000 €
+                r'(\d{1,3}(?:\.\d{3})*)\s*€',  # Spanish format: 59.000 €
+                r'Price:?\s*(\d{1,3}(?:,\d{3})*)\s*€',  # English with label
+                r'Precio:?\s*(\d{1,3}(?:\.\d{3})*)\s*€'  # Spanish with label
             ],
             'area': [
-                r'(\d+(?:,\d+)?)\s*m[²2]',
-                r'Superficie:?\s*(\d+(?:,\d+)?)\s*m[²2]'
+                r'(\d{1,3}(?:,\d{3})*)\s*m[²2]',  # English format: 1,373 m²
+                r'(\d{1,3}(?:\.\d{3})*)\s*m[²2]',  # Spanish format: 1.373 m²
+                r'(\d+)\s*m[²2]',  # Simple format: 1373 m²
+                r'Superficie:?\s*(\d+(?:,\d+)?)\s*m[²2]'  # Spanish with label
             ],
             'url': [
                 r'https?://www\.idealista\.com/[^\s]+',
@@ -91,7 +95,9 @@ class EmailParser:
         for pattern in self.patterns['price']:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                price_str = match.group(1).replace('.', '')
+                price_str = match.group(1)
+                # Remove both dots and commas used as thousand separators
+                price_str = price_str.replace(',', '').replace('.', '')
                 try:
                     return float(price_str)
                 except ValueError:
@@ -103,9 +109,14 @@ class EmailParser:
         for pattern in self.patterns['area']:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                area_str = match.group(1).replace(',', '.')
+                area_str = match.group(1)
+                # Remove both dots and commas used as thousand separators
+                area_str = area_str.replace(',', '').replace('.', '')
                 try:
-                    return float(area_str)
+                    area = float(area_str)
+                    # Validate area is reasonable (at least 100 m² for land)
+                    if area >= 100:
+                        return area
                 except ValueError:
                     continue
         return None
