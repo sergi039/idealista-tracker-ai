@@ -122,14 +122,24 @@ class EmailParser:
         return None
     
     def _extract_url(self, text: str) -> Optional[str]:
-        """Extract Idealista URL from text"""
+        """Extract Idealista URL from text - prioritize property links over logo links"""
+        # First try to find property-specific URL (with /inmueble/)
+        property_pattern = r'https?://www\.idealista\.com/[a-z]+/inmueble/\d+[^"\s]*'
+        property_match = re.search(property_pattern, text, re.IGNORECASE)
+        if property_match:
+            url = property_match.group(0).strip()
+            # Remove trailing quotes if present
+            url = url.rstrip('"\'')
+            return url
+        
+        # Fallback to general patterns (avoid logo links)
         for pattern in self.patterns['url']:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 url = match.group(0) if len(match.groups()) == 0 else match.group(1)
-                # Clean up URL
                 url = url.strip()
-                if url.startswith('http'):
+                # Skip logo links
+                if 'logo' not in url and url.startswith('http'):
                     return url
         return None
     
