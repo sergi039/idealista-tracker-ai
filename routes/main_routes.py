@@ -236,6 +236,36 @@ def edit_environment(land_id):
         flash(f"Error editing environment: {str(e)}", 'error')
         return redirect(url_for('main.land_detail', land_id=land_id))
 
+@main_bp.route('/land/<int:land_id>/update-score', methods=['POST'])
+def update_score(land_id):
+    """Update manual score for a land"""
+    try:
+        land = Land.query.get_or_404(land_id)
+        
+        # Get the new score from form
+        new_score = request.form.get('score')
+        if new_score:
+            try:
+                score_value = float(new_score)
+                # Validate score is between 0 and 100
+                if 0 <= score_value <= 100:
+                    land.score_total = score_value
+                    db.session.commit()
+                    flash(f'Score updated to {score_value:.1f}', 'success')
+                else:
+                    flash('Score must be between 0 and 100', 'error')
+            except ValueError:
+                flash('Invalid score value', 'error')
+        else:
+            flash('Score is required', 'error')
+        
+        return redirect(url_for('main.land_detail', land_id=land_id))
+        
+    except Exception as e:
+        logger.error(f"Failed to update score for land {land_id}: {str(e)}")
+        flash(f"Error updating score: {str(e)}", 'error')
+        return redirect(url_for('main.land_detail', land_id=land_id))
+
 @main_bp.route('/export.csv')
 def export_csv():
     """Export current land selection to CSV"""
