@@ -189,7 +189,8 @@ class IMAPService:
                             'Weekly digest',
                             'Resumen semanal',
                             'Update your preferences',
-                            'Actualiza tus preferencias'
+                            'Actualiza tus preferencias',
+                            'Respuesta de'  # Skip user responses/replies
                         ]
                         
                         if any(skip_text in subject for skip_text in skip_subjects):

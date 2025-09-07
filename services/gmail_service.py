@@ -58,6 +58,26 @@ class GmailService:
             for message in messages:
                 email_content = self.get_email_content(message['id'])
                 if email_content:
+                    # Skip non-property emails (explicit blacklist)
+                    subject = email_content.get('subject', '')
+                    skip_subjects = [
+                        'One of your favourites is no longer listed',
+                        'Tu favorito ya no está disponible',
+                        'Welcome to Idealista',
+                        'Bienvenido a Idealista',
+                        'Contactos que ha recibido',
+                        'You have received contacts',
+                        'Weekly digest',
+                        'Resumen semanal',
+                        'Update your preferences',
+                        'Actualiza tus preferencias',
+                        'Respuesta de'  # Skip user responses/replies
+                    ]
+                    
+                    if any(skip_text in subject for skip_text in skip_subjects):
+                        logger.info(f"Skipping non-property email: {subject[:50]}")
+                        continue
+                    
                     parsed_data = self.email_parser.parse_idealista_email(email_content)
                     if parsed_data:
                         parsed_data['source_email_id'] = message['id']
