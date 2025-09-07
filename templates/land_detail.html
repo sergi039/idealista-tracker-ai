@@ -263,7 +263,12 @@
                                 {% elif value is sameas false %}
                                     <i class="fas fa-times-circle text-danger"></i>
                                 {% elif value is number %}
-                                    <span class="badge bg-secondary">{{ "%.0f"|format(value/1000) }}km</span>
+                                    {% set distance_km = value/1000 %}
+                                    {% set travel_time_min = (distance_km * 60 / 40)|round %}
+                                    <div>
+                                        <span class="badge bg-secondary me-1">{{ "%.1f"|format(distance_km) }}km</span>
+                                        <span class="badge bg-info">~{{ travel_time_min }}min</span>
+                                    </div>
                                 {% elif value is mapping %}
                                     <!-- Handle other dictionary values -->
                                     <div class="small">
@@ -291,7 +296,15 @@
                 </div>
                 <div class="card-body">
                     <!-- Priority Infrastructure (Top of list) -->
-                    {% if land.travel_time_airport %}
+                    {% if land.transport and land.transport.get('airport_available') == false %}
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small fw-bold"><i class="fas fa-plane me-1"></i>Airport</span>
+                            <div>
+                                <i class="fas fa-times-circle text-danger"></i>
+                                <small class="text-muted ms-1">Not available</small>
+                            </div>
+                        </div>
+                    {% elif land.travel_time_airport %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold"><i class="fas fa-plane me-1"></i>Airport</span>
                             <div>

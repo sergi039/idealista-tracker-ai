@@ -150,8 +150,14 @@ class EnrichmentService:
                     # Calculate distance to nearest and average rating
                     if nearby_places:
                         nearest = min(nearby_places, key=lambda x: x.get('distance', float('inf')))
-                        infrastructure_extended[f'{amenity}_distance'] = nearest.get('distance')
+                        distance_m = nearest.get('distance')
+                        infrastructure_extended[f'{amenity}_distance'] = distance_m
                         infrastructure_extended[f'{amenity}_available'] = True
+                        # Calculate estimated travel time (assuming 40 km/h average speed in city)
+                        # Formula: time_minutes = (distance_km * 60) / speed_kmh
+                        if distance_m:
+                            travel_time_min = round((distance_m / 1000) * 60 / 40)
+                            infrastructure_extended[f'{amenity}_travel_time'] = travel_time_min
                         
                         # Get average rating for services
                         if amenity in ['school', 'restaurant', 'cafe']:
@@ -165,10 +171,28 @@ class EnrichmentService:
                     # Calculate transport accessibility
                     if nearby_places:
                         nearest = min(nearby_places, key=lambda x: x.get('distance', float('inf')))
-                        transport[f'{amenity}_distance'] = nearest.get('distance')
+                        distance_m = nearest.get('distance')
+                        transport[f'{amenity}_distance'] = distance_m
                         transport[f'{amenity}_available'] = True
+                        # Calculate estimated travel time
+                        if distance_m:
+                            # Use higher speed for transport hubs (50 km/h average)
+                            travel_time_min = round((distance_m / 1000) * 60 / 50)
+                            transport[f'{amenity}_travel_time'] = travel_time_min
                     else:
                         transport[f'{amenity}_available'] = False
+                        # For airports, check if there's one within 100km radius
+                        if amenity == 'airport':
+                            wider_places = self._search_nearby_places(lat, lon, place_types, radius=100000)
+                            if wider_places:
+                                nearest = min(wider_places, key=lambda x: x.get('distance', float('inf')))
+                                distance_m = nearest.get('distance')
+                                transport[f'{amenity}_distance'] = distance_m
+                                transport[f'{amenity}_available'] = True
+                                if distance_m:
+                                    # Highway speed for long distance (80 km/h average)
+                                    travel_time_min = round((distance_m / 1000) * 60 / 80)
+                                    transport[f'{amenity}_travel_time'] = travel_time_min
             
             land.infrastructure_extended = infrastructure_extended
             land.transport = transport
