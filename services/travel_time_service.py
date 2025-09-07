@@ -74,11 +74,11 @@ class TravelTimeService:
             # Find nearest beach
             nearest_beach_data = self._find_nearest_beach(origin)
             
-            # Calculate times to key infrastructure (priority locations)
-            airport_time = self._find_nearest_facility(origin, self.airports)
-            train_station_time = self._find_nearest_facility(origin, self.train_stations)
-            hospital_time = self._find_nearest_facility(origin, self.hospitals)
-            police_time = self._find_nearest_facility(origin, self.police_stations)
+            # Calculate times and distances to key infrastructure (priority locations)
+            airport_data = self._find_nearest_facility_with_distance(origin, self.airports)
+            train_station_data = self._find_nearest_facility_with_distance(origin, self.train_stations)
+            hospital_data = self._find_nearest_facility_with_distance(origin, self.hospitals)
+            police_data = self._find_nearest_facility_with_distance(origin, self.police_stations)
             
             # Update land record
             if oviedo_time is not None:
@@ -89,15 +89,19 @@ class TravelTimeService:
                 land.travel_time_nearest_beach = nearest_beach_data['time']
                 land.nearest_beach_name = nearest_beach_data['name']
                 
-            # Update priority infrastructure travel times
-            if airport_time is not None:
-                land.travel_time_airport = airport_time
-            if train_station_time is not None:
-                land.travel_time_train_station = train_station_time
-            if hospital_time is not None:
-                land.travel_time_hospital = hospital_time
-            if police_time is not None:
-                land.travel_time_police = police_time
+            # Update priority infrastructure travel times and distances
+            if airport_data is not None:
+                land.travel_time_airport = airport_data['time']
+                land.distance_airport = airport_data['distance']
+            if train_station_data is not None:
+                land.travel_time_train_station = train_station_data['time']
+                land.distance_train_station = train_station_data['distance']
+            if hospital_data is not None:
+                land.travel_time_hospital = hospital_data['time']
+                land.distance_hospital = hospital_data['distance']
+            if police_data is not None:
+                land.travel_time_police = police_data['time']
+                land.distance_police = police_data['distance']
             
             db.session.commit()
             
@@ -113,6 +117,11 @@ class TravelTimeService:
     
     def _get_travel_time(self, origin: str, destination: str) -> Optional[int]:
         """Get travel time in minutes between origin and destination"""
+        result = self._get_travel_time_and_distance(origin, destination)
+        return result['time'] if result else None
+    
+    def _get_travel_time_and_distance(self, origin: str, destination: str) -> Optional[Dict]:
+        """Get travel time in minutes and distance in km between origin and destination"""
         if not self.google_maps_key:
             logger.warning("Google Maps API key not available for travel times")
             return None
@@ -135,13 +144,18 @@ class TravelTimeService:
                     elements = data['rows'][0].get('elements', [])
                     if elements and elements[0].get('status') == 'OK':
                         duration = elements[0]['duration']['value']  # seconds
-                        return round(duration / 60)  # convert to minutes
+                        distance = elements[0]['distance']['value']  # meters
+                        
+                        return {
+                            'time': round(duration / 60),  # convert to minutes
+                            'distance': round(distance / 1000)  # convert to kilometers
+                        }
             
             logger.warning(f"Failed to get travel time from {origin} to {destination}")
             return None
             
         except Exception as e:
-            logger.error(f"Error getting travel time: {str(e)}")
+            logger.error(f"Error getting travel time and distance: {str(e)}")
             return None
     
     def _find_nearest_beach(self, origin: str) -> Optional[Dict]:
@@ -176,24 +190,29 @@ class TravelTimeService:
             return None
     
     def _find_nearest_facility(self, origin: str, facilities: List[str]) -> Optional[int]:
-        """Find travel time to nearest facility from a list"""
+        """Find travel time to nearest facility from a list (legacy for backward compatibility)"""
+        result = self._find_nearest_facility_with_distance(origin, facilities)
+        return result['time'] if result else None
+    
+    def _find_nearest_facility_with_distance(self, origin: str, facilities: List[str]) -> Optional[Dict]:
+        """Find travel time and distance to nearest facility from a list"""
         if not self.google_maps_key or not facilities:
             return None
         
         try:
-            # Calculate times to all facilities
-            facility_times = []
+            # Calculate times and distances to all facilities
+            facility_data = []
             
             for facility in facilities:
-                travel_time = self._get_travel_time(origin, facility)
-                if travel_time is not None:
-                    facility_times.append(travel_time)
+                result = self._get_travel_time_and_distance(origin, facility)
+                if result is not None:
+                    facility_data.append(result)
             
-            if facility_times:
-                # Return time to nearest facility
-                nearest_time = min(facility_times)
-                logger.info(f"Nearest facility travel time: {nearest_time} minutes")
-                return nearest_time
+            if facility_data:
+                # Return nearest facility data (by time)
+                nearest = min(facility_data, key=lambda x: x['time'])
+                logger.info(f"Nearest facility: {nearest['time']} min, {nearest['distance']} km")
+                return nearest
             
             return None
             
