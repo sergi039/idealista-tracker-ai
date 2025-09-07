@@ -87,12 +87,22 @@
                     </div>
                 {% endif %}
 
-                <!-- Description -->
+                <!-- Brief Description -->
                 {% if land.description %}
                     <div class="mb-4">
-                        <strong>Description:</strong>
+                        <strong>Brief Description:</strong>
                         <div class="mt-2 p-3 bg-dark rounded">
                             {{ land.description }}
+                        </div>
+                    </div>
+                {% endif %}
+                
+                <!-- Property Details from Idealista -->
+                {% if land.property_details %}
+                    <div class="mb-4">
+                        <strong>Property Details:</strong>
+                        <div class="mt-2 p-3 bg-dark rounded">
+                            <pre class="text-light mb-0" style="white-space: pre-wrap; word-wrap: break-word;">{{ land.property_details }}</pre>
                         </div>
                     </div>
                 {% endif %}
@@ -105,6 +115,10 @@
                             View Original Listing
                         </a>
                     {% endif %}
+                    <a href="{{ url_for('main.edit_environment', land_id=land.id) }}" class="btn btn-primary">
+                        <i class="fas fa-edit me-2"></i>
+                        Edit Environment
+                    </a>
                     <a href="{{ url_for('main.lands') }}" class="btn btn-secondary">
                         <i class="fas fa-arrow-left me-2"></i>
                         Back to Properties

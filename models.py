@@ -27,6 +27,7 @@ class Land(db.Model):
     services_quality = db.Column(JSONB)  # schools rating, restaurants rating, cafes rating
     
     legal_status = db.Column(db.String(50))
+    property_details = db.Column(db.Text)  # Full property description from Idealista
     score_total = db.Column(db.Numeric(5, 2))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     

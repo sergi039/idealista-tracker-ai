@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Environment - {{ land.title[:50] }}{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-lg-8 mx-auto">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>
+                <i class="fas fa-edit me-2"></i>
+                Edit Environment Data
+            </h1>
+            <a href="{{ url_for('main.land_detail', land_id=land.id) }}" class="btn btn-outline-secondary">
+                <i class="fas fa-arrow-left me-1"></i>Back to Details
+            </a>
+        </div>
+
+        <div class="alert alert-info">
+            <i class="fas fa-info-circle me-2"></i>
+            Update environment characteristics and property details for accurate scoring.
+        </div>
+
+        <form method="POST" action="{{ url_for('main.edit_environment', land_id=land.id) }}">
+            <!-- Environment Characteristics -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-tree me-2"></i>Environment Characteristics
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="sea_view" name="sea_view"
+                                       {% if land.environment and land.environment.get('sea_view') %}checked{% endif %}>
+                                <label class="form-check-label" for="sea_view">
+                                    <i class="fas fa-water me-1"></i>Sea View
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="mountain_view" name="mountain_view"
+                                       {% if land.environment and land.environment.get('mountain_view') %}checked{% endif %}>
+                                <label class="form-check-label" for="mountain_view">
+                                    <i class="fas fa-mountain me-1"></i>Mountain View
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="forest" name="forest"
+                                       {% if land.environment and land.environment.get('forest') %}checked{% endif %}>
+                                <label class="form-check-label" for="forest">
+                                    <i class="fas fa-tree me-1"></i>Forest/Nature
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="orientation" class="form-label">Orientation</label>
+                            <select class="form-select" id="orientation" name="orientation">
+                                <option value="">Select...</option>
+                                <option value="North" {% if land.environment and land.environment.get('orientation') == 'North' %}selected{% endif %}>North</option>
+                                <option value="South" {% if land.environment and land.environment.get('orientation') == 'South' %}selected{% endif %}>South</option>
+                                <option value="East" {% if land.environment and land.environment.get('orientation') == 'East' %}selected{% endif %}>East</option>
+                                <option value="West" {% if land.environment and land.environment.get('orientation') == 'West' %}selected{% endif %}>West</option>
+                                <option value="Northeast" {% if land.environment and land.environment.get('orientation') == 'Northeast' %}selected{% endif %}>Northeast</option>
+                                <option value="Northwest" {% if land.environment and land.environment.get('orientation') == 'Northwest' %}selected{% endif %}>Northwest</option>
+                                <option value="Southeast" {% if land.environment and land.environment.get('orientation') == 'Southeast' %}selected{% endif %}>Southeast</option>
+                                <option value="Southwest" {% if land.environment and land.environment.get('orientation') == 'Southwest' %}selected{% endif %}>Southwest</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Building Characteristics -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-building me-2"></i>Building Characteristics
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="buildable_floors" class="form-label">Buildable Floors</label>
+                            <input type="text" class="form-control" id="buildable_floors" name="buildable_floors"
+                                   value="{{ land.environment.get('buildable_floors', '') if land.environment else '' }}"
+                                   placeholder="e.g., 4 floors">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="access_type" class="form-label">Access Type</label>
+                            <select class="form-select" id="access_type" name="access_type">
+                                <option value="">Select...</option>
+                                <option value="town_street" {% if land.environment and land.environment.get('access_type') == 'town_street' %}selected{% endif %}>Town Street</option>
+                                <option value="highway" {% if land.environment and land.environment.get('access_type') == 'highway' %}selected{% endif %}>Highway</option>
+                                <option value="dirt_road" {% if land.environment and land.environment.get('access_type') == 'dirt_road' %}selected{% endif %}>Dirt Road</option>
+                                <option value="private_road" {% if land.environment and land.environment.get('access_type') == 'private_road' %}selected{% endif %}>Private Road</option>
+                            </select>
+                        </div>
+                        <div class="col-md-12 mb-3">
+                            <label for="certified_for" class="form-label">Certified For</label>
+                            <input type="text" class="form-control" id="certified_for" name="certified_for"
+                                   value="{{ land.environment.get('certified_for', '') if land.environment else '' }}"
+                                   placeholder="e.g., High-rise residential (blocks) and single family home (houses)">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Property Details -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i class="fas fa-file-alt me-2"></i>Property Details
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label for="property_details" class="form-label">Full Property Description</label>
+                        <textarea class="form-control" id="property_details" name="property_details" rows="10" 
+                                  placeholder="Paste the full property description from Idealista...">{{ land.property_details or '' }}</textarea>
+                        <small class="text-muted">
+                            Copy and paste the complete property description from the Idealista listing page.
+                        </small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="d-flex justify-content-between mb-4">
+                <a href="{{ url_for('main.land_detail', land_id=land.id) }}" class="btn btn-outline-secondary">
+                    <i class="fas fa-times me-2"></i>Cancel
+                </a>
+                <button type="submit" class="btn btn-success">
+                    <i class="fas fa-save me-2"></i>Save Changes
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

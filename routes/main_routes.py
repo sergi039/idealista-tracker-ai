@@ -200,6 +200,42 @@ def update_criteria():
         flash(f"Error updating criteria: {str(e)}", 'error')
         return redirect(url_for('main.criteria'))
 
+@main_bp.route('/land/<int:land_id>/edit-environment', methods=['GET', 'POST'])
+def edit_environment(land_id):
+    """Edit environment data for a land"""
+    try:
+        land = Land.query.get_or_404(land_id)
+        
+        if request.method == 'POST':
+            # Update environment data
+            environment = {
+                'sea_view': request.form.get('sea_view') == 'on',
+                'mountain_view': request.form.get('mountain_view') == 'on', 
+                'forest': request.form.get('forest') == 'on',
+                'orientation': request.form.get('orientation', ''),
+                'buildable_floors': request.form.get('buildable_floors', ''),
+                'access_type': request.form.get('access_type', ''),
+                'certified_for': request.form.get('certified_for', '')
+            }
+            
+            land.environment = environment
+            
+            # Update property details if provided
+            property_details = request.form.get('property_details', '').strip()
+            if property_details:
+                land.property_details = property_details
+            
+            db.session.commit()
+            flash('Environment data updated successfully', 'success')
+            return redirect(url_for('main.land_detail', land_id=land_id))
+        
+        return render_template('edit_environment.html', land=land)
+        
+    except Exception as e:
+        logger.error(f"Failed to edit environment for land {land_id}: {str(e)}")
+        flash(f"Error editing environment: {str(e)}", 'error')
+        return redirect(url_for('main.land_detail', land_id=land_id))
+
 @main_bp.route('/export.csv')
 def export_csv():
     """Export current land selection to CSV"""
