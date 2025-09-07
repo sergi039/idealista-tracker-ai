@@ -26,6 +26,10 @@ def download_project():
 def manual_ingestion():
     """Manually trigger email ingestion"""
     try:
+        # Get sync type from request body (default to incremental)
+        data = request.get_json() or {}
+        sync_type = data.get('sync_type', 'incremental')
+        
         from config import Config
         
         if Config.EMAIL_BACKEND == "imap":
@@ -37,13 +41,22 @@ def manual_ingestion():
             service = GmailService()
             backend_name = "Gmail API"
         
-        processed_count = service.run_ingestion()
+        # Choose appropriate method based on sync type
+        if sync_type == 'full':
+            if hasattr(service, 'run_full_sync'):
+                processed_count = service.run_full_sync()
+            else:
+                # Fallback for services without full sync support
+                processed_count = service.run_ingestion()
+        else:
+            processed_count = service.run_ingestion()
         
         return jsonify({
             "success": True,
             "processed_count": processed_count,
             "backend": backend_name,
-            "message": f"Successfully processed {processed_count} new properties via {backend_name}"
+            "sync_type": sync_type,
+            "message": f"Successfully processed {processed_count} new properties via {backend_name} ({sync_type} sync)"
         })
         
     except Exception as e:
