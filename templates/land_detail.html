@@ -22,12 +22,17 @@
         <div class="card mb-4">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h2 class="card-title mb-0">{{ land.title }}</h2>
-                {% if land.score_total %}
-                    <span class="badge score-badge fs-5" 
-                          style="background-color: {{ 'var(--bs-success)' if land.score_total >= 70 else 'var(--bs-warning)' if land.score_total >= 50 else 'var(--bs-danger)' }}">
-                        Score: {{ "%.1f"|format(land.score_total) }}
-                    </span>
-                {% endif %}
+                <div class="d-flex align-items-center gap-2">
+                    {% if land.score_total %}
+                        <span class="badge score-badge fs-5" 
+                              style="background-color: {{ 'var(--bs-success)' if land.score_total >= 70 else 'var(--bs-warning)' if land.score_total >= 50 else 'var(--bs-danger)' }}">
+                            Score: {{ "%.1f"|format(land.score_total) }}
+                        </span>
+                    {% endif %}
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#editScoreModal">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                </div>
             </div>
             <div class="card-body">
                 <!-- Basic Info -->
@@ -329,6 +334,35 @@
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Score Modal -->
+<div class="modal fade" id="editScoreModal" tabindex="-1" aria-labelledby="editScoreModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('main.update_score', land_id=land.id) }}">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="editScoreModalLabel">Edit Score</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="score" class="form-label">Manual Score (0-100)</label>
+                        <input type="number" class="form-control" id="score" name="score" 
+                               min="0" max="100" step="0.1" 
+                               value="{{ '%.1f'|format(land.score_total) if land.score_total else 0 }}" required>
+                        <div class="form-text">
+                            Enter a score between 0 and 100. This will override the automatically calculated score.
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Score</button>
+                </div>
+            </form>
         </div>
     </div>
 </div>
