@@ -22,33 +22,7 @@ def lands():
         sort_order = request.args.get('order', 'desc')
         land_type_filter = request.args.get('land_type', '')
         municipality_filter = request.args.get('municipality', '')
-        price_range = request.args.get('price_range', '')
-        area_range = request.args.get('area_range', '')
         search_query = request.args.get('search', '')
-        
-        # Parse price range
-        min_price = None
-        max_price = None
-        if price_range:
-            try:
-                price_parts = price_range.split('-')
-                if len(price_parts) == 2:
-                    min_price = float(price_parts[0])
-                    max_price = float(price_parts[1])
-            except (ValueError, IndexError):
-                pass
-        
-        # Parse area range
-        min_area = None
-        max_area = None
-        if area_range:
-            try:
-                area_parts = area_range.split('-')
-                if len(area_parts) == 2:
-                    min_area = float(area_parts[0])
-                    max_area = float(area_parts[1])
-            except (ValueError, IndexError):
-                pass
         
         # Build query
         query = Land.query
@@ -59,18 +33,6 @@ def lands():
         
         if municipality_filter:
             query = query.filter(Land.municipality.ilike(f'%{municipality_filter}%'))
-        
-        if min_price is not None:
-            query = query.filter(Land.price >= min_price)
-        
-        if max_price is not None:
-            query = query.filter(Land.price <= max_price)
-        
-        if min_area is not None:
-            query = query.filter(Land.area >= min_area)
-        
-        if max_area is not None:
-            query = query.filter(Land.area <= max_area)
         
         if search_query:
             search_pattern = f'%{search_query}%'
@@ -111,8 +73,6 @@ def lands():
                 'order': sort_order,
                 'land_type': land_type_filter,
                 'municipality': municipality_filter,
-                'price_range': price_range,
-                'area_range': area_range,
                 'search': search_query
             }
         )
@@ -277,33 +237,7 @@ def export_csv():
         # Get same filters as lands page
         land_type_filter = request.args.get('land_type', '')
         municipality_filter = request.args.get('municipality', '')
-        price_range = request.args.get('price_range', '')
-        area_range = request.args.get('area_range', '')
         search_query = request.args.get('search', '')
-        
-        # Parse price range
-        min_price = None
-        max_price = None
-        if price_range:
-            try:
-                price_parts = price_range.split('-')
-                if len(price_parts) == 2:
-                    min_price = float(price_parts[0])
-                    max_price = float(price_parts[1])
-            except (ValueError, IndexError):
-                pass
-        
-        # Parse area range
-        min_area = None
-        max_area = None
-        if area_range:
-            try:
-                area_parts = area_range.split('-')
-                if len(area_parts) == 2:
-                    min_area = float(area_parts[0])
-                    max_area = float(area_parts[1])
-            except (ValueError, IndexError):
-                pass
         
         # Build query with same filters
         query = Land.query
@@ -313,18 +247,6 @@ def export_csv():
         
         if municipality_filter:
             query = query.filter(Land.municipality.ilike(f'%{municipality_filter}%'))
-        
-        if min_price is not None:
-            query = query.filter(Land.price >= min_price)
-        
-        if max_price is not None:
-            query = query.filter(Land.price <= max_price)
-        
-        if min_area is not None:
-            query = query.filter(Land.area >= min_area)
-        
-        if max_area is not None:
-            query = query.filter(Land.area <= max_area)
         
         if search_query:
             search_pattern = f'%{search_query}%'

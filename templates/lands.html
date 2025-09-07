@@ -13,7 +13,7 @@
             </h1>
             
             <div>
-                <a href="{{ url_for('main.export_csv', **current_filters) }}" class="btn btn-success">
+                <a href="{{ url_for('main.export_csv', sort=current_filters.sort, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" class="btn btn-success">
                     <i class="fas fa-download me-1"></i>Export CSV
                 </a>
             </div>
@@ -30,7 +30,7 @@
                 <form method="GET" id="filter-form">
                     <div class="row">
                         <!-- Search -->
-                        <div class="col-md-4 mb-3">
+                        <div class="col-md-3 mb-3">
                             <label for="search" class="form-label">Search</label>
                             <input type="text" class="form-control" id="search" name="search" 
                                    value="{{ current_filters.search or '' }}" 
@@ -52,7 +52,7 @@
                         </div>
                         
                         <!-- Municipality -->
-                        <div class="col-md-3 mb-3">
+                        <div class="col-md-2 mb-3">
                             <label for="municipality" class="form-label">Municipality</label>
                             <select class="form-select" id="municipality" name="municipality">
                                 <option value="">All Municipalities</option>
@@ -89,64 +89,11 @@
                                 </select>
                             </div>
                         </div>
-                    </div>
-                    
-                    <div class="row">
-                        <!-- Price Range -->
-                        <div class="col-md-3 mb-3">
-                            <label for="price_range" class="form-label">Price Range (€)</label>
-                            <select class="form-select" id="price_range" name="price_range">
-                                <option value="">All Prices</option>
-                                <option value="0-25000" {{ 'selected' if current_filters.price_range == '0-25000' }}>
-                                    Up to 25,000€
-                                </option>
-                                <option value="25000-50000" {{ 'selected' if current_filters.price_range == '25000-50000' }}>
-                                    25,000€ - 50,000€
-                                </option>
-                                <option value="50000-100000" {{ 'selected' if current_filters.price_range == '50000-100000' }}>
-                                    50,000€ - 100,000€
-                                </option>
-                                <option value="100000-200000" {{ 'selected' if current_filters.price_range == '100000-200000' }}>
-                                    100,000€ - 200,000€
-                                </option>
-                                <option value="200000-500000" {{ 'selected' if current_filters.price_range == '200000-500000' }}>
-                                    200,000€ - 500,000€
-                                </option>
-                                <option value="500000-999999999" {{ 'selected' if current_filters.price_range == '500000-999999999' }}>
-                                    Over 500,000€
-                                </option>
-                            </select>
-                        </div>
                         
-                        <!-- Area Range -->
-                        <div class="col-md-3 mb-3">
-                            <label for="area_range" class="form-label">Area Range (m²)</label>
-                            <select class="form-select" id="area_range" name="area_range">
-                                <option value="">All Areas</option>
-                                <option value="0-500" {{ 'selected' if current_filters.area_range == '0-500' }}>
-                                    Up to 500 m²
-                                </option>
-                                <option value="500-1000" {{ 'selected' if current_filters.area_range == '500-1000' }}>
-                                    500 - 1,000 m²
-                                </option>
-                                <option value="1000-2500" {{ 'selected' if current_filters.area_range == '1000-2500' }}>
-                                    1,000 - 2,500 m²
-                                </option>
-                                <option value="2500-5000" {{ 'selected' if current_filters.area_range == '2500-5000' }}>
-                                    2,500 - 5,000 m²
-                                </option>
-                                <option value="5000-10000" {{ 'selected' if current_filters.area_range == '5000-10000' }}>
-                                    5,000 - 10,000 m²
-                                </option>
-                                <option value="10000-999999999" {{ 'selected' if current_filters.area_range == '10000-999999999' }}>
-                                    Over 10,000 m²
-                                </option>
-                            </select>
-                        </div>
-                        
-                        <div class="col-md-6 mb-3 d-flex align-items-end">
+                        <!-- Action Buttons -->
+                        <div class="col-md-2 mb-3 d-flex align-items-end">
                             <button type="submit" class="btn btn-primary me-2">
-                                <i class="fas fa-search me-1"></i>Apply Filters
+                                <i class="fas fa-search me-1"></i>Apply
                             </button>
                             <a href="{{ url_for('main.lands') }}" class="btn btn-outline-secondary">
                                 <i class="fas fa-times me-1"></i>Clear
@@ -165,10 +112,40 @@
                         <table class="table table-hover mb-0">
                             <thead class="table-dark">
                                 <tr>
-                                    <th>Score</th>
+                                    <th>
+                                        <a href="{{ url_for('main.lands', sort='score_total', order='desc' if current_filters.sort == 'score_total' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" 
+                                           class="text-white text-decoration-none d-flex align-items-center">
+                                            Score
+                                            {% if current_filters.sort == 'score_total' %}
+                                                <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
+                                            {% else %}
+                                                <i class="fas fa-sort ms-1 opacity-50"></i>
+                                            {% endif %}
+                                        </a>
+                                    </th>
                                     <th>Title</th>
-                                    <th>Price</th>
-                                    <th>Area</th>
+                                    <th>
+                                        <a href="{{ url_for('main.lands', sort='price', order='desc' if current_filters.sort == 'price' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" 
+                                           class="text-white text-decoration-none d-flex align-items-center">
+                                            Price
+                                            {% if current_filters.sort == 'price' %}
+                                                <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
+                                            {% else %}
+                                                <i class="fas fa-sort ms-1 opacity-50"></i>
+                                            {% endif %}
+                                        </a>
+                                    </th>
+                                    <th>
+                                        <a href="{{ url_for('main.lands', sort='area', order='desc' if current_filters.sort == 'area' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" 
+                                           class="text-white text-decoration-none d-flex align-items-center">
+                                            Area
+                                            {% if current_filters.sort == 'area' %}
+                                                <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
+                                            {% else %}
+                                                <i class="fas fa-sort ms-1 opacity-50"></i>
+                                            {% endif %}
+                                        </a>
+                                    </th>
                                     <th>Coordinates</th>
                                     <th>Travel Times</th>
                                     <th>Type</th>
