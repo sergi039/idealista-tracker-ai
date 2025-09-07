@@ -356,7 +356,11 @@
                                 {% elif value is sameas false %}
                                     <i class="fas fa-times-circle text-danger"></i>
                                 {% elif value is number and 'distance' in key %}
-                                    <span class="badge bg-secondary">{{ "%.0f"|format(value/1000) }}km</span>
+                                    {% if value < 1000 %}
+                                        <span class="badge bg-secondary">{{ "%.1f"|format(value/1000) }}km</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">{{ "%.0f"|format(value/1000) }}km</span>
+                                    {% endif %}
                                 {% elif value is number and 'duration' in key %}
                                     <span class="badge bg-info">{{ "%.0f"|format(value/60) }}min</span>
                                 {% else %}
