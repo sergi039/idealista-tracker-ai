@@ -120,7 +120,7 @@ def lands():
     except Exception as e:
         logger.error(f"Failed to load lands page: {str(e)}")
         flash(f"Error loading lands: {str(e)}", 'error')
-        return render_template('lands.html', lands=[], municipalities=[])
+        return render_template('lands.html', lands=[], municipalities=[], current_filters={})
 
 @main_bp.route('/lands/<int:land_id>')
 def land_detail(land_id):

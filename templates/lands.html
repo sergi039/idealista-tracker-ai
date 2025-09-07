@@ -208,12 +208,29 @@
                                         <td>
                                             {% if land.location_lat and land.location_lon %}
                                                 <a href="https://www.google.com/maps/search/?api=1&query={{ land.location_lat }},{{ land.location_lon }}" 
-                                                   target="_blank" class="text-decoration-none" title="View on Google Maps">
-                                                    <i class="fas fa-map-marker-alt me-1 text-primary"></i>
+                                                   target="_blank" class="text-decoration-none" 
+                                                   title="{% if land.location_accuracy == 'precise' %}Точное местоположение{% elif land.location_accuracy == 'approximate' %}Приблизительное местоположение{% else %}Неизвестная точность местоположения{% endif %}">
+                                                    {% if land.location_accuracy == 'precise' %}
+                                                        <i class="fas fa-map-marker-alt me-1 text-success" title="Точное местоположение"></i>
+                                                    {% elif land.location_accuracy == 'approximate' %}
+                                                        <i class="fas fa-map-marker me-1 text-warning" title="Приблизительное местоположение"></i>
+                                                    {% else %}
+                                                        <i class="fas fa-question-circle me-1 text-secondary" title="Неизвестная точность"></i>
+                                                    {% endif %}
                                                     <small>{{ "%.4f"|format(land.location_lat) }}, {{ "%.4f"|format(land.location_lon) }}</small>
+                                                    {% if land.location_accuracy == 'approximate' %}
+                                                        <small class="text-muted d-block">~{{ land.municipality or 'область' }}</small>
+                                                    {% endif %}
                                                 </a>
                                             {% else %}
-                                                <span class="text-muted">-</span>
+                                                <span class="text-muted" title="Координаты недоступны">
+                                                    <i class="fas fa-map-marker-slash me-1"></i>
+                                                    {% if land.municipality %}
+                                                        <small>{{ land.municipality }}</small>
+                                                    {% else %}
+                                                        -
+                                                    {% endif %}
+                                                </span>
                                             {% endif %}
                                         </td>
                                         <td>

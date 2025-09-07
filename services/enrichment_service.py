@@ -29,14 +29,13 @@ class EnrichmentService:
             
             # Step 1: Geocode the location if coordinates are missing
             if not land.location_lat or not land.location_lon:
-                coordinates = self.geocoding_service.geocode_address(
-                    f"{land.municipality}, Spain"
-                )
-                if coordinates:
-                    land.location_lat = coordinates['lat']
-                    land.location_lon = coordinates['lng']
+                coordinates_info = self._geocode_with_accuracy(land)
+                if coordinates_info:
+                    land.location_lat = coordinates_info['lat']
+                    land.location_lon = coordinates_info['lng']
+                    land.location_accuracy = coordinates_info['accuracy']
                     db.session.commit()
-                    logger.info(f"Geocoded land {land_id}: {coordinates}")
+                    logger.info(f"Geocoded land {land_id}: {coordinates_info}")
             
             if not land.location_lat or not land.location_lon:
                 logger.warning(f"Could not geocode land {land_id}, skipping enrichment")
@@ -66,6 +65,53 @@ class EnrichmentService:
         except Exception as e:
             logger.error(f"Failed to enrich land {land_id}: {str(e)}")
             return False
+    
+    def _geocode_with_accuracy(self, land) -> Optional[Dict]:
+        """Geocode a land with accuracy determination"""
+        if not land.municipality:
+            return None
+            
+        # Try different address formats in order of precision
+        address_attempts = []
+        
+        # Try most specific first if we have detailed municipality info
+        if land.municipality and ', ' in land.municipality:
+            # For addresses like "Caserio Cuesta Ayones, 22, San Claudio-Trubia-Las Caldas, Oviedo"
+            address_attempts.append({
+                'address': f"{land.municipality}, Spain",
+                'accuracy': 'precise'
+            })
+        elif land.municipality and any(keyword in land.municipality.lower() for keyword in ['calle', 'carretera', 'lugar', 'avenida', 'plaza']):
+            # For addresses with street indicators
+            address_attempts.append({
+                'address': f"{land.municipality}, Spain", 
+                'accuracy': 'precise'
+            })
+        
+        # Always try the municipality as-is
+        if land.municipality and land.municipality.lower() not in ['and', 'cantabria']:
+            address_attempts.append({
+                'address': f"{land.municipality}, Spain",
+                'accuracy': 'approximate'
+            })
+        
+        # Final fallback to general region
+        address_attempts.append({
+            'address': "Cantabria, Spain",
+            'accuracy': 'approximate'
+        })
+        
+        for attempt in address_attempts:
+            coordinates = self.geocoding_service.geocode_address(attempt['address'])
+            if coordinates:
+                logger.info(f"Successfully geocoded '{attempt['address']}' with {attempt['accuracy']} accuracy")
+                return {
+                    'lat': coordinates['lat'],
+                    'lng': coordinates['lng'],
+                    'accuracy': attempt['accuracy']
+                }
+        
+        return None
     
     def _enrich_with_google_places(self, land):
         """Enrich with Google Places API data"""
