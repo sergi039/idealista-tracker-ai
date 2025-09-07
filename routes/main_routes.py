@@ -24,6 +24,12 @@ def lands():
         municipality_filter = request.args.get('municipality', '')
         search_query = request.args.get('search', '')
         
+        # Pagination parameters
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 25, type=int)
+        # Limit per_page to reasonable values
+        per_page = min(max(per_page, 10), 100)
+        
         # Build query
         query = Land.query
         
@@ -54,8 +60,13 @@ def lands():
                 # For descending (default for score), NULLs go last
                 query = query.order_by(sort_column.desc().nullslast())
         
-        # Get results
-        lands = query.all()
+        # Get paginated results
+        pagination = query.paginate(
+            page=page,
+            per_page=per_page,
+            error_out=False
+        )
+        lands = pagination.items
         
         # Get unique municipalities for filter dropdown
         municipalities = db.session.query(Land.municipality).distinct().filter(
@@ -67,13 +78,16 @@ def lands():
         return render_template(
             'lands.html',
             lands=lands,
+            pagination=pagination,
             municipalities=municipalities,
             current_filters={
                 'sort_by': sort_by,
                 'order': sort_order,
                 'land_type': land_type_filter,
                 'municipality': municipality_filter,
-                'search': search_query
+                'search': search_query,
+                'page': page,
+                'per_page': per_page
             }
         )
         
