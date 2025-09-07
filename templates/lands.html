@@ -169,7 +169,7 @@
                                     <th>Title</th>
                                     <th>Price</th>
                                     <th>Area</th>
-                                    <th>Municipality</th>
+                                    <th>Coordinates</th>
                                     <th>Type</th>
                                     <th>Added</th>
                                     <th>Actions</th>
@@ -190,12 +190,6 @@
                                         </td>
                                         <td>
                                             <div class="fw-bold">{{ land.title[:60] }}{% if land.title|length > 60 %}...{% endif %}</div>
-                                            {% if land.location_lat and land.location_lon %}
-                                                <small class="text-muted">
-                                                    <i class="fas fa-map-marker-alt me-1"></i>
-                                                    {{ "%.4f"|format(land.location_lat) }}, {{ "%.4f"|format(land.location_lon) }}
-                                                </small>
-                                            {% endif %}
                                         </td>
                                         <td>
                                             {% if land.price %}
@@ -211,7 +205,17 @@
                                                 <span class="text-muted">-</span>
                                             {% endif %}
                                         </td>
-                                        <td>{{ land.municipality or '-' }}</td>
+                                        <td>
+                                            {% if land.location_lat and land.location_lon %}
+                                                <a href="https://www.google.com/maps/search/?api=1&query={{ land.location_lat }},{{ land.location_lon }}" 
+                                                   target="_blank" class="text-decoration-none" title="View on Google Maps">
+                                                    <i class="fas fa-map-marker-alt me-1 text-primary"></i>
+                                                    <small>{{ "%.4f"|format(land.location_lat) }}, {{ "%.4f"|format(land.location_lon) }}</small>
+                                                </a>
+                                            {% else %}
+                                                <span class="text-muted">-</span>
+                                            {% endif %}
+                                        </td>
                                         <td>
                                             {% if land.land_type %}
                                                 <span class="badge {{ 'bg-success' if land.land_type == 'developed' else 'bg-warning' }}">
