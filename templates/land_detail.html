@@ -120,6 +120,10 @@
                             View on Idealista
                         </a>
                     {% endif %}
+                    <button onclick="analyzeWithClaude({{ land.id }})" class="btn btn-info">
+                        <i class="fas fa-brain me-2"></i>
+                        AI Analysis
+                    </button>
                     <a href="{{ url_for('main.edit_environment', land_id=land.id) }}" class="btn btn-primary">
                         <i class="fas fa-edit me-2"></i>
                         Edit Environment
@@ -407,4 +411,41 @@
         </div>
     </div>
 </div>
+
+<script>
+function analyzeWithClaude(landId) {
+    const button = event.target.closest('button');
+    const originalContent = button.innerHTML;
+    
+    // Show loading state
+    button.disabled = true;
+    button.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Analyzing...';
+    
+    // Call API
+    fetch(`/api/analyze/property/${landId}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Show success message and reload to see the analysis
+            alert('AI Analysis complete! The analysis has been saved.');
+            window.location.reload();
+        } else {
+            alert('Analysis failed: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        alert('Error: ' + error);
+    })
+    .finally(() => {
+        // Restore button
+        button.disabled = false;
+        button.innerHTML = originalContent;
+    });
+}
+</script>
 {% endblock %}

@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic>=0.66.0",
     "apscheduler>=3.11.0",
     "email-validator>=2.3.0",
     "flask>=3.1.2",

@@ -53,6 +53,55 @@ def manual_ingestion():
             "error": str(e)
         }), 500
 
+@api_bp.route('/analyze/property/<int:land_id>', methods=['POST'])
+def analyze_property_ai(land_id):
+    """Analyze property using Anthropic Claude AI"""
+    try:
+        land = Land.query.get_or_404(land_id)
+        
+        # Import Anthropic service
+        from services.anthropic_service import get_anthropic_service
+        anthropic_service = get_anthropic_service()
+        
+        # Prepare property data for analysis
+        property_data = {
+            'title': land.title,
+            'price': land.price,
+            'area': land.area,
+            'municipality': land.municipality,
+            'land_type': land.land_type,
+            'score_total': land.score_total,
+            'description': land.description
+        }
+        
+        # Get AI analysis
+        result = anthropic_service.analyze_property(property_data)
+        
+        if result and result.get('status') == 'success':
+            # Optionally store the analysis
+            if not land.property_details:
+                land.property_details = {}
+            land.property_details['ai_analysis'] = result.get('analysis')
+            db.session.commit()
+            
+            return jsonify({
+                "success": True,
+                "analysis": result.get('analysis'),
+                "model": result.get('model')
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": result.get('error', 'Analysis failed')
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"AI analysis failed for land {land_id}: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 @api_bp.route('/lands')
 def get_lands():
     """Get lands with optional filtering and sorting"""

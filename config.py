@@ -4,6 +4,11 @@ class Config:
     # Email backend selection
     EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "imap").lower()  # 'imap' or 'gmail'
     
+    # AI Integration - Anthropic Claude
+    # Using claude_key from secrets for authentication
+    ANTHROPIC_API_KEY = os.environ.get('claude_key')
+    ANTHROPIC_MODEL = "claude-3-5-sonnet-20241022"  # Latest Claude model
+    
     # IMAP settings (for Gmail with App Password)
     IMAP_HOST = os.environ.get("IMAP_HOST", "imap.gmail.com")
     IMAP_PORT = int(os.environ.get("IMAP_PORT", "993"))
