@@ -213,14 +213,11 @@
                                                     {% if land.location_accuracy == 'precise' %}
                                                         <i class="fas fa-map-marker-alt me-1 text-success" title="Precise location"></i>
                                                     {% elif land.location_accuracy == 'approximate' %}
-                                                        <i class="fas fa-map-marker me-1 text-warning" title="Approximate location"></i>
+                                                        <i class="fas fa-map-marker-alt me-1 text-danger" title="Approximate location"></i>
                                                     {% else %}
                                                         <i class="fas fa-question-circle me-1 text-secondary" title="Unknown accuracy"></i>
                                                     {% endif %}
                                                     <small>{{ "%.4f"|format(land.location_lat) }}, {{ "%.4f"|format(land.location_lon) }}</small>
-                                                    {% if land.location_accuracy == 'approximate' %}
-                                                        <small class="text-muted d-block">~{{ land.municipality or 'region' }}</small>
-                                                    {% endif %}
                                                 </a>
                                             {% else %}
                                                 <span class="text-muted" title="Coordinates unavailable">
@@ -250,19 +247,13 @@
                                             {% endif %}
                                         </td>
                                         <td>
-                                            <div class="btn-group btn-group-sm">
-                                                <a href="{{ url_for('main.land_detail', land_id=land.id) }}" 
-                                                   class="btn btn-outline-primary" title="View Details">
-                                                    <i class="fas fa-eye"></i>
+                                            {% if land.url %}
+                                                <a href="{{ land.url }}" target="_blank" 
+                                                   class="btn btn-success btn-sm" title="View on Idealista">
+                                                    <i class="fas fa-home me-1"></i>
+                                                    Idealista
                                                 </a>
-                                                {% if land.url %}
-                                                    <a href="{{ land.url }}" target="_blank" 
-                                                       class="btn btn-success" title="View on Idealista">
-                                                        <i class="fas fa-home me-1"></i>
-                                                        Idealista
-                                                    </a>
-                                                {% endif %}
-                                            </div>
+                                            {% endif %}
                                         </td>
                                     </tr>
                                 {% endfor %}
