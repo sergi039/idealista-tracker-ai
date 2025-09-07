@@ -139,7 +139,7 @@
                                         </a>
                                     </th>
                                     <th>Title</th>
-                                    <th>
+                                    <th style="min-width: 120px !important; white-space: nowrap !important;">
                                         <a href="{{ url_for('main.lands', sort='price', order='desc' if current_filters.sort_by == 'price' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" 
                                            class="text-white text-decoration-none d-flex align-items-center">
                                             Price
@@ -150,7 +150,7 @@
                                             {% endif %}
                                         </a>
                                     </th>
-                                    <th>
+                                    <th style="min-width: 100px !important; white-space: nowrap !important;">
                                         <a href="{{ url_for('main.lands', sort='area', order='desc' if current_filters.sort_by == 'area' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" 
                                            class="text-white text-decoration-none d-flex align-items-center">
                                             Area
@@ -184,14 +184,14 @@
                                         <td>
                                             <div class="fw-bold">{{ land.title[:60] }}{% if land.title|length > 60 %}...{% endif %}</div>
                                         </td>
-                                        <td>
+                                        <td style="min-width: 120px !important; white-space: nowrap !important;">
                                             {% if land.price %}
                                                 <strong>{{ "{:,.0f}".format(land.price) }}€</strong>
                                             {% else %}
                                                 <span class="text-muted">-</span>
                                             {% endif %}
                                         </td>
-                                        <td>
+                                        <td style="min-width: 100px !important; white-space: nowrap !important;">
                                             {% if land.area %}
                                                 {{ "{:,.0f}".format(land.area) }} m²
                                             {% else %}
