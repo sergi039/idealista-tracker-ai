@@ -208,31 +208,53 @@
                             <div class="mb-3">
                                 <span class="small fw-bold">Nearby Amenities:</span>
                                 <div class="mt-2">
+                                    <!-- Priority Amenities (Top of list) -->
+                                    {% for priority_amenity in ['hospital', 'pharmacy', 'police', 'bank'] %}
+                                        {% if priority_amenity in value %}
+                                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                                <span class="small text-capitalize fw-bold">
+                                                    {% if priority_amenity == 'hospital' %}
+                                                        <i class="fas fa-hospital me-1 text-danger"></i> Hospitals
+                                                    {% elif priority_amenity == 'pharmacy' %}
+                                                        <i class="fas fa-pills me-1 text-success"></i> Pharmacies
+                                                    {% elif priority_amenity == 'police' %}
+                                                        <i class="fas fa-shield-alt me-1 text-primary"></i> Police Stations
+                                                    {% elif priority_amenity == 'bank' %}
+                                                        <i class="fas fa-university me-1 text-info"></i> Banks
+                                                    {% endif %}
+                                                </span>
+                                                <span class="badge bg-primary">{{ value[priority_amenity] }}</span>
+                                            </div>
+                                        {% endif %}
+                                    {% endfor %}
+                                    
+                                    <!-- Separator if we have priority amenities -->
+                                    {% if (value.get('hospital') or value.get('pharmacy') or value.get('police') or value.get('bank')) and value.items()|length > (1 if (value.get('hospital') or value.get('pharmacy') or value.get('police') or value.get('bank')) else 0) %}
+                                        <hr class="my-2">
+                                    {% endif %}
+                                    
+                                    <!-- Regular Amenities -->
                                     {% for amenity, count in value.items() %}
-                                        <div class="d-flex justify-content-between align-items-center mb-1">
-                                            <span class="small text-capitalize">
-                                                {% if amenity == 'cafe' %}
-                                                    <i class="fas fa-coffee me-1"></i> Cafes
-                                                {% elif amenity == 'restaurant' %}
-                                                    <i class="fas fa-utensils me-1"></i> Restaurants
-                                                {% elif amenity == 'school' %}
-                                                    <i class="fas fa-graduation-cap me-1"></i> Schools
-                                                {% elif amenity == 'hospital' %}
-                                                    <i class="fas fa-hospital me-1"></i> Hospitals
-                                                {% elif amenity == 'fuel' %}
-                                                    <i class="fas fa-gas-pump me-1"></i> Gas Stations
-                                                {% elif amenity == 'bank' %}
-                                                    <i class="fas fa-university me-1"></i> Banks
-                                                {% elif amenity == 'pharmacy' %}
-                                                    <i class="fas fa-pills me-1"></i> Pharmacies
-                                                {% elif amenity == 'supermarket' %}
-                                                    <i class="fas fa-shopping-cart me-1"></i> Supermarkets
-                                                {% else %}
-                                                    <i class="fas fa-map-marker-alt me-1"></i> {{ amenity.replace('_', ' ').title() }}
-                                                {% endif %}
-                                            </span>
-                                            <span class="badge bg-primary">{{ count }}</span>
-                                        </div>
+                                        {% if amenity not in ['hospital', 'pharmacy', 'police', 'bank'] %}
+                                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                                <span class="small text-capitalize">
+                                                    {% if amenity == 'cafe' %}
+                                                        <i class="fas fa-coffee me-1"></i> Cafes
+                                                    {% elif amenity == 'restaurant' %}
+                                                        <i class="fas fa-utensils me-1"></i> Restaurants
+                                                    {% elif amenity == 'school' %}
+                                                        <i class="fas fa-graduation-cap me-1"></i> Schools
+                                                    {% elif amenity == 'fuel' %}
+                                                        <i class="fas fa-gas-pump me-1"></i> Gas Stations
+                                                    {% elif amenity == 'supermarket' %}
+                                                        <i class="fas fa-shopping-cart me-1"></i> Supermarkets
+                                                    {% else %}
+                                                        <i class="fas fa-map-marker-alt me-1"></i> {{ amenity.replace('_', ' ').title() }}
+                                                    {% endif %}
+                                                </span>
+                                                <span class="badge bg-primary">{{ count }}</span>
+                                            </div>
+                                        {% endif %}
                                     {% endfor %}
                                 </div>
                             </div>
@@ -263,7 +285,7 @@
         {% endif %}
 
         <!-- Transport -->
-        {% if land.transport %}
+        {% if land.transport or land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital or land.travel_time_police %}
             <div class="card mb-4">
                 <div class="card-header">
                     <h6 class="card-title mb-0">
@@ -271,22 +293,56 @@
                     </h6>
                 </div>
                 <div class="card-body">
-                    {% for key, value in land.transport.items() %}
+                    <!-- Priority Infrastructure (Top of list) -->
+                    {% if land.travel_time_airport %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span class="small">{{ key.replace('_', ' ').title() }}</span>
-                            {% if value is sameas true %}
-                                <i class="fas fa-check-circle text-success"></i>
-                            {% elif value is sameas false %}
-                                <i class="fas fa-times-circle text-danger"></i>
-                            {% elif value is number and 'distance' in key %}
-                                <span class="badge bg-secondary">{{ "%.0f"|format(value/1000) }}km</span>
-                            {% elif value is number and 'duration' in key %}
-                                <span class="badge bg-info">{{ "%.0f"|format(value/60) }}min</span>
-                            {% else %}
-                                <span class="text-muted small">{{ value }}</span>
-                            {% endif %}
+                            <span class="small fw-bold"><i class="fas fa-plane me-1"></i>Airport</span>
+                            <span class="badge bg-info">{{ land.travel_time_airport }}min</span>
                         </div>
-                    {% endfor %}
+                    {% endif %}
+                    {% if land.travel_time_train_station %}
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small fw-bold"><i class="fas fa-train me-1"></i>Train Station</span>
+                            <span class="badge bg-info">{{ land.travel_time_train_station }}min</span>
+                        </div>
+                    {% endif %}
+                    {% if land.travel_time_hospital %}
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small fw-bold"><i class="fas fa-hospital me-1"></i>Hospital</span>
+                            <span class="badge bg-info">{{ land.travel_time_hospital }}min</span>
+                        </div>
+                    {% endif %}
+                    {% if land.travel_time_police %}
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small fw-bold"><i class="fas fa-shield-alt me-1"></i>Police Station</span>
+                            <span class="badge bg-info">{{ land.travel_time_police }}min</span>
+                        </div>
+                    {% endif %}
+                    
+                    <!-- Separator if we have both priority and regular transport data -->
+                    {% if (land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital or land.travel_time_police) and land.transport %}
+                        <hr class="my-3">
+                    {% endif %}
+                    
+                    <!-- Regular Transport Data -->
+                    {% if land.transport %}
+                        {% for key, value in land.transport.items() %}
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="small">{{ key.replace('_', ' ').title() }}</span>
+                                {% if value is sameas true %}
+                                    <i class="fas fa-check-circle text-success"></i>
+                                {% elif value is sameas false %}
+                                    <i class="fas fa-times-circle text-danger"></i>
+                                {% elif value is number and 'distance' in key %}
+                                    <span class="badge bg-secondary">{{ "%.0f"|format(value/1000) }}km</span>
+                                {% elif value is number and 'duration' in key %}
+                                    <span class="badge bg-info">{{ "%.0f"|format(value/60) }}min</span>
+                                {% else %}
+                                    <span class="text-muted small">{{ value }}</span>
+                                {% endif %}
+                            </div>
+                        {% endfor %}
+                    {% endif %}
                 </div>
             </div>
         {% endif %}

@@ -37,6 +37,12 @@ class Land(db.Model):
     travel_time_nearest_beach = db.Column(db.Integer)  # Time to nearest beach in minutes
     nearest_beach_name = db.Column(db.String(255))     # Name of nearest beach
     
+    # Priority infrastructure travel times (in minutes)
+    travel_time_airport = db.Column(db.Integer)     # Time to nearest airport
+    travel_time_train_station = db.Column(db.Integer)  # Time to nearest train station
+    travel_time_hospital = db.Column(db.Integer)    # Time to nearest hospital
+    travel_time_police = db.Column(db.Integer)      # Time to nearest police station
+    
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     def __repr__(self):

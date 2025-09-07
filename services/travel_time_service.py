@@ -26,6 +26,31 @@ class TravelTimeService:
             'Playa de la Concha de Artedo, Cudillero, Spain',
             'Playa de Ribadesella, Asturias, Spain'
         ]
+        
+        # Key infrastructure locations
+        self.airports = [
+            'Santander Airport, Santander, Spain',
+            'Asturias Airport, Santiago del Monte, Spain',
+            'Bilbao Airport, Loiu, Spain'
+        ]
+        
+        self.train_stations = [
+            'Santander Railway Station, Santander, Spain',
+            'Oviedo Railway Station, Oviedo, Spain',
+            'Gijón Railway Station, Gijón, Spain'
+        ]
+        
+        self.hospitals = [
+            'Hospital Universitario Marqués de Valdecilla, Santander, Spain',
+            'Hospital Universitario Central de Asturias, Oviedo, Spain',
+            'Hospital Cabueñes, Gijón, Spain'
+        ]
+        
+        self.police_stations = [
+            'Policía Nacional Santander, Spain',
+            'Policía Nacional Oviedo, Spain', 
+            'Policía Nacional Gijón, Spain'
+        ]
     
     def calculate_travel_times(self, land_id: int) -> bool:
         """Calculate travel times for a land property"""
@@ -49,6 +74,12 @@ class TravelTimeService:
             # Find nearest beach
             nearest_beach_data = self._find_nearest_beach(origin)
             
+            # Calculate times to key infrastructure (priority locations)
+            airport_time = self._find_nearest_facility(origin, self.airports)
+            train_station_time = self._find_nearest_facility(origin, self.train_stations)
+            hospital_time = self._find_nearest_facility(origin, self.hospitals)
+            police_time = self._find_nearest_facility(origin, self.police_stations)
+            
             # Update land record
             if oviedo_time is not None:
                 land.travel_time_oviedo = oviedo_time
@@ -57,6 +88,16 @@ class TravelTimeService:
             if nearest_beach_data:
                 land.travel_time_nearest_beach = nearest_beach_data['time']
                 land.nearest_beach_name = nearest_beach_data['name']
+                
+            # Update priority infrastructure travel times
+            if airport_time is not None:
+                land.travel_time_airport = airport_time
+            if train_station_time is not None:
+                land.travel_time_train_station = train_station_time
+            if hospital_time is not None:
+                land.travel_time_hospital = hospital_time
+            if police_time is not None:
+                land.travel_time_police = police_time
             
             db.session.commit()
             
@@ -132,6 +173,32 @@ class TravelTimeService:
             
         except Exception as e:
             logger.error(f"Error finding nearest beach: {str(e)}")
+            return None
+    
+    def _find_nearest_facility(self, origin: str, facilities: List[str]) -> Optional[int]:
+        """Find travel time to nearest facility from a list"""
+        if not self.google_maps_key or not facilities:
+            return None
+        
+        try:
+            # Calculate times to all facilities
+            facility_times = []
+            
+            for facility in facilities:
+                travel_time = self._get_travel_time(origin, facility)
+                if travel_time is not None:
+                    facility_times.append(travel_time)
+            
+            if facility_times:
+                # Return time to nearest facility
+                nearest_time = min(facility_times)
+                logger.info(f"Nearest facility travel time: {nearest_time} minutes")
+                return nearest_time
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error finding nearest facility: {str(e)}")
             return None
     
     def generate_google_maps_route_url(self, origin_lat: float, origin_lon: float, 
