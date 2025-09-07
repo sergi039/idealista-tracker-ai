@@ -236,19 +236,19 @@
                                                 <div class="small">
                                                     {% if land.travel_time_oviedo %}
                                                         <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Oviedo,+Asturias,+Spain" 
-                                                           target="_blank" class="text-decoration-none me-2" title="Drive to Oviedo">
-                                                            🏛️ {{ land.travel_time_oviedo }}min
+                                                           target="_blank" class="text-decoration-none d-block" title="Drive to Oviedo">
+                                                            <strong>Oviedo:</strong> {{ land.travel_time_oviedo }}min
                                                         </a>
                                                     {% endif %}
                                                     {% if land.travel_time_gijon %}
                                                         <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Gijón,+Asturias,+Spain" 
-                                                           target="_blank" class="text-decoration-none me-2" title="Drive to Gijón">
-                                                            🏭 {{ land.travel_time_gijon }}min
+                                                           target="_blank" class="text-decoration-none d-block" title="Drive to Gijón">
+                                                            <strong>Gijón:</strong> {{ land.travel_time_gijon }}min
                                                         </a>
                                                     {% endif %}
                                                     {% if land.travel_time_nearest_beach %}
                                                         <div class="text-info" title="Nearest beach: {{ land.nearest_beach_name }}">
-                                                            🏖️ {{ land.travel_time_nearest_beach }}min
+                                                            <strong>{% if land.nearest_beach_name %}{{ land.nearest_beach_name }}:{% else %}Beach:{% endif %}</strong> {{ land.travel_time_nearest_beach }}min
                                                         </div>
                                                     {% endif %}
                                                 </div>

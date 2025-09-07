@@ -178,6 +178,33 @@ class IMAPService:
                         subject = self._decode_header_value(msg.get('Subject', ''))
                         logger.info(f"Processing email UID {uid}: {subject[:50]}...")
                         
+                        # Skip non-property emails
+                        skip_subjects = [
+                            'One of your favourites is no longer listed',
+                            'Tu favorito ya no está disponible',
+                            'Welcome to Idealista',
+                            'Bienvenido a Idealista'
+                        ]
+                        
+                        if any(skip_text in subject for skip_text in skip_subjects):
+                            logger.info(f"Skipping non-property email: {subject[:50]}")
+                            continue
+                        
+                        # Only process property listing emails
+                        valid_subjects = [
+                            'New plot of land in your search',
+                            'Nuevo terreno en tu búsqueda',
+                            'Listings recommended for you',
+                            'Inmuebles recomendados para ti',
+                            'Price reduction in your search',
+                            'Bajada de precio en tu búsqueda'
+                        ]
+                        
+                        is_valid = any(valid_text in subject for valid_text in valid_subjects)
+                        if not is_valid:
+                            logger.warning(f"Unknown email type, skipping: {subject[:50]}")
+                            continue
+                        
                         email_content = {'subject': subject, 'body': body, 'message_id': f"imap_{uid}"}
                         parsed = self.email_parser.parse_idealista_email(email_content)
                         if parsed:
