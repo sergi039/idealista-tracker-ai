@@ -170,6 +170,7 @@
                                     <th>Price</th>
                                     <th>Area</th>
                                     <th>Coordinates</th>
+                                    <th>Travel Times</th>
                                     <th>Type</th>
                                     <th>Added</th>
                                     <th>Actions</th>
@@ -228,6 +229,31 @@
                                                         -
                                                     {% endif %}
                                                 </span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if land.travel_time_oviedo or land.travel_time_gijon or land.travel_time_nearest_beach %}
+                                                <div class="small">
+                                                    {% if land.travel_time_oviedo %}
+                                                        <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Oviedo,+Asturias,+Spain" 
+                                                           target="_blank" class="text-decoration-none me-2" title="Drive to Oviedo">
+                                                            🏛️ {{ land.travel_time_oviedo }}min
+                                                        </a>
+                                                    {% endif %}
+                                                    {% if land.travel_time_gijon %}
+                                                        <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Gijón,+Asturias,+Spain" 
+                                                           target="_blank" class="text-decoration-none me-2" title="Drive to Gijón">
+                                                            🏭 {{ land.travel_time_gijon }}min
+                                                        </a>
+                                                    {% endif %}
+                                                    {% if land.travel_time_nearest_beach %}
+                                                        <div class="text-info" title="Nearest beach: {{ land.nearest_beach_name }}">
+                                                            🏖️ {{ land.travel_time_nearest_beach }}min
+                                                        </div>
+                                                    {% endif %}
+                                                </div>
+                                            {% else %}
+                                                <span class="text-muted">-</span>
                                             {% endif %}
                                         </td>
                                         <td>

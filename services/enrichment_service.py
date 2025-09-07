@@ -9,8 +9,8 @@ logger = logging.getLogger(__name__)
 
 class EnrichmentService:
     def __init__(self):
-        self.google_maps_key = os.environ.get("Google_api", "") or os.environ.get("GOOGLE_MAPS_API_KEY", "")
-        self.google_places_key = os.environ.get("Google_api", "") or os.environ.get("GOOGLE_PLACES_API_KEY", "")
+        self.google_maps_key = os.environ.get("GOOGLE_MAPS_API", "") or os.environ.get("Google_api", "") or os.environ.get("GOOGLE_MAPS_API_KEY", "")
+        self.google_places_key = os.environ.get("GOOGLE_MAPS_API", "") or os.environ.get("Google_api", "") or os.environ.get("GOOGLE_PLACES_API_KEY", "")
         self.osm_overpass_url = "https://overpass-api.de/api/interpreter"
         self.geocoding_service = GeocodingService()
         
@@ -53,7 +53,12 @@ class EnrichmentService:
             # Step 5: Analyze environment (views, orientation)
             self._analyze_environment(land)
             
-            # Step 6: Calculate final score
+            # Step 6: Calculate travel times
+            from services.travel_time_service import TravelTimeService
+            travel_service = TravelTimeService()
+            travel_service.calculate_travel_times(land_id)
+            
+            # Step 7: Calculate final score
             from services.scoring_service import ScoringService
             scoring_service = ScoringService()
             scoring_service.calculate_score(land)
