@@ -264,10 +264,16 @@ class IMAPService:
                     db.session.add(land)
                     db.session.commit()
                     
-                    # Temporarily skip enrichment to avoid timeouts
-                    # enrichment_service = EnrichmentService()
-                    # enrichment_service.enrich_land(land.id)
-                    logger.info(f"Skipping enrichment for land {land.id} to avoid timeouts")
+                    # Try enrichment but continue if it fails
+                    try:
+                        enrichment_service = EnrichmentService()
+                        enriched = enrichment_service.enrich_land(land.id)
+                        if enriched:
+                            logger.info(f"Successfully enriched land {land.id}")
+                        else:
+                            logger.warning(f"Failed to enrich land {land.id}, continuing without enrichment")
+                    except Exception as enrich_error:
+                        logger.warning(f"Enrichment failed for land {land.id}: {str(enrich_error)}, continuing")
                     
                     processed_count += 1
                     logger.info(f"Processed new land: {land.title}")
