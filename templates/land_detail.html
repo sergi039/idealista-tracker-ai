@@ -294,25 +294,37 @@
                     {% if land.travel_time_airport %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold"><i class="fas fa-plane me-1"></i>Airport</span>
-                            <span class="badge bg-info">{{ land.travel_time_airport }}min</span>
+                            <div>
+                                <span class="badge bg-info me-1">{{ land.travel_time_airport }}min</span>
+                                {% if land.distance_airport %}<span class="badge bg-secondary">{{ land.distance_airport }}km</span>{% endif %}
+                            </div>
                         </div>
                     {% endif %}
                     {% if land.travel_time_train_station %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold"><i class="fas fa-train me-1"></i>Train Station</span>
-                            <span class="badge bg-info">{{ land.travel_time_train_station }}min</span>
+                            <div>
+                                <span class="badge bg-info me-1">{{ land.travel_time_train_station }}min</span>
+                                {% if land.distance_train_station %}<span class="badge bg-secondary">{{ land.distance_train_station }}km</span>{% endif %}
+                            </div>
                         </div>
                     {% endif %}
                     {% if land.travel_time_hospital %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold"><i class="fas fa-hospital me-1"></i>Hospital</span>
-                            <span class="badge bg-info">{{ land.travel_time_hospital }}min</span>
+                            <div>
+                                <span class="badge bg-info me-1">{{ land.travel_time_hospital }}min</span>
+                                {% if land.distance_hospital %}<span class="badge bg-secondary">{{ land.distance_hospital }}km</span>{% endif %}
+                            </div>
                         </div>
                     {% endif %}
                     {% if land.travel_time_police %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold"><i class="fas fa-shield-alt me-1"></i>Police Station</span>
-                            <span class="badge bg-info">{{ land.travel_time_police }}min</span>
+                            <div>
+                                <span class="badge bg-info me-1">{{ land.travel_time_police }}min</span>
+                                {% if land.distance_police %}<span class="badge bg-secondary">{{ land.distance_police }}km</span>{% endif %}
+                            </div>
                         </div>
                     {% endif %}
                     
