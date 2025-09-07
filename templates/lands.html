@@ -224,9 +224,10 @@
                                                         </a>
                                                     {% endif %}
                                                     {% if land.travel_time_nearest_beach %}
-                                                        <div class="text-info" title="Nearest beach: {{ land.nearest_beach_name }}">
+                                                        <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/{{ land.nearest_beach_name if land.nearest_beach_name else 'Playa' }},+Asturias,+Spain" 
+                                                           target="_blank" class="text-decoration-none text-info d-block" title="Drive to {{ land.nearest_beach_name if land.nearest_beach_name else 'nearest beach' }}">
                                                             <strong>{% if land.nearest_beach_name %}{{ land.nearest_beach_name }}:{% else %}Beach:{% endif %}</strong> {{ land.travel_time_nearest_beach }}min
-                                                        </div>
+                                                        </a>
                                                     {% endif %}
                                                 </div>
                                             {% else %}
