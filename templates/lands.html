@@ -149,7 +149,7 @@
                                     <th>Coordinates</th>
                                     <th>Travel Times</th>
                                     <th>Type</th>
-                                    <th>Added</th>
+                                    <th style="min-width: 85px;">Added</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
@@ -242,7 +242,7 @@
                                                 <span class="text-muted">-</span>
                                             {% endif %}
                                         </td>
-                                        <td>
+                                        <td style="min-width: 85px;">
                                             {% if land.created_at %}
                                                 <small>{{ land.created_at.strftime('%d %b %y') }}</small>
                                             {% else %}
