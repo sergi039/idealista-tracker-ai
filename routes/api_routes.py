@@ -26,8 +26,11 @@ def download_project():
 def manual_ingestion():
     """Manually trigger email ingestion"""
     try:
-        # Get sync type from request body (default to incremental)
-        data = request.get_json() or {}
+        # Get sync type from request body (support both JSON and form data)
+        if request.is_json:
+            data = request.get_json() or {}
+        else:
+            data = request.form.to_dict() or {}
         sync_type = data.get('sync_type', 'incremental')
         
         from config import Config
