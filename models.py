@@ -50,6 +50,7 @@ class Land(db.Model):
     distance_police = db.Column(db.Integer)         # Distance to nearest police station in km
     
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    email_date = db.Column(db.DateTime)  # Date when the email was received
     
     def __repr__(self):
         return f'<Land {self.id}: {self.title[:50]}...>'

@@ -314,6 +314,16 @@ class IMAPService:
                         continue
                     
                     # Create new land record
+                    # Parse email date if available
+                    email_date = None
+                    if email_data.get('email_received_at'):
+                        try:
+                            import email.utils
+                            # Parse IMAP INTERNALDATE format
+                            email_date = email.utils.parsedate_to_datetime(email_data['email_received_at'].decode() if isinstance(email_data['email_received_at'], bytes) else email_data['email_received_at'])
+                        except Exception as e:
+                            logger.warning(f"Failed to parse email date: {e}")
+                    
                     land = Land(
                         source_email_id=email_data['source_email_id'],
                         title=email_data.get('title'),
@@ -323,7 +333,8 @@ class IMAPService:
                         municipality=email_data.get('municipality'),
                         land_type=email_data.get('land_type'),
                         description=email_data.get('description'),
-                        legal_status=email_data.get('legal_status')
+                        legal_status=email_data.get('legal_status'),
+                        email_date=email_date
                     )
                     
                     db.session.add(land)
