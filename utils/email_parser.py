@@ -56,7 +56,7 @@ class EmailParser:
             
             # Extract basic information
             extracted_data = {
-                'title': self._extract_title(subject),
+                'title': self._extract_title(full_text),
                 'price': self._extract_price(full_text),
                 'area': self._extract_area(full_text),
                 'url': self._extract_url(full_text),
@@ -83,12 +83,53 @@ class EmailParser:
             logger.error(f"Failed to parse email: {str(e)}")
             return None
     
-    def _extract_title(self, subject: str) -> str:
-        """Extract property title from email subject"""
-        # Clean up subject line
-        title = re.sub(r'^(Re:|Fwd?:|Idealista:?)\s*', '', subject, flags=re.IGNORECASE)
-        title = re.sub(r'\s+', ' ', title).strip()
-        return title
+    def _extract_title(self, text: str) -> str:
+        """Extract property title from email content"""
+        # Try to extract real property title from HTML content
+        title_patterns = [
+            # Look for property descriptions in quotes or specific HTML structures
+            r'<strong[^>]*>([^<]+(?:m²|m2)[^<]*)</strong>',  # Bold text with area
+            r'<h[1-6][^>]*>([^<]+(?:terreno|finca|parcela|solar)[^<]*)</h[1-6]>',  # Headers with land keywords
+            r'<td[^>]*>([^<]*(?:terreno|finca|parcela|solar)[^<]{10,50})</td>',  # Table cells with descriptions
+            r'(?:Terreno|Finca|Parcela|Solar)\s+[^\.]{10,80}',  # Land descriptions
+            r'Land\s+[^\.]{10,80}',  # English land descriptions
+            r'Plot\s+[^\.]{10,80}',  # Plot descriptions
+            # Look for text after price/area information
+            r'€[^a-zA-Z]*([A-Z][^€\n]{15,80})',  # Text after price
+            r'(\d+,?\d*\s*m²[^€\n]{5,60})',  # Area followed by description
+            r'>([^<>]{20,80}(?:terreno|finca|parcela|solar|plot|land)[^<>]{0,20})<',  # HTML content with keywords
+        ]
+        
+        for pattern in title_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+            for match in matches:
+                title = match.strip()
+                # Clean up HTML entities and extra whitespace
+                title = re.sub(r'&[a-zA-Z]+;', ' ', title)
+                title = re.sub(r'\s+', ' ', title)
+                title = title.strip()
+                
+                # Validate the title (should be descriptive, not too short/generic)
+                if (len(title) >= 15 and 
+                    not any(skip in title.lower() for skip in ['your search', 'cantabria land', 'new plot', 'idealista']) and
+                    any(keyword in title.lower() for keyword in ['terreno', 'finca', 'parcela', 'solar', 'plot', 'land', 'm²', 'm2'])):
+                    return title[:100]  # Limit length
+        
+        # If no specific property title found, create a descriptive one from available info
+        # Try to extract location info
+        location_match = re.search(r'([A-ZÁÉÍÓÚ][a-záéíóúñ\s-]+)\s*,\s*(?:Cantabria|Asturias)', text, re.IGNORECASE)
+        if location_match:
+            location = location_match.group(1).strip()
+            return f"Terreno en {location}"
+        
+        # Fallback to area-based title if available
+        area_match = re.search(r'(\d{1,3}(?:[,\.]\d{3})*)\s*m[²2]', text, re.IGNORECASE)
+        if area_match:
+            area = area_match.group(1)
+            return f"Terreno de {area} m²"
+        
+        # Last resort: generic but better than email subject
+        return "Terreno en Cantabria"
     
     def _extract_price(self, text: str) -> Optional[float]:
         """Extract price from text"""
