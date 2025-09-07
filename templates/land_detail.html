@@ -349,7 +349,7 @@
                     <!-- Regular Transport Data -->
                     {% if land.transport %}
                         {% for key, value in land.transport.items() %}
-                            {% if not (key.endswith('_travel_time') and (key.replace('_travel_time', '_distance') in land.transport)) %}
+                            {% if not (key.endswith('_travel_time') and (key.replace('_travel_time', '_distance') in land.transport)) and not (key.endswith('_available') and (key.replace('_available', '_distance') in land.transport)) %}
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 <span class="small">{{ key.replace('_', ' ').title() }}</span>
                                 {% if value is sameas true %}
