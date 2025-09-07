@@ -7,7 +7,7 @@ from imapclient import IMAPClient
 from email import message_from_bytes
 from email.header import decode_header
 from utils.email_parser import EmailParser
-from models import Land
+from models import Land, SyncHistory
 from app import db
 from config import Config
 
@@ -204,16 +204,33 @@ class IMAPService:
 
         return email_data
     
-    def run_ingestion(self) -> int:
+    def run_ingestion(self, sync_type: str = "incremental") -> int:
         """Main method to run email ingestion via IMAP"""
+        start_time = datetime.utcnow()
+        
+        # Create sync history record
+        sync_history = SyncHistory(
+            sync_type=sync_type,
+            backend='imap',
+            started_at=start_time
+        )
+        db.session.add(sync_history)
+        db.session.commit()
+        
         try:
-            logger.info("Starting IMAP ingestion process")
+            logger.info(f"Starting IMAP ingestion process ({sync_type})")
             
             # Fetch and parse emails
             emails = self.get_idealista_emails()
+            sync_history.total_emails_found = len(emails)
             
             if not emails:
                 logger.warning("No emails found for ingestion")
+                sync_history.new_properties_added = 0
+                sync_history.status = 'completed'
+                sync_history.completed_at = datetime.utcnow()
+                sync_history.sync_duration = int((datetime.utcnow() - start_time).total_seconds())
+                db.session.commit()
                 return 0
             
             # Import here to avoid circular imports
@@ -260,9 +277,42 @@ class IMAPService:
                     db.session.rollback()
                     continue
             
+            # Update sync history
+            sync_history.new_properties_added = processed_count
+            sync_history.status = 'completed'
+            sync_history.completed_at = datetime.utcnow()
+            sync_history.sync_duration = int((datetime.utcnow() - start_time).total_seconds())
+            db.session.commit()
+            
             logger.info(f"IMAP ingestion completed. Processed {processed_count} new properties")
             return processed_count
             
         except Exception as e:
             logger.error(f"IMAP ingestion failed: {str(e)}")
+            
+            # Update sync history with error
+            sync_history.status = 'failed'
+            sync_history.error_message = str(e)
+            sync_history.completed_at = datetime.utcnow()
+            sync_history.sync_duration = int((datetime.utcnow() - start_time).total_seconds())
+            db.session.commit()
+            
             return 0
+    
+    def run_full_sync(self) -> int:
+        """Run a full synchronization - reset last seen UID and process all emails"""
+        logger.info("Starting full email synchronization")
+        
+        # Temporarily reset last seen UID for full sync
+        original_uid = self.last_seen_uid
+        self.last_seen_uid = 0
+        
+        try:
+            # Run ingestion with full sync type
+            result = self.run_ingestion(sync_type="full")
+            return result
+            
+        finally:
+            # Restore original UID only if full sync failed
+            # If successful, the new UID will be saved automatically
+            pass

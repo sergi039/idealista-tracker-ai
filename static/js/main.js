@@ -328,16 +328,29 @@ window.IdealistaApp = {
         fetch('/api/stats')
             .then(response => response.json())
             .then(data => {
-                if (data.success) {
+                if (data.success && data.stats.last_sync) {
                     const lastSyncElement = document.getElementById('last-sync');
                     if (lastSyncElement) {
-                        // This would be enhanced with actual last sync data from the API
-                        lastSyncElement.textContent = new Date().toLocaleDateString();
+                        const sync = data.stats.last_sync;
+                        const date = new Date(sync.completed_at);
+                        const dateStr = date.toLocaleDateString();
+                        const timeStr = date.toLocaleTimeString();
+                        
+                        lastSyncElement.innerHTML = `${dateStr} at ${timeStr} (+${sync.new_properties} new)`;
+                    }
+                } else {
+                    const lastSyncElement = document.getElementById('last-sync');
+                    if (lastSyncElement) {
+                        lastSyncElement.textContent = 'No sync data';
                     }
                 }
             })
             .catch(error => {
                 console.warn('Failed to update last sync time:', error);
+                const lastSyncElement = document.getElementById('last-sync');
+                if (lastSyncElement) {
+                    lastSyncElement.textContent = 'Error loading';
+                }
             });
     },
 

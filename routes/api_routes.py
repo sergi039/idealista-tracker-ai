@@ -1,7 +1,7 @@
 import logging
 import os
 from flask import Blueprint, jsonify, request, send_from_directory
-from models import Land, ScoringCriteria
+from models import Land, ScoringCriteria, SyncHistory
 from app import db
 
 logger = logging.getLogger(__name__)
@@ -286,6 +286,21 @@ def get_stats():
             municipality: count for municipality, count in municipality_stats if municipality
         }
         
+        # Get last sync information
+        last_sync = SyncHistory.query.order_by(SyncHistory.completed_at.desc()).first()
+        last_sync_info = None
+        
+        if last_sync:
+            last_sync_info = {
+                "sync_type": last_sync.sync_type,
+                "backend": last_sync.backend,
+                "new_properties": last_sync.new_properties_added,
+                "total_emails": last_sync.total_emails_found,
+                "status": last_sync.status,
+                "completed_at": last_sync.completed_at.isoformat() if last_sync.completed_at else None,
+                "duration": last_sync.sync_duration
+            }
+        
         return jsonify({
             "success": True,
             "stats": {
@@ -299,7 +314,8 @@ def get_stats():
                     "maximum": float(max_score) if max_score else 0,
                     "minimum": float(min_score) if min_score else 0
                 },
-                "municipality_distribution": municipality_distribution
+                "municipality_distribution": municipality_distribution,
+                "last_sync": last_sync_info
             }
         })
         
