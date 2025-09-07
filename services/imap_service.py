@@ -178,24 +178,28 @@ class IMAPService:
                         subject = self._decode_header_value(msg.get('Subject', ''))
                         logger.info(f"Processing email UID {uid}: {subject[:50]}...")
                         
-                        # Skip non-property emails
+                        # Skip non-property emails (explicit blacklist)
                         skip_subjects = [
                             'One of your favourites is no longer listed',
                             'Tu favorito ya no está disponible',
                             'Welcome to Idealista',
-                            'Bienvenido a Idealista'
+                            'Bienvenido a Idealista',
+                            'Contactos que ha recibido',
+                            'You have received contacts',
+                            'Weekly digest',
+                            'Resumen semanal',
+                            'Update your preferences',
+                            'Actualiza tus preferencias'
                         ]
                         
                         if any(skip_text in subject for skip_text in skip_subjects):
                             logger.info(f"Skipping non-property email: {subject[:50]}")
                             continue
                         
-                        # Only process property listing emails
+                        # Only process property listing emails (whitelist approach)
                         valid_subjects = [
                             'New plot of land in your search',
                             'Nuevo terreno en tu búsqueda',
-                            'Listings recommended for you',
-                            'Inmuebles recomendados para ti',
                             'Price reduction in your search',
                             'Bajada de precio en tu búsqueda'
                         ]
@@ -205,8 +209,30 @@ class IMAPService:
                             logger.warning(f"Unknown email type, skipping: {subject[:50]}")
                             continue
                         
+                        # Parse email content and validate
                         email_content = {'subject': subject, 'body': body, 'message_id': f"imap_{uid}"}
                         parsed = self.email_parser.parse_idealista_email(email_content)
+                        
+                        if not parsed:
+                            logger.warning(f"Could not parse property data from email UID {uid}")
+                            continue
+                            
+                        # Validate URL quality - skip emails with homepage/UTM-only links
+                        if parsed.get('url'):
+                            url = parsed['url']
+                            # Good URLs contain '/inmueble/' or '/venta-' or '/alquiler-'
+                            is_property_url = any(path in url for path in ['/inmueble/', '/venta-', '/alquiler-'])
+                            # Bad URLs are just homepage with UTM parameters
+                            is_homepage_only = (
+                                url.startswith('https://www.idealista.com/?') or
+                                url.startswith('https://www.idealista.com/#') or
+                                url.endswith('idealista.com/') or
+                                'utm_link=logo' in url
+                            )
+                            
+                            if is_homepage_only or not is_property_url:
+                                logger.warning(f"Skipping email with invalid URL: {url[:100]}")
+                                continue
                         if parsed:
                             parsed['source_email_id'] = f"imap_{uid}"
                             parsed['email_received_at'] = fetch_data[uid][b'INTERNALDATE']
