@@ -110,9 +110,9 @@
                 <!-- Actions -->
                 <div class="mt-4">
                     {% if land.url %}
-                        <a href="{{ land.url }}" target="_blank" class="btn btn-success">
-                            <i class="fas fa-external-link-alt me-2"></i>
-                            View Original Listing
+                        <a href="{{ land.url }}" target="_blank" class="btn btn-success btn-lg">
+                            <i class="fas fa-home me-2"></i>
+                            View on Idealista
                         </a>
                     {% endif %}
                     <a href="{{ url_for('main.edit_environment', land_id=land.id) }}" class="btn btn-primary">
