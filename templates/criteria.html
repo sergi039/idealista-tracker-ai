@@ -17,8 +17,8 @@
 
         <div class="alert alert-info">
             <i class="fas fa-info-circle me-2"></i>
-            Adjust the weights for each scoring criterion. Changes will trigger automatic rescoring of all properties.
-            Weights are relative - they don't need to sum to 1.0.
+            <strong>Методика MCDM (Multi-Criteria Decision Making):</strong> Веса должны в сумме давать 1.0 (100%). При изменении одного веса остальные пропорционально корректируются.
+            <br><small>Используется в профессиональной оценке недвижимости по стандартам ISO 31000 и RICS.</small>
         </div>
 
         <div class="card">
@@ -58,19 +58,31 @@
                                 </p>
                             </div>
                             <div class="col-md-4">
-                                <div class="input-group">
+                                <div class="d-flex align-items-center">
+                                    <button type="button" class="btn btn-sm btn-outline-secondary me-2 weight-adjust" data-criteria="{{ criterion.criteria_name }}" data-delta="-0.05">
+                                        <i class="fas fa-minus"></i>
+                                    </button>
+                                    <input type="range" 
+                                           class="form-range flex-grow-1 me-2 weight-slider" 
+                                           id="slider_{{ criterion.criteria_name }}"
+                                           data-criteria="{{ criterion.criteria_name }}"
+                                           value="{{ criterion.weight * 100 }}"
+                                           min="0" 
+                                           max="100" 
+                                           step="1">
                                     <input type="number" 
-                                           class="form-control" 
+                                           class="form-control weight-input" 
                                            id="weight_{{ criterion.criteria_name }}"
                                            name="weight_{{ criterion.criteria_name }}"
                                            value="{{ criterion.weight }}"
                                            min="0" 
-                                           max="10" 
+                                           max="1" 
                                            step="0.01"
+                                           style="width: 80px;"
                                            required>
-                                    <span class="input-group-text">
-                                        <i class="fas fa-weight-hanging"></i>
-                                    </span>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary ms-2 weight-adjust" data-criteria="{{ criterion.criteria_name }}" data-delta="0.05">
+                                        <i class="fas fa-plus"></i>
+                                    </button>
                                 </div>
                             </div>
                             <div class="col-md-4">
@@ -84,7 +96,7 @@
                                         </div>
                                     </div>
                                     <small class="text-muted">
-                                        Weight: <span id="percent_{{ criterion.criteria_name }}">{{ "%.1f"|format(criterion.weight * 10) }}%</span>
+                                        <span id="percent_{{ criterion.criteria_name }}" class="fw-bold">{{ "%.1f"|format(criterion.weight * 100) }}%</span>
                                     </small>
                                 </div>
                             </div>
@@ -105,8 +117,13 @@
                             </button>
                         </div>
                         <div class="text-end">
-                            <small class="text-muted">
-                                Total Weight: <span id="total-weight" class="fw-bold">0.00</span><br>
+                            <div>
+                                <div class="progress mb-1" style="height: 25px;">
+                                    <div id="total-weight-bar" class="progress-bar" role="progressbar" style="width: 100%">
+                                        <span id="total-weight-text" class="fw-bold">100%</span>
+                                    </div>
+                                </div>
+                                <small class="text-muted">
                                 Last Updated: 
                                 {% if criteria %}
                                     {{ criteria[0].updated_at.strftime('%Y-%m-%d %H:%M') if criteria[0].updated_at else 'Never' }}
@@ -170,7 +187,10 @@
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const form = document.getElementById('criteria-form');
-    const inputs = form.querySelectorAll('input[type="number"]');
+    const inputs = form.querySelectorAll('input.weight-input');
+    const sliders = form.querySelectorAll('input.weight-slider');
+    const adjustButtons = form.querySelectorAll('button.weight-adjust');
+    let isAdjusting = false;
     
     function updateVisualizations() {
         let totalWeight = 0;
@@ -180,46 +200,128 @@ document.addEventListener('DOMContentLoaded', function() {
             const weight = parseFloat(input.value) || 0;
             const progressBar = document.getElementById(`progress_${criteriaName}`);
             const percentSpan = document.getElementById(`percent_${criteriaName}`);
+            const slider = document.getElementById(`slider_${criteriaName}`);
             
             totalWeight += weight;
             
-            // Update progress bar (normalize to 0-100% for visualization)
-            const percentage = Math.min((weight / 2) * 100, 100); // Assuming max reasonable weight is 2.0
-            progressBar.style.width = `${percentage}%`;
-            progressBar.setAttribute('data-weight', weight);
+            // Update progress bar (now showing actual percentage)
+            const percentage = weight * 100;
+            if (progressBar) {
+                progressBar.style.width = `${percentage}%`;
+                progressBar.setAttribute('data-weight', weight);
+            }
             
             // Update percentage text
             if (percentSpan) {
-                percentSpan.textContent = `${(weight * 10).toFixed(1)}%`;
+                percentSpan.textContent = `${percentage.toFixed(1)}%`;
+            }
+            
+            // Update slider
+            if (slider && !isAdjusting) {
+                slider.value = percentage;
             }
             
             // Color code based on weight
-            if (weight > 0.5) {
-                progressBar.className = 'progress-bar bg-success';
-            } else if (weight > 0.2) {
-                progressBar.className = 'progress-bar bg-warning';
-            } else {
-                progressBar.className = 'progress-bar bg-danger';
+            if (progressBar) {
+                if (weight > 0.3) {
+                    progressBar.className = 'progress-bar bg-success';
+                } else if (weight > 0.1) {
+                    progressBar.className = 'progress-bar bg-warning';
+                } else {
+                    progressBar.className = 'progress-bar bg-danger';
+                }
             }
         });
         
-        // Update total weight
-        const totalWeightSpan = document.getElementById('total-weight');
-        if (totalWeightSpan) {
-            totalWeightSpan.textContent = totalWeight.toFixed(2);
+        // Update total weight indicator
+        const totalWeightBar = document.getElementById('total-weight-bar');
+        const totalWeightText = document.getElementById('total-weight-text');
+        
+        if (totalWeightBar && totalWeightText) {
+            const totalPercent = totalWeight * 100;
+            totalWeightText.textContent = `${totalPercent.toFixed(1)}%`;
+            totalWeightBar.style.width = `${Math.min(totalPercent, 100)}%`;
             
             // Color code total weight
-            if (totalWeight < 0.8 || totalWeight > 1.5) {
-                totalWeightSpan.className = 'fw-bold text-warning';
+            if (Math.abs(totalWeight - 1.0) < 0.01) {
+                totalWeightBar.className = 'progress-bar bg-success';
+            } else if (Math.abs(totalWeight - 1.0) < 0.1) {
+                totalWeightBar.className = 'progress-bar bg-warning';
             } else {
-                totalWeightSpan.className = 'fw-bold text-success';
+                totalWeightBar.className = 'progress-bar bg-danger';
             }
         }
     }
     
-    // Update visualizations on input change
+    function adjustWeightsProportionally(changedCriteria, newWeight) {
+        isAdjusting = true;
+        const oldWeight = parseFloat(document.getElementById(`weight_${changedCriteria}`).value) || 0;
+        const delta = newWeight - oldWeight;
+        
+        // Set the changed weight
+        document.getElementById(`weight_${changedCriteria}`).value = newWeight.toFixed(2);
+        
+        // If proportional adjustment is enabled (check for a toggle or always do it)
+        if (delta !== 0) {
+            let totalOtherWeights = 0;
+            const otherWeights = [];
+            
+            // Calculate total of other weights
+            inputs.forEach(input => {
+                const criteriaName = input.name.replace('weight_', '');
+                if (criteriaName !== changedCriteria) {
+                    const weight = parseFloat(input.value) || 0;
+                    totalOtherWeights += weight;
+                    otherWeights.push({name: criteriaName, weight: weight});
+                }
+            });
+            
+            // Distribute the delta proportionally among other weights
+            if (totalOtherWeights > 0) {
+                otherWeights.forEach(item => {
+                    const proportion = item.weight / totalOtherWeights;
+                    const adjustment = -delta * proportion;
+                    const newValue = Math.max(0, Math.min(1, item.weight + adjustment));
+                    document.getElementById(`weight_${item.name}`).value = newValue.toFixed(2);
+                });
+            }
+        }
+        
+        isAdjusting = false;
+        updateVisualizations();
+    }
+    
+    // Slider change handler
+    sliders.forEach(slider => {
+        slider.addEventListener('input', function() {
+            const criteriaName = this.dataset.criteria;
+            const newWeight = parseFloat(this.value) / 100;
+            adjustWeightsProportionally(criteriaName, newWeight);
+        });
+    });
+    
+    // Input change handler
     inputs.forEach(input => {
-        input.addEventListener('input', updateVisualizations);
+        input.addEventListener('input', function() {
+            if (!isAdjusting) {
+                const criteriaName = this.name.replace('weight_', '');
+                const newWeight = Math.max(0, Math.min(1, parseFloat(this.value) || 0));
+                this.value = newWeight.toFixed(2);
+                adjustWeightsProportionally(criteriaName, newWeight);
+            }
+        });
+    });
+    
+    // Plus/Minus button handlers
+    adjustButtons.forEach(button => {
+        button.addEventListener('click', function() {
+            const criteriaName = this.dataset.criteria;
+            const delta = parseFloat(this.dataset.delta);
+            const input = document.getElementById(`weight_${criteriaName}`);
+            const currentWeight = parseFloat(input.value) || 0;
+            const newWeight = Math.max(0, Math.min(1, currentWeight + delta));
+            adjustWeightsProportionally(criteriaName, newWeight);
+        });
     });
     
     // Initial update
@@ -231,13 +333,14 @@ document.addEventListener('DOMContentLoaded', function() {
             return sum + (parseFloat(input.value) || 0);
         }, 0);
         
-        if (totalWeight === 0) {
-            e.preventDefault();
-            alert('Error: Total weight cannot be zero. Please set at least one weight above 0.');
-            return false;
+        if (Math.abs(totalWeight - 1.0) > 0.01) {
+            if (!confirm(`Внимание: Сумма весов ${(totalWeight * 100).toFixed(1)}% отличается от 100%. Рекомендуется сумма = 100% для корректной оценки. Продолжить?`)) {
+                e.preventDefault();
+                return false;
+            }
         }
         
-        if (!confirm(`This will update scoring weights and rescore all properties. Continue?`)) {
+        if (!confirm(`Это обновит веса и пересчитает оценки всех объектов. Продолжить?`)) {
             e.preventDefault();
             return false;
         }
