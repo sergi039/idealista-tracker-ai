@@ -349,7 +349,7 @@
                     <!-- Regular Transport Data -->
                     {% if land.transport %}
                         {% for key, value in land.transport.items() %}
-                            {% if not (key.endswith('_travel_time') and (key.replace('_travel_time', '_distance') in land.transport)) and not (key.endswith('_available') and (key.replace('_available', '_distance') in land.transport)) %}
+                            {% if key not in ['cafe_available', 'school_available', 'hospital_available', 'restaurant_available', 'supermarket_available', 'airport_available', 'bus_station_available', 'cafe_travel_time', 'school_travel_time', 'hospital_travel_time', 'restaurant_travel_time', 'supermarket_travel_time', 'airport_travel_time', 'bus_station_travel_time'] %}
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 <span class="small">{{ key.replace('_', ' ').title() }}</span>
                                 {% if value is sameas true %}
