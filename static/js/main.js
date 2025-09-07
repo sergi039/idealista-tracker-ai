@@ -332,11 +332,21 @@ window.IdealistaApp = {
                     const lastSyncElement = document.getElementById('last-sync');
                     if (lastSyncElement) {
                         const sync = data.stats.last_sync;
-                        const date = new Date(sync.completed_at);
-                        const dateStr = date.toLocaleDateString();
-                        const timeStr = date.toLocaleTimeString();
                         
-                        lastSyncElement.innerHTML = `${dateStr} at ${timeStr} (+${sync.new_properties} new)`;
+                        // Handle null or invalid completed_at
+                        if (sync.completed_at) {
+                            const date = new Date(sync.completed_at);
+                            // Check if date is valid
+                            if (!isNaN(date.getTime()) && date.getFullYear() > 1970) {
+                                const dateStr = date.toLocaleDateString();
+                                const timeStr = date.toLocaleTimeString();
+                                lastSyncElement.innerHTML = `${dateStr} at ${timeStr} (+${sync.new_properties} new)`;
+                            } else {
+                                lastSyncElement.innerHTML = `Sync completed (+${sync.new_properties} new) - time unavailable`;
+                            }
+                        } else {
+                            lastSyncElement.innerHTML = `Sync completed (+${sync.new_properties} new) - time unavailable`;
+                        }
                     }
                 } else {
                     const lastSyncElement = document.getElementById('last-sync');
