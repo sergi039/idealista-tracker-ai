@@ -315,8 +315,8 @@
                             </div>
                         {% else %}
                             {% set base_key = key.replace('_available', '').replace('_distance', '').replace('_travel_time', '') %}
-                            {% set has_distance = land.infrastructure_extended.get(base_key + '_distance') %}
-                            {% set has_travel_time = land.infrastructure_extended.get(base_key + '_travel_time') %}
+                            {% set has_distance = land.infrastructure_extended.get(base_key + '_distance') if land.infrastructure_extended else None %}
+                            {% set has_travel_time = land.infrastructure_extended.get(base_key + '_travel_time') if land.infrastructure_extended else None %}
                             
                             <!-- Skip 'available' fields if we have distance or travel time data -->
                             {% if not (key.endswith('_available') and (has_distance or has_travel_time)) %}
@@ -329,7 +329,7 @@
                                     {% elif value is number %}
                                         {% if 'distance' in key %}
                                             {% set distance_km = value/1000 %}
-                                            {% set travel_time_value = land.infrastructure_extended.get(base_key + '_travel_time') %}
+                                            {% set travel_time_value = land.infrastructure_extended.get(base_key + '_travel_time') if land.infrastructure_extended else None %}
                                             <div>
                                                 {% if travel_time_value %}
                                                     <span class="badge bg-info me-1">{{ travel_time_value }}min</span>
@@ -337,7 +337,7 @@
                                                 <span class="badge bg-secondary">{{ "%.1f"|format(distance_km) }}km</span>
                                             </div>
                                         {% elif 'travel_time' in key %}
-                                            {% set distance_value = land.infrastructure_extended.get(base_key + '_distance') %}
+                                            {% set distance_value = land.infrastructure_extended.get(base_key + '_distance') if land.infrastructure_extended else None %}
                                             <div>
                                                 <span class="badge bg-info me-1">{{ value }}min</span>
                                                 {% if distance_value %}
@@ -429,8 +429,8 @@
                     {% if land.transport %}
                         {% for key, value in land.transport.items() %}
                             {% set base_key = key.replace('_available', '').replace('_distance', '').replace('_travel_time', '') %}
-                            {% set has_distance_field = land.transport.get(base_key + '_distance') %}
-                            {% set has_travel_time_field = land.transport.get(base_key + '_travel_time') %}
+                            {% set has_distance_field = land.transport.get(base_key + '_distance') if land.transport else None %}
+                            {% set has_travel_time_field = land.transport.get(base_key + '_travel_time') if land.transport else None %}
                             
                             <!-- Skip 'available' and individual 'travel_time' fields if we already show combined data above -->
                             {% if not (
@@ -447,7 +447,7 @@
                                 {% elif value is number and 'distance' in key %}
                                     <div>
                                         {% set transport_type = key.replace('_distance', '') %}
-                                        {% if land.transport.get(transport_type + '_travel_time') %}
+                                        {% if land.transport and land.transport.get(transport_type + '_travel_time') %}
                                             <span class="badge bg-info me-1">{{ land.transport[transport_type + '_travel_time'] }}min</span>
                                         {% endif %}
                                         {% if value < 1000 %}
