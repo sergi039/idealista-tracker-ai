@@ -10,7 +10,7 @@
                 <i class="fas fa-map-marker-alt me-2"></i>
                 {{ land.title[:60] }}{% if land.title|length > 60 %}...{% endif %}
             </h1>
-            <a href="{{ url_for('main.lands') }}" class="btn btn-outline-secondary">
+            <a href="{{ url_for('main.lands', sort=request.args.get('sort'), order=request.args.get('order'), land_type=request.args.get('land_type'), municipality=request.args.get('municipality'), search=request.args.get('search'), per_page=request.args.get('per_page')) }}" class="btn btn-outline-secondary">
                 <i class="fas fa-arrow-left me-1"></i>Back to Properties
             </a>
         </div>

@@ -165,7 +165,11 @@ window.IdealistaApp = {
                 
                 const landId = this.getAttribute('data-land-id');
                 if (landId) {
-                    window.location.href = `/lands/${landId}`;
+                    // Preserve current filter/sort state when navigating to detail
+                    const currentUrl = new URL(window.location);
+                    const params = currentUrl.searchParams.toString();
+                    const targetUrl = `/lands/${landId}${params ? '?' + params : ''}`;
+                    window.location.href = targetUrl;
                 }
             });
             
@@ -175,7 +179,11 @@ window.IdealistaApp = {
                     e.preventDefault();
                     const landId = this.getAttribute('data-land-id');
                     if (landId) {
-                        window.location.href = `/lands/${landId}`;
+                        // Preserve current filter/sort state when navigating to detail
+                        const currentUrl = new URL(window.location);
+                        const params = currentUrl.searchParams.toString();
+                        const targetUrl = `/lands/${landId}${params ? '?' + params : ''}`;
+                        window.location.href = targetUrl;
                     }
                 }
             });
