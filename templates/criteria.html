@@ -17,7 +17,8 @@
 
         <div class="card">
             <div class="card-header">
-                <h5 class="card-title mb-0">Scoring Weights Configuration</h5>
+                <h5 class="card-title mb-0">MCDM Scoring Weights Configuration</h5>
+                <p class="text-muted mb-0">Multi-Criteria Decision Making (ISO 31000 & RICS Standards)</p>
             </div>
             <div class="card-body">
                 <form method="POST" action="{{ url_for('main.update_criteria') }}" id="criteria-form">
@@ -155,7 +156,7 @@
                 </div>
 
                 <div class="mt-3">
-                    <h6>Professional Scoring Ranges (Spanish/European Standards):</h6>
+                    <h6>Professional Scoring Ranges (International Standards):</h6>
                     <div class="row">
                         <div class="col-md-3">
                             <span class="badge bg-success">80-100</span> Investment Grade
@@ -174,20 +175,43 @@
             </div>
         </div>
         
-        <!-- Methodology info -->
-        <div class="mt-4 text-center">
-            <small class="text-muted" style="font-size: 0.75rem;">
-                <i class="fas fa-info-circle me-1"></i>
-                Adjust the weights for each scoring criterion. Changes will trigger automatic rescoring of all properties. 
-                Weights are relative - they don't need to sum to 1.0.
-                <br>
-                <span style="font-size: 0.7rem;">
-                    Методика MCDM (Multi-Criteria Decision Making): Веса должны в сумме давать 1.0 (100%). 
-                    При изменении одного веса остальные пропорционально корректируются.
-                    <br>
-                    Используется в профессиональной оценке недвижимости по стандартам ISO 31000 и RICS.
-                </span>
-            </small>
+        <!-- MCDM Methodology Info -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h6 class="card-title mb-0">
+                    <i class="fas fa-balance-scale me-2"></i>
+                    MCDM Methodology (Multi-Criteria Decision Making)
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6><i class="fas fa-check-circle text-success me-1"></i>Weight Requirements:</h6>
+                        <ul class="small text-muted mb-0">
+                            <li>Weights must sum to exactly 1.0 (100%)</li>
+                            <li>Individual weights between 0.0 and 1.0</li>
+                            <li>Automatic proportional adjustment when changed</li>
+                            <li>Real-time normalization validation</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h6><i class="fas fa-certificate text-info me-1"></i>Professional Standards:</h6>
+                        <ul class="small text-muted mb-0">
+                            <li>ISO 31000 Risk Management compliance</li>
+                            <li>RICS professional real estate evaluation</li>
+                            <li>Scientific decision-making methodology</li>
+                            <li>Transparent scoring process</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="mt-3 p-2 bg-dark rounded">
+                    <small class="text-warning">
+                        <i class="fas fa-info-circle me-1"></i>
+                        <strong>Total Weight:</strong> <span id="total-weight" class="fw-bold">1.000</span>
+                        <span class="ms-2 text-muted">| Changes trigger automatic rescoring of all properties</span>
+                    </small>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -344,13 +368,13 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 0);
         
         if (Math.abs(totalWeight - 1.0) > 0.01) {
-            if (!confirm(`Внимание: Сумма весов ${(totalWeight * 100).toFixed(1)}% отличается от 100%. Рекомендуется сумма = 100% для корректной оценки. Продолжить?`)) {
+            if (!confirm(`Warning: Weight sum ${(totalWeight * 100).toFixed(1)}% differs from 100%. MCDM methodology requires exactly 100%. Continue anyway?`)) {
                 e.preventDefault();
                 return false;
             }
         }
         
-        if (!confirm(`Это обновит веса и пересчитает оценки всех объектов. Продолжить?`)) {
+        if (!confirm(`This will update MCDM weights and rescore all properties using professional standards. Continue?`)) {
             e.preventDefault();
             return false;
         }

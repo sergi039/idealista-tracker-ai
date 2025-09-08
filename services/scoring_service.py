@@ -10,7 +10,7 @@ class ScoringService:
         self.load_custom_weights()
     
     def load_custom_weights(self):
-        """Load custom scoring weights from database"""
+        """Load custom scoring weights from database and normalize using MCDM methodology"""
         try:
             from models import ScoringCriteria
             
@@ -20,16 +20,23 @@ class ScoringService:
                 for criterion in criteria:
                     custom_weights[criterion.criteria_name] = float(criterion.weight)
                 
-                # Update weights if we have custom ones
+                # MCDM normalization: ensure weights sum to 1.0
                 if custom_weights:
+                    total_weight = sum(custom_weights.values())
+                    if total_weight > 0:
+                        # Normalize weights to sum to 1.0 (ISO 31000, RICS standards)
+                        for key in custom_weights:
+                            custom_weights[key] = custom_weights[key] / total_weight
+                    
                     self.weights.update(custom_weights)
-                    logger.info(f"Loaded custom scoring weights: {custom_weights}")
+                    logger.info(f"Loaded and normalized MCDM weights (sum={sum(custom_weights.values()):.3f}): {custom_weights}")
             
         except Exception as e:
             logger.error(f"Failed to load custom weights: {str(e)}")
     
     def calculate_score(self, land) -> float:
-        """Calculate total score for a land based on all criteria (max 100 points)"""
+        """Calculate total score using MCDM methodology (Multi-Criteria Decision Making)
+        Compliant with ISO 31000 and RICS professional real estate evaluation standards"""
         try:
             scores = {}
             
@@ -44,33 +51,42 @@ class ScoringService:
             scores['legal_status'] = self._score_legal_status(land)
             scores['development_potential'] = self._score_development_potential(land)
             
-            # Calculate weighted total score (directly to 100 scale)
+            # Ensure weights are normalized (MCDM requirement)
+            total_weight = sum(self.weights.values())
+            if abs(total_weight - 1.0) > 0.001:
+                logger.warning(f"Weights not properly normalized (sum={total_weight:.3f}), normalizing...")
+                for key in self.weights:
+                    self.weights[key] = self.weights[key] / total_weight if total_weight > 0 else 0
+            
+            # Calculate MCDM weighted score (0-100 scale)
             total_score = 0
+            weight_sum_used = 0
             
             for criterion, score in scores.items():
                 if score is not None and criterion in self.weights:
                     weight = self.weights[criterion]
-                    # Each score is 0-100, multiply by weight (e.g., 0.20 for 20%)
+                    # MCDM: score * normalized_weight (where weights sum to 1.0)
                     total_score += score * weight
+                    weight_sum_used += weight
             
-            # Score is already in 0-100 scale
-            final_score = min(100, max(0, total_score))  # Ensure 0-100 range
+            # Final score with MCDM validation
+            final_score = min(100, max(0, total_score))
             
             # Update land record
             land.score_total = round(final_score, 2)
             
-            # Store individual scores in JSONB fields for transparency
-            if not hasattr(land, 'score_breakdown'):
-                # We'll store this in the environment field for now
-                if not land.environment:
-                    land.environment = {}
-                land.environment['score_breakdown'] = scores
+            # Store MCDM breakdown for transparency
+            if not land.environment:
+                land.environment = {}
+            land.environment['score_breakdown'] = scores
+            land.environment['mcdm_weights_used'] = dict(self.weights)
+            land.environment['mcdm_weight_sum'] = weight_sum_used
             
-            logger.info(f"Calculated score for land {land.id}: {final_score}")
+            logger.info(f"MCDM score calculated for land {land.id}: {final_score} (weights_sum={weight_sum_used:.3f})")
             return final_score
             
         except Exception as e:
-            logger.error(f"Failed to calculate score for land {land.id}: {str(e)}")
+            logger.error(f"Failed to calculate MCDM score for land {land.id}: {str(e)}")
             return 0
     
     def _score_infrastructure_basic(self, land) -> Optional[float]:
