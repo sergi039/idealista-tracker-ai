@@ -10,6 +10,19 @@ The application serves as a real estate investment analysis tool, helping users 
 
 Preferred communication style: Simple, everyday language.
 
+### Interface Language Policy
+- **All user interfaces must be in English only**
+- Source content (property titles, descriptions from Idealista emails) remains in original Spanish
+- System messages, forms, buttons, labels, confirmations - all in English
+- No Russian, Spanish (except source content), or other languages in UI elements
+
+### Scoring Methodology
+- **MCDM (Multi-Criteria Decision Making) methodology implemented**
+- Weights must sum to exactly 1.0 (100%) as per ISO 31000 and RICS standards
+- When one weight changes, others are proportionally adjusted automatically
+- Professional real estate evaluation standards compliance
+- Real-time weight normalization and validation
+
 ## System Architecture
 
 ### Backend Architecture
@@ -44,10 +57,13 @@ Preferred communication style: Simple, everyday language.
 - **Error Handling**: Comprehensive logging and graceful failure handling
 
 ### Scoring Algorithm
-- **Multi-Criteria Decision Analysis**: Weighted scoring across 7 main categories
-- **Configurable Weights**: Database-driven scoring criteria with admin interface
-- **Real-time Calculation**: Automatic score updates when criteria weights change
-- **Normalization**: Scores scaled to 0-100 range for consistent comparison
+- **MCDM Methodology**: Multi-Criteria Decision Making using professional standards
+- **Weight Normalization**: Weights automatically normalized to sum to 1.0 (100%)
+- **Proportional Adjustment**: When one weight changes, others adjust proportionally
+- **Professional Compliance**: ISO 31000 and RICS real estate evaluation standards
+- **Real-time Validation**: Instant weight validation and normalization feedback
+- **Transparent Process**: Score breakdown shows individual criteria contributions
+- **Scientific Approach**: Eliminates subjective bias through structured methodology
 
 ## External Dependencies
 
