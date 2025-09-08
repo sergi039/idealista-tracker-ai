@@ -232,13 +232,49 @@ window.IdealistaApp = {
         const criteriaForm = document.getElementById('criteria-form');
         if (!criteriaForm) return;
 
-        // Real-time weight visualization updates
+        // MCDM weight normalization on input change
         const inputs = criteriaForm.querySelectorAll('input[type="number"]');
         inputs.forEach(input => {
             input.addEventListener('input', function() {
+                IdealistaApp.normalizeWeightsMCDM(this);
                 IdealistaApp.updateWeightVisualizations();
             });
         });
+
+        // Weight adjustment buttons
+        const adjustButtons = criteriaForm.querySelectorAll('button.weight-adjust');
+        adjustButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                const criteria = this.getAttribute('data-criteria');
+                const delta = parseFloat(this.getAttribute('data-delta'));
+                const input = document.getElementById(`weight_${criteria}`);
+                
+                if (input) {
+                    const newValue = Math.max(0, Math.min(1, parseFloat(input.value) + delta));
+                    input.value = newValue.toFixed(3);
+                    IdealistaApp.normalizeWeightsMCDM(input);
+                    IdealistaApp.updateWeightVisualizations();
+                }
+            });
+        });
+
+        // Slider interactions
+        const sliders = criteriaForm.querySelectorAll('input[type="range"]');
+        sliders.forEach(slider => {
+            slider.addEventListener('input', function() {
+                const criteria = this.getAttribute('data-criteria');
+                const weightInput = document.getElementById(`weight_${criteria}`);
+                if (weightInput) {
+                    weightInput.value = (parseFloat(this.value) / 100).toFixed(3);
+                    IdealistaApp.normalizeWeightsMCDM(weightInput);
+                    IdealistaApp.updateWeightVisualizations();
+                }
+            });
+        });
+
+        // Initial normalization
+        IdealistaApp.normalizeWeightsMCDM();
+        IdealistaApp.updateWeightVisualizations();
 
         // Form validation
         criteriaForm.addEventListener('submit', function(e) {
@@ -248,7 +284,7 @@ window.IdealistaApp = {
             }
             
             // Confirmation dialog
-            if (!confirm('This will update scoring weights and rescore all properties. This may take a few moments. Continue?')) {
+            if (!confirm('This will update scoring weights using MCDM methodology and rescore all properties. This may take a few moments. Continue?')) {
                 e.preventDefault();
                 return false;
             }
@@ -269,6 +305,67 @@ window.IdealistaApp = {
         });
     },
 
+    normalizeWeightsMCDM: function(changedInput = null) {
+        const inputs = document.querySelectorAll('#criteria-form input[type="number"]');
+        const weights = [];
+        let changedIndex = -1;
+        
+        // Collect all weights and find changed input index
+        inputs.forEach((input, index) => {
+            const weight = Math.max(0, parseFloat(input.value) || 0);
+            weights.push(weight);
+            if (changedInput && input === changedInput) {
+                changedIndex = index;
+            }
+        });
+        
+        // Calculate current total
+        const currentTotal = weights.reduce((sum, w) => sum + w, 0);
+        
+        // If total is 0, set equal weights
+        if (currentTotal === 0) {
+            const equalWeight = (1 / weights.length).toFixed(3);
+            inputs.forEach(input => {
+                input.value = equalWeight;
+            });
+            return;
+        }
+        
+        // MCDM normalization: adjust other weights proportionally
+        if (changedIndex !== -1 && currentTotal !== 1) {
+            const changedWeight = weights[changedIndex];
+            const othersTotal = currentTotal - changedWeight;
+            const remainingWeight = Math.max(0, 1 - changedWeight);
+            
+            // Adjust other weights proportionally
+            inputs.forEach((input, index) => {
+                if (index !== changedIndex && othersTotal > 0) {
+                    const originalWeight = weights[index];
+                    const newWeight = (originalWeight / othersTotal) * remainingWeight;
+                    input.value = Math.max(0, newWeight).toFixed(3);
+                } else if (index === changedIndex) {
+                    // Ensure changed weight doesn't exceed 1
+                    input.value = Math.min(1, changedWeight).toFixed(3);
+                }
+            });
+        } else if (currentTotal !== 1) {
+            // Normalize all weights to sum to 1
+            inputs.forEach((input, index) => {
+                const normalizedWeight = weights[index] / currentTotal;
+                input.value = normalizedWeight.toFixed(3);
+            });
+        }
+        
+        // Update sliders to match normalized weights
+        inputs.forEach(input => {
+            const criteriaName = input.name.replace('weight_', '');
+            const slider = document.getElementById(`slider_${criteriaName}`);
+            if (slider) {
+                slider.value = (parseFloat(input.value) * 100).toFixed(0);
+            }
+        });
+    },
+
     updateWeightVisualizations: function() {
         const inputs = document.querySelectorAll('#criteria-form input[type="number"]');
         let totalWeight = 0;
@@ -282,37 +379,42 @@ window.IdealistaApp = {
             totalWeight += weight;
             
             if (progressBar) {
-                // Update progress bar (normalize for visualization)
-                const percentage = Math.min((weight / 2) * 100, 100);
+                // Update progress bar (show actual percentage of total)
+                const percentage = weight * 100;
                 progressBar.style.width = `${percentage}%`;
                 
-                // Color coding
+                // Color coding based on MCDM standards
                 progressBar.className = 'progress-bar';
-                if (weight > 0.5) {
+                if (weight >= 0.2) {  // High importance (≥20%)
                     progressBar.classList.add('bg-success');
-                } else if (weight > 0.2) {
+                } else if (weight >= 0.1) {  // Medium importance (10-19%)
+                    progressBar.classList.add('bg-info');
+                } else if (weight >= 0.05) {  // Low importance (5-9%)
                     progressBar.classList.add('bg-warning');
-                } else {
-                    progressBar.classList.add('bg-danger');
+                } else {  // Very low importance (<5%)
+                    progressBar.classList.add('bg-secondary');
                 }
             }
             
             if (percentSpan) {
-                percentSpan.textContent = `${(weight * 10).toFixed(1)}%`;
+                percentSpan.textContent = `${(weight * 100).toFixed(1)}%`;
             }
         });
         
-        // Update total weight display
+        // Update total weight display (should always be 1.0 for MCDM)
         const totalWeightSpan = document.getElementById('total-weight');
         if (totalWeightSpan) {
-            totalWeightSpan.textContent = totalWeight.toFixed(2);
+            totalWeightSpan.textContent = totalWeight.toFixed(3);
             
-            // Color coding for total
+            // Color coding for total (MCDM requires exactly 1.0)
             totalWeightSpan.className = 'fw-bold';
-            if (totalWeight < 0.8 || totalWeight > 1.5) {
-                totalWeightSpan.classList.add('text-warning');
-            } else {
+            const difference = Math.abs(totalWeight - 1.0);
+            if (difference < 0.001) {  // Within tolerance
                 totalWeightSpan.classList.add('text-success');
+            } else if (difference < 0.01) {  // Minor deviation
+                totalWeightSpan.classList.add('text-warning');
+            } else {  // Significant deviation
+                totalWeightSpan.classList.add('text-danger');
             }
         }
     },
@@ -326,16 +428,16 @@ window.IdealistaApp = {
             const weight = parseFloat(input.value) || 0;
             totalWeight += weight;
             
-            // Individual validation
+            // Individual validation (MCDM standards)
             if (weight < 0) {
-                IdealistaApp.showNotification('Weights cannot be negative', 'error');
+                IdealistaApp.showNotification('Weights cannot be negative (MCDM requirement)', 'error');
                 input.focus();
                 hasError = true;
                 return;
             }
             
-            if (weight > 10) {
-                IdealistaApp.showNotification('Weights cannot exceed 10.0', 'error');
+            if (weight > 1) {
+                IdealistaApp.showNotification('Individual weights cannot exceed 1.0 (MCDM requirement)', 'error');
                 input.focus();
                 hasError = true;
                 return;
@@ -344,9 +446,10 @@ window.IdealistaApp = {
         
         if (hasError) return false;
         
-        // Total weight validation
-        if (totalWeight === 0) {
-            IdealistaApp.showNotification('Total weight cannot be zero. Please set at least one weight above 0.', 'error');
+        // MCDM validation: weights must sum to 1.0
+        const difference = Math.abs(totalWeight - 1.0);
+        if (difference > 0.001) {
+            IdealistaApp.showNotification(`MCDM validation failed: Total weights must equal 1.0 (current: ${totalWeight.toFixed(3)})`, 'error');
             return false;
         }
         
