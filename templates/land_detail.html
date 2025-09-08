@@ -129,6 +129,13 @@
                         <i class="fas fa-edit me-2"></i>
                         Edit Environment
                     </a>
+                    <button class="btn btn-warning" 
+                            hx-post="{{ url_for('api.manual_enrichment', land_id=land.id) }}"
+                            hx-trigger="click"
+                            hx-indicator="#enrichment-spinner">
+                        <i class="fas fa-sync me-2"></i>
+                        Enrich with Google APIs
+                    </button>
                 </div>
             </div>
         </div>
@@ -166,6 +173,57 @@
 
     <!-- Sidebar -->
     <div class="col-lg-4">
+        <!-- Loading indicator for enrichment -->
+        <div id="enrichment-spinner" class="htmx-indicator">
+            <div class="alert alert-info">
+                <i class="fas fa-spinner fa-spin me-2"></i>
+                Enriching property with Google API data...
+            </div>
+        </div>
+        
+        <!-- Travel Times to Cities & Beaches -->
+        {% if land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital or land.travel_time_police or land.distance_airport or land.distance_train_station %}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h6 class="card-title mb-0">
+                        <i class="fas fa-map-marked-alt me-2"></i>Travel Times & Distances
+                    </h6>
+                </div>
+                <div class="card-body">
+                    <!-- Major Cities & Transport Hubs -->
+                    {% if land.travel_time_airport or land.distance_airport %}
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small fw-bold"><i class="fas fa-plane me-1 text-primary"></i>Nearest Airport</span>
+                            <div>
+                                {% if land.travel_time_airport %}<span class="badge bg-info me-1">{{ land.travel_time_airport }}min</span>{% endif %}
+                                {% if land.distance_airport %}<span class="badge bg-secondary">{{ land.distance_airport }}km</span>{% endif %}
+                            </div>
+                        </div>
+                    {% endif %}
+                    
+                    {% if land.travel_time_train_station or land.distance_train_station %}
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small fw-bold"><i class="fas fa-train me-1 text-success"></i>Train Station</span>
+                            <div>
+                                {% if land.travel_time_train_station %}<span class="badge bg-info me-1">{{ land.travel_time_train_station }}min</span>{% endif %}
+                                {% if land.distance_train_station %}<span class="badge bg-secondary">{{ land.distance_train_station }}km</span>{% endif %}
+                            </div>
+                        </div>
+                    {% endif %}
+                    
+                    {% if land.travel_time_hospital or land.distance_hospital %}
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small fw-bold"><i class="fas fa-hospital me-1 text-danger"></i>Hospital</span>
+                            <div>
+                                {% if land.travel_time_hospital %}<span class="badge bg-info me-1">{{ land.travel_time_hospital }}min</span>{% endif %}
+                                {% if land.distance_hospital %}<span class="badge bg-secondary">{{ land.distance_hospital }}km</span>{% endif %}
+                            </div>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        {% endif %}
+
         <!-- Infrastructure Basic -->
         {% if land.infrastructure_basic %}
             <div class="card mb-4">

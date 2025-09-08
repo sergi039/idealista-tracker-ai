@@ -22,6 +22,76 @@ def download_project():
     except Exception as e:
         return jsonify({"error": str(e)}), 404
 
+@api_bp.route('/lands/enrich-all', methods=['POST'])
+def bulk_enrichment():
+    """Enrich all properties that are missing extended infrastructure or environment data"""
+    try:
+        from services.enrichment_service import EnrichmentService
+        
+        # Find properties missing enrichment data
+        lands_to_enrich = Land.query.filter(
+            (Land.infrastructure_extended.is_(None)) |
+            (Land.environment.is_(None)) |
+            (Land.infrastructure_extended == {}) |
+            (Land.environment == {})
+        ).all()
+        
+        enrichment_service = EnrichmentService()
+        success_count = 0
+        total_count = len(lands_to_enrich)
+        
+        for land in lands_to_enrich:
+            try:
+                if enrichment_service.enrich_land(land.id):
+                    success_count += 1
+                    logger.info(f"Enriched land {land.id}: {land.title[:50]}...")
+            except Exception as e:
+                logger.error(f"Failed to enrich land {land.id}: {str(e)}")
+                continue
+        
+        return jsonify({
+            "success": True,
+            "message": f"Successfully enriched {success_count} out of {total_count} properties",
+            "enriched_count": success_count,
+            "total_found": total_count
+        })
+        
+    except Exception as e:
+        logger.error(f"Bulk enrichment failed: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@api_bp.route('/land/<int:land_id>/enrich', methods=['POST'])
+def manual_enrichment(land_id):
+    """Manually trigger data enrichment for a specific property"""
+    try:
+        from services.enrichment_service import EnrichmentService
+        
+        land = Land.query.get_or_404(land_id)
+        enrichment_service = EnrichmentService()
+        
+        success = enrichment_service.enrich_land(land_id)
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": f"Property enriched successfully with Google API data"
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Failed to enrich property data"
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Manual enrichment failed for land {land_id}: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 @api_bp.route('/ingest/email/run', methods=['POST'])
 def manual_ingestion():
     """Manually trigger email ingestion"""
