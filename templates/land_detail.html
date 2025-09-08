@@ -256,30 +256,51 @@
                                 </div>
                             </div>
                         {% else %}
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <span class="small">{{ key.replace('_', ' ').title() }}</span>
-                                {% if value is sameas true %}
-                                    <i class="fas fa-check-circle text-success"></i>
-                                {% elif value is sameas false %}
-                                    <i class="fas fa-times-circle text-danger"></i>
-                                {% elif value is number %}
-                                    {% set distance_km = value/1000 %}
-                                    {% set travel_time_min = (distance_km * 60 / 40)|round %}
-                                    <div>
-                                        <span class="badge bg-secondary me-1">{{ "%.1f"|format(distance_km) }}km</span>
-                                        <span class="badge bg-info">~{{ travel_time_min }}min</span>
-                                    </div>
-                                {% elif value is mapping %}
-                                    <!-- Handle other dictionary values -->
-                                    <div class="small">
-                                        {% for k, v in value.items() %}
-                                            <div>{{ k }}: {{ v }}</div>
-                                        {% endfor %}
-                                    </div>
-                                {% else %}
-                                    <span class="text-muted small">{{ value }}</span>
-                                {% endif %}
-                            </div>
+                            {% set base_key = key.replace('_available', '').replace('_distance', '').replace('_travel_time', '') %}
+                            {% set has_distance = land.infrastructure_extended.get(base_key + '_distance') %}
+                            {% set has_travel_time = land.infrastructure_extended.get(base_key + '_travel_time') %}
+                            
+                            <!-- Skip 'available' fields if we have distance or travel time data -->
+                            {% if not (key.endswith('_available') and (has_distance or has_travel_time)) %}
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <span class="small">{{ key.replace('_', ' ').title() }}</span>
+                                    {% if value is sameas true %}
+                                        <i class="fas fa-check-circle text-success"></i>
+                                    {% elif value is sameas false %}
+                                        <i class="fas fa-times-circle text-danger"></i>
+                                    {% elif value is number %}
+                                        {% if 'distance' in key %}
+                                            {% set distance_km = value/1000 %}
+                                            {% set travel_time_value = land.infrastructure_extended.get(base_key + '_travel_time') %}
+                                            <div>
+                                                {% if travel_time_value %}
+                                                    <span class="badge bg-info me-1">{{ travel_time_value }}min</span>
+                                                {% endif %}
+                                                <span class="badge bg-secondary">{{ "%.1f"|format(distance_km) }}km</span>
+                                            </div>
+                                        {% elif 'travel_time' in key %}
+                                            {% set distance_value = land.infrastructure_extended.get(base_key + '_distance') %}
+                                            <div>
+                                                <span class="badge bg-info me-1">{{ value }}min</span>
+                                                {% if distance_value %}
+                                                    <span class="badge bg-secondary">{{ "%.1f"|format(distance_value/1000) }}km</span>
+                                                {% endif %}
+                                            </div>
+                                        {% else %}
+                                            <span class="badge bg-secondary">{{ value }}</span>
+                                        {% endif %}
+                                    {% elif value is mapping %}
+                                        <!-- Handle other dictionary values -->
+                                        <div class="small">
+                                            {% for k, v in value.items() %}
+                                                <div>{{ k }}: {{ v }}</div>
+                                            {% endfor %}
+                                        </div>
+                                    {% else %}
+                                        <span class="text-muted small">{{ value }}</span>
+                                    {% endif %}
+                                </div>
+                            {% endif %}
                         {% endif %}
                     {% endfor %}
                 </div>
@@ -349,7 +370,16 @@
                     <!-- Regular Transport Data -->
                     {% if land.transport %}
                         {% for key, value in land.transport.items() %}
-                            {% if key not in ['cafe_available', 'school_available', 'hospital_available', 'restaurant_available', 'supermarket_available', 'airport_available', 'bus_station_available', 'cafe_travel_time', 'school_travel_time', 'hospital_travel_time', 'restaurant_travel_time', 'supermarket_travel_time', 'airport_travel_time', 'bus_station_travel_time'] %}
+                            {% set base_key = key.replace('_available', '').replace('_distance', '').replace('_travel_time', '') %}
+                            {% set has_distance_field = land.transport.get(base_key + '_distance') or land.get('distance_' + base_key) %}
+                            {% set has_travel_time_field = land.transport.get(base_key + '_travel_time') or land.get('travel_time_' + base_key) %}
+                            
+                            <!-- Skip 'available' and individual 'travel_time' fields if we already show combined data above -->
+                            {% if not (
+                                (key.endswith('_available') and (has_distance_field or has_travel_time_field)) or
+                                (key.endswith('_travel_time') and (base_key in ['cafe', 'school', 'hospital', 'restaurant', 'supermarket', 'airport', 'bus_station'])) or
+                                (key == 'airport_available' and land.travel_time_airport)
+                            ) %}
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 <span class="small">{{ key.replace('_', ' ').title() }}</span>
                                 {% if value is sameas true %}
