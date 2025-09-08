@@ -55,7 +55,37 @@ window.IdealistaApp = {
             
             // Handle successful responses
             if (evt.detail.successful) {
-                IdealistaApp.showNotification('Operation completed successfully', 'success');
+                // Special handling for sync buttons - prevent JSON from showing in button
+                if (target.getAttribute('hx-post') && target.getAttribute('hx-post').includes('/api/ingest/email/run')) {
+                    // Parse JSON response and show user-friendly message
+                    try {
+                        const response = JSON.parse(evt.detail.xhr.responseText);
+                        let message = 'Sync completed';
+                        
+                        if (response.processed_count !== undefined) {
+                            if (response.processed_count === 0) {
+                                message = 'Sync completed - no new properties found';
+                            } else {
+                                message = `Sync completed - ${response.processed_count} new ${response.processed_count === 1 ? 'property' : 'properties'} added`;
+                            }
+                        }
+                        
+                        IdealistaApp.showNotification(message, 'success');
+                        
+                        // Restore button content (prevent JSON replacement)
+                        if (target.innerHTML.startsWith('{')) {
+                            target.innerHTML = '<i class="fas fa-sync-alt me-1"></i>Manual Sync';
+                        }
+                    } catch (e) {
+                        IdealistaApp.showNotification('Sync completed successfully', 'success');
+                        // Restore button content
+                        if (target.innerHTML.startsWith('{')) {
+                            target.innerHTML = '<i class="fas fa-sync-alt me-1"></i>Manual Sync';
+                        }
+                    }
+                } else {
+                    IdealistaApp.showNotification('Operation completed successfully', 'success');
+                }
                 
                 // Update last sync time
                 setTimeout(() => {
