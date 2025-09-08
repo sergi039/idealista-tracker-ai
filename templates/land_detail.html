@@ -371,8 +371,8 @@
                     {% if land.transport %}
                         {% for key, value in land.transport.items() %}
                             {% set base_key = key.replace('_available', '').replace('_distance', '').replace('_travel_time', '') %}
-                            {% set has_distance_field = land.transport.get(base_key + '_distance') or land.get('distance_' + base_key) %}
-                            {% set has_travel_time_field = land.transport.get(base_key + '_travel_time') or land.get('travel_time_' + base_key) %}
+                            {% set has_distance_field = land.transport.get(base_key + '_distance') %}
+                            {% set has_travel_time_field = land.transport.get(base_key + '_travel_time') %}
                             
                             <!-- Skip 'available' and individual 'travel_time' fields if we already show combined data above -->
                             {% if not (
