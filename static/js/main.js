@@ -300,13 +300,36 @@ window.IdealistaApp = {
             // Show loading state
             const submitButton = this.querySelector('button[type="submit"]');
             if (submitButton) {
-                const originalText = submitButton.innerHTML;
-                submitButton.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Updating...';
+                // Store original content safely
+                const originalIcon = submitButton.querySelector('i');
+                const originalIconClasses = originalIcon ? originalIcon.className : '';
+                const originalTextContent = submitButton.textContent.trim();
+                
+                // Clear button content safely
+                submitButton.textContent = '';
+                
+                // Create loading state with safe DOM methods
+                const loadingIcon = document.createElement('i');
+                loadingIcon.className = 'fas fa-spinner fa-spin me-2';
+                const loadingText = document.createTextNode('Updating...');
+                
+                submitButton.appendChild(loadingIcon);
+                submitButton.appendChild(loadingText);
                 submitButton.disabled = true;
                 
                 // Re-enable after timeout (fallback)
                 setTimeout(() => {
-                    submitButton.innerHTML = originalText;
+                    // Restore original content safely
+                    submitButton.textContent = '';
+                    
+                    if (originalIconClasses) {
+                        const restoredIcon = document.createElement('i');
+                        restoredIcon.className = originalIconClasses;
+                        submitButton.appendChild(restoredIcon);
+                    }
+                    
+                    const restoredText = document.createTextNode(originalTextContent);
+                    submitButton.appendChild(restoredText);
                     submitButton.disabled = false;
                 }, 30000);
             }
