@@ -74,13 +74,23 @@ window.IdealistaApp = {
                         
                         // Restore button content (prevent JSON replacement)
                         if (target.innerHTML.startsWith('{')) {
-                            target.innerHTML = '<i class="fas fa-sync-alt me-1"></i>Manual Sync';
+                            // Safe DOM manipulation - prevent XSS
+                            target.textContent = '';
+                            const icon = document.createElement('i');
+                            icon.className = 'fas fa-sync-alt me-1';
+                            target.appendChild(icon);
+                            target.appendChild(document.createTextNode('Manual Sync'));
                         }
                     } catch (e) {
                         IdealistaApp.showNotification('Sync completed successfully', 'success');
                         // Restore button content
                         if (target.innerHTML.startsWith('{')) {
-                            target.innerHTML = '<i class="fas fa-sync-alt me-1"></i>Manual Sync';
+                            // Safe DOM manipulation - prevent XSS
+                            target.textContent = '';
+                            const icon = document.createElement('i');
+                            icon.className = 'fas fa-sync-alt me-1';
+                            target.appendChild(icon);
+                            target.appendChild(document.createTextNode('Manual Sync'));
                         }
                     }
                 } else {
