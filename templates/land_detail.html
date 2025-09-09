@@ -278,7 +278,7 @@
                                                         <i class="fas fa-university me-1 text-info"></i> Banks
                                                     {% endif %}
                                                 </span>
-                                                <span class="badge bg-primary">{{ value[priority_amenity] }}</span>
+                                                <span class="badge bg-primary">{{ value[priority_amenity] }} nearby</span>
                                             </div>
                                         {% endif %}
                                     {% endfor %}
@@ -307,7 +307,7 @@
                                                         <i class="fas fa-map-marker-alt me-1"></i> {{ amenity.replace('_', ' ').title() }}
                                                     {% endif %}
                                                 </span>
-                                                <span class="badge bg-primary">{{ count }}</span>
+                                                <span class="badge bg-primary">{{ count }} nearby</span>
                                             </div>
                                         {% endif %}
                                     {% endfor %}
@@ -349,7 +349,13 @@
                                                 {% endif %}
                                             </div>
                                         {% else %}
-                                            <span class="badge bg-secondary">{{ value }}</span>
+                                            {% if 'duration' in key or 'time' in key %}
+                                                <span class="badge bg-info">{{ value }}min</span>
+                                            {% elif 'distance' in key %}
+                                                <span class="badge bg-secondary">{{ "%.1f"|format(value/1000) }}km</span>
+                                            {% else %}
+                                                <span class="badge bg-secondary">{{ value }}</span>
+                                            {% endif %}
                                         {% endif %}
                                     {% elif value is mapping %}
                                         <!-- Handle other dictionary values -->
