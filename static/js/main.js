@@ -504,12 +504,12 @@ window.IdealistaApp = {
                             if (!isNaN(date.getTime()) && date.getFullYear() > 1970) {
                                 const dateStr = date.toLocaleDateString();
                                 const timeStr = date.toLocaleTimeString();
-                                lastSyncElement.innerHTML = `${dateStr} at ${timeStr} (+${sync.new_properties} new)`;
+                                lastSyncElement.textContent = `${dateStr} at ${timeStr} (+${sync.new_properties} new)`;
                             } else {
-                                lastSyncElement.innerHTML = `Sync completed (+${sync.new_properties} new) - time unavailable`;
+                                lastSyncElement.textContent = `Sync completed (+${sync.new_properties} new) - time unavailable`;
                             }
                         } else {
-                            lastSyncElement.innerHTML = `Sync completed (+${sync.new_properties} new) - time unavailable`;
+                            lastSyncElement.textContent = `Sync completed (+${sync.new_properties} new) - time unavailable`;
                         }
                     }
                 } else {
