@@ -528,8 +528,8 @@
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small">{{ key.replace('_', ' ').title() }}</span>
                             {% if value is number %}
-                                <div>
-                                    <span class="badge bg-warning">{{ "%.1f"|format(value) }}/5</span>
+                                <div class="d-flex align-items-center">
+                                    <span class="badge bg-warning me-2">{{ "%.1f"|format(value) }}/5</span>
                                     <div class="small">
                                         {% for i in range(5) %}
                                             {% if i < value %}
