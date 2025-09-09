@@ -318,8 +318,12 @@
                             {% set has_distance = land.infrastructure_extended.get(base_key + '_distance') if land.infrastructure_extended else None %}
                             {% set has_travel_time = land.infrastructure_extended.get(base_key + '_travel_time') if land.infrastructure_extended else None %}
                             
-                            <!-- Skip 'available' fields if we have distance or travel time data -->
-                            {% if not (key.endswith('_available') and (has_distance or has_travel_time)) %}
+                            <!-- Skip 'available' fields if we have distance/travel_time data, and skip zero distances -->
+                            {% if not (
+                                key.endswith('_available') and (has_distance or has_travel_time)
+                            ) and not (
+                                key.endswith('_distance') and value == 0
+                            ) %}
                                 <div class="d-flex justify-content-between align-items-center mb-2">
                                     <span class="small">{{ key.replace('_', ' ').title() }}</span>
                                     {% if value is sameas true %}
