@@ -73,7 +73,7 @@ window.IdealistaApp = {
                         IdealistaApp.showNotification(message, 'success');
                         
                         // Restore button content (prevent JSON replacement)
-                        if (target.innerHTML.startsWith('{')) {
+                        if (target.textContent.startsWith('{')) {
                             // Safe DOM manipulation - prevent XSS
                             target.textContent = '';
                             const icon = document.createElement('i');
@@ -84,7 +84,7 @@ window.IdealistaApp = {
                     } catch (e) {
                         IdealistaApp.showNotification('Sync completed successfully', 'success');
                         // Restore button content
-                        if (target.innerHTML.startsWith('{')) {
+                        if (target.textContent.startsWith('{')) {
                             // Safe DOM manipulation - prevent XSS
                             target.textContent = '';
                             const icon = document.createElement('i');
