@@ -334,16 +334,36 @@
                                         {% if 'distance' in key %}
                                             {% set distance_km = value/1000 %}
                                             {% set travel_time_value = land.infrastructure_extended.get(base_key + '_travel_time') if land.infrastructure_extended else None %}
-                                            <div>
+                                            <div class="d-flex align-items-center">
                                                 {% if travel_time_value %}
-                                                    <span class="badge bg-info me-1">{{ travel_time_value }}min</span>
+                                                    <!-- Car time -->
+                                                    <span class="badge bg-info me-1">
+                                                        <i class="fas fa-car me-1"></i>{{ travel_time_value }}min
+                                                    </span>
+                                                    {% set walking_time = (travel_time_value * 4)|int %}
+                                                    {% if walking_time <= 15 %}
+                                                        <!-- Walking time (only if <= 15 min) -->
+                                                        <span class="badge bg-success me-1">
+                                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
+                                                        </span>
+                                                    {% endif %}
                                                 {% endif %}
                                                 <span class="badge bg-secondary">{{ "%.1f"|format(distance_km) }}km</span>
                                             </div>
                                         {% elif 'travel_time' in key %}
                                             {% set distance_value = land.infrastructure_extended.get(base_key + '_distance') if land.infrastructure_extended else None %}
-                                            <div>
-                                                <span class="badge bg-info me-1">{{ value }}min</span>
+                                            <div class="d-flex align-items-center">
+                                                <!-- Car time -->
+                                                <span class="badge bg-info me-1">
+                                                    <i class="fas fa-car me-1"></i>{{ value }}min
+                                                </span>
+                                                {% set walking_time = (value * 4)|int %}
+                                                {% if walking_time <= 15 %}
+                                                    <!-- Walking time (only if <= 15 min) -->
+                                                    <span class="badge bg-success me-1">
+                                                        <i class="fas fa-walking me-1"></i>{{ walking_time }}min
+                                                    </span>
+                                                {% endif %}
                                                 {% if distance_value %}
                                                     <span class="badge bg-secondary">{{ "%.1f"|format(distance_value/1000) }}km</span>
                                                 {% endif %}
