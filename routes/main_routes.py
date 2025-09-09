@@ -248,7 +248,7 @@ def export_csv():
     """Export current land selection to CSV"""
     try:
         from flask import make_response
-        import csv
+        from defusedcsv import csv
         import io
         
         # Get same filters as lands page
