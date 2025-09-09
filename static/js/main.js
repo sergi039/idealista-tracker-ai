@@ -536,10 +536,17 @@ window.IdealistaApp = {
         const notification = document.createElement('div');
         notification.className = `alert ${alertClass} alert-dismissible fade show position-fixed`;
         notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 400px;';
-        notification.innerHTML = `
-            ${message}
-            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-        `;
+        
+        // Safe DOM manipulation - prevent XSS
+        notification.textContent = message;
+        
+        const closeButton = document.createElement('button');
+        closeButton.type = 'button';
+        closeButton.className = 'btn-close';
+        closeButton.setAttribute('data-bs-dismiss', 'alert');
+        closeButton.setAttribute('aria-label', 'Close');
+        
+        notification.appendChild(closeButton);
         
         document.body.appendChild(notification);
         
