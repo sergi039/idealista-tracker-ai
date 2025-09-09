@@ -531,10 +531,23 @@
                                 <div class="d-flex align-items-center">
                                     <span class="badge bg-warning me-2">{{ "%.1f"|format(value) }}/5</span>
                                     <div class="small">
+                                        {% set full_stars = value|int %}
+                                        {% set has_partial = (value - full_stars) > 0 %}
+                                        {% set partial_percent = ((value - full_stars) * 100)|int %}
+                                        
                                         {% for i in range(5) %}
-                                            {% if i < value %}
+                                            {% if i < full_stars %}
+                                                <!-- Full star -->
                                                 <i class="fas fa-star text-warning"></i>
+                                            {% elif i == full_stars and has_partial %}
+                                                <!-- Partial star -->
+                                                <span class="position-relative d-inline-block">
+                                                    <i class="far fa-star text-muted"></i>
+                                                    <i class="fas fa-star text-warning position-absolute" 
+                                                       style="top: 0; left: 0; overflow: hidden; width: {{ partial_percent }}%;"></i>
+                                                </span>
                                             {% else %}
+                                                <!-- Empty star -->
                                                 <i class="far fa-star text-muted"></i>
                                             {% endif %}
                                         {% endfor %}
