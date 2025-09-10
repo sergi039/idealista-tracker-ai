@@ -205,13 +205,21 @@ Focus on creating professional, engaging content that would appeal to potential 
             # Check if enhanced description already exists
             if hasattr(land, 'enhanced_description') and land.enhanced_description:
                 try:
-                    enhanced_data = json.loads(land.enhanced_description)
+                    # Handle both dict (JSONB) and string formats
+                    if isinstance(land.enhanced_description, dict):
+                        enhanced_data = land.enhanced_description
+                    else:
+                        enhanced_data = json.loads(land.enhanced_description)
+                    
                     return {
                         'enhanced': enhanced_data.get('enhanced_description', land.description),
                         'original': enhanced_data.get('original_description', land.description),
-                        'status': enhanced_data.get('processing_status', 'unknown')
+                        'status': enhanced_data.get('processing_status', 'processed'),
+                        'key_highlights': enhanced_data.get('key_highlights', []),
+                        'price_info': enhanced_data.get('price_info', {})
                     }
-                except (json.JSONDecodeError, AttributeError):
+                except (json.JSONDecodeError, TypeError, AttributeError) as e:
+                    logger.warning(f"Failed to parse enhanced description for land {land_id}: {e}")
                     pass
             
             # Return original description only
