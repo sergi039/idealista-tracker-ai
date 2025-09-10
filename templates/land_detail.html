@@ -831,28 +831,72 @@ function analyzeWithClaude(landId) {
     const aiSection = document.getElementById('ai-analysis-section');
     const aiContent = document.getElementById('ai-analysis-content');
     
+    // Check if there's existing analysis for enrichment
+    let existingAnalysis = null;
+    let isEnrichment = false;
+    
+    try {
+        {% if land.ai_analysis %}
+            const currentData = {{ land.ai_analysis|tojson|safe }};
+            if (currentData && typeof currentData === 'object') {
+                existingAnalysis = currentData;
+                isEnrichment = true;
+            }
+        {% endif %}
+    } catch (e) {
+        console.log('No valid existing analysis found, performing fresh analysis');
+    }
+    
     // Show loading state
     button.disabled = true;
-    button.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Analyzing...';
+    const loadingText = isEnrichment ? 'Enriching Analysis...' : 'Analyzing...';
+    button.innerHTML = `<i class="fas fa-spinner fa-spin me-2"></i>${loadingText}`;
     
     // Show AI section and display loading
     aiSection.style.display = 'block';
-    aiContent.innerHTML = `
-        <div class="text-center">
-            <div class="spinner-border text-primary mb-3" role="status">
-                <span class="visually-hidden">Loading...</span>
+    
+    // For enrichment, don't clear existing content - just show loading overlay
+    if (isEnrichment) {
+        const existingContent = aiContent.innerHTML;
+        aiContent.innerHTML = `
+            <div class="position-relative">
+                <div class="analysis-loading-overlay position-absolute w-100 h-100 d-flex align-items-center justify-content-center" style="background: rgba(0,0,0,0.7); z-index: 10; border-radius: 0.375rem;">
+                    <div class="text-center text-white">
+                        <div class="spinner-border text-light mb-3" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <p class="mb-1">Enriching existing analysis...</p>
+                        <small>Adding new insights and rental market data</small>
+                    </div>
+                </div>
+                ${existingContent}
             </div>
-            <p class="text-muted">Claude AI is analyzing this property...</p>
-            <small class="text-muted">This may take 10-30 seconds</small>
-        </div>
-    `;
+        `;
+    } else {
+        aiContent.innerHTML = `
+            <div class="text-center">
+                <div class="spinner-border text-primary mb-3" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="text-muted">Claude AI is analyzing this property...</p>
+                <small class="text-muted">This may take 10-30 seconds</small>
+            </div>
+        `;
+    }
+    
+    // Prepare request body
+    const requestBody = {};
+    if (existingAnalysis) {
+        requestBody.existing_analysis = existingAnalysis;
+    }
     
     // Call structured analysis API
     fetch(`/api/analyze/property/${landId}/structured`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
-        }
+        },
+        body: JSON.stringify(requestBody)
     })
     .then(response => response.json())
     .then(data => {
@@ -871,16 +915,40 @@ function analyzeWithClaude(landId) {
                 analysisContent = `<div class="analysis-text">${String(data.analysis).replace(/\n/g, '<br>')}</div>`;
             }
             
-            aiContent.innerHTML = `
-                <div class="analysis-content">
-                    <div class="alert alert-success alert-dismissible fade show" role="alert" id="success-alert">
-                        <i class="fas fa-check-circle me-2"></i>
-                        Analysis completed successfully!
+            const successText = data.is_enrichment ? 'Analysis enriched successfully!' : 'Analysis completed successfully!';
+            
+            // For enrichment, smoothly update content, for new analysis, replace entirely
+            if (data.is_enrichment) {
+                // Remove loading overlay first
+                const overlay = aiContent.querySelector('.analysis-loading-overlay');
+                if (overlay) {
+                    overlay.remove();
+                }
+                
+                // Update existing content with enriched data
+                aiContent.innerHTML = `
+                    <div class="analysis-content">
+                        <div class="alert alert-info alert-dismissible fade show" role="alert" id="success-alert">
+                            <i class="fas fa-plus-circle me-2"></i>
+                            ${successText}
                         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        </div>
+                        ${analysisContent}
                     </div>
-                    ${analysisContent}
-                </div>
-            `;
+                `;
+            } else {
+                // New analysis - replace entirely
+                aiContent.innerHTML = `
+                    <div class="analysis-content">
+                        <div class="alert alert-success alert-dismissible fade show" role="alert" id="success-alert">
+                            <i class="fas fa-check-circle me-2"></i>
+                            ${successText}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        </div>
+                        ${analysisContent}
+                    </div>
+                `;
+            }
             
             // Auto-hide success alert after 3 seconds
             setTimeout(() => {
@@ -894,7 +962,8 @@ function analyzeWithClaude(landId) {
             // Update button to show success state
             button.classList.remove('btn-outline-info');
             button.classList.add('btn-success');
-            button.innerHTML = '<i class="fas fa-brain me-2 text-white"></i>AI Analysis <span class="badge bg-light text-dark ms-1">✓</span>';
+            const buttonText = data.is_enrichment ? 'Analysis Enriched' : 'AI Analysis';
+            button.innerHTML = `<i class="fas fa-brain me-2 text-white"></i>${buttonText} <span class="badge bg-light text-dark ms-1">✓</span>`;
         } else {
             // Display error in the analysis section
             aiContent.innerHTML = `
