@@ -139,6 +139,60 @@ def manual_ingestion():
             "error": str(e)
         }), 500
 
+@api_bp.route('/analyze/property/<int:land_id>/structured', methods=['POST'])
+def analyze_property_structured(land_id):
+    """Analyze property using Anthropic Claude AI with structured 5-block format"""
+    try:
+        land = Land.query.get_or_404(land_id)
+        
+        # Import Anthropic service
+        from services.anthropic_service import get_anthropic_service
+        anthropic_service = get_anthropic_service()
+        
+        # Prepare comprehensive property data
+        property_data = {
+            'title': land.title,
+            'price': float(land.price) if land.price else None,
+            'area': float(land.area) if land.area else None,
+            'municipality': land.municipality,
+            'land_type': land.land_type,
+            'score_total': float(land.score_total) if land.score_total else None,
+            'description': land.description,
+            'travel_time_nearest_beach': land.travel_time_nearest_beach,
+            'nearest_beach_name': land.nearest_beach_name,
+            'travel_time_oviedo': land.travel_time_oviedo,
+            'travel_time_gijon': land.travel_time_gijon,
+            'travel_time_airport': land.travel_time_airport,
+            'infrastructure_basic': land.infrastructure_basic or {}
+        }
+        
+        # Get structured AI analysis
+        result = anthropic_service.analyze_property_structured(property_data)
+        
+        if result and result.get('status') == 'success':
+            # Store the structured analysis
+            land.ai_analysis = result.get('structured_analysis')
+            db.session.commit()
+            
+            return jsonify({
+                "success": True,
+                "analysis": result.get('structured_analysis'),
+                "model": result.get('model')
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": result.get('error', 'Analysis failed'),
+                "raw_analysis": result.get('raw_analysis')
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Structured AI analysis failed for land {land_id}: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 @api_bp.route('/analyze/property/<int:land_id>', methods=['POST'])
 def analyze_property_ai(land_id):
     """Analyze property using Anthropic Claude AI"""
