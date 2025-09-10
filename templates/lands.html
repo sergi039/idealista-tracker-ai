@@ -83,6 +83,9 @@
                                     <option value="area" {{ 'selected' if current_filters.sort_by == 'area' }}>
                                         Area
                                     </option>
+                                    <option value="travel_time_nearest_beach" {{ 'selected' if current_filters.sort_by == 'travel_time_nearest_beach' }}>
+                                        Beach Distance
+                                    </option>
                                     <option value="created_at" {{ 'selected' if current_filters.sort_by == 'created_at' }}>
                                         Date Added
                                     </option>
@@ -162,6 +165,17 @@
                                         </a>
                                     </th>
                                     <th>Coordinates</th>
+                                    <th style="min-width: 110px !important; white-space: nowrap !important;">
+                                        <a href="{{ url_for('main.lands', sort='travel_time_nearest_beach', order='asc' if current_filters.sort_by == 'travel_time_nearest_beach' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" 
+                                           class="text-white text-decoration-none d-flex align-items-center">
+                                            Beach Distance
+                                            {% if current_filters.sort_by == 'travel_time_nearest_beach' %}
+                                                <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
+                                            {% else %}
+                                                <i class="fas fa-sort ms-1 opacity-50"></i>
+                                            {% endif %}
+                                        </a>
+                                    </th>
                                     <th>Travel Times</th>
                                     <th>Type</th>
                                     <th style="min-width: 120px !important; white-space: nowrap !important;">Added</th>
@@ -223,8 +237,23 @@
                                                 </span>
                                             {% endif %}
                                         </td>
+                                        <td style="min-width: 110px !important; white-space: nowrap !important;">
+                                            {% if land.travel_time_nearest_beach %}
+                                                <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/{{ land.nearest_beach_name if land.nearest_beach_name else 'Playa' }},+Asturias,+Spain" 
+                                                   target="_blank" class="text-decoration-none text-info d-flex align-items-center" 
+                                                   title="Drive to {{ land.nearest_beach_name if land.nearest_beach_name else 'nearest beach' }}">
+                                                    <i class="fas fa-umbrella-beach me-1"></i>
+                                                    <span class="fw-bold">{{ land.travel_time_nearest_beach }}min</span>
+                                                </a>
+                                                {% if land.nearest_beach_name %}
+                                                    <small class="text-muted d-block">{{ land.nearest_beach_name[:15] }}{% if land.nearest_beach_name|length > 15 %}...{% endif %}</small>
+                                                {% endif %}
+                                            {% else %}
+                                                <span class="text-muted">-</span>
+                                            {% endif %}
+                                        </td>
                                         <td>
-                                            {% if land.travel_time_oviedo or land.travel_time_gijon or land.travel_time_nearest_beach %}
+                                            {% if land.travel_time_oviedo or land.travel_time_gijon %}
                                                 <div class="small">
                                                     {% if land.travel_time_oviedo %}
                                                         <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Oviedo,+Asturias,+Spain" 
@@ -236,12 +265,6 @@
                                                         <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Gijón,+Asturias,+Spain" 
                                                            target="_blank" class="text-decoration-none d-block" title="Drive to Gijón">
                                                             <strong>Gijón:</strong> {{ land.travel_time_gijon }}min
-                                                        </a>
-                                                    {% endif %}
-                                                    {% if land.travel_time_nearest_beach %}
-                                                        <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/{{ land.nearest_beach_name if land.nearest_beach_name else 'Playa' }},+Asturias,+Spain" 
-                                                           target="_blank" class="text-decoration-none text-info d-block" title="Drive to {{ land.nearest_beach_name if land.nearest_beach_name else 'nearest beach' }}">
-                                                            <strong>{% if land.nearest_beach_name %}{{ land.nearest_beach_name }}:{% else %}Beach:{% endif %}</strong> {{ land.travel_time_nearest_beach }}min
                                                         </a>
                                                     {% endif %}
                                                 </div>
