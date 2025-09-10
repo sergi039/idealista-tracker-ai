@@ -750,10 +750,24 @@
 function analyzeWithClaude(landId) {
     const button = event.target.closest('button');
     const originalContent = button.innerHTML;
+    const aiSection = document.getElementById('ai-analysis-section');
+    const aiContent = document.getElementById('ai-analysis-content');
     
     // Show loading state
     button.disabled = true;
     button.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Analyzing...';
+    
+    // Show AI section and display loading
+    aiSection.style.display = 'block';
+    aiContent.innerHTML = `
+        <div class="text-center">
+            <div class="spinner-border text-primary mb-3" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="text-muted">Claude AI is analyzing this property...</p>
+            <small class="text-muted">This may take 10-30 seconds</small>
+        </div>
+    `;
     
     // Call API
     fetch(`/api/analyze/property/${landId}`, {
@@ -765,20 +779,59 @@ function analyzeWithClaude(landId) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            // Show success message and reload to see the analysis
-            alert('AI Analysis complete! The analysis has been saved.');
-            window.location.reload();
+            // Display the analysis result
+            aiContent.innerHTML = `
+                <div class="analysis-content">
+                    <div class="alert alert-success alert-dismissible fade show" role="alert">
+                        <i class="fas fa-check-circle me-2"></i>
+                        Analysis completed successfully!
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                    <div class="analysis-text">
+                        ${data.analysis.replace(/\n/g, '<br>')}
+                    </div>
+                </div>
+            `;
+            
+            // Update button to show success state
+            button.classList.remove('btn-outline-info');
+            button.classList.add('btn-success');
+            button.innerHTML = '<i class="fas fa-brain me-2 text-white"></i>AI Analysis <span class="badge bg-light text-dark ms-1">✓</span>';
         } else {
-            alert('Analysis failed: ' + (data.error || 'Unknown error'));
+            // Display error in the analysis section
+            aiContent.innerHTML = `
+                <div class="alert alert-danger" role="alert">
+                    <i class="fas fa-exclamation-triangle me-2"></i>
+                    <strong>Analysis Failed:</strong> ${data.error || 'Unknown error occurred'}
+                </div>
+                <div class="text-center text-muted">
+                    <i class="fas fa-robot fa-3x mb-3 opacity-50"></i>
+                    <p>Please try again or contact support if the problem persists</p>
+                </div>
+            `;
         }
     })
     .catch(error => {
-        alert('Error: ' + error);
+        // Display network error in the analysis section
+        aiContent.innerHTML = `
+            <div class="alert alert-danger" role="alert">
+                <i class="fas fa-wifi me-2"></i>
+                <strong>Network Error:</strong> Unable to connect to AI service. Please check your connection and try again.
+            </div>
+            <div class="text-center text-muted">
+                <i class="fas fa-robot fa-3x mb-3 opacity-50"></i>
+                <p>Connection failed. Please try again in a moment.</p>
+            </div>
+        `;
     })
     .finally(() => {
-        // Restore button
-        button.disabled = false;
-        button.innerHTML = originalContent;
+        // Restore button (unless it was successful)
+        if (!button.classList.contains('btn-success')) {
+            button.disabled = false;
+            button.innerHTML = originalContent;
+        } else {
+            button.disabled = false;
+        }
     });
 }
 </script>
