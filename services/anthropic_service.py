@@ -14,6 +14,13 @@ from sqlalchemy import and_, or_, func
 
 logger = logging.getLogger(__name__)
 
+# Import market analysis service for enriched data
+try:
+    from services.market_analysis_service import MarketAnalysisService
+except ImportError:
+    MarketAnalysisService = None
+    logger.warning("MarketAnalysisService not available")
+
 # IMPORTANT: Using claude_key from secrets for authentication
 # The newest Anthropic model is "claude-3-5-sonnet-20241022", not older models
 # Always prefer using the latest model for best performance
@@ -299,8 +306,38 @@ Format your response in clear sections."""
             Structured analysis with 5 blocks or None if failed
         """
         try:
+            # Get enriched market data if available
+            enriched_data = {}
+            if MarketAnalysisService:
+                try:
+                    from models import Land
+                    from app import db
+                    market_service = MarketAnalysisService()
+                    land = db.session.query(Land).filter_by(id=property_data.get('id')).first()
+                    if land:
+                        enriched_data = market_service.get_enriched_data(land)
+                except Exception as e:
+                    logger.warning(f"Could not get enriched data: {str(e)}")
+            
             # Prepare comprehensive property data
             property_text = self._format_comprehensive_data(property_data)
+            
+            # Add construction and market data to the context
+            if enriched_data.get('construction_value_estimation'):
+                construction = enriched_data['construction_value_estimation']
+                property_text += f"\n\nCONSTRUCTION ESTIMATES (Asturias 2024-2025):"
+                property_text += f"\nBuildable area: {construction.get('buildable_area', 'N/A')}m² ({construction.get('buildability_ratio', 'N/A')} of land)"
+                property_text += f"\nConstruction cost per m²: €{construction.get('value_per_m2', 1000)}"
+                property_text += f"\nEstimated construction: €{construction.get('minimum_value', 0):,.0f} - €{construction.get('maximum_value', 0):,.0f}"
+                property_text += f"\nTotal investment needed: €{construction.get('total_investment_min', 0):,.0f} - €{construction.get('total_investment_max', 0):,.0f}"
+            
+            if enriched_data.get('market_price_dynamics'):
+                market = enriched_data['market_price_dynamics']
+                property_text += f"\n\nMARKET DATA (Based on {market.get('sample_size', 0)} similar properties):"
+                property_text += f"\nAverage price per m²: €{market.get('avg_price_per_m2', 50)}"
+                property_text += f"\nPrice range: €{market.get('min_price_per_m2', 30)} - €{market.get('max_price_per_m2', 150)}/m²"
+                property_text += f"\nCurrent trend: {market.get('price_trend', 'STABLE')}"
+                property_text += f"\nAnnual growth: {market.get('annual_growth_rate', 3.5):.1f}%"
             
             # Find similar properties for comparison
             similar_properties = self.find_similar_properties(property_data, limit=3)
@@ -368,6 +405,8 @@ Provide analysis in this EXACT JSON format (keep all text in English):
         "market_factors": ["key factor 1 affecting prices", "key factor 2", "key factor 3"]
     }}
 }}
+
+IMPORTANT: Use the provided CONSTRUCTION ESTIMATES and MARKET DATA in your analysis. Base your construction_value_estimation and market_price_dynamics on the real data provided above, not on general estimates.
 
 Keep all responses concise and in English. Focus on practical investment insights for Asturias real estate market."""
             
