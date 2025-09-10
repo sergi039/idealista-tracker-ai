@@ -656,12 +656,6 @@ window.IdealistaApp = {
         // Initialize description enhancement UI
         this.initializeDescriptionUI();
         
-        // Setup event listeners
-        const enhanceBtn = document.getElementById('enhance-description-btn');
-        if (enhanceBtn) {
-            enhanceBtn.addEventListener('click', this.handleEnhanceDescription.bind(this));
-        }
-
         // Setup language toggle
         const langToggle = document.getElementById('description-language-toggle');
         if (langToggle) {
@@ -680,10 +674,8 @@ window.IdealistaApp = {
             .then(data => {
                 if (data.success) {
                     if (data.status === 'not_processed') {
-                        // Show enhance button
-                        document.getElementById('enhance-description-btn').style.display = 'block';
-                        document.getElementById('description-status-badge').style.display = 'block';
-                        document.getElementById('description-status-badge').textContent = 'Original';
+                        // Auto-enhance the description silently
+                        this.autoEnhanceDescription(landId);
                     } else {
                         // Show language toggle and enhanced description
                         this.displayEnhancedDescription(data);
@@ -692,22 +684,13 @@ window.IdealistaApp = {
             })
             .catch(error => {
                 console.error('Failed to load description variants:', error);
-                // Show enhance button as fallback
-                document.getElementById('enhance-description-btn').style.display = 'block';
+                // Try to auto-enhance as fallback
+                this.autoEnhanceDescription(landId);
             });
     },
 
-    handleEnhanceDescription: function(event) {
-        const landId = event.target.getAttribute('data-land-id');
-        if (!landId) return;
-
-        // Show loading state
-        this.showDescriptionLoading(true);
-        
-        // Hide enhance button
-        event.target.style.display = 'none';
-
-        // Call API to enhance description
+    autoEnhanceDescription: function(landId) {
+        // Silently enhance the description in the background
         fetch(`/api/enhance/description/${landId}`, {
             method: 'POST',
             headers: {
@@ -716,38 +699,37 @@ window.IdealistaApp = {
         })
         .then(response => response.json())
         .then(data => {
-            this.showDescriptionLoading(false);
-            
             if (data.success) {
-                // Display enhanced description
+                // Display enhanced description with language toggle
                 this.displayEnhancedDescription(data);
-                this.showNotification('Description enhanced successfully!', 'success');
             } else {
-                // Show error and restore enhance button
-                this.showNotification('Failed to enhance description: ' + (data.error || 'Unknown error'), 'error');
-                event.target.style.display = 'block';
+                // Keep original description visible, hide any loading indicators
+                console.log('Auto-enhancement failed, keeping original description');
             }
         })
         .catch(error => {
-            this.showDescriptionLoading(false);
-            console.error('Enhancement failed:', error);
-            this.showNotification('Failed to enhance description. Please try again.', 'error');
-            event.target.style.display = 'block';
+            console.error('Auto-enhancement failed:', error);
+            // Keep original description visible
         });
     },
+
 
     displayEnhancedDescription: function(data) {
         // Update enhanced description content
         const enhancedTextEl = document.getElementById('enhanced-description-text');
-        enhancedTextEl.textContent = data.enhanced_description || data.enhanced;
+        if (enhancedTextEl) {
+            enhancedTextEl.textContent = data.enhanced_description || data.enhanced;
+        }
 
         // Display key highlights if available
         if (data.key_highlights && data.key_highlights.length > 0) {
             const highlightsEl = document.getElementById('highlights-list');
-            highlightsEl.innerHTML = data.key_highlights
-                .map(highlight => `<span class="badge bg-info me-1 mb-1">${highlight}</span>`)
-                .join('');
-            document.getElementById('description-highlights').style.display = 'block';
+            if (highlightsEl) {
+                highlightsEl.innerHTML = data.key_highlights
+                    .map(highlight => `<span class="badge bg-info me-1 mb-1">${highlight}</span>`)
+                    .join('');
+                document.getElementById('description-highlights').style.display = 'block';
+            }
         }
 
         // Display price info if available
@@ -768,28 +750,32 @@ window.IdealistaApp = {
             }
             
             if (priceText) {
-                document.getElementById('price-info-text').textContent = priceText;
-                document.getElementById('price-info-section').style.display = 'block';
+                const priceInfoText = document.getElementById('price-info-text');
+                if (priceInfoText) {
+                    priceInfoText.textContent = priceText;
+                    document.getElementById('price-info-section').style.display = 'block';
+                }
             }
         }
 
         // Show enhanced description and language toggle
-        document.getElementById('enhanced-description').style.display = 'block';
-        document.getElementById('original-description').style.display = 'none';
-        document.getElementById('description-language-toggle').style.display = 'block';
+        const enhancedDesc = document.getElementById('enhanced-description');
+        const originalDesc = document.getElementById('original-description');
+        const langToggle = document.getElementById('description-language-toggle');
         
-        // Update status badge
-        const statusBadge = document.getElementById('description-status-badge');
-        statusBadge.textContent = 'Enhanced';
-        statusBadge.className = 'badge bg-success';
-        statusBadge.innerHTML = '<i class="fas fa-magic me-1"></i>Enhanced';
-        statusBadge.style.display = 'block';
-
-        // Ensure Enhanced button is active
-        const enhancedBtn = document.querySelector('[data-lang="enhanced"]');
-        const originalBtn = document.querySelector('[data-lang="original"]');
-        enhancedBtn.classList.add('active');
-        originalBtn.classList.remove('active');
+        if (enhancedDesc && originalDesc && langToggle) {
+            enhancedDesc.style.display = 'block';
+            originalDesc.style.display = 'none';
+            langToggle.style.display = 'block';
+            
+            // Ensure English button is active
+            const enhancedBtn = document.querySelector('[data-lang="enhanced"]');
+            const originalBtn = document.querySelector('[data-lang="original"]');
+            if (enhancedBtn && originalBtn) {
+                enhancedBtn.classList.add('active');
+                originalBtn.classList.remove('active');
+            }
+        }
     },
 
     handleLanguageToggle: function(event) {
@@ -798,21 +784,14 @@ window.IdealistaApp = {
         const lang = event.target.getAttribute('data-lang');
         const enhancedDiv = document.getElementById('enhanced-description');
         const originalDiv = document.getElementById('original-description');
-        const statusBadge = document.getElementById('description-status-badge');
         
         // Toggle visibility
         if (lang === 'enhanced') {
-            enhancedDiv.style.display = 'block';
-            originalDiv.style.display = 'none';
-            statusBadge.textContent = 'Enhanced';
-            statusBadge.className = 'badge bg-success';
-            statusBadge.innerHTML = '<i class="fas fa-magic me-1"></i>Enhanced';
+            if (enhancedDiv) enhancedDiv.style.display = 'block';
+            if (originalDiv) originalDiv.style.display = 'none';
         } else {
-            enhancedDiv.style.display = 'none';
-            originalDiv.style.display = 'block';
-            statusBadge.textContent = 'Original Spanish';
-            statusBadge.className = 'badge bg-secondary';
-            statusBadge.innerHTML = '<i class="fas fa-file-text me-1"></i>Original';
+            if (enhancedDiv) enhancedDiv.style.display = 'none';
+            if (originalDiv) originalDiv.style.display = 'block';
         }
         
         // Update button states

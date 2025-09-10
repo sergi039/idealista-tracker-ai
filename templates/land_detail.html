@@ -102,32 +102,17 @@
                                 <!-- Language Toggle -->
                                 <div class="btn-group btn-group-sm" role="group" id="description-language-toggle" style="display: none;">
                                     <button type="button" class="btn btn-outline-light active" data-lang="enhanced">
-                                        <i class="fas fa-magic me-1"></i>Enhanced
+                                        <i class="fas fa-language me-1"></i>English
                                     </button>
                                     <button type="button" class="btn btn-outline-light" data-lang="original">
-                                        <i class="fas fa-file-text me-1"></i>Original
+                                        <i class="fas fa-language me-1"></i>Spanish
                                     </button>
                                 </div>
-                                
-                                <!-- Enhance Button -->
-                                <button type="button" class="btn btn-sm btn-primary" id="enhance-description-btn" 
-                                        data-land-id="{{ land.id }}" style="display: none;">
-                                    <i class="fas fa-magic me-1"></i>Enhance Description
-                                </button>
                             </div>
                         </div>
                         
                         <!-- Description Content -->
                         <div class="mt-2 p-3 bg-dark rounded position-relative" id="description-content">
-                            <!-- Loading overlay -->
-                            <div id="description-loading" class="position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center bg-dark bg-opacity-75 rounded" style="display: none !important;">
-                                <div class="text-center">
-                                    <div class="spinner-border text-primary mb-2" role="status">
-                                        <span class="visually-hidden">Loading...</span>
-                                    </div>
-                                    <div class="text-light">Enhancing description with AI...</div>
-                                </div>
-                            </div>
                             
                             <!-- Enhanced Description -->
                             <div id="enhanced-description" style="display: none;">
@@ -144,13 +129,6 @@
                             <!-- Original Description -->
                             <div id="original-description">
                                 {{ land.description }}
-                            </div>
-                            
-                            <!-- Status indicator -->
-                            <div class="position-absolute top-0 end-0 p-1">
-                                <span id="description-status-badge" class="badge bg-secondary" style="display: none;">
-                                    <i class="fas fa-info-circle me-1"></i>Original
-                                </span>
                             </div>
                         </div>
                     </div>
