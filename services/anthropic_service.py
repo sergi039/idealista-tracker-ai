@@ -302,10 +302,18 @@ Format your response in clear sections."""
             # Prepare comprehensive property data
             property_text = self._format_comprehensive_data(property_data)
             
+            # Find similar properties for comparison
+            similar_properties = self.find_similar_properties(property_data, limit=3)
+            similar_text = ""
+            if similar_properties:
+                similar_text = "\n\nSimilar properties in our database:"
+                for i, prop in enumerate(similar_properties, 1):
+                    similar_text += f"\n{i}. {prop['title'][:80]}... - €{prop['price']:,.0f} - {prop['area']:.0f}m² - {prop['municipality']} - Score: {prop['score_total']:.1f}/100" if prop['price'] and prop['area'] and prop['score_total'] else f"\n{i}. {prop['title'][:80]}... - {prop['municipality']}"
+            
             # Create prompt for structured analysis
             prompt = f"""Analyze this Asturias real estate property and provide structured insights in ENGLISH:
 
-{property_text}
+{property_text}{similar_text}
 
 Provide analysis in this EXACT JSON format (keep all text in English):
 {{
@@ -338,6 +346,10 @@ Provide analysis in this EXACT JSON format (keep all text in English):
         "advantages_vs_similar": ["what makes this better"],
         "disadvantages_vs_similar": ["what makes this worse"],
         "price_comparison": "How price compares to similar properties"
+    }},
+    "similar_objects": {{
+        "comparison_summary": "Brief comparison with similar properties from our database",
+        "recommended_alternatives": ["ID:1 - Brief reason why this is similar", "ID:2 - Brief reason", "ID:3 - Brief reason"]
     }}
 }}
 
@@ -366,6 +378,12 @@ Keep all responses concise and in English. Focus on practical investment insight
             # Try to parse JSON response
             try:
                 analysis_data = json.loads(response_text)
+                
+                # Add actual similar properties data for display
+                if similar_properties:
+                    # Add similar properties data for frontend to use
+                    analysis_data['similar_properties_data'] = similar_properties
+                
                 return {
                     'structured_analysis': analysis_data,
                     'model': DEFAULT_MODEL,
