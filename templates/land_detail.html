@@ -612,7 +612,7 @@
                                                 <span class="position-relative d-inline-block">
                                                     <i class="far fa-star text-muted"></i>
                                                     <i class="fas fa-star text-warning position-absolute" 
-                                                       style="top: 0; left: 0; overflow: hidden; width: {{ partial_percent }}%;"></i>
+                                                       style="top: 0; left: 0; clip-path: inset(0 {{ 100 - partial_percent }}% 0 0);"></i>
                                                 </span>
                                             {% else %}
                                                 <!-- Empty star -->
