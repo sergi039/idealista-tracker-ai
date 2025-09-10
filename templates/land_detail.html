@@ -415,37 +415,77 @@
                         </div>
                     {% elif land.travel_time_airport %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span class="small fw-bold"><i class="fas fa-plane me-1"></i>Airport</span>
-                            <div>
-                                <span class="badge bg-info me-1">{{ land.travel_time_airport }}min</span>
-                                {% if land.distance_airport %}<span class="badge bg-secondary">{{ land.distance_airport }}km</span>{% endif %}
+                            <span class="small fw-bold">Airport Distance</span>
+                            <div class="d-flex align-items-center">
+                                <span class="badge bg-info me-1">
+                                    <i class="fas fa-car me-1"></i>{{ land.travel_time_airport }}min
+                                </span>
+                                {% if land.distance_airport %}
+                                    {% set walking_time = (land.travel_time_airport * 4)|int %}
+                                    {% if walking_time <= 15 %}
+                                        <span class="badge bg-success me-1">
+                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
+                                        </span>
+                                    {% endif %}
+                                    <span class="badge bg-secondary">{{ land.distance_airport }}km</span>
+                                {% endif %}
                             </div>
                         </div>
                     {% endif %}
                     {% if land.travel_time_train_station %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span class="small fw-bold"><i class="fas fa-train me-1"></i>Train Station</span>
-                            <div>
-                                <span class="badge bg-info me-1">{{ land.travel_time_train_station }}min</span>
-                                {% if land.distance_train_station %}<span class="badge bg-secondary">{{ land.distance_train_station }}km</span>{% endif %}
+                            <span class="small fw-bold">Train Station Distance</span>
+                            <div class="d-flex align-items-center">
+                                <span class="badge bg-info me-1">
+                                    <i class="fas fa-car me-1"></i>{{ land.travel_time_train_station }}min
+                                </span>
+                                {% if land.distance_train_station %}
+                                    {% set walking_time = (land.travel_time_train_station * 4)|int %}
+                                    {% if walking_time <= 15 %}
+                                        <span class="badge bg-success me-1">
+                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
+                                        </span>
+                                    {% endif %}
+                                    <span class="badge bg-secondary">{{ land.distance_train_station }}km</span>
+                                {% endif %}
                             </div>
                         </div>
                     {% endif %}
                     {% if land.travel_time_hospital %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span class="small fw-bold"><i class="fas fa-hospital me-1"></i>Hospital</span>
-                            <div>
-                                <span class="badge bg-info me-1">{{ land.travel_time_hospital }}min</span>
-                                {% if land.distance_hospital %}<span class="badge bg-secondary">{{ land.distance_hospital }}km</span>{% endif %}
+                            <span class="small fw-bold">Hospital Distance</span>
+                            <div class="d-flex align-items-center">
+                                <span class="badge bg-info me-1">
+                                    <i class="fas fa-car me-1"></i>{{ land.travel_time_hospital }}min
+                                </span>
+                                {% if land.distance_hospital %}
+                                    {% set walking_time = (land.travel_time_hospital * 4)|int %}
+                                    {% if walking_time <= 15 %}
+                                        <span class="badge bg-success me-1">
+                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
+                                        </span>
+                                    {% endif %}
+                                    <span class="badge bg-secondary">{{ land.distance_hospital }}km</span>
+                                {% endif %}
                             </div>
                         </div>
                     {% endif %}
                     {% if land.travel_time_police %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span class="small fw-bold"><i class="fas fa-shield-alt me-1"></i>Police Station</span>
-                            <div>
-                                <span class="badge bg-info me-1">{{ land.travel_time_police }}min</span>
-                                {% if land.distance_police %}<span class="badge bg-secondary">{{ land.distance_police }}km</span>{% endif %}
+                            <span class="small fw-bold">Police Station Distance</span>
+                            <div class="d-flex align-items-center">
+                                <span class="badge bg-info me-1">
+                                    <i class="fas fa-car me-1"></i>{{ land.travel_time_police }}min
+                                </span>
+                                {% if land.distance_police %}
+                                    {% set walking_time = (land.travel_time_police * 4)|int %}
+                                    {% if walking_time <= 15 %}
+                                        <span class="badge bg-success me-1">
+                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
+                                        </span>
+                                    {% endif %}
+                                    <span class="badge bg-secondary">{{ land.distance_police }}km</span>
+                                {% endif %}
                             </div>
                         </div>
                     {% endif %}
@@ -475,10 +515,18 @@
                                 {% elif value is sameas false %}
                                     <i class="fas fa-times-circle text-danger"></i>
                                 {% elif value is number and 'distance' in key %}
-                                    <div>
+                                    <div class="d-flex align-items-center">
                                         {% set transport_type = key.replace('_distance', '') %}
                                         {% if land.transport and land.transport.get(transport_type + '_travel_time') %}
-                                            <span class="badge bg-info me-1">{{ land.transport[transport_type + '_travel_time'] }}min</span>
+                                            <span class="badge bg-info me-1">
+                                                <i class="fas fa-car me-1"></i>{{ land.transport[transport_type + '_travel_time'] }}min
+                                            </span>
+                                            {% set walking_time = (land.transport[transport_type + '_travel_time'] * 4)|int %}
+                                            {% if walking_time <= 15 %}
+                                                <span class="badge bg-success me-1">
+                                                    <i class="fas fa-walking me-1"></i>{{ walking_time }}min
+                                                </span>
+                                            {% endif %}
                                         {% endif %}
                                         {% if value < 1000 %}
                                             <span class="badge bg-secondary">{{ "%.1f"|format(value/1000) }}km</span>
