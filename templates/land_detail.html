@@ -720,8 +720,27 @@
                     <div class="mb-2">
                         <strong>Added:</strong> {% if land.created_at %}{{ land.created_at.strftime('%B %d, %Y at %H:%M') }}{% else %}Unknown{% endif %}
                     </div>
-                    <div>
-                        <strong>Email ID:</strong> <code>{{ land.source_email_id }}</code>
+                    {% if land.email_date %}
+                        <div class="mb-2">
+                            <strong>Email Received:</strong> {{ land.email_date.strftime('%B %d, %Y at %H:%M') }}
+                        </div>
+                    {% endif %}
+                    <div class="mb-2">
+                        <strong>Source Email:</strong> 
+                        {% if land.email_date and land.title %}
+                            {% set email_date_str = land.email_date.strftime('%Y/%m/%d') %}
+                            {% set title_words = land.title.split(' ')[:3]|join(' ') %}
+                            {% set search_query = 'from:idealista.com after:' + email_date_str + ' "' + title_words + '"' %}
+                            <a href="https://mail.google.com/mail/u/0/#search/{{ search_query|urlencode }}" 
+                               target="_blank" 
+                               class="btn btn-sm btn-outline-primary"
+                               title="Search for this email in Gmail using date and property title">
+                                <i class="fas fa-envelope me-1"></i>Find in Gmail
+                            </a>
+                            <small class="text-muted d-block mt-1">Search: {{ title_words }} from {{ email_date_str }}</small>
+                        {% else %}
+                            <code class="text-muted">{{ land.source_email_id }}</code>
+                        {% endif %}
                     </div>
                 </div>
             </div>
