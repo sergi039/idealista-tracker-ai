@@ -24,6 +24,7 @@ def lands():
         municipality_filter = request.args.get('municipality', '')
         search_query = request.args.get('search', '')
         sea_view_filter = request.args.get('sea_view', '') == 'on'
+        view_type = request.args.get('view_type', 'cards')  # Default to cards
         
         # Pagination parameters
         page = request.args.get('page', 1, type=int)
@@ -91,6 +92,7 @@ def lands():
                 'municipality': municipality_filter,
                 'search': search_query,
                 'sea_view': sea_view_filter,
+                'view_type': view_type,
                 'page': page,
                 'per_page': per_page
             }
