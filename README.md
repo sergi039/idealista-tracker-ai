@@ -1,93 +1,101 @@
-# Idealista Land Watch & Rank
+# 🏡 Idealista Land Watch & Rank
 
-A production-ready real estate property analysis application that automates property listing analysis from Idealista real estate emails. The system fetches property listings from Gmail twice daily, enriches the data using external APIs, applies a multi-criteria scoring algorithm, and presents the results through a web interface with filtering, sorting, and export capabilities.
+An advanced real estate investment analysis platform that automates property evaluation for the Asturias region of Spain. The system monitors Idealista property listings via email integration, enriches data with multiple APIs, and provides AI-powered investment insights through a professional web interface.
 
-## 🏗️ Architecture Overview
+## ✨ What Makes This Special
 
-This application serves as a real estate investment analysis tool, helping users evaluate land properties in Asturias, Spain based on infrastructure, transportation, environment, neighborhood quality, and legal status factors.
-
-### Backend Architecture
-- **Framework**: Flask with SQLAlchemy ORM for database operations
-- **Application Factory Pattern**: Uses `create_app()` function for proper initialization
-- **Blueprint Structure**: Separates routes into `main_routes` (web pages) and `api_routes` (REST endpoints)
-- **Service Layer**: Modular services for Gmail integration, data enrichment, scoring, and scheduling
-- **Configuration Management**: Centralized config class with environment variable support
-
-### Frontend Architecture
-- **Template Engine**: Jinja2 for server-side rendering
-- **UI Framework**: Bootstrap with dark theme for responsive design
-- **Progressive Enhancement**: HTMX for dynamic interactions without full page reloads
-- **Vanilla JavaScript**: Custom scripts for table interactions, form handling, and UI enhancements
+This isn't just another property listing tool. It's a comprehensive investment analysis platform that:
+- **Saves hours of manual research** by automatically processing property emails
+- **Provides institutional-grade analysis** using MCDM methodology and AI insights
+- **Delivers actionable investment recommendations** based on real market data
+- **Tracks market dynamics** to identify the best investment opportunities
 
 ## 🚀 Key Features
 
-### Email Integration & Data Processing
-- **Automated Email Ingestion**: Fetches property listings from Gmail twice daily (7 AM and 7 PM CET)
-- **Email Parsing**: Custom regex-based parser for Idealista email formats
-- **Manual Triggers**: API endpoints for on-demand ingestion
-- **Error Handling**: Comprehensive logging and graceful failure handling
+### 📧 Automated Email Processing
+- **Smart Email Ingestion**: Automatically fetches and processes Idealista property emails twice daily
+- **Intelligent Parsing**: Extracts property details, prices, locations, and descriptions
+- **Duplicate Detection**: Prevents duplicate listings from being processed
+- **Manual Triggers**: On-demand ingestion available through the web interface
 
-### Advanced Scoring System
-- **MCDM Methodology**: Multi-Criteria Decision Making using professional standards (ISO 31000, RICS)
-- **Weight Normalization**: Weights automatically normalized to sum to 1.0 (100%)
-- **Proportional Adjustment**: When one weight changes, others adjust proportionally
-- **Transparent Process**: Score breakdown shows individual criteria contributions
-- **Real-time Validation**: Instant weight validation and normalization feedback
+### 🤖 AI-Powered Analysis (NEW)
+- **Investment Insights**: Claude AI provides detailed investment potential analysis
+- **Construction Estimates**: Calculates development costs and ROI projections
+- **Market Comparisons**: Analyzes similar properties to determine fair pricing
+- **Risk Assessment**: Identifies major risks and advantages for each property
+- **Rental Market Analysis**: Projects rental income and investment returns
+- **Development Ideas**: Suggests best use cases for land development
 
-### Data Enrichment
-- **Google Maps Integration**: Geocoding, distance calculations, travel time analysis
-- **Google Places API**: Restaurant ratings, school quality, nearby services
-- **OpenStreetMap Integration**: Infrastructure and transportation data via Overpass API
-- **Multi-source Fallbacks**: Robust data collection with multiple API sources
+### 📊 Professional Scoring System
+- **MCDM Methodology**: Multi-Criteria Decision Making following ISO 31000 standards
+- **5 Key Categories**:
+  - Infrastructure (25%): Utilities, internet, road access
+  - Transportation (25%): Public transport, airports, highways
+  - Environment (20%): Natural features, pollution, noise levels
+  - Neighborhood (20%): Safety, amenities, schools, healthcare
+  - Legal Status (10%): Zoning, permits, development restrictions
+- **Dynamic Weight Adjustment**: Weights auto-normalize to 100% for accuracy
+- **Transparent Scoring**: Detailed breakdown of how each score is calculated
 
-### Web Interface
-- **Property Management**: View, filter, and sort property listings
-- **Detailed Analysis**: Individual property pages with comprehensive scoring breakdown
-- **Export Capabilities**: CSV export functionality for data analysis
-- **Responsive Design**: Mobile-friendly interface with Bootstrap styling
-- **Real-time Updates**: HTMX-powered dynamic content updates
+### 🗺️ Location Intelligence
+- **Google Maps Integration**: Precise geocoding and distance calculations
+- **Travel Time Analysis**: Real-time travel estimates to major cities (Oviedo, Gijón, Avilés)
+- **Nearby Amenities**: Schools, hospitals, restaurants, shopping centers
+- **Infrastructure Mapping**: Public transport, utilities, road networks via OpenStreetMap
+- **Beach Proximity**: Distance to nearest beaches for tourism potential
 
-## 🛠️ Installation & Setup
+### 💰 Investment Analytics
+- **Rental Yield Calculations**: Expected returns based on location and property type
+- **Cap Rate Analysis**: Capitalization rates for investment comparison
+- **Price-to-Rent Ratios**: Evaluate if buying or renting is better
+- **Payback Period**: Years to recover investment through rental income
+- **Market Trends**: Historical price dynamics and future projections
+- **Similar Properties**: Find and compare similar investment opportunities
+
+### 🎨 Modern Web Interface
+- **Responsive Design**: Works seamlessly on desktop, tablet, and mobile
+- **Dark Theme**: Professional dark mode interface that's easy on the eyes
+- **Dynamic Updates**: Real-time content updates without page refreshes (HTMX)
+- **Advanced Filtering**: Filter by price, location, score, property type
+- **Multiple Views**: Table and card layouts for different preferences
+- **Export Capabilities**: Download data as CSV for external analysis
+
+## 🛠️ Technical Architecture
+
+### Backend Stack
+- **Framework**: Flask with production-ready Gunicorn WSGI server
+- **Database**: PostgreSQL with SQLAlchemy ORM
+- **Task Scheduling**: APScheduler for automated email ingestion
+- **API Integration**: RESTful endpoints for all functionality
+- **Security**: Environment-based secrets management with validation
+
+### Frontend Stack
+- **Template Engine**: Jinja2 for server-side rendering
+- **CSS Framework**: Bootstrap 5 with custom dark theme
+- **JavaScript**: Vanilla JS with HTMX for progressive enhancement
+- **Icons**: Font Awesome for professional iconography
+
+### External Services
+- **Google Cloud Platform**: Maps, Places, Geocoding APIs
+- **Anthropic Claude**: AI-powered property analysis
+- **OpenStreetMap**: Infrastructure and transportation data
+- **Gmail API**: Secure email integration with OAuth2
+
+## 📦 Installation
 
 ### Prerequisites
-- Python 3.11+
+- Python 3.11 or higher
 - PostgreSQL database
-- Gmail account with App Password
-- Google Cloud Platform APIs (Maps, Places)
-- Anthropic Claude API (optional, for AI analysis)
+- Gmail account with App Password enabled
+- API keys for Google Maps/Places (optional but recommended)
+- Anthropic API key (optional for AI features)
 
-### Environment Variables
-
-#### Required Secrets
-Set these in your environment or Replit Secrets:
-
-```bash
-SESSION_SECRET=your-secure-session-secret
-DATABASE_URL=postgresql://user:password@host:port/database
-```
-
-#### Optional Secrets (for enhanced functionality)
-```bash
-# Google APIs (use existing names if you have them)
-GOOGLE_MAPS_API_KEY=your-google-maps-api-key
-GOOGLE_PLACES_API_KEY=your-google-places-api-key
-Google_api=your-google-api-key  # Alternative naming
-GOOGLE_MAPS_API=your-google-maps-api  # Alternative naming
-
-# Anthropic Claude AI
-claude_key=your-anthropic-api-key
-
-# Gmail Integration
-IMAP_USER=your-gmail-address
-IMAP_PASSWORD=your-gmail-app-password
-```
-
-### Installation Steps
+### Quick Start
 
 1. **Clone the repository**
 ```bash
-git clone https://github.com/sergi039/IdealistaRank.git
-cd IdealistaRank
+git clone https://github.com/yourusername/idealista-land-watch.git
+cd idealista-land-watch
 ```
 
 2. **Install dependencies**
@@ -96,160 +104,126 @@ pip install -r requirements.txt
 ```
 
 3. **Set up environment variables**
-- Copy `.env.example` to `.env` and fill in your values
-- Or set variables in your hosting platform (Replit, Heroku, etc.)
+```bash
+# Required
+export SESSION_SECRET="your-secure-session-key"
+export DATABASE_URL="postgresql://user:pass@localhost/dbname"
 
-4. **Initialize the database**
+# Optional but recommended
+export GOOGLE_MAPS_API_KEY="your-google-maps-key"
+export GOOGLE_PLACES_API_KEY="your-google-places-key"
+export ANTHROPIC_API_KEY="your-claude-api-key"
+export IMAP_USER="your-gmail@gmail.com"
+export IMAP_PASSWORD="your-app-specific-password"
+```
+
+4. **Initialize database**
 ```bash
 python -c "from app import app, db; app.app_context().push(); db.create_all()"
 ```
 
 5. **Run the application**
 ```bash
-gunicorn --bind 0.0.0.0:5000 --reuse-port --reload main:app
+gunicorn --bind 0.0.0.0:5000 --reload main:app
 ```
 
-## 🔒 Security Features
+Visit `http://localhost:5000` to access the application.
 
-### Centralized Security Validation
-- **SecurityValidator Class**: Validates all required and optional secrets at startup
-- **Fail-Fast Validation**: Application refuses to start if required secrets are missing
-- **Zero Hardcoded Secrets**: All sensitive values loaded from environment variables
-- **Security Logging**: Startup validation logs missing optional secrets as warnings
+## 🔐 Security Features
 
-### API Key Management
-- **Standardized Names**: Consistent naming conventions for all API keys
-- **Multiple Naming Support**: Backward compatibility with existing key names
-- **Secure Storage**: Integration with encrypted secret management systems
+- **No Hardcoded Secrets**: All sensitive data in environment variables
+- **Validation on Startup**: Application verifies all required secrets before starting
+- **Secure Email Access**: Uses Gmail App Passwords, never stores main password
+- **SQL Injection Protection**: SQLAlchemy ORM prevents SQL injection attacks
+- **XSS Protection**: Template auto-escaping prevents cross-site scripting
+- **CSRF Protection**: Flask-WTF forms include CSRF tokens
 
-## 📊 Scoring Methodology
-
-The application uses a **Multi-Criteria Decision Making (MCDM)** approach for property evaluation:
-
-### Scoring Categories
-1. **Infrastructure** (25%): Utilities, internet, road access
-2. **Transportation** (25%): Public transport, airports, highways  
-3. **Environment** (20%): Natural features, pollution levels, noise
-4. **Neighborhood** (20%): Safety, amenities, schools, healthcare
-5. **Legal Status** (10%): Zoning, permits, restrictions
-
-### Weight Management
-- Weights must sum to exactly 1.0 (100%) as per ISO 31000 standards
-- When one weight changes, others are proportionally adjusted automatically
-- Real-time weight normalization and validation
-- Professional compliance with RICS real estate evaluation standards
-
-## 🔄 API Endpoints
+## 📊 API Endpoints
 
 ### Property Management
-- `GET /api/lands` - Retrieve all properties
-- `GET /api/lands/<id>` - Get specific property details
-- `POST /api/lands/<id>/enrich` - Trigger data enrichment
-- `POST /api/lands/<id>/score` - Recalculate property score
+- `GET /lands` - View all properties with filtering
+- `GET /lands/<id>` - Detailed property view
+- `POST /api/lands/<id>/enrich` - Enrich property with API data
+- `POST /api/analyze/property/<id>/structured` - Generate AI analysis
 
 ### Email Integration
-- `POST /api/ingest` - Manual email ingestion trigger
-- `GET /api/ingest/status` - Check ingestion status
-- `GET /api/ingest/logs` - View ingestion logs
+- `POST /api/ingest` - Trigger manual email ingestion
+- `GET /api/scheduler/status` - Check scheduler status
+- `POST /api/scheduler/trigger/<job_id>` - Run scheduled job manually
 
-### Export Functions
-- `GET /api/export/csv` - Export properties to CSV
-- `GET /api/export/scores` - Export scoring data
-
-## 🗄️ Database Schema
-
-### Primary Table: `lands`
-```sql
-CREATE TABLE lands (
-    id SERIAL PRIMARY KEY,
-    title VARCHAR(500) NOT NULL,
-    price NUMERIC(12,2),
-    location VARCHAR(500),
-    location_lat DECIMAL(10,8),
-    location_lon DECIMAL(11,8),
-    location_accuracy VARCHAR(50),
-    infrastructure_score JSONB,
-    transport_score JSONB,
-    environment_score JSONB,
-    neighborhood_score JSONB,
-    legal_score JSONB,
-    total_score DECIMAL(5,2),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
+### Data Export
+- `GET /api/export/csv` - Export all properties to CSV
+- `POST /api/scoring/weights` - Update scoring weights
 
 ## 🧪 Testing
 
-Run the test suite:
 ```bash
+# Run all tests
 pytest tests/ -v
-```
 
-### Test Coverage
-- Unit tests for all service classes
-- API endpoint testing
-- Database integration tests
-- Security validation tests
+# Run with coverage
+pytest tests/ --cov=app --cov-report=html
+```
 
 ## 🚀 Deployment
 
-### Replit Deployment
-1. Import project from GitHub
-2. Set environment variables in Secrets tab
-3. Run with provided configuration
+### Deploy on Replit
+1. Import this repository to Replit
+2. Add secrets in the Secrets tab
+3. Click Run - Replit handles the rest
 
-### Traditional Hosting
-1. Set up PostgreSQL database
-2. Configure environment variables
-3. Deploy with any WSGI server (Gunicorn recommended)
+### Deploy on Heroku
+```bash
+heroku create your-app-name
+heroku addons:create heroku-postgresql:hobby-dev
+heroku config:set SESSION_SECRET="your-secret"
+git push heroku main
+```
 
-## 📈 Performance Monitoring
+### Docker Deployment
+```bash
+docker build -t idealista-watch .
+docker run -p 5000:5000 --env-file .env idealista-watch
+```
 
-### Logging
-- Structured logging throughout application layers
-- APScheduler job monitoring
-- API response time tracking
-- Error aggregation and alerting
+## 📈 Performance & Monitoring
 
-### Metrics
-- Property processing rates
-- API call success rates
-- Database query performance
-- Email ingestion statistics
+- **Structured Logging**: Comprehensive logs for debugging
+- **Performance Metrics**: Track API response times and success rates
+- **Error Handling**: Graceful fallbacks when external services fail
+- **Database Optimization**: Indexed queries for fast property searches
 
 ## 🤝 Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+Contributions are welcome! Please feel free to submit a Pull Request. For major changes:
 
-### Development Guidelines
-- Follow PEP 8 coding standards
-- Add tests for new features
-- Update documentation as needed
-- Ensure all security validations pass
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
 ## 📝 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🆘 Support
+## 🙏 Acknowledgments
 
-For support and questions:
-- Create an issue on GitHub
-- Check the documentation in `/docs`
-- Review the application logs for troubleshooting
+- **Idealista** - For providing the property data source
+- **Google Cloud Platform** - For mapping and location services
+- **Anthropic** - For Claude AI integration
+- **OpenStreetMap** - For open-source geographic data
+- **Flask Community** - For the excellent web framework
 
-## 🏆 Acknowledgments
+## 📞 Support
 
-- **Idealista**: For providing the real estate data source
-- **Google Maps/Places APIs**: For geospatial data enrichment
-- **OpenStreetMap**: For open-source mapping data
-- **Anthropic Claude**: For AI-powered analysis capabilities
+Having issues? 
+- Check the [Issues](https://github.com/yourusername/idealista-land-watch/issues) page
+- Review application logs in `/tmp/logs/`
+- Ensure all API keys are correctly configured
 
 ---
 
-**Built with ❤️ for real estate investment analysis in Asturias, Spain**
+**Built with passion for smart real estate investment in Asturias, Spain** 🇪🇸
+
+*Making property investment decisions easier, one analysis at a time.*
