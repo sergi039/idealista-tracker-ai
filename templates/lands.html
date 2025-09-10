@@ -372,22 +372,24 @@
                 <div class="row" id="properties-grid">
                 {% for land in lands %}
                     <div class="col-lg-6 col-xl-4 mb-4">
-                        <div class="card h-100 property-card" data-land-id="{{ land.id }}">
+                        <div class="card h-100 property-card" data-land-id="{{ land.id }}" style="overflow: hidden;">
                             <!-- Card Header with Score and AI Indicator -->
-                            <div class="card-header d-flex justify-content-between align-items-center bg-dark text-white">
-                                <div class="d-flex align-items-center">
-                                    {% if land.score_total %}
-                                        <span class="badge score-badge me-2" 
-                                              style="background-color: {{ 'var(--bs-success)' if land.score_total >= 70 else 'var(--bs-warning)' if land.score_total >= 50 else 'var(--bs-danger)' }}">
-                                            {{ "%.1f"|format(land.score_total) }}
+                            <div class="card-header bg-dark text-white" style="padding: 0.5rem 1rem;">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div class="d-flex align-items-center" style="min-width: 0; flex: 1;">
+                                        {% if land.score_total %}
+                                            <span class="badge score-badge me-2" 
+                                                  style="background-color: {{ 'var(--bs-success)' if land.score_total >= 70 else 'var(--bs-warning)' if land.score_total >= 50 else 'var(--bs-danger)' }}; flex-shrink: 0;">
+                                                {{ "%.1f"|format(land.score_total) }}
+                                            </span>
+                                        {% endif %}
+                                        <span class="badge {{ 'bg-success' if land.land_type == 'developed' else 'bg-warning' }}" style="flex-shrink: 0;">
+                                            {{ land.land_type.title() if land.land_type else 'Unknown' }}
                                         </span>
-                                    {% endif %}
-                                    <span class="badge {{ 'bg-success' if land.land_type == 'developed' else 'bg-warning' }}">
-                                        {{ land.land_type.title() if land.land_type else 'Unknown' }}
-                                    </span>
-                                </div>
-                                <div class="d-flex align-items-center">
-                                    <small>{{ land.created_at.strftime('%d %b %y') if land.created_at else '-' }}</small>
+                                    </div>
+                                    <div class="ms-2" style="flex-shrink: 0;">
+                                        <small>{{ land.created_at.strftime('%d %b %y') if land.created_at else '-' }}</small>
+                                    </div>
                                 </div>
                             </div>
                             
