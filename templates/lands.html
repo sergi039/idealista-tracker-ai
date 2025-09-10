@@ -849,14 +849,13 @@ function showAIError(landId, error) {
 // Generate AI Analysis and redirect to details page
 async function generateAIAnalysisAndRedirect(landId) {
     try {
-        // Show loading state for all AI icons of this property
-        const icons = document.querySelectorAll(`[onclick*="${landId}"]`);
-        icons.forEach(icon => {
-            if (icon.classList.contains('fa-brain')) {
-                icon.className = 'fas fa-spinner fa-spin me-1';
-                icon.style.pointerEvents = 'none';
-            }
-        });
+        // Find the specific clicked icon using a more targeted approach
+        const clickedIcon = event.target;
+        
+        // Show loading state for the clicked icon
+        const originalClass = clickedIcon.className;
+        clickedIcon.className = 'fas fa-spinner fa-spin me-1';
+        clickedIcon.style.pointerEvents = 'none';
 
         // Generate AI analysis
         const response = await fetch(`/api/analyze/property/${landId}/structured`, {
@@ -871,24 +870,16 @@ async function generateAIAnalysisAndRedirect(landId) {
             window.location.href = `/lands/${landId}`;
         } else {
             // Restore icon on error
-            icons.forEach(icon => {
-                if (icon.classList.contains('fa-spinner')) {
-                    icon.className = 'fas fa-brain text-muted me-1';
-                    icon.style.pointerEvents = 'auto';
-                }
-            });
+            clickedIcon.className = originalClass;
+            clickedIcon.style.pointerEvents = 'auto';
             alert('Failed to generate AI analysis. Please try again.');
         }
     } catch (error) {
         console.error('Error generating AI analysis:', error);
-        // Restore icons on error
-        const icons = document.querySelectorAll(`[onclick*="${landId}"]`);
-        icons.forEach(icon => {
-            if (icon.classList.contains('fa-spinner')) {
-                icon.className = 'fas fa-brain text-muted me-1';
-                icon.style.pointerEvents = 'auto';
-            }
-        });
+        // Restore icon on error
+        const clickedIcon = event.target;
+        clickedIcon.className = 'fas fa-brain text-muted me-1';
+        clickedIcon.style.pointerEvents = 'auto';
         alert('Failed to generate AI analysis. Please try again.');
     }
 }
