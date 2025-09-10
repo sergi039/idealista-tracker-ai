@@ -17,7 +17,7 @@
             </h1>
             
             <div>
-                <a href="{{ url_for('main.export_csv', sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" class="btn btn-success">
+                <a href="{{ url_for('main.export_csv', sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}" class="btn btn-success">
                     <i class="fas fa-download me-1"></i>Export CSV
                 </a>
             </div>
@@ -67,6 +67,18 @@
                                     </option>
                                 {% endfor %}
                             </select>
+                        </div>
+                        
+                        <!-- Sea View Filter -->
+                        <div class="col-md-2 mb-3">
+                            <label class="form-label">&nbsp;</label>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="sea_view" name="sea_view" 
+                                       {{ 'checked' if current_filters.sea_view }}>
+                                <label class="form-check-label" for="sea_view">
+                                    <i class="fas fa-water me-1"></i>Sea View Only
+                                </label>
+                            </div>
                         </div>
                         
                         <!-- Sort -->
@@ -131,7 +143,7 @@
                             <thead class="table-dark">
                                 <tr>
                                     <th>
-                                        <a href="{{ url_for('main.lands', sort='score_total', order='desc' if current_filters.sort_by == 'score_total' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" 
+                                        <a href="{{ url_for('main.lands', sort='score_total', order='desc' if current_filters.sort_by == 'score_total' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}" 
                                            class="text-white text-decoration-none d-flex align-items-center">
                                             Score
                                             {% if current_filters.sort_by == 'score_total' %}
@@ -143,7 +155,7 @@
                                     </th>
                                     <th>Title</th>
                                     <th style="min-width: 120px !important; white-space: nowrap !important;">
-                                        <a href="{{ url_for('main.lands', sort='price', order='desc' if current_filters.sort_by == 'price' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" 
+                                        <a href="{{ url_for('main.lands', sort='price', order='desc' if current_filters.sort_by == 'price' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}" 
                                            class="text-white text-decoration-none d-flex align-items-center">
                                             Price
                                             {% if current_filters.sort_by == 'price' %}
@@ -154,7 +166,7 @@
                                         </a>
                                     </th>
                                     <th style="min-width: 100px !important; white-space: nowrap !important;">
-                                        <a href="{{ url_for('main.lands', sort='area', order='desc' if current_filters.sort_by == 'area' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" 
+                                        <a href="{{ url_for('main.lands', sort='area', order='desc' if current_filters.sort_by == 'area' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}" 
                                            class="text-white text-decoration-none d-flex align-items-center">
                                             Area
                                             {% if current_filters.sort_by == 'area' %}
@@ -166,7 +178,7 @@
                                     </th>
                                     <th>Coordinates</th>
                                     <th style="min-width: 110px !important; white-space: nowrap !important;">
-                                        <a href="{{ url_for('main.lands', sort='travel_time_nearest_beach', order='asc' if current_filters.sort_by == 'travel_time_nearest_beach' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}" 
+                                        <a href="{{ url_for('main.lands', sort='travel_time_nearest_beach', order='asc' if current_filters.sort_by == 'travel_time_nearest_beach' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}" 
                                            class="text-white text-decoration-none d-flex align-items-center">
                                             Beach Distance
                                             {% if current_filters.sort_by == 'travel_time_nearest_beach' %}
@@ -322,7 +334,7 @@
                                     <!-- Previous page -->
                                     {% if pagination.has_prev %}
                                         <li class="page-item">
-                                            <a class="page-link" href="{{ url_for('main.lands', page=pagination.prev_num, per_page=current_filters.per_page, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}">
+                                            <a class="page-link" href="{{ url_for('main.lands', page=pagination.prev_num, per_page=current_filters.per_page, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}">
                                                 <i class="fas fa-chevron-left"></i>
                                             </a>
                                         </li>
@@ -333,7 +345,7 @@
                                         {% if page_num %}
                                             {% if page_num != pagination.page %}
                                                 <li class="page-item">
-                                                    <a class="page-link" href="{{ url_for('main.lands', page=page_num, per_page=current_filters.per_page, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}">
+                                                    <a class="page-link" href="{{ url_for('main.lands', page=page_num, per_page=current_filters.per_page, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}">
                                                         {{ page_num }}
                                                     </a>
                                                 </li>
@@ -352,7 +364,7 @@
                                     <!-- Next page -->
                                     {% if pagination.has_next %}
                                         <li class="page-item">
-                                            <a class="page-link" href="{{ url_for('main.lands', page=pagination.next_num, per_page=current_filters.per_page, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search) }}">
+                                            <a class="page-link" href="{{ url_for('main.lands', page=pagination.next_num, per_page=current_filters.per_page, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}">
                                                 <i class="fas fa-chevron-right"></i>
                                             </a>
                                         </li>

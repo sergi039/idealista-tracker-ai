@@ -23,6 +23,7 @@ def lands():
         land_type_filter = request.args.get('land_type', '')
         municipality_filter = request.args.get('municipality', '')
         search_query = request.args.get('search', '')
+        sea_view_filter = request.args.get('sea_view', '') == 'on'
         
         # Pagination parameters
         page = request.args.get('page', 1, type=int)
@@ -49,6 +50,9 @@ def lands():
                     Land.municipality.ilike(search_pattern)
                 )
             )
+        
+        if sea_view_filter:
+            query = query.filter(Land.environment['sea_view'].astext == 'true')
         
         # Apply sorting with NULL values last
         if hasattr(Land, sort_by):
@@ -86,6 +90,7 @@ def lands():
                 'land_type': land_type_filter,
                 'municipality': municipality_filter,
                 'search': search_query,
+                'sea_view': sea_view_filter,
                 'page': page,
                 'per_page': per_page
             }
@@ -255,6 +260,7 @@ def export_csv():
         land_type_filter = request.args.get('land_type', '')
         municipality_filter = request.args.get('municipality', '')
         search_query = request.args.get('search', '')
+        sea_view_filter = request.args.get('sea_view', '') == 'on'
         
         # Build query with same filters
         query = Land.query
@@ -274,6 +280,9 @@ def export_csv():
                     Land.municipality.ilike(search_pattern)
                 )
             )
+        
+        if sea_view_filter:
+            query = query.filter(Land.environment['sea_view'].astext == 'true')
         
         lands = query.order_by(Land.score_total.desc()).all()
         
