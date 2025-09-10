@@ -1093,9 +1093,9 @@ function renderStructuredAIAnalysis(analysis) {
                                 </div>
                             </div>
                             <div class="col-4">
-                                <div class="border rounded p-2 bg-light">
+                                <div class="border rounded p-2" style="background-color: rgba(255,255,255,0.1);">
                                     <small class="text-muted d-block">Average</small>
-                                    <strong>€${analysis.construction_value_estimation?.average_value?.toLocaleString() || 'N/A'}</strong>
+                                    <strong class="text-warning">€${analysis.construction_value_estimation?.average_value?.toLocaleString() || 'N/A'}</strong>
                                 </div>
                             </div>
                             <div class="col-4">
