@@ -253,19 +253,23 @@
                                                 <span class="text-muted">-</span>
                                             {% endif %}
                                         </td>
-                                        <td>
+                                        <td style="min-width: 140px !important; white-space: nowrap !important;">
                                             {% if land.travel_time_oviedo or land.travel_time_gijon %}
-                                                <div class="small">
+                                                <div class="d-flex flex-wrap align-items-center gap-1 small">
                                                     {% if land.travel_time_oviedo %}
                                                         <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Oviedo,+Asturias,+Spain" 
-                                                           target="_blank" class="text-decoration-none d-block" title="Drive to Oviedo">
-                                                            <strong>Oviedo:</strong> {{ land.travel_time_oviedo }}min
+                                                           target="_blank" class="text-decoration-none d-inline-flex align-items-center me-2" title="Drive to Oviedo">
+                                                            <i class="fas fa-car me-1 text-primary"></i>
+                                                            <span class="fw-bold">{{ land.travel_time_oviedo }}min</span>
+                                                            <small class="text-muted ms-1">OV</small>
                                                         </a>
                                                     {% endif %}
                                                     {% if land.travel_time_gijon %}
                                                         <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Gijón,+Asturias,+Spain" 
-                                                           target="_blank" class="text-decoration-none d-block" title="Drive to Gijón">
-                                                            <strong>Gijón:</strong> {{ land.travel_time_gijon }}min
+                                                           target="_blank" class="text-decoration-none d-inline-flex align-items-center" title="Drive to Gijón">
+                                                            <i class="fas fa-car me-1 text-primary"></i>
+                                                            <span class="fw-bold">{{ land.travel_time_gijon }}min</span>
+                                                            <small class="text-muted ms-1">GJ</small>
                                                         </a>
                                                     {% endif %}
                                                 </div>
