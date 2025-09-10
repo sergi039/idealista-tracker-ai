@@ -847,8 +847,8 @@ function analyzeWithClaude(landId) {
         </div>
     `;
     
-    // Call API
-    fetch(`/api/analyze/property/${landId}`, {
+    // Call structured analysis API
+    fetch(`/api/analyze/property/${landId}/structured`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
