@@ -521,14 +521,18 @@
                                             <!-- Major cities: show car time + distance in one line -->
                                             {% set duration_key = key.replace('distance_to_', 'duration_to_') %}
                                             {% set duration_value = land.transport.get(duration_key) %}
-                                            {% if duration_value %}
-                                                <span class="badge bg-info me-1">
-                                                    <i class="fas fa-car me-1"></i>{{ "%.0f"|format(duration_value/60) }}min
+                                            {% if value == 0 and not duration_value %}
+                                                <span class="text-muted small">no data</span>
+                                            {% else %}
+                                                {% if duration_value %}
+                                                    <span class="badge bg-info me-1">
+                                                        <i class="fas fa-car me-1"></i>{{ "%.0f"|format(duration_value/60) }}min
+                                                    </span>
+                                                {% endif %}
+                                                <span class="badge bg-secondary">
+                                                    <i class="fas fa-road me-1"></i>{{ "%.0f"|format(value/1000) }}km
                                                 </span>
                                             {% endif %}
-                                            <span class="badge bg-secondary">
-                                                <i class="fas fa-road me-1"></i>{{ "%.0f"|format(value/1000) }}km
-                                            </span>
                                         {% else %}
                                             <!-- Local transport: show car time + walking time + distance -->
                                             {% set transport_type = key.replace('_distance', '') %}
@@ -556,6 +560,10 @@
                                     </div>
                                 {% elif value is number and 'duration' in key %}
                                     <span class="badge bg-info">{{ "%.0f"|format(value/60) }}min</span>
+                                {% elif value is number and key.endswith('_travel_time') %}
+                                    <span class="badge bg-info">
+                                        <i class="fas fa-car me-1"></i>{{ value }}min
+                                    </span>
                                 {% else %}
                                     <span class="text-muted small">{{ value }}</span>
                                 {% endif %}
