@@ -166,6 +166,9 @@ Format your response in clear sections."""
             current_land_type = current_property.get('land_type')
             current_beach_time = current_property.get('travel_time_nearest_beach')
             
+            # Debug logging
+            logger.info(f"Finding similar properties for ID: {current_id} (type: {type(current_id)})")
+            
             # Start with base query (exclude current property)
             query = Land.query.filter(Land.id != current_id)
             
@@ -225,6 +228,11 @@ Format your response in clear sections."""
             for prop in similar_properties:
                 if len(results) >= limit:
                     break
+                
+                # Double-check exclusion of current property
+                if prop.id == current_id:
+                    logger.warning(f"Found current property {current_id} in similar results - skipping")
+                    continue
                     
                 similarity_score = self._calculate_similarity_score(current_property, prop)
                 if similarity_score > 0:  # Only include if there's some similarity
@@ -241,6 +249,7 @@ Format your response in clear sections."""
                         'similarity_score': similarity_score
                     }
                     results.append(prop_dict)
+                    logger.info(f"Added similar property ID: {prop.id} with score: {similarity_score:.2f}")
             
             # Sort by similarity score (highest first)
             results.sort(key=lambda x: x['similarity_score'], reverse=True)
