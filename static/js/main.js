@@ -725,9 +725,16 @@ window.IdealistaApp = {
         if (data.key_highlights && data.key_highlights.length > 0) {
             const highlightsEl = document.getElementById('highlights-list');
             if (highlightsEl) {
-                highlightsEl.innerHTML = data.key_highlights
-                    .map(highlight => `<span class="badge bg-info me-1 mb-1">${highlight}</span>`)
-                    .join('');
+                // Clear existing content
+                highlightsEl.textContent = '';
+                
+                // Create highlight badges using safe DOM methods
+                data.key_highlights.forEach(highlight => {
+                    const span = document.createElement('span');
+                    span.className = 'badge bg-info me-1 mb-1';
+                    span.textContent = highlight;
+                    highlightsEl.appendChild(span);
+                });
                 document.getElementById('description-highlights').style.display = 'block';
             }
         }
