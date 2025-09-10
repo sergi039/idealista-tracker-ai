@@ -616,15 +616,22 @@
 
         <!-- Environment -->
         {% if land.environment %}
-            <div class="card mb-4">
-                <div class="card-header">
-                    <h6 class="card-title mb-0">
-                        <i class="fas fa-leaf me-2"></i>Environment
-                    </h6>
-                </div>
-                <div class="card-body">
-                    {% for key, value in land.environment.items() %}
-                        {% if key != 'score_breakdown' %}
+            {% set environment_items = [] %}
+            {% for key, value in land.environment.items() %}
+                {% if key != 'score_breakdown' %}
+                    {% set _ = environment_items.append((key, value)) %}
+                {% endif %}
+            {% endfor %}
+            
+            {% if environment_items %}
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h6 class="card-title mb-0">
+                            <i class="fas fa-leaf me-2"></i>Environment
+                        </h6>
+                    </div>
+                    <div class="card-body">
+                        {% for key, value in environment_items %}
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 {% if key in ['sea_view', 'forest_view', 'mountain_view'] %}
                                     <span class="small">{{ key.replace('_view', '').replace('_', ' ').title() }} View</span>
@@ -644,10 +651,10 @@
                                     {% endif %}
                                 {% endif %}
                             </div>
-                        {% endif %}
-                    {% endfor %}
+                        {% endfor %}
+                    </div>
                 </div>
-            </div>
+            {% endif %}
         {% endif %}
 
         <!-- Services Quality -->
