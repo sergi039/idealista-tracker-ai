@@ -53,8 +53,15 @@ class Land(db.Model):
     distance_hospital = db.Column(db.Integer)       # Distance to nearest hospital in km
     distance_police = db.Column(db.Integer)         # Distance to nearest police station in km
     
+    # Price history tracking
+    previous_price = db.Column(db.Numeric(10, 2))  # Previous price before update
+    price_change_amount = db.Column(db.Numeric(10, 2))  # Amount of price change (negative for decrease)
+    price_change_percentage = db.Column(db.Numeric(5, 2))  # Percentage change
+    price_changed_date = db.Column(db.DateTime)  # When price was last changed
+    
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     email_date = db.Column(db.DateTime)  # Date when the email was received
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)  # Last update time
     
     def __repr__(self):
         return f'<Land {self.id}: {self.title[:50]}...>'
