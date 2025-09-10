@@ -8,7 +8,8 @@ logger = logging.getLogger(__name__)
 
 class GeocodingService:
     def __init__(self):
-        self.google_maps_key = os.environ.get("GOOGLE_MAPS_API_KEY")
+        # Use existing secret names with fallback to standard names
+        self.google_maps_key = os.environ.get("Google_api") or os.environ.get("GOOGLE_MAPS_API") or os.environ.get("GOOGLE_MAPS_API_KEY")
         
     def geocode_address(self, address: str) -> Optional[Dict]:
         """Geocode an address using Google Maps Geocoding API"""

@@ -9,8 +9,9 @@ logger = logging.getLogger(__name__)
 
 class EnrichmentService:
     def __init__(self):
-        self.google_maps_key = os.environ.get("GOOGLE_MAPS_API_KEY")
-        self.google_places_key = os.environ.get("GOOGLE_PLACES_API_KEY")
+        # Use existing secret names with fallback to standard names
+        self.google_maps_key = os.environ.get("Google_api") or os.environ.get("GOOGLE_MAPS_API") or os.environ.get("GOOGLE_MAPS_API_KEY")
+        self.google_places_key = os.environ.get("Google_api") or os.environ.get("GOOGLE_MAPS_API") or os.environ.get("GOOGLE_PLACES_API_KEY")
         self.osm_overpass_url = "https://overpass-api.de/api/interpreter"
         self.geocoding_service = GeocodingService()
         
