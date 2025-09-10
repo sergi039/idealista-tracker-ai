@@ -857,7 +857,27 @@ function analyzeWithClaude(landId) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            // Display the analysis result
+            // Display the analysis result with proper formatting
+            let analysisContent = '';
+            
+            // Check if analysis is a string or object
+            if (typeof data.analysis === 'string') {
+                // Try to parse it as JSON for structured display
+                try {
+                    const parsedAnalysis = JSON.parse(data.analysis);
+                    analysisContent = renderStructuredAIAnalysis(parsedAnalysis);
+                } catch (e) {
+                    // If parsing fails, show as formatted text
+                    analysisContent = `<div class="analysis-text">${data.analysis.replace(/\n/g, '<br>')}</div>`;
+                }
+            } else if (typeof data.analysis === 'object' && data.analysis !== null) {
+                // If it's already an object, render it with structured format
+                analysisContent = renderStructuredAIAnalysis(data.analysis);
+            } else {
+                // Fallback to plain text
+                analysisContent = `<div class="analysis-text">${data.analysis}</div>`;
+            }
+            
             aiContent.innerHTML = `
                 <div class="analysis-content">
                     <div class="alert alert-success alert-dismissible fade show" role="alert">
@@ -865,9 +885,7 @@ function analyzeWithClaude(landId) {
                         Analysis completed successfully!
                         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
                     </div>
-                    <div class="analysis-text">
-                        ${data.analysis.replace(/\n/g, '<br>')}
-                    </div>
+                    ${analysisContent}
                 </div>
             `;
             
