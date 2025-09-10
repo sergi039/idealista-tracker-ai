@@ -114,9 +114,9 @@
                 {% endif %}
 
                 <!-- Actions -->
-                <div class="mt-4 d-flex flex-wrap gap-2 justify-content-center">
+                <div class="mt-4 d-flex flex-wrap justify-content-center">
                     {% if land.url %}
-                        <a href="{{ land.url }}" target="_blank" class="btn btn-success">
+                        <a href="{{ land.url }}" target="_blank" class="btn btn-success me-2 mb-2">
                             <i class="fas fa-home me-2"></i>
                             View on Idealista
                         </a>
@@ -124,7 +124,7 @@
                     
                     <!-- AI Analysis Button - highlighted if analysis exists -->
                     <button onclick="analyzeWithClaude({{ land.id }})" 
-                            class="btn {{ 'btn-success' if land.ai_analysis else 'btn-outline-info' }}">
+                            class="btn {{ 'btn-success' if land.ai_analysis else 'btn-outline-info' }} me-2 mb-2">
                         <i class="fas fa-brain me-2 {{ 'text-white' if land.ai_analysis else '' }}"></i>
                         AI Analysis
                         {% if land.ai_analysis %}
@@ -132,14 +132,14 @@
                         {% endif %}
                     </button>
                     
-                    <a href="{{ url_for('main.edit_environment', land_id=land.id) }}" class="btn btn-primary">
+                    <a href="{{ url_for('main.edit_environment', land_id=land.id) }}" class="btn btn-primary me-2 mb-2">
                         <i class="fas fa-edit me-2"></i>
                         Edit Environment
                     </a>
                     
                     <!-- Google Enrichment Button - highlighted if enrichment data exists -->
                     {% set has_enrichment = land.infrastructure_basic or land.infrastructure_extended or land.transport or (land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital) %}
-                    <button class="btn {{ 'btn-success' if has_enrichment else 'btn-outline-warning' }}" 
+                    <button class="btn {{ 'btn-success' if has_enrichment else 'btn-outline-warning' }} me-2 mb-2" 
                             hx-post="{{ url_for('api.manual_enrichment', land_id=land.id) }}"
                             hx-trigger="click"
                             hx-indicator="#enrichment-spinner">
