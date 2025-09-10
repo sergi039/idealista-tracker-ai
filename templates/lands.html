@@ -343,19 +343,6 @@
                                                             <i class="fas fa-home"></i>
                                                         </a>
                                                     {% endif %}
-                                                    {% if land.ai_analysis %}
-                                                        <button onclick="viewAIAnalysis({{ land.id }})" 
-                                                                class="btn btn-info btn-sm ai-analyze-btn"
-                                                                data-land-id="{{ land.id }}" title="View AI Analysis - Click to go to details">
-                                                            <i class="fas fa-brain text-white"></i>
-                                                        </button>
-                                                    {% else %}
-                                                        <button onclick="generateAIAnalysisOnly({{ land.id }})" 
-                                                                class="btn btn-outline-secondary btn-sm ai-analyze-btn"
-                                                                data-land-id="{{ land.id }}" title="Generate AI Analysis">
-                                                            <i class="fas fa-brain"></i>
-                                                        </button>
-                                                    {% endif %}
                                                 </div>
                                             </td>
                                         </tr>
@@ -490,21 +477,6 @@
                                             <i class="fas fa-home me-1"></i>
                                             Idealista
                                         </a>
-                                    {% endif %}
-                                </div>
-                                <div>
-                                    {% if land.ai_analysis %}
-                                        <button onclick="viewAIAnalysis({{ land.id }})" 
-                                                class="btn btn-info btn-sm ai-analyze-btn"
-                                                data-land-id="{{ land.id }}" title="View AI Analysis - Click to go to details">
-                                            <i class="fas fa-brain text-white"></i> AI Analysis
-                                        </button>
-                                    {% else %}
-                                        <button onclick="generateAIAnalysisOnly({{ land.id }})" 
-                                                class="btn btn-outline-secondary btn-sm ai-analyze-btn"
-                                                data-land-id="{{ land.id }}" title="Generate AI Analysis">
-                                            <i class="fas fa-brain"></i> AI Analysis
-                                        </button>
                                     {% endif %}
                                 </div>
                             </div>
