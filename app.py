@@ -17,10 +17,13 @@ db = SQLAlchemy(model_class=Base)
 def create_app():
     # Create the app
     app = Flask(__name__)
-    # Security: Require SESSION_SECRET to be set - no fallback for production
+    # Security: Validate all required secrets before continuing
+    from utils.security import SecurityValidator
+    
+    security_results = SecurityValidator.validate_all_secrets(raise_on_missing_required=True)
+    logger.info(f"Security check passed: {security_results['optional_available_count']}/{security_results['total_optional']} optional secrets available")
+    
     app.secret_key = os.environ.get("SESSION_SECRET")
-    if not app.secret_key:
-        raise ValueError("SESSION_SECRET environment variable must be set in Replit Secrets")
     app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
     # Configure the database
