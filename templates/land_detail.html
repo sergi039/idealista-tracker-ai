@@ -505,7 +505,8 @@
                             <!-- Skip 'available' and individual 'travel_time' fields if we already show combined data above -->
                             {% if not (
                                 (key.endswith('_available') and (has_distance_field or has_travel_time_field)) or
-                                (key.endswith('_travel_time') and (base_key in ['cafe', 'school', 'hospital', 'restaurant', 'supermarket', 'airport', 'bus_station', 'madrid', 'valencia', 'barcelona', 'barrio_la_sierra'])) or
+                                (key.endswith('_travel_time') and (base_key in ['cafe', 'school', 'hospital', 'restaurant', 'supermarket', 'airport', 'bus_station'])) or
+                                (key in ['duration_to_madrid', 'duration_to_valencia', 'duration_to_barcelona', 'duration_to_barrio_la_sierra']) or
                                 (key == 'airport_available' and land.travel_time_airport)
                             ) %}
                             <div class="d-flex justify-content-between align-items-center mb-2">
@@ -517,7 +518,14 @@
                                 {% elif value is number and 'distance' in key %}
                                     <div class="d-flex align-items-center">
                                         {% set transport_type = key.replace('_distance', '') %}
-                                        {% if land.transport and land.transport.get(transport_type + '_travel_time') %}
+                                        {% if key.startswith('distance_to_') %}
+                                            {% set duration_key = key.replace('distance_to_', 'duration_to_') %}
+                                            {% if land.transport and land.transport.get(duration_key) %}
+                                                <span class="badge bg-info me-1">
+                                                    <i class="fas fa-car me-1"></i>{{ "%.0f"|format(land.transport[duration_key]/60) }}min
+                                                </span>
+                                            {% endif %}
+                                        {% elif land.transport and land.transport.get(transport_type + '_travel_time') %}
                                             <span class="badge bg-info me-1">
                                                 <i class="fas fa-car me-1"></i>{{ land.transport[transport_type + '_travel_time'] }}min
                                             </span>
