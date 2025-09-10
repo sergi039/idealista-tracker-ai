@@ -771,13 +771,20 @@ async function generateAIAnalysisAndRedirect(landId) {
 
 // Generate AI Analysis only (no display in list)
 async function generateAIAnalysisOnly(landId) {
-    const button = document.querySelector(`[data-land-id="${landId}"]`);
+    // Find button more reliably - check both AI Analysis buttons in cards and table
+    const button = document.querySelector(`button[data-land-id="${landId}"][onclick*="generateAIAnalysisOnly"]`) || 
+                   document.querySelector(`[data-land-id="${landId}"].ai-analyze-btn`);
+    
+    if (!button) {
+        console.error('AI Analysis button not found for land:', landId);
+        return;
+    }
     
     // Add gradient animation
     button.style.background = 'linear-gradient(45deg, #007bff, #0056b3, #007bff)';
     button.style.backgroundSize = '200% 200%';
     button.style.animation = 'gradientShift 1.5s ease-in-out infinite';
-    button.innerHTML = '<i class="fas fa-brain text-white"></i>';
+    button.innerHTML = '<i class="fas fa-brain text-white"></i> Analyzing...';
     button.disabled = true;
     button.title = 'Generating AI Analysis...';
     
@@ -808,7 +815,7 @@ async function generateAIAnalysisOnly(landId) {
             button.classList.add('btn-info');
             button.style.background = '';
             button.style.animation = '';
-            button.innerHTML = '<i class="fas fa-brain text-white"></i>';
+            button.innerHTML = '<i class="fas fa-brain text-white"></i> AI Analysis';
             button.title = 'View AI Analysis - Click to go to details';
             button.onclick = () => viewAIAnalysis(landId);
         } else {
@@ -820,12 +827,12 @@ async function generateAIAnalysisOnly(landId) {
         button.classList.add('btn-outline-secondary');
         button.style.background = '';
         button.style.animation = '';
-        button.innerHTML = '<i class="fas fa-brain"></i>';
+        button.innerHTML = '<i class="fas fa-brain"></i> AI Analysis';
         button.title = 'AI Analysis (Failed - Click to retry)';
         button.onclick = () => generateAIAnalysisOnly(landId);
         
-        // Show user-friendly error message
-        alert(error.message);
+        // Show user-friendly error message (console only for card view)
+        console.warn('AI Analysis failed:', error.message);
     }
     
     button.disabled = false;

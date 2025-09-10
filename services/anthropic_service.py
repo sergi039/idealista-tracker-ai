@@ -369,7 +369,7 @@ Provide analysis in this EXACT JSON format (keep all text in English):
     }}
 }}
 
-Keep all responses concise and in English. Focus on practical investment insights for Asturias real estate market.
+Keep all responses concise and in English. Focus on practical investment insights for Asturias real estate market."""
             
             # Call Claude API
             message = self.client.messages.create(
