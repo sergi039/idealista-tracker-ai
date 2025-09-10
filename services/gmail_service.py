@@ -2,6 +2,7 @@ import os
 import logging
 import base64
 import re
+from datetime import datetime
 from email.mime.text import MIMEText
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
@@ -170,14 +171,65 @@ class GmailService:
             processed_count = 0
             for email_data in emails:
                 try:
-                    # Check if already exists
-                    existing = Land.query.filter_by(
+                    # Check if email already processed
+                    existing_email = Land.query.filter_by(
                         source_email_id=email_data['source_email_id']
                     ).first()
                     
-                    if existing:
+                    if existing_email:
                         logger.debug(f"Email {email_data['source_email_id']} already processed")
                         continue
+                    
+                    # Check if property already exists by URL (for price updates)
+                    existing_property = None
+                    if email_data.get('url'):
+                        existing_property = Land.query.filter_by(
+                            url=email_data['url']
+                        ).first()
+                    
+                    # If property exists, update price if changed
+                    if existing_property and email_data.get('price'):
+                        new_price = float(email_data['price'])
+                        old_price = float(existing_property.price) if existing_property.price else None
+                        
+                        if old_price and new_price != old_price:
+                            # Calculate price change
+                            price_change = new_price - old_price
+                            price_change_percentage = (price_change / old_price) * 100 if old_price > 0 else 0
+                            
+                            # Update property with new price information
+                            existing_property.previous_price = old_price
+                            existing_property.price = new_price
+                            existing_property.price_change_amount = price_change
+                            existing_property.price_change_percentage = price_change_percentage
+                            existing_property.price_changed_date = datetime.utcnow()
+                            
+                            # Parse email date if available
+                            email_date_obj = None
+                            if email_data.get('email_date'):
+                                try:
+                                    from email.utils import parsedate_to_datetime
+                                    email_date_obj = parsedate_to_datetime(email_data['email_date'])
+                                except Exception as e:
+                                    logger.warning(f"Failed to parse email date: {str(e)}")
+                            
+                            existing_property.email_date = email_date_obj
+                            
+                            # Add this email ID to prevent reprocessing
+                            existing_property.source_email_id = email_data['source_email_id']
+                            
+                            db.session.commit()
+                            
+                            if price_change < 0:
+                                logger.info(f"Price REDUCED for {existing_property.title}: {old_price:.0f}€ → {new_price:.0f}€ ({price_change:.0f}€, {price_change_percentage:.1f}%)")
+                            else:
+                                logger.info(f"Price INCREASED for {existing_property.title}: {old_price:.0f}€ → {new_price:.0f}€ (+{price_change:.0f}€, +{price_change_percentage:.1f}%)")
+                            
+                            processed_count += 1
+                            continue
+                        else:
+                            logger.debug(f"Property {existing_property.title} price unchanged: {old_price}€")
+                            continue
                     
                     # Parse email date to datetime
                     email_date_obj = None
