@@ -25,8 +25,9 @@ class EmailParser:
                 r'Ver anuncio:?\s*(https?://www\.idealista\.com/[^\s]+)'
             ],
             'municipality': [
-                r'en\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ\s]+(?:[A-ZÁÉÍÓÚÑ][a-záéíóúñ\s]*)*)',
-                r'Municipio:?\s*([A-ZÁÉÍÓÚÑ][a-záéíóúñ\s]+)'
+                r'(?:en|in)\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ\s,\-]+(?:[A-ZÁÉÍÓÚÑ][a-záéíóúñ\s,\-]*)*)',
+                r'Municipio:?\s*([A-ZÁÉÍÓÚÑ][a-záéíóúñ\s,\-]+)',
+                r'([A-ZÁÉÍÓÚÑ][a-záéíóúñ\s,\-]+),\s*(?:Asturias|Cantabria)'
             ]
         }
         
@@ -201,31 +202,94 @@ class EmailParser:
     
     def _extract_municipality(self, text: str) -> Optional[str]:
         """Extract municipality from text"""
-        # First try to find location from "Land in [location]" pattern
-        # But exclude "your search" patterns
-        land_match = re.search(r'Land in ([^€\n]+?)(?:\s+\d+[,.]?\d*\s*€|\s+See \d+|\n)', text, re.IGNORECASE)
+        logger.debug(f"Extracting municipality from text: {text[:200]}...")
+        
+        # Normalize the text first - fix encoding issues
+        normalized_text = self._normalize_email_text(text)
+        logger.debug(f"Normalized text: {normalized_text[:200]}...")
+        
+        # First try to find location from "Land in [location]" pattern with improved regex
+        # Use lookahead instead of literal euro symbol to handle different encodings
+        land_pattern = r'Land in\s+(.+?)(?=\s+\d{1,3}(?:[.,]\d{3})*(?:\s*[€]|\s*EUR|\s*&euro;|\s*â‚¬)|\s+See\s+\d+|[\r\n]|$)'
+        land_match = re.search(land_pattern, normalized_text, re.IGNORECASE)
         if land_match:
             location = land_match.group(1).strip()
+            logger.debug(f"Found 'Land in' match: '{location}'")
             # Skip if it contains "your search"
             if 'your search' not in location.lower():
-                # Clean up the location
-                location = re.sub(r'\s+', ' ', location)
-                # Remove trailing numbers or commas
-                location = re.sub(r',?\s*\d+\s*$', '', location)
+                # Clean up the location - remove trailing commas/numbers
+                location = re.sub(r'[,\s]*(\d{1,3}(?:[.,]\d{3})*)$', '', location)
+                location = re.sub(r'\s+', ' ', location).strip()
                 if location and len(location) > 2:
+                    logger.debug(f"Extracted municipality from 'Land in': '{location}'")
                     return location
         
-        # Try to find municipality from other patterns
-        for pattern in self.patterns['municipality']:
-            match = re.search(pattern, text, re.IGNORECASE)
+        # Try to find municipality from other patterns with hardened fallbacks
+        for i, pattern in enumerate(self.patterns['municipality']):
+            match = re.search(pattern, normalized_text, re.IGNORECASE)
             if match:
                 municipality = match.group(1).strip()
-                # Clean up municipality name
-                municipality = re.sub(r'\s+', ' ', municipality)
-                if municipality and len(municipality) > 2:
+                logger.debug(f"Pattern {i} matched: '{municipality}'")
+                
+                # Apply hardened validation
+                if self._is_valid_municipality(municipality):
+                    logger.debug(f"Extracted municipality from pattern {i}: '{municipality.title()}'")
                     return municipality.title()
+                else:
+                    logger.debug(f"Rejected municipality '{municipality}' - failed validation")
         
+        logger.debug("No municipality found")
         return None
+    
+    def _normalize_email_text(self, text: str) -> str:
+        """Normalize email text by fixing common encoding issues"""
+        # Convert non-breaking space to regular space
+        text = text.replace('\xa0', ' ')
+        
+        # Normalize euro symbols to standard euro
+        text = text.replace('&euro;', '€')
+        text = text.replace('â‚¬', '€')
+        text = text.replace('&nbsp;', ' ')
+        
+        # Basic HTML entity cleanup
+        import html
+        text = html.unescape(text)
+        
+        return text
+    
+    def _is_valid_municipality(self, municipality: str) -> bool:
+        """Validate if a municipality name is legitimate"""
+        if not municipality or len(municipality) <= 2:
+            return False
+        
+        # Reject if contains digits
+        if re.search(r'\d', municipality):
+            return False
+        
+        # Define stopwords (common Spanish/English words that aren't locations)
+        stopwords = {'and', 'en', 'de', 'del', 'la', 'el', 'por', 'con', 'y', 'e', 'with', 'for', 'in', 'of', 'the'}
+        
+        # Check if first word is a stopword
+        first_word = municipality.split()[0].lower()
+        if first_word in stopwords:
+            return False
+        
+        # Require either:
+        # a) Contains a comma (e.g., 'Corias, Pravia')
+        # b) Ends with known region
+        # c) Contains at least two meaningful tokens
+        if (',' in municipality or 
+            re.search(r'\b(?:Asturias|Cantabria|Spain)\b', municipality, re.IGNORECASE) or
+            len(municipality.split()) >= 2):
+            return True
+        
+        # Single word must be a proper location name (capitalized, reasonable length)
+        if (municipality.istitle() and 
+            3 <= len(municipality) <= 30 and
+            municipality.isalpha()):
+            return True
+        
+        return False
     
     def _classify_land_type(self, text: str) -> Optional[str]:
         """Classify land type based on text content"""

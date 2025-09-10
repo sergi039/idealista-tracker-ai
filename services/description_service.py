@@ -136,7 +136,7 @@ Focus on creating professional, engaging content that would appeal to potential 
                     else:
                         response_text = str(content_block)
                 
-                # Parse JSON response - handle potential markdown wrapping
+                # Parse JSON response - handle potential markdown wrapping and extra content
                 response_text = response_text.strip()
                 
                 # Extract JSON from markdown code blocks if present
@@ -144,6 +144,23 @@ Focus on creating professional, engaging content that would appeal to potential 
                 json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
                 if json_match:
                     response_text = json_match.group(1)
+                else:
+                    # If no markdown, try to extract first complete JSON object
+                    # Handle cases where AI returns JSON + extra text
+                    json_match = re.search(r'(\{[^{}]*\{[^{}]*\}[^{}]*\}|\{[^{}]*\})', response_text, re.DOTALL)
+                    if json_match:
+                        # Find the complete JSON object with proper bracket matching
+                        start = response_text.find('{')
+                        if start >= 0:
+                            bracket_count = 0
+                            for i, char in enumerate(response_text[start:], start):
+                                if char == '{':
+                                    bracket_count += 1
+                                elif char == '}':
+                                    bracket_count -= 1
+                                    if bracket_count == 0:
+                                        response_text = response_text[start:i+1]
+                                        break
                 
                 enhanced_data = json.loads(response_text)
                 enhanced_data['original_description'] = raw_description
