@@ -739,24 +739,48 @@
                                 </a>
                             {% endif %}
                             
-                            <!-- Search link (always show for both IMAP and Gmail) -->
-                            {% if land.email_date and land.title %}
+                            <!-- Always show search link - build best possible query with available data -->
+                            {% set search_parts = [] %}
+                            {% set _ = search_parts.append('from:idealista.com') %}
+                            
+                            {% if land.email_date %}
                                 {% set email_date_str = land.email_date.strftime('%Y/%m/%d') %}
-                                {% set title_words = land.title.split(' ')[:3]|join(' ') %}
-                                {% set search_query = 'from:idealista.com after:' + email_date_str + ' "' + title_words + '"' %}
-                                <a href="https://mail.google.com/mail/u/0/#search/{{ search_query|urlencode }}" 
-                                   target="_blank" 
-                                   class="btn btn-{% if land.source_email_id.startswith('imap_') %}primary{% else %}outline-secondary{% endif %} btn-sm"
-                                   title="Search for this email in Gmail using date and property title">
-                                    <i class="fas fa-{% if land.source_email_id.startswith('imap_') %}envelope{% else %}search{% endif %} me-1"></i>
-                                    {% if land.source_email_id.startswith('imap_') %}Open in Gmail{% else %}Search{% endif %}
-                                </a>
+                                {% set _ = search_parts.append('after:' + email_date_str) %}
                             {% endif %}
+                            
+                            {% if land.price %}
+                                {% set price_str = (land.price|int)|string %}
+                                {% set _ = search_parts.append('"' + price_str + '€"') %}
+                            {% endif %}
+                            
+                            {% if land.area %}
+                                {% set area_str = (land.area|int)|string + ' m²' %}
+                                {% set _ = search_parts.append('"' + area_str + '"') %}
+                            {% endif %}
+                            
+                            {% if land.municipality %}
+                                {% set _ = search_parts.append('"' + land.municipality + '"') %}
+                            {% endif %}
+                            
+                            {% set search_query = search_parts|join(' ') %}
+                            
+                            <a href="https://mail.google.com/mail/u/0/#search/{{ search_query|urlencode }}" 
+                               target="_blank" 
+                               class="btn btn-{% if land.source_email_id.startswith('imap_') %}primary{% else %}outline-secondary{% endif %} btn-sm"
+                               title="Search for this email in Gmail">
+                                <i class="fas fa-{% if land.source_email_id.startswith('imap_') %}envelope{% else %}search{% endif %} me-1"></i>
+                                {% if land.source_email_id.startswith('imap_') %}Find in Gmail{% else %}Search in Gmail{% endif %}
+                            </a>
                             
                             <!-- Show email metadata if available -->
                             {% if land.email_subject %}
                                 <div class="small text-muted mt-1">
                                     <strong>Subject:</strong> {{ land.email_subject[:60] }}{% if land.email_subject|length > 60 %}...{% endif %}
+                                </div>
+                            {% endif %}
+                            {% if land.email_sender %}
+                                <div class="small text-muted">
+                                    <strong>From:</strong> {{ land.email_sender }}
                                 </div>
                             {% endif %}
                         {% else %}
