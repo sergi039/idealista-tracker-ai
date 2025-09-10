@@ -1031,9 +1031,10 @@ window.addEventListener('popstate', function(event) {
 
 // Initialize view on page load
 document.addEventListener('DOMContentLoaded', function() {
-    // Set initial opacity to 1 for visible view
     const listView = document.getElementById('list-view');
     const cardsView = document.getElementById('cards-view');
+    const listBtn = document.getElementById('view-list-btn');
+    const cardsBtn = document.getElementById('view-cards-btn');
     
     // Load user preference from localStorage
     const savedViewType = localStorage.getItem('preferredViewType');
@@ -1042,7 +1043,30 @@ document.addEventListener('DOMContentLoaded', function() {
     if (savedViewType && (savedViewType === 'list' || savedViewType === 'cards')) {
         // Apply saved preference if different from server-side default
         if (savedViewType !== currentServerView) {
-            switchView(savedViewType);
+            // Switch instantly without animation on page load
+            if (savedViewType === 'list') {
+                cardsView.style.display = 'none';
+                listView.style.display = 'block';
+                listView.style.opacity = '1';
+                listBtn.classList.add('active');
+                cardsBtn.classList.remove('active');
+                
+                // Update URL without reload
+                const url = new URL(window.location);
+                url.searchParams.set('view_type', 'list');
+                window.history.replaceState({ viewType: 'list' }, '', url.toString());
+            } else {
+                listView.style.display = 'none';
+                cardsView.style.display = 'block';
+                cardsView.style.opacity = '1';
+                cardsBtn.classList.add('active');
+                listBtn.classList.remove('active');
+                
+                // Update URL without reload
+                const url = new URL(window.location);
+                url.searchParams.set('view_type', 'cards');
+                window.history.replaceState({ viewType: 'cards' }, '', url.toString());
+            }
         } else {
             // Set opacity for the current view
             if (listView.style.display !== 'none') {
