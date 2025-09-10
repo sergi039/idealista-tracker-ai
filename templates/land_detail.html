@@ -640,21 +640,17 @@
                                 <div class="d-flex align-items-center">
                                     <span class="badge bg-warning me-2">{{ "%.1f"|format(value) }}/5</span>
                                     <div class="small">
-                                        {% set full_stars = value|int %}
-                                        {% set has_partial = (value - full_stars) > 0 %}
-                                        {% set partial_percent = ((value - full_stars) * 100)|int %}
+                                        {% set rounded_rating = (value * 2)|round / 2 %}
+                                        {% set full_stars = rounded_rating|int %}
+                                        {% set has_half = (rounded_rating - full_stars) >= 0.5 %}
                                         
-                                        {% for i in range(5) %}
-                                            {% if i < full_stars %}
+                                        {% for i in range(1, 6) %}
+                                            {% if i <= full_stars %}
                                                 <!-- Full star -->
                                                 <i class="fas fa-star text-warning"></i>
-                                            {% elif i == full_stars and has_partial %}
-                                                <!-- Partial star -->
-                                                <span class="position-relative d-inline-block">
-                                                    <i class="far fa-star text-muted"></i>
-                                                    <i class="fas fa-star text-warning position-absolute" 
-                                                       style="top: 0; left: 0; clip-path: inset(0 {{ 100 - partial_percent }}% 0 0);"></i>
-                                                </span>
+                                            {% elif i == full_stars + 1 and has_half %}
+                                                <!-- Half star -->
+                                                <i class="fas fa-star-half-alt text-warning"></i>
                                             {% else %}
                                                 <!-- Empty star -->
                                                 <i class="far fa-star text-muted"></i>
