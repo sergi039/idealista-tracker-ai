@@ -304,14 +304,67 @@ class IMAPService:
             processed_count = 0
             for email_data in emails:
                 try:
-                    # Check if already exists
-                    existing = Land.query.filter_by(
+                    # Check if email already processed
+                    existing_email = Land.query.filter_by(
                         source_email_id=email_data['source_email_id']
                     ).first()
                     
-                    if existing:
+                    if existing_email:
                         logger.debug(f"Email {email_data['source_email_id']} already processed")
                         continue
+                    
+                    # Check if property already exists by URL (for price updates)
+                    existing_property = None
+                    if email_data.get('url'):
+                        existing_property = Land.query.filter_by(
+                            url=email_data['url']
+                        ).first()
+                    
+                    # If property exists, update price if changed
+                    if existing_property and email_data.get('price'):
+                        new_price = float(email_data['price'])
+                        old_price = float(existing_property.price) if existing_property.price else None
+                        
+                        if old_price and new_price != old_price:
+                            # Calculate price change
+                            price_change = new_price - old_price
+                            price_change_percentage = (price_change / old_price) * 100 if old_price > 0 else 0
+                            
+                            # Update property with new price information
+                            existing_property.previous_price = old_price
+                            existing_property.price = new_price
+                            existing_property.price_change_amount = price_change
+                            existing_property.price_change_percentage = price_change_percentage
+                            existing_property.price_changed_date = datetime.utcnow()
+                            
+                            # Parse email date if available
+                            email_date_obj = None
+                            if email_data.get('email_received_at'):
+                                try:
+                                    import email.utils
+                                    # Parse IMAP INTERNALDATE format
+                                    email_date_obj = email.utils.parsedate_to_datetime(
+                                        email_data['email_received_at'].decode() 
+                                        if isinstance(email_data['email_received_at'], bytes) 
+                                        else email_data['email_received_at']
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"Failed to parse email date: {e}")
+                            
+                            existing_property.email_date = email_date_obj
+                            
+                            # Add this email ID to prevent reprocessing
+                            existing_property.source_email_id = email_data['source_email_id']
+                            
+                            db.session.commit()
+                            
+                            if price_change < 0:
+                                logger.info(f"Price REDUCED for {existing_property.title}: {old_price:.0f}€ → {new_price:.0f}€ ({price_change:.0f}€, {price_change_percentage:.1f}%)")
+                            else:
+                                logger.info(f"Price INCREASED for {existing_property.title}: {old_price:.0f}€ → {new_price:.0f}€ (+{price_change:.0f}€, +{price_change_percentage:.1f}%)")
+                            
+                            processed_count += 1
+                            continue
                     
                     # Create new land record
                     # Parse email date if available
@@ -324,18 +377,17 @@ class IMAPService:
                         except Exception as e:
                             logger.warning(f"Failed to parse email date: {e}")
                     
-                    land = Land(
-                        source_email_id=email_data['source_email_id'],
-                        title=email_data.get('title'),
-                        url=email_data.get('url'),
-                        price=email_data.get('price'),
-                        area=email_data.get('area'),
-                        municipality=email_data.get('municipality'),
-                        land_type=email_data.get('land_type'),
-                        description=email_data.get('description'),
-                        legal_status=email_data.get('legal_status'),
-                        email_date=email_date
-                    )
+                    land = Land()
+                    land.source_email_id = email_data['source_email_id']
+                    land.title = email_data.get('title')
+                    land.url = email_data.get('url')
+                    land.price = email_data.get('price')
+                    land.area = email_data.get('area')
+                    land.municipality = email_data.get('municipality')
+                    land.land_type = email_data.get('land_type')
+                    land.description = email_data.get('description')
+                    land.legal_status = email_data.get('legal_status')
+                    land.email_date = email_date
                     
                     db.session.add(land)
                     db.session.commit()
