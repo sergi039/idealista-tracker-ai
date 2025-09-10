@@ -217,7 +217,17 @@
                                         </th>
                                         <th>Travel Times</th>
                                         <th>Type</th>
-                                        <th style="min-width: 120px !important; white-space: nowrap !important;">Added</th>
+                                        <th style="min-width: 120px !important; white-space: nowrap !important;">
+                            <a href="{{ url_for('main.lands', sort='created_at', order='desc' if current_filters.sort_by == 'created_at' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
+                               class="text-white text-decoration-none d-flex align-items-center">
+                                Added
+                                {% if current_filters.sort_by == 'created_at' %}
+                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
+                                {% else %}
+                                    <i class="fas fa-sort ms-1 opacity-50"></i>
+                                {% endif %}
+                            </a>
+                        </th>
                                         <th>Actions</th>
                                     </tr>
                                 </thead>
