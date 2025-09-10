@@ -109,14 +109,29 @@
                             </div>
                         </div>
                         
-                        <!-- Action Buttons -->
+                        <!-- Action Buttons and View Toggle -->
                         <div class="col-md-4 mb-3 d-flex align-items-end">
                             <button type="submit" class="btn btn-primary me-2">
                                 <i class="fas fa-search me-1"></i>Apply
                             </button>
-                            <a href="{{ url_for('main.lands') }}" class="btn btn-outline-secondary">
+                            <a href="{{ url_for('main.lands') }}" class="btn btn-outline-secondary me-3">
                                 <i class="fas fa-times me-1"></i>Clear
                             </a>
+                            
+                            <!-- View Toggle -->
+                            <div class="btn-group" role="group" aria-label="View type">
+                                <input type="radio" class="btn-check" name="view_type" id="view_list" value="list" 
+                                       {{ 'checked' if current_filters.view_type == 'list' else '' }}>
+                                <label class="btn btn-outline-secondary" for="view_list" title="List view">
+                                    <i class="fas fa-list"></i>
+                                </label>
+                                
+                                <input type="radio" class="btn-check" name="view_type" id="view_cards" value="cards" 
+                                       {{ 'checked' if current_filters.view_type == 'cards' or not current_filters.view_type else '' }}>
+                                <label class="btn btn-outline-secondary" for="view_cards" title="Card view">
+                                    <i class="fas fa-th-large"></i>
+                                </label>
+                            </div>
                         </div>
                     </div>
                 </form>
