@@ -145,12 +145,18 @@ def analyze_property_structured(land_id):
     try:
         land = Land.query.get_or_404(land_id)
         
+        # Get existing analysis from request for enrichment
+        request_data = request.get_json() if request.is_json else {}
+        existing_analysis = request_data.get('existing_analysis')
+        is_enrichment = existing_analysis is not None
+        
         # Import Anthropic service
         from services.anthropic_service import get_anthropic_service
         anthropic_service = get_anthropic_service()
         
         # Prepare comprehensive property data
         property_data = {
+            'id': land.id,
             'title': land.title,
             'price': float(land.price) if land.price else None,
             'area': float(land.area) if land.area else None,
@@ -163,21 +169,35 @@ def analyze_property_structured(land_id):
             'travel_time_oviedo': land.travel_time_oviedo,
             'travel_time_gijon': land.travel_time_gijon,
             'travel_time_airport': land.travel_time_airport,
-            'infrastructure_basic': land.infrastructure_basic or {}
+            'infrastructure_basic': land.infrastructure_basic or {},
+            'existing_analysis': existing_analysis  # Pass existing analysis for enrichment
         }
         
-        # Get structured AI analysis
+        # Get structured AI analysis (with optional enrichment)
         result = anthropic_service.analyze_property_structured(property_data)
         
         if result and result.get('status') == 'success':
-            # Store the structured analysis
-            land.ai_analysis = result.get('structured_analysis')
+            new_analysis = result.get('structured_analysis')
+            
+            # If enrichment, merge with existing analysis, otherwise replace
+            if is_enrichment and existing_analysis and new_analysis:
+                # Merge analyses - new data enriches existing
+                merged_analysis = dict(existing_analysis)
+                merged_analysis.update(new_analysis)
+                land.ai_analysis = merged_analysis
+                final_analysis = merged_analysis
+            else:
+                # New analysis or no existing data
+                land.ai_analysis = new_analysis
+                final_analysis = new_analysis
+                
             db.session.commit()
             
             return jsonify({
                 "success": True,
-                "analysis": result.get('structured_analysis'),
-                "model": result.get('model')
+                "analysis": final_analysis,
+                "model": result.get('model'),
+                "is_enrichment": is_enrichment
             })
         else:
             error_msg = result.get('error', 'Analysis failed') if result else 'Analysis service unavailable'
