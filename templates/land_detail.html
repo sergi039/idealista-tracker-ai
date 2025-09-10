@@ -505,7 +505,7 @@
                             <!-- Skip 'available' and individual 'travel_time' fields if we already show combined data above -->
                             {% if not (
                                 (key.endswith('_available') and (has_distance_field or has_travel_time_field)) or
-                                (key.endswith('_travel_time') and (base_key in ['cafe', 'school', 'hospital', 'restaurant', 'supermarket', 'airport', 'bus_station'])) or
+                                (key.endswith('_travel_time') and has_distance_field) or
                                 (key.startswith('duration_to_')) or
                                 (key == 'airport_available' and land.travel_time_airport)
                             ) %}
