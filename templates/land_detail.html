@@ -1166,14 +1166,14 @@ function renderStructuredAIAnalysis(analysis) {
                         <h6 class="text-success"><i class="fas fa-chart-pie"></i> Investment Metrics</h6>
                         <div class="row mb-2">
                             <div class="col-6">
-                                <small class="text-muted">Rental Yield</small>
+                                <small class="text-muted d-block">Rental Yield</small>
                                 <div class="d-flex align-items-center">
                                     <strong class="${(analysis.rental_market_analysis?.rental_yield > 5) ? 'text-success' : (analysis.rental_market_analysis?.rental_yield > 4) ? 'text-warning' : 'text-danger'}">${analysis.rental_market_analysis?.rental_yield || 'N/A'}%</strong>
                                     <small class="text-muted ms-2">/year</small>
                                 </div>
                             </div>
                             <div class="col-6">
-                                <small class="text-muted">Cap Rate</small>
+                                <small class="text-muted d-block">Cap Rate</small>
                                 <div class="d-flex align-items-center">
                                     <strong class="${(analysis.rental_market_analysis?.cap_rate > 4) ? 'text-success' : (analysis.rental_market_analysis?.cap_rate > 3) ? 'text-warning' : 'text-danger'}">${analysis.rental_market_analysis?.cap_rate || 'N/A'}%</strong>
                                 </div>
@@ -1181,12 +1181,12 @@ function renderStructuredAIAnalysis(analysis) {
                         </div>
                         <div class="row">
                             <div class="col-6">
-                                <small class="text-muted">Price/Rent Ratio</small>
-                                <strong>${analysis.rental_market_analysis?.price_to_rent_ratio || 'N/A'}</strong>
+                                <small class="text-muted d-block">Price/Rent Ratio</small>
+                                <strong class="${getPriceToRentClass(analysis.rental_market_analysis?.price_to_rent_ratio)}">${analysis.rental_market_analysis?.price_to_rent_ratio || 'N/A'}</strong>
                             </div>
                             <div class="col-6">
-                                <small class="text-muted">Payback Period</small>
-                                <strong>${analysis.rental_market_analysis?.payback_period_years || 'N/A'} years</strong>
+                                <small class="text-muted d-block">Payback Period</small>
+                                <strong class="${getPaybackPeriodClass(analysis.rental_market_analysis?.payback_period_years)}">${analysis.rental_market_analysis?.payback_period_years || 'N/A'} years</strong>
                             </div>
                         </div>
                         <div class="mt-2">
@@ -1214,6 +1214,22 @@ function getInvestmentRatingClass(rating) {
     if (rating.includes('GOOD')) return 'bg-primary';
     if (rating.includes('MODERATE')) return 'bg-warning';
     return 'bg-danger';
+}
+
+// Helper function for Price/Rent Ratio color
+function getPriceToRentClass(ratio) {
+    if (!ratio) return 'text-muted';
+    if (ratio < 15) return 'text-success';        // Good - low ratio means faster payback
+    if (ratio < 20) return 'text-warning';        // Average 
+    return 'text-danger';                         // Poor - high ratio means slow payback
+}
+
+// Helper function for Payback Period color  
+function getPaybackPeriodClass(years) {
+    if (!years) return 'text-muted';
+    if (years < 15) return 'text-success';        // Good - quick payback
+    if (years < 25) return 'text-warning';        // Average
+    return 'text-danger';                         // Poor - very long payback
 }
 
 // Initialize structured AI analysis on page load
