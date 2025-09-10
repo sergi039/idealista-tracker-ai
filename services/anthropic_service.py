@@ -359,6 +359,10 @@ Format your response in clear sections."""
                 property_text += f"\nCap rate: {rental.get('cap_rate', 0):.1f}%"
                 property_text += f"\nInvestment rating: {rental.get('investment_rating', 'N/A')}"
             
+            # Check for existing analysis for enrichment
+            existing_analysis = property_data.get('existing_analysis')
+            is_enrichment = existing_analysis is not None
+            
             # Find similar properties for comparison
             similar_properties = self.find_similar_properties(property_data, limit=3)
             similar_text = ""
@@ -368,7 +372,34 @@ Format your response in clear sections."""
                     similar_text += f"\n{i}. {prop['title'][:80]}... - €{prop['price']:,.0f} - {prop['area']:.0f}m² - {prop['municipality']} - Score: {prop['score_total']:.1f}/100" if prop['price'] and prop['area'] and prop['score_total'] else f"\n{i}. {prop['title'][:80]}... - {prop['municipality']}"
             
             # Create prompt for structured analysis
-            prompt = f"""Analyze this Asturias real estate property and provide structured insights in ENGLISH:
+            if is_enrichment:
+                # Enrichment prompt - focus on missing/incomplete sections
+                existing_sections = list(existing_analysis.keys()) if existing_analysis else []
+                missing_sections = []
+                incomplete_sections = []
+                
+                for section in ['rental_market_analysis', 'construction_value_estimation', 'market_price_dynamics']:
+                    if section not in existing_sections:
+                        missing_sections.append(section)
+                    elif not existing_analysis.get(section):
+                        incomplete_sections.append(section)
+                
+                enrichment_focus = missing_sections + incomplete_sections
+                
+                prompt = f"""ENRICHMENT TASK: You are enhancing an existing real estate analysis. Focus on completing missing or incomplete sections.
+
+EXISTING ANALYSIS:
+{existing_analysis}
+
+PROPERTY DATA:
+{property_text}{similar_text}
+
+ENRICHMENT PRIORITY: Focus especially on these sections: {', '.join(enrichment_focus) if enrichment_focus else 'rental_market_analysis, market insights'}
+
+Provide ONLY the missing or enhanced data in this EXACT JSON format (keep all text in English). Include ALL sections but focus enrichment on priority areas:"""
+            else:
+                # Fresh analysis prompt
+                prompt = f"""Analyze this Asturias real estate property and provide structured insights in ENGLISH:
 
 {property_text}{similar_text}
 
