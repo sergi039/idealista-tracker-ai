@@ -45,8 +45,13 @@ Preferred communication style: Simple, everyday language.
 - **Flexible Scoring**: Separate criteria management for customizable scoring weights
 
 ### Authentication & Security
-- **Gmail Integration**: OAuth2/API key authentication for email access
-- **Environment Variables**: Secure storage of API keys and sensitive configuration
+- **Centralized Security Validation**: SecurityValidator class validates all required and optional secrets at startup
+- **Required Secrets Management**: SESSION_SECRET and DATABASE_URL must be set in Replit Secrets (no fallbacks)
+- **Standardized API Key Names**: GOOGLE_MAPS_API_KEY, GOOGLE_PLACES_API_KEY, claude_key (ANTHROPIC_API_KEY)
+- **Gmail Integration**: IMAP_USER and IMAP_PASSWORD for secure email access via App Passwords
+- **Zero Hardcoded Secrets**: All sensitive values loaded from environment variables
+- **Security Logging**: Startup validation logs missing optional secrets as warnings
+- **Fail-Fast Validation**: Application refuses to start if required secrets are missing
 - **Input Validation**: SQLAlchemy model constraints and form validation
 - **Proxy Support**: ProxyFix middleware for deployment behind reverse proxies
 
