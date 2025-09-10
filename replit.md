@@ -73,6 +73,16 @@ Preferred communication style: Simple, everyday language.
 ### Rental Market Analysis
 - **Rental Income Estimation**: Calculates monthly and annual rental income based on location and property size
 - **Investment Metrics**: Provides rental yield, cap rate, price-to-rent ratio, and payback period
+
+### AI-Powered Description Enhancement
+- **Smart Processing**: Uses Claude Sonnet 4 to transform raw email descriptions into professional property listings
+- **Structured Data Extraction**: Automatically extracts price changes, discounts, area, and key features
+- **Multilingual Support**: English descriptions by default with toggle to original Spanish content
+- **Professional Formatting**: Converts unprofessional email text into marketing-ready property descriptions
+- **Key Highlights**: Automatically identifies and displays important property features as badges
+- **Price Analysis**: Extracts and highlights price reductions and special offers
+- **Interactive UI**: Toggle between enhanced English and original Spanish descriptions
+- **Cost Optimization**: Only processes descriptions when requested to minimize API usage
 - **Location-Based Analysis**: Different rental rates for urban, suburban, and rural areas in Asturias
 - **Market Comparison**: Shows expected yield ranges and investment ratings (Excellent/Good/Moderate/Below Average)
 - **Demand Factors**: Identifies rental demand drivers specific to property location
