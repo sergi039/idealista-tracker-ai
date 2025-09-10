@@ -505,7 +505,7 @@
                             <!-- Skip 'available' and individual 'travel_time' fields if we already show combined data above -->
                             {% if not (
                                 (key.endswith('_available') and (has_distance_field or has_travel_time_field)) or
-                                (key.endswith('_travel_time') and (base_key in ['cafe', 'school', 'hospital', 'restaurant', 'supermarket', 'airport', 'bus_station'])) or
+                                (key.endswith('_travel_time') and (base_key in ['cafe', 'school', 'hospital', 'restaurant', 'supermarket', 'airport', 'bus_station', 'madrid', 'valencia', 'barcelona', 'barrio_la_sierra'])) or
                                 (key == 'airport_available' and land.travel_time_airport)
                             ) %}
                             <div class="d-flex justify-content-between align-items-center mb-2">
@@ -529,9 +529,13 @@
                                             {% endif %}
                                         {% endif %}
                                         {% if value < 1000 %}
-                                            <span class="badge bg-secondary">{{ "%.1f"|format(value/1000) }}km</span>
+                                            <span class="badge bg-secondary">
+                                                <i class="fas fa-road me-1"></i>{{ "%.1f"|format(value/1000) }}km
+                                            </span>
                                         {% else %}
-                                            <span class="badge bg-secondary">{{ "%.0f"|format(value/1000) }}km</span>
+                                            <span class="badge bg-secondary">
+                                                <i class="fas fa-road me-1"></i>{{ "%.0f"|format(value/1000) }}km
+                                            </span>
                                         {% endif %}
                                     </div>
                                 {% elif value is number and 'duration' in key %}
