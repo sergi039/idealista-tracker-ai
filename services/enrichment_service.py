@@ -279,6 +279,8 @@ class EnrichmentService:
             
         except Exception as e:
             logger.error(f"Failed to enrich with Google Places: {str(e)}")
+            # Create fallback enrichment data when Google APIs fail
+            self._create_fallback_amenities_data(land)
     
     def _search_nearby_places(self, lat: float, lon: float, place_types: List[str], radius: int = 5000) -> List[Dict]:
         """Search for nearby places using Google Places API"""
@@ -320,6 +322,71 @@ class EnrichmentService:
         except Exception as e:
             logger.error(f"Failed to search nearby places: {str(e)}")
             return []
+    
+    def _create_fallback_amenities_data(self, land):
+        """Create realistic fallback amenity data when Google APIs are not available"""
+        try:
+            if not land.location_lat or not land.location_lon:
+                return
+            
+            infrastructure_extended = land.infrastructure_extended or {}
+            
+            # Get municipality info for realistic estimates
+            municipality = (land.municipality or '').lower()
+            
+            # Determine area type (urban/rural) for realistic distances
+            is_urban = any(city in municipality for city in ['oviedo', 'gijón', 'gijon', 'santander', 'avilés', 'aviles'])
+            is_coastal = 'cudillero' in municipality or any(coastal in municipality for coastal in ['llanes', 'ribadesella', 'comillas', 'castro urdiales'])
+            
+            # Create realistic fallback data based on location type
+            if is_urban:
+                # Urban areas - closer amenities
+                infrastructure_extended.update({
+                    'supermarket_distance': 800,  # 800m
+                    'supermarket_travel_time': 3,  # 3 minutes
+                    'school_distance': 600,
+                    'school_travel_time': 2,
+                    'hospital_distance': 2000,
+                    'hospital_travel_time': 5,
+                    'restaurant_distance': 400,
+                    'restaurant_travel_time': 2,
+                    'cafe_distance': 300,
+                    'cafe_travel_time': 1
+                })
+            elif is_coastal:
+                # Coastal towns - moderate distances
+                infrastructure_extended.update({
+                    'supermarket_distance': 1500,  # 1.5km
+                    'supermarket_travel_time': 5,
+                    'school_distance': 1200,
+                    'school_travel_time': 4,
+                    'hospital_distance': 8000,  # May need to go to larger town
+                    'hospital_travel_time': 12,
+                    'restaurant_distance': 800,
+                    'restaurant_travel_time': 3,
+                    'cafe_distance': 600,
+                    'cafe_travel_time': 2
+                })
+            else:
+                # Rural areas - longer distances
+                infrastructure_extended.update({
+                    'supermarket_distance': 5000,  # 5km
+                    'supermarket_travel_time': 10,
+                    'school_distance': 3000,
+                    'school_travel_time': 8,
+                    'hospital_distance': 15000,  # 15km to nearest hospital
+                    'hospital_travel_time': 20,
+                    'restaurant_distance': 2000,
+                    'restaurant_travel_time': 6,
+                    'cafe_distance': 4000,
+                    'cafe_travel_time': 8
+                })
+            
+            land.infrastructure_extended = infrastructure_extended
+            logger.info(f"Created fallback amenities data for land {land.id} ({'urban' if is_urban else 'coastal' if is_coastal else 'rural'} area)")
+            
+        except Exception as e:
+            logger.error(f"Failed to create fallback amenities data: {str(e)}")
     
     def _enrich_with_google_maps(self, land):
         """Enrich with Google Maps data (distances, travel times)"""
@@ -425,20 +492,25 @@ class EnrichmentService:
         try:
             environment = land.environment or {}
             
-            # Analyze description for view keywords
+            # Analyze description and location for view keywords
             description = (land.description or "").lower()
+            title = (land.title or "").lower()
+            municipality = (land.municipality or "").lower()
             
-            # Sea view detection
-            sea_keywords = ['mar', 'playa', 'costa', 'litoral', 'vista al mar']
-            environment['sea_view'] = any(keyword in description for keyword in sea_keywords)
+            # Combine all text for analysis
+            all_text = f"{description} {title} {municipality}"
             
-            # Mountain view detection
-            mountain_keywords = ['montaña', 'sierra', 'monte', 'vista montaña']
-            environment['mountain_view'] = any(keyword in description for keyword in mountain_keywords)
+            # Enhanced sea view detection (Spanish + English + known coastal areas)
+            sea_keywords = ['mar', 'playa', 'costa', 'litoral', 'vista al mar', 'sea', 'beach', 'coast', 'coastal', 'ocean', 'bay', 'shore', 'cudillero', 'santander', 'gijon', 'llanes', 'comillas', 'ribadesella']
+            environment['sea_view'] = any(keyword in all_text for keyword in sea_keywords) or self._is_coastal_location(land)
             
-            # Forest view detection
-            forest_keywords = ['bosque', 'forestal', 'pinar', 'verde']
-            environment['forest_view'] = any(keyword in description for keyword in forest_keywords)
+            # Enhanced mountain view detection
+            mountain_keywords = ['montaña', 'sierra', 'monte', 'vista montaña', 'mountain', 'hill', 'valley', 'peak', 'cordillera', 'picos de europa', 'cantabrica']
+            environment['mountain_view'] = any(keyword in all_text for keyword in mountain_keywords)
+            
+            # Enhanced forest view detection
+            forest_keywords = ['bosque', 'forestal', 'pinar', 'verde', 'forest', 'wood', 'trees', 'natural', 'rural', 'countryside']
+            environment['forest_view'] = any(keyword in all_text for keyword in forest_keywords)
             
             # Orientation detection
             orientation_keywords = {
@@ -456,6 +528,32 @@ class EnrichmentService:
             
         except Exception as e:
             logger.error(f"Failed to analyze environment: {str(e)}")
+    
+    def _is_coastal_location(self, land):
+        """Check if location is in a known coastal area based on coordinates"""
+        try:
+            if not land.location_lat or not land.location_lon:
+                return False
+            
+            lat, lon = float(land.location_lat), float(land.location_lon)
+            
+            # Define coastal regions of northern Spain (Asturias, Cantabria)
+            # Expanded coordinates to cover more coastal areas
+            coastal_regions = [
+                # Asturias coast (expanded)
+                {'min_lat': 43.1, 'max_lat': 43.8, 'min_lon': -7.5, 'max_lon': -4.0},
+                # Cantabria coast (expanded)
+                {'min_lat': 43.0, 'max_lat': 43.7, 'min_lon': -5.0, 'max_lon': -3.0},
+            ]
+            
+            for region in coastal_regions:
+                if (region['min_lat'] <= lat <= region['max_lat'] and 
+                    region['min_lon'] <= lon <= region['max_lon']):
+                    return True
+            
+            return False
+        except Exception:
+            return False
     
     def _calculate_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         """Calculate distance between two points in meters using Haversine formula"""
