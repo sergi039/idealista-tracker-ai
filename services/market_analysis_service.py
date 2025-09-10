@@ -39,6 +39,32 @@ class MarketAnalysisService:
         'default': 0.20         # Default 20%
     }
     
+    # Rental market data for Asturias (2024-2025)
+    RENTAL_YIELDS = {
+        'urban': {
+            'min': 3.5,    # % annual yield in major cities
+            'avg': 4.5,    # % average yield
+            'max': 5.5     # % maximum yield
+        },
+        'suburban': {
+            'min': 4.0,    # % annual yield in suburban areas
+            'avg': 5.0,    # % average yield  
+            'max': 6.0     # % maximum yield
+        },
+        'rural': {
+            'min': 5.0,    # % annual yield in rural areas
+            'avg': 6.0,    # % average yield
+            'max': 7.5     # % maximum yield (vacation rentals)
+        }
+    }
+    
+    # Average rental prices per m² per month in Asturias
+    RENTAL_PRICES = {
+        'urban': {'min': 8, 'avg': 10, 'max': 13},      # €/m²/month
+        'suburban': {'min': 6, 'avg': 8, 'max': 10},    # €/m²/month
+        'rural': {'min': 5, 'avg': 7, 'max': 9}         # €/m²/month
+    }
+    
     def calculate_construction_value(self, land: Land) -> Dict:
         """
         Calculate construction value estimates based on land characteristics
@@ -185,6 +211,126 @@ class MarketAnalysisService:
             logger.error(f"Error analyzing market trends: {str(e)}")
             return self._get_default_market_trends()
     
+    def calculate_rental_analysis(self, land: Land, construction_data: Dict = None) -> Dict:
+        """
+        Calculate rental market analysis and investment metrics
+        """
+        try:
+            # Determine location type based on municipality
+            location_type = 'rural'  # default
+            if land.municipality:
+                municipality_lower = land.municipality.lower()
+                if any(city in municipality_lower for city in ['gijón', 'oviedo', 'avilés']):
+                    location_type = 'urban'
+                elif any(area in municipality_lower for city in ['gijón', 'oviedo', 'avilés'] for area in [city]):
+                    # Check if it's near major cities (simplified logic)
+                    location_type = 'suburban'
+            
+            # Get rental yields and prices for location
+            yields = self.RENTAL_YIELDS.get(location_type, self.RENTAL_YIELDS['rural'])
+            rental_prices = self.RENTAL_PRICES.get(location_type, self.RENTAL_PRICES['rural'])
+            
+            # Calculate property value (land + construction)
+            if not construction_data:
+                construction_data = self.calculate_construction_value(land)
+            
+            total_investment = construction_data.get('total_investment_avg', 0)
+            buildable_area = construction_data.get('buildable_area', 0)
+            
+            # Calculate monthly rental estimates based on buildable area
+            monthly_rent_min = buildable_area * rental_prices['min']
+            monthly_rent_avg = buildable_area * rental_prices['avg']
+            monthly_rent_max = buildable_area * rental_prices['max']
+            
+            # Annual rental income
+            annual_rent_min = monthly_rent_min * 12
+            annual_rent_avg = monthly_rent_avg * 12
+            annual_rent_max = monthly_rent_max * 12
+            
+            # Calculate investment metrics
+            if total_investment > 0:
+                # Rental yield (annual rent / total investment * 100)
+                rental_yield = (annual_rent_avg / total_investment) * 100
+                
+                # Price-to-rent ratio (property price / annual rent)
+                price_to_rent_ratio = total_investment / annual_rent_avg if annual_rent_avg > 0 else 0
+                
+                # Payback period in years
+                payback_period = total_investment / annual_rent_avg if annual_rent_avg > 0 else 0
+                
+                # Cap rate (Net Operating Income / Property Value)
+                # Assuming 25% expenses (maintenance, taxes, management)
+                noi = annual_rent_avg * 0.75
+                cap_rate = (noi / total_investment) * 100
+            else:
+                rental_yield = yields['avg']
+                price_to_rent_ratio = 0
+                payback_period = 0
+                cap_rate = 0
+            
+            # Rental demand indicators
+            demand_factors = []
+            if location_type == 'urban':
+                demand_factors = [
+                    "High demand from professionals and students",
+                    "Proximity to business centers and universities",
+                    "Strong rental market with quick tenant turnover"
+                ]
+            elif location_type == 'suburban':
+                demand_factors = [
+                    "Growing demand from families",
+                    "Good schools and amenities nearby",
+                    "Balance of urban access and quality of life"
+                ]
+            else:  # rural
+                demand_factors = [
+                    "Vacation rental potential (Airbnb)",
+                    "Rural tourism growth in Asturias",
+                    "Weekend home rental opportunities"
+                ]
+            
+            return {
+                'location_type': location_type.capitalize(),
+                'monthly_rent_min': round(monthly_rent_min),
+                'monthly_rent_avg': round(monthly_rent_avg),
+                'monthly_rent_max': round(monthly_rent_max),
+                'annual_rent_min': round(annual_rent_min),
+                'annual_rent_avg': round(annual_rent_avg),
+                'annual_rent_max': round(annual_rent_max),
+                'rental_yield': round(rental_yield, 1),
+                'expected_yield_range': f"{yields['min']}-{yields['max']}%",
+                'price_to_rent_ratio': round(price_to_rent_ratio, 1),
+                'payback_period_years': round(payback_period, 1),
+                'cap_rate': round(cap_rate, 1),
+                'rental_price_per_m2': f"€{rental_prices['avg']}/m²/month",
+                'demand_factors': demand_factors,
+                'investment_rating': self._get_investment_rating(rental_yield, cap_rate),
+                'market_comparison': f"Average rental yield in {location_type} Asturias: {yields['avg']}%"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error calculating rental analysis: {str(e)}")
+            return {
+                'error': 'Unable to calculate rental analysis',
+                'location_type': 'Unknown',
+                'monthly_rent_avg': 0,
+                'annual_rent_avg': 0,
+                'rental_yield': 0
+            }
+    
+    def _get_investment_rating(self, rental_yield: float, cap_rate: float) -> str:
+        """
+        Determine investment rating based on yield and cap rate
+        """
+        if rental_yield >= 6 and cap_rate >= 5:
+            return "EXCELLENT - High returns expected"
+        elif rental_yield >= 5 and cap_rate >= 4:
+            return "GOOD - Above average returns"
+        elif rental_yield >= 4 and cap_rate >= 3:
+            return "MODERATE - Standard market returns"
+        else:
+            return "BELOW AVERAGE - Consider other options"
+    
     def _get_default_market_trends(self) -> Dict:
         """Return default market trends for Asturias region"""
         return {
@@ -207,12 +353,14 @@ class MarketAnalysisService:
     def get_enriched_data(self, land: Land) -> Dict:
         """
         Get comprehensive enriched data for a property including
-        construction estimates and market analysis
+        construction estimates, market analysis, and rental analysis
         """
         construction_data = self.calculate_construction_value(land)
         market_data = self.analyze_market_trends(land)
+        rental_data = self.calculate_rental_analysis(land, construction_data)
         
         return {
             'construction_value_estimation': construction_data,
-            'market_price_dynamics': market_data
+            'market_price_dynamics': market_data,
+            'rental_market_analysis': rental_data
         }

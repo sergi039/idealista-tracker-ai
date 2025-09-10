@@ -348,6 +348,17 @@ Format your response in clear sections."""
                 property_text += f"\nCurrent trend: {market.get('price_trend', 'STABLE')}"
                 property_text += f"\nAnnual growth: {market.get('annual_growth_rate', 3.5):.1f}%"
             
+            if enriched_data.get('rental_market_analysis'):
+                rental = enriched_data['rental_market_analysis']
+                property_text += f"\n\nRENTAL MARKET ANALYSIS ({rental.get('location_type', 'Unknown')} area):"
+                property_text += f"\nEstimated monthly rent: €{rental.get('monthly_rent_min', 0):,.0f} - €{rental.get('monthly_rent_max', 0):,.0f} (avg: €{rental.get('monthly_rent_avg', 0):,.0f})"
+                property_text += f"\nAnnual rental income: €{rental.get('annual_rent_min', 0):,.0f} - €{rental.get('annual_rent_max', 0):,.0f}"
+                property_text += f"\nRental yield: {rental.get('rental_yield', 0):.1f}% (expected range: {rental.get('expected_yield_range', 'N/A')})"
+                property_text += f"\nPrice-to-rent ratio: {rental.get('price_to_rent_ratio', 0):.1f}"
+                property_text += f"\nPayback period: {rental.get('payback_period_years', 0):.1f} years"
+                property_text += f"\nCap rate: {rental.get('cap_rate', 0):.1f}%"
+                property_text += f"\nInvestment rating: {rental.get('investment_rating', 'N/A')}"
+            
             # Find similar properties for comparison
             similar_properties = self.find_similar_properties(property_data, limit=3)
             similar_text = ""
@@ -412,6 +423,19 @@ Provide analysis in this EXACT JSON format (keep all text in English):
         "trend_analysis": "Brief explanation of what drives the price trend in this area",
         "future_outlook": "1-3 year price forecast for similar properties",
         "market_factors": ["key factor 1 affecting prices", "key factor 2", "key factor 3"]
+    }},
+    "rental_market_analysis": {{
+        "monthly_rent_min": minimum_monthly_rental,
+        "monthly_rent_avg": average_monthly_rental,
+        "monthly_rent_max": maximum_monthly_rental,
+        "annual_rent_avg": average_annual_rental,
+        "rental_yield": expected_rental_yield_percentage,
+        "price_to_rent_ratio": price_to_annual_rent_ratio,
+        "payback_period_years": years_to_recover_investment,
+        "cap_rate": capitalization_rate_percentage,
+        "investment_rating": "EXCELLENT|GOOD|MODERATE|BELOW_AVERAGE",
+        "demand_factors": ["rental demand factor 1", "factor 2", "factor 3"],
+        "rental_strategy": "Recommended rental strategy (long-term, vacation, etc.)"
     }}
 }}
 
