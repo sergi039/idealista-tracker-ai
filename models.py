@@ -8,6 +8,8 @@ class Land(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     source_email_id = db.Column(db.String(255), unique=True, nullable=False)
+    email_subject = db.Column(db.Text)  # Original email subject line
+    email_sender = db.Column(db.String(255))  # Email sender
     title = db.Column(db.Text)
     url = db.Column(db.Text)
     price = db.Column(db.Numeric(10, 2))

@@ -92,6 +92,9 @@ class GmailService:
                     parsed_data = self.email_parser.parse_idealista_email(email_content)
                     if parsed_data:
                         parsed_data['source_email_id'] = message['id']
+                        parsed_data['email_subject'] = email_content.get('subject', '')
+                        parsed_data['email_sender'] = email_content.get('sender', '')
+                        parsed_data['email_date'] = email_content.get('date', '')
                         email_data.append(parsed_data)
             
             logger.info(f"Successfully parsed {len(email_data)} emails")
@@ -115,12 +118,17 @@ class GmailService:
             body = ""
             subject = ""
             
-            # Get subject
+            # Get subject, date, and sender
             headers = payload.get('headers', [])
+            date_str = ""
+            sender = ""
             for header in headers:
                 if header['name'] == 'Subject':
                     subject = header['value']
-                    break
+                elif header['name'] == 'Date':
+                    date_str = header['value']
+                elif header['name'] == 'From':
+                    sender = header['value']
             
             # Get body content
             if 'parts' in payload:
@@ -136,7 +144,9 @@ class GmailService:
             return {
                 'subject': subject,
                 'body': body,
-                'message_id': message_id
+                'message_id': message_id,
+                'date': date_str,
+                'sender': sender
             }
             
         except Exception as e:
@@ -169,9 +179,21 @@ class GmailService:
                         logger.debug(f"Email {email_data['source_email_id']} already processed")
                         continue
                     
+                    # Parse email date to datetime
+                    email_date_obj = None
+                    if email_data.get('email_date'):
+                        try:
+                            from email.utils import parsedate_to_datetime
+                            email_date_obj = parsedate_to_datetime(email_data['email_date'])
+                        except Exception as e:
+                            logger.warning(f"Failed to parse email date: {str(e)}")
+                    
                     # Create new land record
                     land = Land(
                         source_email_id=email_data['source_email_id'],
+                        email_subject=email_data.get('email_subject'),
+                        email_sender=email_data.get('email_sender'),
+                        email_date=email_date_obj,
                         title=email_data.get('title'),
                         url=email_data.get('url'),
                         price=email_data.get('price'),
