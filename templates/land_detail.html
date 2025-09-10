@@ -93,12 +93,65 @@
                     </div>
                 {% endif %}
 
-                <!-- Brief Description -->
+                <!-- Enhanced Description -->
                 {% if land.description %}
-                    <div class="mb-4">
-                        <strong>Brief Description:</strong>
-                        <div class="mt-2 p-3 bg-dark rounded">
-                            {{ land.description }}
+                    <div class="mb-4" id="description-section">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <strong>Property Description:</strong>
+                            <div class="d-flex gap-2">
+                                <!-- Language Toggle -->
+                                <div class="btn-group btn-group-sm" role="group" id="description-language-toggle" style="display: none;">
+                                    <button type="button" class="btn btn-outline-light active" data-lang="enhanced">
+                                        <i class="fas fa-magic me-1"></i>Enhanced
+                                    </button>
+                                    <button type="button" class="btn btn-outline-light" data-lang="original">
+                                        <i class="fas fa-file-text me-1"></i>Original
+                                    </button>
+                                </div>
+                                
+                                <!-- Enhance Button -->
+                                <button type="button" class="btn btn-sm btn-primary" id="enhance-description-btn" 
+                                        data-land-id="{{ land.id }}" style="display: none;">
+                                    <i class="fas fa-magic me-1"></i>Enhance Description
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Description Content -->
+                        <div class="mt-2 p-3 bg-dark rounded position-relative" id="description-content">
+                            <!-- Loading overlay -->
+                            <div id="description-loading" class="position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center bg-dark bg-opacity-75 rounded" style="display: none !important;">
+                                <div class="text-center">
+                                    <div class="spinner-border text-primary mb-2" role="status">
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
+                                    <div class="text-light">Enhancing description with AI...</div>
+                                </div>
+                            </div>
+                            
+                            <!-- Enhanced Description -->
+                            <div id="enhanced-description" style="display: none;">
+                                <div class="text-light" id="enhanced-description-text"></div>
+                                <div class="mt-2" id="description-highlights" style="display: none;">
+                                    <small class="text-muted d-block mb-1">Key Highlights:</small>
+                                    <div id="highlights-list"></div>
+                                </div>
+                                <div class="mt-2" id="price-info-section" style="display: none;">
+                                    <small class="text-success">💰 <span id="price-info-text"></span></small>
+                                </div>
+                            </div>
+                            
+                            <!-- Original Description -->
+                            <div id="original-description">
+                                {{ land.description }}
+                            </div>
+                            
+                            <!-- Status indicator -->
+                            <div class="position-absolute top-0 end-0 p-1">
+                                <span id="description-status-badge" class="badge bg-secondary" style="display: none;">
+                                    <i class="fas fa-info-circle me-1"></i>Original
+                                </span>
+                            </div>
                         </div>
                     </div>
                 {% endif %}

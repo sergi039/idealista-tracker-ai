@@ -24,6 +24,9 @@ window.IdealistaApp = {
         
         // Criteria form enhancements
         this.setupCriteriaForm();
+        
+        // Description enhancement functionality
+        this.setupDescriptionEnhancement();
     },
 
     setupHTMX: function() {
@@ -641,6 +644,188 @@ window.IdealistaApp = {
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
+        }
+    },
+
+    // Description Enhancement Functions
+    setupDescriptionEnhancement: function() {
+        // Check if we're on the property detail page
+        const descriptionSection = document.getElementById('description-section');
+        if (!descriptionSection) return;
+
+        // Initialize description enhancement UI
+        this.initializeDescriptionUI();
+        
+        // Setup event listeners
+        const enhanceBtn = document.getElementById('enhance-description-btn');
+        if (enhanceBtn) {
+            enhanceBtn.addEventListener('click', this.handleEnhanceDescription.bind(this));
+        }
+
+        // Setup language toggle
+        const langToggle = document.getElementById('description-language-toggle');
+        if (langToggle) {
+            langToggle.addEventListener('click', this.handleLanguageToggle.bind(this));
+        }
+    },
+
+    initializeDescriptionUI: function() {
+        // Check if enhanced description already exists
+        const landId = document.querySelector('[data-land-id]')?.getAttribute('data-land-id');
+        if (!landId) return;
+
+        // Fetch existing description variants
+        fetch(`/api/description/variants/${landId}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    if (data.status === 'not_processed') {
+                        // Show enhance button
+                        document.getElementById('enhance-description-btn').style.display = 'block';
+                        document.getElementById('description-status-badge').style.display = 'block';
+                        document.getElementById('description-status-badge').textContent = 'Original';
+                    } else {
+                        // Show language toggle and enhanced description
+                        this.displayEnhancedDescription(data);
+                    }
+                }
+            })
+            .catch(error => {
+                console.error('Failed to load description variants:', error);
+                // Show enhance button as fallback
+                document.getElementById('enhance-description-btn').style.display = 'block';
+            });
+    },
+
+    handleEnhanceDescription: function(event) {
+        const landId = event.target.getAttribute('data-land-id');
+        if (!landId) return;
+
+        // Show loading state
+        this.showDescriptionLoading(true);
+        
+        // Hide enhance button
+        event.target.style.display = 'none';
+
+        // Call API to enhance description
+        fetch(`/api/enhance/description/${landId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            this.showDescriptionLoading(false);
+            
+            if (data.success) {
+                // Display enhanced description
+                this.displayEnhancedDescription(data);
+                this.showNotification('Description enhanced successfully!', 'success');
+            } else {
+                // Show error and restore enhance button
+                this.showNotification('Failed to enhance description: ' + (data.error || 'Unknown error'), 'error');
+                event.target.style.display = 'block';
+            }
+        })
+        .catch(error => {
+            this.showDescriptionLoading(false);
+            console.error('Enhancement failed:', error);
+            this.showNotification('Failed to enhance description. Please try again.', 'error');
+            event.target.style.display = 'block';
+        });
+    },
+
+    displayEnhancedDescription: function(data) {
+        // Update enhanced description content
+        const enhancedTextEl = document.getElementById('enhanced-description-text');
+        enhancedTextEl.textContent = data.enhanced_description || data.enhanced;
+
+        // Display key highlights if available
+        if (data.key_highlights && data.key_highlights.length > 0) {
+            const highlightsEl = document.getElementById('highlights-list');
+            highlightsEl.innerHTML = data.key_highlights
+                .map(highlight => `<span class="badge bg-info me-1 mb-1">${highlight}</span>`)
+                .join('');
+            document.getElementById('description-highlights').style.display = 'block';
+        }
+
+        // Display price info if available
+        if (data.price_info && Object.keys(data.price_info).length > 0) {
+            const priceInfo = data.price_info;
+            let priceText = '';
+            
+            if (priceInfo.current_price) {
+                priceText = `Current price: €${priceInfo.current_price.toLocaleString()}`;
+                
+                if (priceInfo.original_price && priceInfo.original_price !== priceInfo.current_price) {
+                    priceText += ` (Originally €${priceInfo.original_price.toLocaleString()}`;
+                    if (priceInfo.discount) {
+                        priceText += ` - ${priceInfo.discount}% off!`;
+                    }
+                    priceText += ')';
+                }
+            }
+            
+            if (priceText) {
+                document.getElementById('price-info-text').textContent = priceText;
+                document.getElementById('price-info-section').style.display = 'block';
+            }
+        }
+
+        // Show enhanced description and language toggle
+        document.getElementById('enhanced-description').style.display = 'block';
+        document.getElementById('original-description').style.display = 'none';
+        document.getElementById('description-language-toggle').style.display = 'block';
+        
+        // Update status badge
+        const statusBadge = document.getElementById('description-status-badge');
+        statusBadge.textContent = 'Enhanced';
+        statusBadge.className = 'badge bg-success';
+        statusBadge.innerHTML = '<i class="fas fa-magic me-1"></i>Enhanced';
+        statusBadge.style.display = 'block';
+
+        // Ensure Enhanced button is active
+        const enhancedBtn = document.querySelector('[data-lang="enhanced"]');
+        const originalBtn = document.querySelector('[data-lang="original"]');
+        enhancedBtn.classList.add('active');
+        originalBtn.classList.remove('active');
+    },
+
+    handleLanguageToggle: function(event) {
+        if (!event.target.hasAttribute('data-lang')) return;
+        
+        const lang = event.target.getAttribute('data-lang');
+        const enhancedDiv = document.getElementById('enhanced-description');
+        const originalDiv = document.getElementById('original-description');
+        const statusBadge = document.getElementById('description-status-badge');
+        
+        // Toggle visibility
+        if (lang === 'enhanced') {
+            enhancedDiv.style.display = 'block';
+            originalDiv.style.display = 'none';
+            statusBadge.textContent = 'Enhanced';
+            statusBadge.className = 'badge bg-success';
+            statusBadge.innerHTML = '<i class="fas fa-magic me-1"></i>Enhanced';
+        } else {
+            enhancedDiv.style.display = 'none';
+            originalDiv.style.display = 'block';
+            statusBadge.textContent = 'Original Spanish';
+            statusBadge.className = 'badge bg-secondary';
+            statusBadge.innerHTML = '<i class="fas fa-file-text me-1"></i>Original';
+        }
+        
+        // Update button states
+        document.querySelectorAll('[data-lang]').forEach(btn => {
+            btn.classList.remove('active');
+        });
+        event.target.classList.add('active');
+    },
+
+    showDescriptionLoading: function(show) {
+        const loadingEl = document.getElementById('description-loading');
+        if (loadingEl) {
+            loadingEl.style.display = show ? 'flex' : 'none';
         }
     }
 };
