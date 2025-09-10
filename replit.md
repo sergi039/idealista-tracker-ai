@@ -70,6 +70,15 @@ Preferred communication style: Simple, everyday language.
 - **Transparent Process**: Score breakdown shows individual criteria contributions
 - **Scientific Approach**: Eliminates subjective bias through structured methodology
 
+### Rental Market Analysis
+- **Rental Income Estimation**: Calculates monthly and annual rental income based on location and property size
+- **Investment Metrics**: Provides rental yield, cap rate, price-to-rent ratio, and payback period
+- **Location-Based Analysis**: Different rental rates for urban, suburban, and rural areas in Asturias
+- **Market Comparison**: Shows expected yield ranges and investment ratings (Excellent/Good/Moderate/Below Average)
+- **Demand Factors**: Identifies rental demand drivers specific to property location
+- **Real Estate Investment Analysis**: Comprehensive ROI calculations including NOI and capitalization rates
+- **Rental Strategy Recommendations**: AI-powered suggestions for long-term vs vacation rental approaches
+
 ## External Dependencies
 
 ### Email Integration
