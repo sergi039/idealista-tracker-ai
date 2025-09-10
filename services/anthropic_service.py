@@ -350,10 +350,26 @@ Provide analysis in this EXACT JSON format (keep all text in English):
     "similar_objects": {{
         "comparison_summary": "Brief comparison with similar properties from our database",
         "recommended_alternatives": ["ID:1 - Brief reason why this is similar", "ID:2 - Brief reason", "ID:3 - Brief reason"]
+    }},
+    "construction_value_estimation": {{
+        "minimum_value": estimated_minimum_construction_value,
+        "maximum_value": estimated_maximum_construction_value,
+        "average_value": estimated_average_construction_value,
+        "construction_type": "Modern house type recommended for this plot",
+        "value_per_m2": estimated_value_per_m2_for_built_property,
+        "total_investment": "Land price + construction cost estimate"
+    }},
+    "market_price_dynamics": {{
+        "price_trend": "RISING|STABLE|DECLINING",
+        "annual_growth_rate": estimated_annual_growth_percentage,
+        "trend_period": "Time period for this trend (e.g., '2020-2025')",
+        "trend_analysis": "Brief explanation of what drives the price trend in this area",
+        "future_outlook": "1-3 year price forecast for similar properties",
+        "market_factors": ["key factor 1 affecting prices", "key factor 2", "key factor 3"]
     }}
 }}
 
-Keep all responses concise and in English. Focus on practical investment insights."""
+Keep all responses concise and in English. Focus on practical investment insights for Asturias real estate market.
             
             # Call Claude API
             message = self.client.messages.create(
