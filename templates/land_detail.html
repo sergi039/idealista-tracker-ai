@@ -1173,167 +1173,128 @@ function getPriceTrendClass(trend) {
 
 // Render structured AI analysis
 function renderStructuredAIAnalysis(analysis) {
-    return `
-        <div class="row">
-            <div class="col-md-6 mb-3">
-                <div class="border rounded p-3 h-100">
-                    <h6><i class="fas fa-euro-sign text-success"></i> Price Analysis</h6>
-                    <span class="badge ${getPriceVerdictClass(analysis.price_analysis?.verdict)}">
-                        ${analysis.price_analysis?.verdict || 'Unknown'}
-                    </span>
-                    <p class="mb-1 mt-2">${analysis.price_analysis?.summary || 'No analysis available'}</p>
-                    <small class="text-muted">${analysis.price_analysis?.recommendation || ''}</small>
+    console.log('Rendering analysis with structure:', Object.keys(analysis || {}));
+    
+    // Safety check for empty analysis
+    if (!analysis || typeof analysis !== 'object') {
+        return '<div class="alert alert-warning">No analysis data available</div>';
+    }
+    
+    try {
+        return `
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <div class="border rounded p-3 h-100">
+                        <h6><i class="fas fa-euro-sign text-success"></i> Price Analysis</h6>
+                        ${analysis.price_analysis ? `
+                            <span class="badge ${getPriceVerdictClass(analysis.price_analysis.verdict)}">
+                                ${analysis.price_analysis.verdict || 'Unknown'}
+                            </span>
+                            <p class="mb-1 mt-2">${analysis.price_analysis.summary || 'No analysis available'}</p>
+                            <small class="text-muted">${analysis.price_analysis.recommendation || ''}</small>
+                        ` : `
+                            <span class="badge bg-secondary">Analysis Pending</span>
+                            <p class="mb-1 mt-2 text-muted">Price analysis will be available after next AI enrichment</p>
+                        `}
+                    </div>
+                </div>
+                
+                <div class="col-md-6 mb-3">
+                    <div class="border rounded p-3 h-100">
+                        <h6><i class="fas fa-chart-line text-primary"></i> Investment Potential</h6>
+                        ${analysis.investment_potential ? `
+                            <span class="badge ${getInvestmentRatingClass(analysis.investment_potential.rating)}">
+                                ${analysis.investment_potential.rating || 'Unknown'} Growth
+                            </span>
+                            <p class="mb-1 mt-2">${analysis.investment_potential.forecast || 'No forecast available'}</p>
+                            <small class="text-muted">Risk: ${analysis.investment_potential.risk_level || 'Unknown'}</small>
+                            ${analysis.investment_potential.key_drivers ? renderListItems(analysis.investment_potential.key_drivers, 'Key Drivers:', 'info') : ''}
+                        ` : `
+                            <span class="badge bg-secondary">Analysis Pending</span>
+                            <p class="mb-1 mt-2 text-muted">Investment analysis will be available after next AI enrichment</p>
+                        `}
+                    </div>
                 </div>
             </div>
             
-            <div class="col-md-6 mb-3">
-                <div class="border rounded p-3 h-100">
-                    <h6><i class="fas fa-chart-line text-primary"></i> Investment Potential</h6>
-                    <span class="badge ${getInvestmentRatingClass(analysis.investment_potential?.rating)}">
-                        ${analysis.investment_potential?.rating || 'Unknown'} Growth
-                    </span>
-                    <p class="mb-1 mt-2">${analysis.investment_potential?.forecast || 'No forecast available'}</p>
-                    <small class="text-muted">Risk: ${analysis.investment_potential?.risk_level || 'Unknown'}</small>
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <div class="border rounded p-3 h-100">
+                        <h6><i class="fas fa-exclamation-triangle text-warning"></i> Risks & Advantages</h6>
+                        ${analysis.risks_analysis ? `
+                            ${renderListItems(analysis.risks_analysis.major_risks, 'Risks:', 'danger')}
+                            ${renderListItems(analysis.risks_analysis.advantages, 'Advantages:', 'success')}
+                            <small class="text-muted">${analysis.risks_analysis.mitigation || ''}</small>
+                        ` : analysis.comparable_analysis ? `
+                            ${renderListItems(analysis.comparable_analysis.advantages_vs_similar, 'Advantages:', 'success')}
+                            ${renderListItems(analysis.comparable_analysis.disadvantages_vs_similar, 'Disadvantages:', 'danger')}
+                            <small class="text-muted">Based on market comparison data</small>
+                        ` : `
+                            <p class="text-muted">Risk analysis will be available after next AI enrichment</p>
+                        `}
+                    </div>
                 </div>
-            </div>
-        </div>
-        
-        <div class="row">
-            <div class="col-md-6 mb-3">
-                <div class="border rounded p-3 h-100">
-                    <h6><i class="fas fa-exclamation-triangle text-warning"></i> Risks & Advantages</h6>
-                    ${renderListItems(analysis.risks_analysis?.major_risks, 'Risks:', 'danger')}
-                    ${renderListItems(analysis.risks_analysis?.advantages, 'Advantages:', 'success')}
-                    <small class="text-muted">${analysis.risks_analysis?.mitigation || ''}</small>
+                
+                <div class="col-md-6 mb-3">
+                    <div class="border rounded p-3 h-100">
+                        <h6><i class="fas fa-hammer text-info"></i> Development Ideas</h6>
+                        ${analysis.development_ideas ? `
+                            <p class="mb-1"><strong>${analysis.development_ideas.best_use || 'No recommendations'}</strong></p>
+                            <p class="mb-1">${analysis.development_ideas.building_size || ''}</p>
+                            <small class="text-muted">${analysis.development_ideas.estimated_cost || ''}</small>
+                            ${analysis.development_ideas.special_features ? `<div class="mt-2"><small class="text-info">${analysis.development_ideas.special_features}</small></div>` : ''}
+                        ` : `
+                            <p class="text-muted">Development ideas will be available after next AI enrichment</p>
+                        `}
+                    </div>
                 </div>
             </div>
             
-            <div class="col-md-6 mb-3">
-                <div class="border rounded p-3 h-100">
-                    <h6><i class="fas fa-hammer text-info"></i> Development Ideas</h6>
-                    <p class="mb-1"><strong>${analysis.development_ideas?.best_use || 'No recommendations'}</strong></p>
-                    <p class="mb-1">${analysis.development_ideas?.building_size || ''}</p>
-                    <small class="text-muted">${analysis.development_ideas?.estimated_cost || ''}</small>
+            ${analysis.comparable_analysis ? `
+            <div class="border rounded p-3 mb-3">
+                <h6><i class="fas fa-balance-scale text-secondary"></i> Market Comparison</h6>
+                <p class="mb-1">${analysis.comparable_analysis.market_position || 'No comparison data'}</p>
+                <small class="text-muted">${analysis.comparable_analysis.price_comparison || ''}</small>
+            </div>
+            ` : ''}
+            
+            ${analysis.construction_value_estimation ? `
+            <div class="border rounded p-3 mb-3">
+                <h6><i class="fas fa-calculator text-warning"></i> Construction Value Estimation</h6>
+                <div class="row">
+                    <div class="col-md-4">
+                        <small class="text-muted d-block">Construction Type</small>
+                        <strong>${analysis.construction_value_estimation.construction_type || 'Standard construction'}</strong>
+                    </div>
+                    <div class="col-md-4">
+                        <small class="text-muted d-block">Est. Construction Value</small>
+                        <strong>€${(analysis.construction_value_estimation.minimum_value || 0).toLocaleString()} - €${(analysis.construction_value_estimation.maximum_value || 0).toLocaleString()}</strong>
+                    </div>
+                    <div class="col-md-4">
+                        <small class="text-muted d-block">Total Investment</small>
+                        <strong class="text-warning">${analysis.construction_value_estimation.total_investment || 'N/A'}</strong>
+                    </div>
                 </div>
             </div>
-        </div>
+        ` : ''}
         
-        <div class="border rounded p-3">
-            <h6><i class="fas fa-balance-scale text-secondary"></i> Market Comparison</h6>
-            <p class="mb-1">${analysis.comparable_analysis?.market_position || 'No comparison data'}</p>
-            ${renderListItems(analysis.comparable_analysis?.advantages_vs_similar, 'Better than similar:', 'success')}
-            ${renderListItems(analysis.comparable_analysis?.disadvantages_vs_similar, 'Worse than similar:', 'danger')}
-        </div>
-        
-        ${analysis.similar_objects ? `
-        <div class="border rounded p-3 mt-3">
-            <h6><i class="fas fa-link text-primary"></i> Similar Objects</h6>
-            <p class="mb-2">${analysis.similar_objects?.comparison_summary || 'Similar properties from our database:'}</p>
-            ${renderSimilarProperties(analysis.similar_properties_data)}
+        <!-- Market Price Dynamics Section -->
+        ${analysis.market_price_dynamics ? `
+        <div class="border rounded p-3 mb-3">
+            <h6><i class="fas fa-chart-line text-warning"></i> Market Price Dynamics</h6>
+            <div class="mb-2">
+                <span class="badge ${getPriceTrendClass(analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend)}">${analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend || 'Unknown'} Trend</span>
+                <span class="badge bg-info ms-1">${analysis.market_price_dynamics.annual_growth_rate || analysis.market_price_dynamics.annual_appreciation || 'N/A'}% annually</span>
+            </div>
+            <p class="mb-2">${analysis.market_price_dynamics.trend_analysis || 'No trend analysis available'}</p>
+            ${analysis.market_price_dynamics.market_factors ? renderListItems(analysis.market_price_dynamics.market_factors, 'Market Factors:', 'primary') : ''}
+            <small class="text-muted">${analysis.market_price_dynamics.future_outlook || ''}</small>
         </div>
         ` : ''}
         
-        <div class="row mt-3">
-            <div class="col-md-6 mb-3">
-                <div class="border rounded p-3 h-100">
-                    <h6><i class="fas fa-home text-success"></i> Construction Value Estimation</h6>
-                    ${analysis.construction_value_estimation ? `
-                        <div class="mb-2">
-                            <span class="badge bg-info">${analysis.construction_value_estimation?.construction_type || 'Modern House'}</span>
-                        </div>
-                        ${(analysis.construction_value_estimation?.minimum_value || 
-                           analysis.construction_value_estimation?.average_value || 
-                           analysis.construction_value_estimation?.maximum_value) ? `
-                        <div class="row text-center mb-2">
-                            <div class="col-4">
-                                <div class="border rounded p-2">
-                                    <small class="text-muted d-block">Minimum</small>
-                                    <strong>€${analysis.construction_value_estimation?.minimum_value?.toLocaleString() || 'N/A'}</strong>
-                                </div>
-                            </div>
-                            <div class="col-4">
-                                <div class="border rounded p-2" style="background-color: rgba(255,255,255,0.1);">
-                                    <small class="text-muted d-block">Average</small>
-                                    <strong class="text-warning">€${analysis.construction_value_estimation?.average_value?.toLocaleString() || 'N/A'}</strong>
-                                </div>
-                            </div>
-                            <div class="col-4">
-                                <div class="border rounded p-2">
-                                    <small class="text-muted d-block">Maximum</small>
-                                    <strong>€${analysis.construction_value_estimation?.maximum_value?.toLocaleString() || 'N/A'}</strong>
-                                </div>
-                            </div>
-                        </div>
-                        ` : ''}
-                        ${analysis.construction_value_estimation?.total_investment_scenarios ? `
-                        <div class="row text-center mb-2">
-                            <div class="col-6">
-                                <div class="border rounded p-2">
-                                    <small class="text-muted d-block">Basic Build</small>
-                                    <strong>${analysis.construction_value_estimation.total_investment_scenarios.basic || 'N/A'}</strong>
-                                </div>
-                            </div>
-                            <div class="col-6">
-                                <div class="border rounded p-2" style="background-color: rgba(255,255,255,0.1);">
-                                    <small class="text-muted d-block">Premium Build</small>
-                                    <strong class="text-warning">${analysis.construction_value_estimation.total_investment_scenarios.premium || 'N/A'}</strong>
-                                </div>
-                            </div>
-                        </div>
-                        ` : ''}
-                        ${analysis.construction_value_estimation?.construction_costs ? `
-                        <div class="small">
-                            <p class="mb-1"><strong>Land Value:</strong> ${analysis.construction_value_estimation.land_value || 'N/A'}</p>
-                            <p class="mb-1"><strong>Structure:</strong> ${analysis.construction_value_estimation.construction_costs.basic_structure || 'N/A'}</p>
-                        </div>
-                        ` : ''}
-                        ${analysis.construction_value_estimation?.value_per_m2 ? `<p class="mb-1"><small class="text-muted">Built property value per m²: €${analysis.construction_value_estimation?.value_per_m2?.toLocaleString()}/m²</small></p>` : ''}
-                        ${analysis.construction_value_estimation?.total_investment ? `<p class="mb-0"><strong>Total Investment:</strong> ${analysis.construction_value_estimation?.total_investment}</p>` : ''}
-                    ` : '<p class="text-muted">Construction value estimation not available</p>'}
-                </div>
-            </div>
-            
-            <div class="col-md-6 mb-3">
-                <div class="border rounded p-3 h-100">
-                    <h6><i class="fas fa-chart-line text-warning"></i> Market Price Dynamics</h6>
-                    ${analysis.market_price_dynamics ? `
-                        <div class="mb-2">
-                            <span class="badge ${getPriceTrendClass(analysis.market_price_dynamics?.price_trend || analysis.market_price_dynamics?.current_trend)}">${analysis.market_price_dynamics?.price_trend || analysis.market_price_dynamics?.current_trend || 'Unknown'} Trend</span>
-                            <span class="badge bg-info ms-1">${analysis.market_price_dynamics?.annual_growth_rate || analysis.market_price_dynamics?.annual_appreciation || 'N/A'}% annually</span>
-                        </div>
-                        <p class="mb-1"><strong>Period:</strong> ${analysis.market_price_dynamics?.trend_period || 'Recent years'}</p>
-                        <p class="mb-2">${analysis.market_price_dynamics?.trend_analysis || 'No trend analysis available'}</p>
-                        ${analysis.market_price_dynamics?.price_forecast ? `
-                        <div class="mb-2">
-                            <strong>Price Forecast:</strong>
-                            <div class="small">
-                                <span class="badge bg-success me-1">1yr: ${analysis.market_price_dynamics.price_forecast['1_year'] || 'N/A'}</span>
-                                <span class="badge bg-info me-1">3yr: ${analysis.market_price_dynamics.price_forecast['3_year'] || 'N/A'}</span>
-                                <span class="badge bg-primary">5yr: ${analysis.market_price_dynamics.price_forecast['5_year'] || 'N/A'}</span>
-                            </div>
-                        </div>
-                        ` : ''}
-                        ${analysis.market_price_dynamics?.price_drivers ? `
-                        <div class="mb-2">
-                            <strong>Price Drivers:</strong>
-                            ${renderListItems(analysis.market_price_dynamics?.price_drivers, '', 'primary')}
-                        </div>
-                        ` : ''}
-                        ${analysis.market_price_dynamics?.market_factors ? `
-                        <div class="mb-2">
-                            <strong>Market Factors:</strong>
-                            ${renderListItems(analysis.market_price_dynamics?.market_factors, '', 'primary')}
-                        </div>
-                        ` : ''}
-                        <small class="text-muted">${analysis.market_price_dynamics?.future_outlook || ''}</small>
-                    ` : '<p class="text-muted">Market dynamics data not available</p>'}
-                </div>
-            </div>
-        </div>
-        
         <!-- Rental Market Analysis Section -->
         ${analysis.rental_market_analysis ? `
-        <div class="border rounded p-3 mt-3">
+        <div class="border rounded p-3 mb-3">
             <h6><i class="fas fa-key text-info"></i> Rental Market Analysis</h6>
             
             <div class="row mb-3">
@@ -1343,21 +1304,21 @@ function renderStructuredAIAnalysis(analysis) {
                         <div class="row text-center mb-2">
                             <div class="col-4">
                                 <small class="text-muted d-block">Min Monthly</small>
-                                <strong>€${analysis.rental_market_analysis?.monthly_rent_min?.toLocaleString() || 'N/A'}</strong>
+                                <strong>€${(analysis.rental_market_analysis.monthly_rent_min || 0).toLocaleString()}</strong>
                             </div>
                             <div class="col-4">
                                 <div style="background-color: rgba(255,255,255,0.1); border-radius: 5px; padding: 5px;">
                                     <small class="text-muted d-block">Avg Monthly</small>
-                                    <strong class="text-warning">€${analysis.rental_market_analysis?.monthly_rent_avg?.toLocaleString() || 'N/A'}</strong>
+                                    <strong class="text-warning">€${(analysis.rental_market_analysis.monthly_rent_avg || 0).toLocaleString()}</strong>
                                 </div>
                             </div>
                             <div class="col-4">
                                 <small class="text-muted d-block">Max Monthly</small>
-                                <strong>€${analysis.rental_market_analysis?.monthly_rent_max?.toLocaleString() || 'N/A'}</strong>
+                                <strong>€${(analysis.rental_market_analysis.monthly_rent_max || 0).toLocaleString()}</strong>
                             </div>
                         </div>
-                        <p class="mb-1"><strong>Annual Income:</strong> €${analysis.rental_market_analysis?.annual_rent_avg?.toLocaleString() || 'N/A'}/year</p>
-                        <p class="mb-0"><small class="text-muted">Rental Strategy: ${analysis.rental_market_analysis?.rental_strategy || 'Long-term rental'}</small></p>
+                        <p class="mb-1"><strong>Annual Income:</strong> €${(analysis.rental_market_analysis.annual_rent_avg || 0).toLocaleString()}/year</p>
+                        <p class="mb-0"><small class="text-muted">Strategy: ${analysis.rental_market_analysis.rental_strategy || 'Long-term rental'}</small></p>
                     </div>
                 </div>
                 
@@ -1368,35 +1329,35 @@ function renderStructuredAIAnalysis(analysis) {
                             <div class="col-6">
                                 <small class="text-muted d-block">Rental Yield</small>
                                 <div class="d-flex align-items-center">
-                                    <strong class="${(analysis.rental_market_analysis?.rental_yield > 5) ? 'text-success' : (analysis.rental_market_analysis?.rental_yield > 4) ? 'text-warning' : 'text-danger'}">${analysis.rental_market_analysis?.rental_yield || 'N/A'}%</strong>
+                                    <strong class="${(analysis.rental_market_analysis.rental_yield && analysis.rental_market_analysis.rental_yield > 5) ? 'text-success' : (analysis.rental_market_analysis.rental_yield && analysis.rental_market_analysis.rental_yield > 4) ? 'text-warning' : 'text-danger'}">${analysis.rental_market_analysis.rental_yield || 'N/A'}%</strong>
                                     <small class="text-muted ms-2">/year</small>
                                 </div>
                             </div>
                             <div class="col-6">
                                 <small class="text-muted d-block">Cap Rate</small>
                                 <div class="d-flex align-items-center">
-                                    <strong class="${(analysis.rental_market_analysis?.cap_rate > 4) ? 'text-success' : (analysis.rental_market_analysis?.cap_rate > 3) ? 'text-warning' : 'text-danger'}">${analysis.rental_market_analysis?.cap_rate || 'N/A'}%</strong>
+                                    <strong class="${(analysis.rental_market_analysis.cap_rate && analysis.rental_market_analysis.cap_rate > 4) ? 'text-success' : (analysis.rental_market_analysis.cap_rate && analysis.rental_market_analysis.cap_rate > 3) ? 'text-warning' : 'text-danger'}">${analysis.rental_market_analysis.cap_rate || 'N/A'}%</strong>
                                 </div>
                             </div>
                         </div>
                         <div class="row">
                             <div class="col-6">
                                 <small class="text-muted d-block">Price/Rent Ratio</small>
-                                <strong class="${getPriceToRentClass(analysis.rental_market_analysis?.price_to_rent_ratio)}">${analysis.rental_market_analysis?.price_to_rent_ratio || 'N/A'}</strong>
+                                <strong class="${getPriceToRentClass(analysis.rental_market_analysis.price_to_rent_ratio)}">${analysis.rental_market_analysis.price_to_rent_ratio || 'N/A'}</strong>
                             </div>
                             <div class="col-6">
                                 <small class="text-muted d-block">Payback Period</small>
-                                <strong class="${getPaybackPeriodClass(analysis.rental_market_analysis?.payback_period_years)}">${analysis.rental_market_analysis?.payback_period_years || 'N/A'} years</strong>
+                                <strong class="${getPaybackPeriodClass(analysis.rental_market_analysis.payback_period_years)}">${analysis.rental_market_analysis.payback_period_years || 'N/A'} years</strong>
                             </div>
                         </div>
                         <div class="mt-2">
-                            <span class="badge ${getInvestmentRatingClass(analysis.rental_market_analysis?.investment_rating)}">${analysis.rental_market_analysis?.investment_rating || 'Not rated'}</span>
+                            <span class="badge ${getInvestmentRatingClass(analysis.rental_market_analysis.investment_rating)}">${analysis.rental_market_analysis.investment_rating || 'Not rated'}</span>
                         </div>
                     </div>
                 </div>
             </div>
             
-            ${analysis.rental_market_analysis?.demand_factors ? `
+            ${analysis.rental_market_analysis.demand_factors ? `
             <div class="border rounded p-2 bg-dark">
                 <strong><i class="fas fa-trending-up text-info"></i> Rental Demand Factors:</strong>
                 ${renderListItems(analysis.rental_market_analysis.demand_factors, '', 'info')}
@@ -1404,7 +1365,20 @@ function renderStructuredAIAnalysis(analysis) {
             ` : ''}
         </div>
         ` : ''}
+        
+        <!-- Similar Objects - Additional Information -->
+        ${analysis.similar_objects ? `
+        <div class="border rounded p-3 mt-4" style="background-color: rgba(255,255,255,0.02);">
+            <h6><i class="fas fa-link text-primary"></i> Similar Objects</h6>
+            <p class="mb-3 small text-muted">${analysis.similar_objects.comparison_summary || 'Similar properties from our database:'}</p>
+            ${renderSimilarProperties(analysis.similar_properties_data || [])}
+        </div>
+        ` : ''}
     `;
+    } catch (renderError) {
+        console.error('Template rendering error:', renderError);
+        return '<div class="alert alert-danger">Error rendering analysis template. Please refresh the page.</div>';
+    }
 }
 
 // Helper function for investment rating badge color
@@ -1454,7 +1428,16 @@ document.addEventListener('DOMContentLoaded', function() {
             } else if (typeof analysisData === 'object' && analysisData !== null) {
                 // If it's already an object, use it directly
                 console.log('Using structured analysis display');
-                structuredAnalysis.innerHTML = renderStructuredAIAnalysis(analysisData);
+                try {
+                    const renderedHTML = renderStructuredAIAnalysis(analysisData);
+                    console.log('Rendered HTML length:', renderedHTML.length);
+                    structuredAnalysis.innerHTML = renderedHTML;
+                    console.log('Successfully rendered AI analysis');
+                } catch (renderError) {
+                    console.error('Error in renderStructuredAIAnalysis:', renderError);
+                    console.error('Error details:', renderError.message, renderError.stack);
+                    structuredAnalysis.innerHTML = '<div class="alert alert-warning">Error rendering analysis. Please try refreshing the page.</div>';
+                }
             } else {
                 // Fallback to displaying raw content
                 console.log('Fallback: displaying raw content');
@@ -1462,6 +1445,8 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         } catch (e) {
             console.error('Error processing AI analysis:', e);
+            console.error('Error message:', e.message);
+            console.error('Error stack:', e.stack);
             // If parsing fails, display raw content
             const rawData = {{ land.ai_analysis|tojson|safe }};
             structuredAnalysis.innerHTML = `<div class="analysis-text">${String(rawData).replace(/\n/g, '<br>')}</div>`;
