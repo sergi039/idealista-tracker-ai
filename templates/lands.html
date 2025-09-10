@@ -237,12 +237,6 @@
                                                         {{ land.title[:60] }}{% if land.title|length > 60 %}...{% endif %}
                                                     </a>
                                                 </div>
-                                                <!-- AI Analysis Status -->
-                                                {% if land.ai_analysis %}
-                                                    <small><i class="fas fa-brain text-info me-1" title="AI Analysis Available" style="cursor: pointer;" onclick="window.location.href='{{ url_for('main.land_detail', land_id=land.id) }}'"></i>AI Available</small>
-                                                {% else %}
-                                                    <small><i class="fas fa-brain text-muted me-1" title="Click to generate AI Analysis" style="cursor: pointer;" onclick="generateAIAnalysisAndRedirect({{ land.id }})"></i>AI Analysis</small>
-                                                {% endif %}
                                             </td>
                                             <td style="min-width: 120px !important; white-space: nowrap !important;">
                                                 {% if land.price %}
@@ -346,15 +340,19 @@
                                                             <i class="fas fa-home"></i>
                                                         </a>
                                                     {% endif %}
-                                                    <button onclick="toggleAIAnalysisInTable({{ land.id }})" 
-                                                            class="btn btn-outline-primary btn-sm ai-analyze-btn"
-                                                            data-land-id="{{ land.id }}" title="AI Analysis">
-                                                        {% if land.ai_analysis %}
-                                                            <i class="fas fa-eye"></i>
-                                                        {% else %}
+                                                    {% if land.ai_analysis %}
+                                                        <button onclick="toggleAIAnalysisInTable({{ land.id }})" 
+                                                                class="btn btn-info btn-sm ai-analyze-btn"
+                                                                data-land-id="{{ land.id }}" title="View AI Analysis">
+                                                            <i class="fas fa-brain text-white"></i>
+                                                        </button>
+                                                    {% else %}
+                                                        <button onclick="toggleAIAnalysisInTable({{ land.id }})" 
+                                                                class="btn btn-outline-secondary btn-sm ai-analyze-btn"
+                                                                data-land-id="{{ land.id }}" title="Generate AI Analysis">
                                                             <i class="fas fa-brain"></i>
-                                                        {% endif %}
-                                                    </button>
+                                                        </button>
+                                                    {% endif %}
                                                 </div>
                                             </td>
                                         </tr>
@@ -398,12 +396,6 @@
                                     </span>
                                 </div>
                                 <div class="d-flex align-items-center">
-                                    <!-- AI Analysis Status -->
-                                    {% if land.ai_analysis %}
-                                        <i class="fas fa-brain text-info me-2" title="AI Analysis Available" style="cursor: pointer;" onclick="window.location.href='{{ url_for('main.land_detail', land_id=land.id) }}'"></i>
-                                    {% else %}
-                                        <i class="fas fa-brain text-muted me-2" title="Click to generate AI Analysis" style="cursor: pointer;" onclick="generateAIAnalysisAndRedirect({{ land.id }})"></i>
-                                    {% endif %}
                                     <small>{{ land.created_at.strftime('%d %b %y') if land.created_at else '-' }}</small>
                                 </div>
                             </div>
@@ -908,8 +900,8 @@ async function toggleAIAnalysisInTable(landId) {
     const button = document.querySelector(`[data-land-id="${landId}"]`);
     const content = document.getElementById(`ai-content-table-${landId}`);
     
-    // Check if the property has AI analysis by looking at button icon
-    const hasAnalysis = button.innerHTML.includes('fa-eye');
+    // Check if the property has AI analysis by looking at button class
+    const hasAnalysis = button.classList.contains('btn-info');
     
     if (!hasAnalysis) {
         // No analysis yet - generate it first
@@ -928,8 +920,10 @@ async function toggleAIAnalysisInTable(landId) {
             if (response.ok) {
                 const data = await response.json();
                 if (data.success) {
-                    // Update button to show "view" state
-                    button.innerHTML = '<i class="fas fa-eye"></i>';
+                    // Update button to show "has analysis" state
+                    button.classList.remove('btn-outline-secondary');
+                    button.classList.add('btn-info');
+                    button.innerHTML = '<i class="fas fa-brain text-white"></i>';
                     button.title = 'View AI Analysis';
                     
                     // Load and show the analysis
@@ -950,7 +944,7 @@ async function toggleAIAnalysisInTable(landId) {
         
         button.disabled = false;
     } else {
-        // Has analysis - toggle visibility
+        // Has analysis - toggle visibility in table
         if (analysisRow.style.display === 'none') {
             // Show analysis row
             analysisRow.style.display = 'table-row';
@@ -960,12 +954,10 @@ async function toggleAIAnalysisInTable(landId) {
                 await loadAIAnalysisForTable(landId);
             }
             
-            button.innerHTML = '<i class="fas fa-eye-slash"></i>';
             button.title = 'Hide AI Analysis';
         } else {
             // Hide analysis row
             analysisRow.style.display = 'none';
-            button.innerHTML = '<i class="fas fa-eye"></i>';
             button.title = 'View AI Analysis';
         }
     }
