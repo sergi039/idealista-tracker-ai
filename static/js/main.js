@@ -649,41 +649,62 @@ window.IdealistaApp = {
 
     // Description Enhancement Functions
     setupDescriptionEnhancement: function() {
+        console.log('[DESC] Setting up description enhancement...');
+        
         // Check if we're on the property detail page
         const descriptionSection = document.getElementById('description-section');
-        if (!descriptionSection) return;
+        if (!descriptionSection) {
+            console.log('[DESC] No description section found, skipping');
+            return;
+        }
 
+        console.log('[DESC] Description section found, initializing UI...');
         // Initialize description enhancement UI
         this.initializeDescriptionUI();
         
         // Setup language toggle
         const langToggle = document.getElementById('description-language-toggle');
         if (langToggle) {
+            console.log('[DESC] Language toggle found, adding event listener');
             langToggle.addEventListener('click', this.handleLanguageToggle.bind(this));
+        } else {
+            console.log('[DESC] Language toggle not found');
         }
     },
 
     initializeDescriptionUI: function() {
+        console.log('[DESC] Initializing description UI...');
+        
         // Check if enhanced description already exists
         const landId = document.querySelector('[data-land-id]')?.getAttribute('data-land-id');
-        if (!landId) return;
+        if (!landId) {
+            console.log('[DESC] No land ID found, skipping description enhancement');
+            return;
+        }
+
+        console.log(`[DESC] Found land ID: ${landId}, fetching description variants...`);
 
         // Fetch existing description variants
         fetch(`/api/description/variants/${landId}`)
             .then(response => response.json())
             .then(data => {
+                console.log('[DESC] Received description variants response:', data);
                 if (data.success) {
                     if (data.status === 'not_processed') {
+                        console.log('[DESC] Description not processed, auto-enhancing...');
                         // Auto-enhance the description silently
                         this.autoEnhanceDescription(landId);
                     } else {
+                        console.log('[DESC] Description already processed, displaying enhanced version...');
                         // Show language toggle and enhanced description
                         this.displayEnhancedDescription(data);
                     }
+                } else {
+                    console.log('[DESC] API returned error:', data.error);
                 }
             })
             .catch(error => {
-                console.error('Failed to load description variants:', error);
+                console.error('[DESC] Failed to load description variants:', error);
                 // Try to auto-enhance as fallback
                 this.autoEnhanceDescription(landId);
             });

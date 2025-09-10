@@ -56,7 +56,7 @@ class DescriptionService:
         
         return extracted
     
-    def enhance_description(self, raw_description: str, property_data: Dict = None) -> Dict[str, Any]:
+    def enhance_description(self, raw_description: str, property_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Use AI to create a professional, structured description
         """
@@ -130,8 +130,11 @@ Focus on creating professional, engaging content that would appeal to potential 
                 response_text = ""
                 if message.content and len(message.content) > 0:
                     content_block = message.content[0]
-                    if hasattr(content_block, 'text') and content_block.text:
-                        response_text = content_block.text
+                    # Claude API response structure - handle different block types
+                    if hasattr(content_block, 'text'):
+                        response_text = str(content_block.text)
+                    else:
+                        response_text = str(content_block)
                 
                 # Parse JSON response - handle potential markdown wrapping
                 response_text = response_text.strip()

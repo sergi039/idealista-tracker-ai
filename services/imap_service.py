@@ -403,6 +403,28 @@ class IMAPService:
                     except Exception as enrich_error:
                         logger.warning(f"Enrichment failed for land {land.id}: {str(enrich_error)}, continuing")
                     
+                    # Enhance description with AI
+                    try:
+                        from services.description_service import DescriptionService
+                        description_service = DescriptionService()
+                        
+                        if land.description:
+                            property_data = {
+                                'price': land.price,
+                                'area': land.area,
+                                'municipality': land.municipality,
+                                'land_type': land.land_type,
+                                'title': land.title
+                            }
+                            
+                            result = description_service.enhance_description(land.description, property_data)
+                            if result.get('processing_status') in ['success', 'fallback']:
+                                land.enhanced_description = result
+                                db.session.commit()
+                                logger.info(f"Enhanced description for land {land.id}")
+                    except Exception as e:
+                        logger.warning(f"Description enhancement failed for land {land.id}: {str(e)}")
+                    
                     processed_count += 1
                     logger.info(f"Processed new land: {land.title}")
                     
