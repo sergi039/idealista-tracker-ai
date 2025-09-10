@@ -873,7 +873,7 @@ function analyzeWithClaude(landId) {
             
             aiContent.innerHTML = `
                 <div class="analysis-content">
-                    <div class="alert alert-success alert-dismissible fade show" role="alert">
+                    <div class="alert alert-success alert-dismissible fade show" role="alert" id="success-alert">
                         <i class="fas fa-check-circle me-2"></i>
                         Analysis completed successfully!
                         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
@@ -881,6 +881,15 @@ function analyzeWithClaude(landId) {
                     ${analysisContent}
                 </div>
             `;
+            
+            // Auto-hide success alert after 3 seconds
+            setTimeout(() => {
+                const successAlert = document.getElementById('success-alert');
+                if (successAlert) {
+                    const bsAlert = new bootstrap.Alert(successAlert);
+                    bsAlert.close();
+                }
+            }, 3000);
             
             // Update button to show success state
             button.classList.remove('btn-outline-info');
