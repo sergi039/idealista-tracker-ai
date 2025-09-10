@@ -123,10 +123,20 @@ class TravelTimeService:
     
     def _get_travel_time_and_distance(self, origin: str, destination: str) -> Optional[Dict]:
         """Get travel time in minutes and distance in km between origin and destination"""
-        if not self.google_maps_key:
-            logger.warning("Google Maps API key not available for travel times")
-            return None
+        # Try Google API first if available
+        if self.google_maps_key:
+            result = self._get_google_travel_time(origin, destination)
+            if result:
+                return result
         
+        # Fallback to mathematical estimation
+        logger.info("Using fallback travel time calculation")
+        return self._calculate_fallback_travel_time(origin, destination)
+        
+        return self._calculate_fallback_travel_time(origin, destination)
+    
+    def _get_google_travel_time(self, origin: str, destination: str) -> Optional[Dict]:
+        """Get travel time using Google Maps API"""
         try:
             url = "https://maps.googleapis.com/maps/api/distancematrix/json"
             params = {
@@ -152,36 +162,140 @@ class TravelTimeService:
                             'distance': round(distance / 1000)  # convert to kilometers
                         }
             
-            logger.warning(f"Failed to get travel time from {origin} to {destination}")
+            logger.warning(f"Google API failed for {origin} to {destination}: {data.get('status') if 'data' in locals() else 'No response'}")
             return None
             
         except Exception as e:
-            logger.error(f"Error getting travel time and distance: {str(e)}")
+            logger.error(f"Google Maps API error: {str(e)}")
             return None
+    
+    def _calculate_fallback_travel_time(self, origin: str, destination: str) -> Optional[Dict]:
+        """Calculate travel time using mathematical distance estimation"""
+        try:
+            # Parse origin coordinates
+            if ',' in origin:
+                origin_lat, origin_lon = map(float, origin.split(','))
+            else:
+                logger.error(f"Invalid origin format: {origin}")
+                return None
+            
+            # Get destination coordinates
+            dest_coords = self._get_destination_coordinates(destination)
+            if not dest_coords:
+                logger.warning(f"Could not get coordinates for destination: {destination}")
+                return None
+            
+            dest_lat, dest_lon = dest_coords
+            
+            # Calculate straight-line distance using Haversine formula
+            distance_km = self._haversine_distance(origin_lat, origin_lon, dest_lat, dest_lon)
+            
+            # Estimate travel time based on distance and road type
+            # Use realistic speed estimates: 
+            # - Short distances (<20km): 45 km/h average (local roads, traffic)
+            # - Medium distances (20-50km): 55 km/h average (mixed roads)
+            # - Long distances (>50km): 65 km/h average (highways)
+            
+            if distance_km < 20:
+                avg_speed = 45
+            elif distance_km < 50:
+                avg_speed = 55
+            else:
+                avg_speed = 65
+            
+            # Add 20% to account for actual road routes vs straight line
+            actual_distance = distance_km * 1.2
+            travel_time = round((actual_distance / avg_speed) * 60)  # Convert to minutes
+            
+            return {
+                'time': travel_time,
+                'distance': round(actual_distance)
+            }
+            
+        except Exception as e:
+            logger.error(f"Fallback travel time calculation failed: {str(e)}")
+            return None
+    
+    def _haversine_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Calculate the great circle distance between two points on earth (in kilometers)"""
+        import math
+        
+        # Convert decimal degrees to radians
+        lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+        
+        # Haversine formula
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+        c = 2 * math.asin(math.sqrt(a))
+        
+        # Radius of earth in kilometers
+        r = 6371
+        
+        return c * r
+    
+    def _get_destination_coordinates(self, destination: str) -> Optional[tuple]:
+        """Get coordinates for common destinations"""
+        # Predefined coordinates for major destinations
+        coords_map = {
+            'Oviedo, Asturias, Spain': (43.3614, -5.8593),
+            'Gijón, Asturias, Spain': (43.5322, -5.6611),
+            'Santander, Cantabria, Spain': (43.4623, -3.8099),
+            
+            # Beaches
+            'Playa de San Lorenzo, Gijón, Spain': (43.5390, -5.6531),
+            'Playa de Rodiles, Villaviciosa, Spain': (43.4844, -5.3869),
+            'Playa de Gulpiyuri, Llanes, Spain': (43.4222, -4.7558),
+            'Playa del Sardinero, Santander, Spain': (43.4816, -3.7886),
+            'Playa de Comillas, Cantabria, Spain': (43.3878, -4.2894),
+            'Playa de Oyambre, Comillas, Spain': (43.3756, -4.2736),
+            'Playa de la Concha de Artedo, Cudillero, Spain': (43.5667, -6.1500),
+            'Playa de Ribadesella, Asturias, Spain': (43.4628, -5.0589),
+            
+            # Airports
+            'Santander Airport, Santander, Spain': (43.4270, -3.8201),
+            'Asturias Airport, Santiago del Monte, Spain': (43.5637, -6.0346),
+            'Bilbao Airport, Loiu, Spain': (43.3011, -2.9106),
+            
+            # Train stations
+            'Santander Railway Station, Santander, Spain': (43.4616, -3.8048),
+            'Oviedo Railway Station, Oviedo, Spain': (43.3656, -5.8515),
+            'Gijón Railway Station, Gijón, Spain': (43.5406, -5.6606),
+            
+            # Hospitals
+            'Hospital Universitario Marqués de Valdecilla, Santander, Spain': (43.4559, -3.8049),
+            'Hospital Universitario Central de Asturias, Oviedo, Spain': (43.3378, -5.8515),
+            'Hospital Cabueñes, Gijón, Spain': (43.5211, -5.6069),
+            
+            # Police stations (approximate city center locations)
+            'Policía Nacional Santander, Spain': (43.4623, -3.8099),
+            'Policía Nacional Oviedo, Spain': (43.3614, -5.8593),
+            'Policía Nacional Gijón, Spain': (43.5322, -5.6611)
+        }
+        
+        return coords_map.get(destination)
     
     def _find_nearest_beach(self, origin: str) -> Optional[Dict]:
         """Find nearest beach and travel time"""
-        if not self.google_maps_key:
-            return None
-        
         try:
-            # Calculate times to all beaches
+            # Calculate times to all beaches using available method
             beach_times = []
             
             for beach in self.beaches:
-                travel_time = self._get_travel_time(origin, beach)
-                if travel_time is not None:
+                travel_data = self._get_travel_time_and_distance(origin, beach)
+                if travel_data:
                     beach_name = beach.split(',')[0].replace('Playa de ', '').replace('Playa del ', '')
                     beach_times.append({
                         'name': beach_name,
-                        'time': travel_time,
+                        'time': travel_data['time'],
+                        'distance': travel_data['distance'],
                         'full_name': beach
                     })
             
             if beach_times:
-                # Return nearest beach
+                # Return nearest beach by time
                 nearest = min(beach_times, key=lambda x: x['time'])
-                logger.info(f"Nearest beach: {nearest['name']} ({nearest['time']} minutes)")
+                logger.info(f"Nearest beach: {nearest['name']} ({nearest['time']} minutes, {nearest['distance']} km)")
                 return nearest
             
             return None
@@ -197,11 +311,11 @@ class TravelTimeService:
     
     def _find_nearest_facility_with_distance(self, origin: str, facilities: List[str]) -> Optional[Dict]:
         """Find travel time and distance to nearest facility from a list"""
-        if not self.google_maps_key or not facilities:
+        if not facilities:
             return None
         
         try:
-            # Calculate times and distances to all facilities
+            # Calculate times and distances to all facilities using available method
             facility_data = []
             
             for facility in facilities:

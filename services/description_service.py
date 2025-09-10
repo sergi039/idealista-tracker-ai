@@ -115,7 +115,7 @@ Focus on creating professional, engaging content that would appeal to potential 
             # Call Claude API
             try:
                 message = self.anthropic_service.client.messages.create(
-                    model="claude-sonnet-4-20250514",  # Latest model
+                    model="claude-3-5-sonnet-20241022",  # Latest available model
                     max_tokens=800,
                     temperature=0.3,
                     messages=[
@@ -133,7 +133,15 @@ Focus on creating professional, engaging content that would appeal to potential 
                     if hasattr(content_block, 'text') and content_block.text:
                         response_text = content_block.text
                 
-                # Parse JSON response
+                # Parse JSON response - handle potential markdown wrapping
+                response_text = response_text.strip()
+                
+                # Extract JSON from markdown code blocks if present
+                import re
+                json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+                if json_match:
+                    response_text = json_match.group(1)
+                
                 enhanced_data = json.loads(response_text)
                 enhanced_data['original_description'] = raw_description
                 enhanced_data['processing_status'] = 'success'

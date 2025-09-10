@@ -77,47 +77,131 @@ class EnrichmentService:
         if not land.municipality:
             return None
             
+        # Clean and validate municipality data first
+        municipality = self._clean_municipality(land.municipality)
+        if not municipality:
+            logger.warning(f"Invalid municipality data for land {land.id}: '{land.municipality}'")
+            return None
+            
         # Try different address formats in order of precision
         address_attempts = []
         
         # Try most specific first if we have detailed municipality info
-        if land.municipality and ', ' in land.municipality:
+        if municipality and ', ' in municipality:
             # For addresses like "Caserio Cuesta Ayones, 22, San Claudio-Trubia-Las Caldas, Oviedo"
             address_attempts.append({
-                'address': f"{land.municipality}, Spain",
+                'address': f"{municipality}, Spain",
                 'accuracy': 'precise'
             })
-        elif land.municipality and any(keyword in land.municipality.lower() for keyword in ['calle', 'carretera', 'lugar', 'avenida', 'plaza']):
+        elif municipality and any(keyword in municipality.lower() for keyword in ['calle', 'carretera', 'lugar', 'avenida', 'plaza']):
             # For addresses with street indicators
             address_attempts.append({
-                'address': f"{land.municipality}, Spain", 
+                'address': f"{municipality}, Spain", 
                 'accuracy': 'precise'
             })
         
-        # Always try the municipality as-is
-        if land.municipality and land.municipality.lower() not in ['and', 'cantabria']:
+        # Always try the municipality as-is (if not too generic)
+        if municipality and not self._is_too_generic(municipality):
             address_attempts.append({
-                'address': f"{land.municipality}, Spain",
+                'address': f"{municipality}, Spain",
                 'accuracy': 'approximate'
             })
         
-        # Final fallback to general region
-        address_attempts.append({
-            'address': "Cantabria, Spain",
-            'accuracy': 'approximate'
-        })
+        # Try more specific regional fallbacks instead of just "Cantabria, Spain"
+        regional_fallbacks = self._get_regional_fallbacks(municipality)
+        for fallback in regional_fallbacks:
+            address_attempts.append({
+                'address': fallback,
+                'accuracy': 'regional'
+            })
         
         for attempt in address_attempts:
             coordinates = self.geocoding_service.geocode_address(attempt['address'])
             if coordinates:
-                logger.info(f"Successfully geocoded '{attempt['address']}' with {attempt['accuracy']} accuracy")
-                return {
-                    'lat': coordinates['lat'],
-                    'lng': coordinates['lng'],
-                    'accuracy': attempt['accuracy']
-                }
+                # Skip if we got the exact same coordinates as another property (duplicate issue)
+                if not self._is_duplicate_coordinates(coordinates['lat'], coordinates['lng'], land.id):
+                    logger.info(f"Successfully geocoded '{attempt['address']}' with {attempt['accuracy']} accuracy")
+                    return {
+                        'lat': coordinates['lat'],
+                        'lng': coordinates['lng'],
+                        'accuracy': attempt['accuracy']
+                    }
+                else:
+                    logger.warning(f"Skipping duplicate coordinates for '{attempt['address']}'")
         
         return None
+    
+    def _clean_municipality(self, municipality: str) -> Optional[str]:
+        """Clean and validate municipality data"""
+        if not municipality or not isinstance(municipality, str):
+            return None
+            
+        # Remove common bad values
+        municipality = municipality.strip()
+        bad_values = ['and', 'n/a', 'na', 'null', 'none', '']
+        if municipality.lower() in bad_values:
+            return None
+            
+        # Clean up common parsing artifacts
+        municipality = municipality.replace('"', '').strip()
+        
+        return municipality if len(municipality) > 2 else None
+    
+    def _is_too_generic(self, municipality: str) -> bool:
+        """Check if municipality is too generic to geocode uniquely"""
+        generic_terms = ['cantabria', 'asturias', 'spain', 'españa']
+        return municipality.lower().strip() in generic_terms
+    
+    def _get_regional_fallbacks(self, municipality: str) -> List[str]:
+        """Get more specific regional fallbacks instead of just 'Cantabria, Spain'"""
+        fallbacks = []
+        
+        # Try to extract more specific location info
+        if municipality:
+            # Look for known cities/towns in the municipality string
+            known_locations = {
+                'oviedo': 'Oviedo, Asturias, Spain',
+                'gijon': 'Gijón, Asturias, Spain', 
+                'santander': 'Santander, Cantabria, Spain',
+                'cudillero': 'Cudillero, Asturias, Spain',
+                'ribadedeva': 'Ribadedeva, Asturias, Spain',
+                'siero': 'Siero, Asturias, Spain',
+                'piloña': 'Piloña, Asturias, Spain',
+                'llanes': 'Llanes, Asturias, Spain',
+                'comillas': 'Comillas, Cantabria, Spain'
+            }
+            
+            municipality_lower = municipality.lower()
+            for location, full_address in known_locations.items():
+                if location in municipality_lower:
+                    fallbacks.append(full_address)
+                    break
+        
+        # Default regional fallbacks - more specific than just "Cantabria, Spain"
+        if not fallbacks:
+            fallbacks.extend([
+                'Asturias, Spain',  # Try Asturias first as many properties seem to be there
+                'Cantabria, Spain'  # Final fallback
+            ])
+        
+        return fallbacks
+    
+    def _is_duplicate_coordinates(self, lat: float, lng: float, current_land_id: int) -> bool:
+        """Check if these coordinates already exist for another property"""
+        try:
+            from models import Land
+            
+            # Check if these exact coordinates exist for other properties
+            existing = Land.query.filter(
+                Land.id != current_land_id,
+                Land.location_lat == lat,
+                Land.location_lon == lng
+            ).first()
+            
+            return existing is not None
+        except Exception as e:
+            logger.warning(f"Could not check for duplicate coordinates: {e}")
+            return False
     
     def _enrich_with_google_places(self, land):
         """Enrich with Google Places API data"""
