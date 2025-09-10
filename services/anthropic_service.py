@@ -77,7 +77,11 @@ Format your response in clear sections."""
             )
             
             # Extract response
-            response_text = message.content[0].text if message.content else ""
+            response_text = ""
+            if message.content and len(message.content) > 0:
+                content_block = message.content[0]
+                if hasattr(content_block, 'text'):
+                    response_text = content_block.text
             
             return {
                 'analysis': response_text,
@@ -121,7 +125,11 @@ Format your response in clear sections."""
                 ]
             )
             
-            return message.content[0].text if message.content else None
+            if message.content and len(message.content) > 0:
+                content_block = message.content[0]
+                if hasattr(content_block, 'text'):
+                    return content_block.text
+            return None
             
         except Exception as e:
             logger.error(f"Failed to generate summary: {str(e)}")
@@ -158,7 +166,11 @@ Respond with ONLY a number between 0 and 100, nothing else."""
                 ]
             )
             
-            response = message.content[0].text if message.content else ""
+            response = ""
+            if message.content and len(message.content) > 0:
+                content_block = message.content[0]
+                if hasattr(content_block, 'text'):
+                    response = content_block.text
             # Extract numeric score
             score = float(response.strip())
             return min(100, max(0, score))  # Ensure within bounds
