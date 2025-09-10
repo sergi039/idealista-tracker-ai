@@ -785,6 +785,22 @@ function renderAIAnalysis(landId, analysis) {
                 </div>
             </div>
         </div>
+        
+        ${analysis.similar_objects ? `
+        <div class="row mt-3">
+            <div class="col-12">
+                <div class="ai-section border rounded p-3">
+                    <h6 class="ai-section-title">
+                        <i class="fas fa-link text-primary"></i> Similar Objects
+                    </h6>
+                    <div class="ai-content">
+                        <p class="mb-2">${analysis.similar_objects?.comparison_summary || 'Similar properties from our database:'}</p>
+                        ${renderSimilarProperties(analysis.similar_properties_data)}
+                    </div>
+                </div>
+            </div>
+        </div>
+        ` : ''}
     `;
     
     content.innerHTML = html;
@@ -798,6 +814,50 @@ function renderListItems(items, label, colorClass) {
     ).join('');
     
     return `<div class="mb-2"><strong>${label}</strong><ul class="list-unstyled mb-1">${listItems}</ul></div>`;
+}
+
+function renderSimilarProperties(similarProperties) {
+    if (!similarProperties || !Array.isArray(similarProperties) || similarProperties.length === 0) {
+        return '<p class="text-muted">No similar properties found</p>';
+    }
+    
+    const propertyCards = similarProperties.map(prop => {
+        const priceText = prop.price ? `€${prop.price.toLocaleString()}` : 'Price N/A';
+        const areaText = prop.area ? `${prop.area.toLocaleString()}m²` : 'Area N/A';
+        const scoreText = prop.score_total ? `${prop.score_total.toFixed(1)}/100` : 'Not scored';
+        const scoreClass = prop.score_total ? (prop.score_total >= 70 ? 'text-success' : prop.score_total >= 50 ? 'text-warning' : 'text-danger') : 'text-muted';
+        
+        return `
+            <div class="similar-property-card border rounded p-2 mb-2">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div class="flex-grow-1">
+                        <h6 class="mb-1">
+                            <a href="/land/${prop.id}" class="text-decoration-none text-light" target="_blank">
+                                ${prop.title ? prop.title.substring(0, 60) + (prop.title.length > 60 ? '...' : '') : 'Property #' + prop.id}
+                            </a>
+                        </h6>
+                        <div class="d-flex flex-wrap gap-3 small text-muted">
+                            <span><i class="fas fa-euro-sign"></i> ${priceText}</span>
+                            <span><i class="fas fa-ruler-combined"></i> ${areaText}</span>
+                            <span><i class="fas fa-map-marker-alt"></i> ${prop.municipality || 'Location N/A'}</span>
+                        </div>
+                    </div>
+                    <div class="text-end">
+                        <span class="badge bg-secondary small">${prop.land_type || 'Unknown'}</span>
+                        <div class="small ${scoreClass} mt-1">
+                            <i class="fas fa-star"></i> ${scoreText}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    return `
+        <div class="similar-properties-list">
+            ${propertyCards}
+        </div>
+    `;
 }
 
 function getPriceVerdictClass(verdict) {
