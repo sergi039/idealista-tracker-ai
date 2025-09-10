@@ -1153,14 +1153,7 @@ function getPriceVerdictClass(verdict) {
     }
 }
 
-function getInvestmentRatingClass(rating) {
-    switch(rating) {
-        case 'HIGH': return 'bg-success';
-        case 'MEDIUM': return 'bg-warning';
-        case 'LOW': return 'bg-danger';
-        default: return 'bg-secondary';
-    }
-}
+// Removed duplicate - see consolidated version below
 
 function getPriceTrendClass(trend) {
     switch(trend) {
@@ -1381,13 +1374,20 @@ function renderStructuredAIAnalysis(analysis) {
     }
 }
 
-// Helper function for investment rating badge color
+// Helper function for investment rating badge color (consolidated version)
 function getInvestmentRatingClass(rating) {
     if (!rating) return 'bg-secondary';
-    if (rating.includes('EXCELLENT')) return 'bg-success';
-    if (rating.includes('GOOD')) return 'bg-primary';
-    if (rating.includes('MODERATE')) return 'bg-warning';
-    return 'bg-danger';
+    
+    // Convert to uppercase for comparison
+    const upperRating = String(rating).toUpperCase();
+    
+    // Check for both styles of ratings
+    if (upperRating === 'HIGH' || upperRating.includes('EXCELLENT')) return 'bg-success';
+    if (upperRating.includes('GOOD')) return 'bg-primary';
+    if (upperRating === 'MEDIUM' || upperRating.includes('MODERATE')) return 'bg-warning';
+    if (upperRating === 'LOW' || upperRating.includes('POOR') || upperRating.includes('BELOW')) return 'bg-danger';
+    
+    return 'bg-secondary';
 }
 
 // Helper function for Price/Rent Ratio color
@@ -1447,9 +1447,15 @@ document.addEventListener('DOMContentLoaded', function() {
             console.error('Error processing AI analysis:', e);
             console.error('Error message:', e.message);
             console.error('Error stack:', e.stack);
-            // If parsing fails, display raw content
+            // If parsing fails, display raw content properly
             const rawData = {{ land.ai_analysis|tojson|safe }};
-            structuredAnalysis.innerHTML = `<div class="analysis-text">${String(rawData).replace(/\n/g, '<br>')}</div>`;
+            if (typeof rawData === 'object' && rawData !== null) {
+                // For objects, display as formatted JSON
+                structuredAnalysis.innerHTML = `<pre class="text-light">${JSON.stringify(rawData, null, 2)}</pre>`;
+            } else {
+                // For strings, display with line breaks
+                structuredAnalysis.innerHTML = `<div class="analysis-text">${String(rawData).replace(/\n/g, '<br>')}</div>`;
+            }
         }
     {% endif %}
 });
