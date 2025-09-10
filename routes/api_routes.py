@@ -218,10 +218,8 @@ def analyze_property_ai(land_id):
         result = anthropic_service.analyze_property(property_data)
         
         if result and result.get('status') == 'success':
-            # Optionally store the analysis
-            if not land.property_details:
-                land.property_details = {}
-            land.property_details['ai_analysis'] = result.get('analysis')
+            # Store the analysis in ai_analysis field
+            land.ai_analysis = result.get('analysis')
             db.session.commit()
             
             return jsonify({
@@ -230,9 +228,12 @@ def analyze_property_ai(land_id):
                 "model": result.get('model')
             })
         else:
+            error_msg = 'Analysis failed'
+            if result:
+                error_msg = result.get('error', 'Analysis failed')
             return jsonify({
                 "success": False,
-                "error": result.get('error', 'Analysis failed')
+                "error": error_msg
             }), 500
             
     except Exception as e:
