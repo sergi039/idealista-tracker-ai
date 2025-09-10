@@ -198,9 +198,9 @@
                 </div>
 
                 <!-- Actions -->
-                <div class="mt-4 d-flex flex-wrap justify-content-center">
+                <div class="mt-4 d-flex justify-content-center gap-2" style="flex-wrap: nowrap;">
                     {% if land.url %}
-                        <a href="{{ land.url }}" target="_blank" class="btn btn-success me-2 mb-2">
+                        <a href="{{ land.url }}" target="_blank" class="btn btn-success">
                             <i class="fas fa-home me-2"></i>
                             View on Idealista
                         </a>
@@ -208,7 +208,7 @@
                     
                     <!-- AI Analysis Button - highlighted if analysis exists -->
                     <button onclick="analyzeWithClaude({{ land.id }})" 
-                            class="btn {{ 'btn-success' if land.ai_analysis else 'btn-outline-info' }} me-2 mb-2">
+                            class="btn {{ 'btn-success' if land.ai_analysis else 'btn-outline-info' }}">
                         <i class="fas fa-brain me-2 {{ 'text-white' if land.ai_analysis else '' }}"></i>
                         AI Analysis
                         {% if land.ai_analysis %}
@@ -216,14 +216,14 @@
                         {% endif %}
                     </button>
                     
-                    <a href="{{ url_for('main.edit_environment', land_id=land.id) }}" class="btn btn-primary me-2 mb-2">
+                    <a href="{{ url_for('main.edit_environment', land_id=land.id) }}" class="btn btn-primary">
                         <i class="fas fa-edit me-2"></i>
                         Edit Environment
                     </a>
                     
                     <!-- Google Enrichment Button - highlighted if enrichment data exists -->
                     {% set has_enrichment = land.infrastructure_basic or land.infrastructure_extended or land.transport or (land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital) %}
-                    <button class="btn {{ 'btn-success' if has_enrichment else 'btn-outline-warning' }} me-2 mb-2" 
+                    <button class="btn {{ 'btn-success' if has_enrichment else 'btn-outline-warning' }}" 
                             hx-post="{{ url_for('api.manual_enrichment', land_id=land.id) }}"
                             hx-trigger="click"
                             hx-indicator="#enrichment-spinner">
@@ -1216,6 +1216,9 @@ function renderStructuredAIAnalysis(analysis) {
                         <div class="mb-2">
                             <span class="badge bg-info">${analysis.construction_value_estimation?.construction_type || 'Modern House'}</span>
                         </div>
+                        ${(analysis.construction_value_estimation?.minimum_value || 
+                           analysis.construction_value_estimation?.average_value || 
+                           analysis.construction_value_estimation?.maximum_value) ? `
                         <div class="row text-center mb-2">
                             <div class="col-4">
                                 <div class="border rounded p-2">
@@ -1236,8 +1239,31 @@ function renderStructuredAIAnalysis(analysis) {
                                 </div>
                             </div>
                         </div>
-                        <p class="mb-1"><small class="text-muted">Built property value per m²: €${analysis.construction_value_estimation?.value_per_m2?.toLocaleString() || 'N/A'}/m²</small></p>
-                        <p class="mb-0"><strong>Total Investment:</strong> ${analysis.construction_value_estimation?.total_investment || 'Not calculated'}</p>
+                        ` : ''}
+                        ${analysis.construction_value_estimation?.total_investment_scenarios ? `
+                        <div class="row text-center mb-2">
+                            <div class="col-6">
+                                <div class="border rounded p-2">
+                                    <small class="text-muted d-block">Basic Build</small>
+                                    <strong>${analysis.construction_value_estimation.total_investment_scenarios.basic || 'N/A'}</strong>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="border rounded p-2" style="background-color: rgba(255,255,255,0.1);">
+                                    <small class="text-muted d-block">Premium Build</small>
+                                    <strong class="text-warning">${analysis.construction_value_estimation.total_investment_scenarios.premium || 'N/A'}</strong>
+                                </div>
+                            </div>
+                        </div>
+                        ` : ''}
+                        ${analysis.construction_value_estimation?.construction_costs ? `
+                        <div class="small">
+                            <p class="mb-1"><strong>Land Value:</strong> ${analysis.construction_value_estimation.land_value || 'N/A'}</p>
+                            <p class="mb-1"><strong>Structure:</strong> ${analysis.construction_value_estimation.construction_costs.basic_structure || 'N/A'}</p>
+                        </div>
+                        ` : ''}
+                        ${analysis.construction_value_estimation?.value_per_m2 ? `<p class="mb-1"><small class="text-muted">Built property value per m²: €${analysis.construction_value_estimation?.value_per_m2?.toLocaleString()}/m²</small></p>` : ''}
+                        ${analysis.construction_value_estimation?.total_investment ? `<p class="mb-0"><strong>Total Investment:</strong> ${analysis.construction_value_estimation?.total_investment}</p>` : ''}
                     ` : '<p class="text-muted">Construction value estimation not available</p>'}
                 </div>
             </div>
@@ -1247,15 +1273,33 @@ function renderStructuredAIAnalysis(analysis) {
                     <h6><i class="fas fa-chart-line text-warning"></i> Market Price Dynamics</h6>
                     ${analysis.market_price_dynamics ? `
                         <div class="mb-2">
-                            <span class="badge ${getPriceTrendClass(analysis.market_price_dynamics?.price_trend)}">${analysis.market_price_dynamics?.price_trend || 'Unknown'} Trend</span>
-                            <span class="badge bg-info ms-1">${analysis.market_price_dynamics?.annual_growth_rate || 'N/A'}% annually</span>
+                            <span class="badge ${getPriceTrendClass(analysis.market_price_dynamics?.price_trend || analysis.market_price_dynamics?.current_trend)}">${analysis.market_price_dynamics?.price_trend || analysis.market_price_dynamics?.current_trend || 'Unknown'} Trend</span>
+                            <span class="badge bg-info ms-1">${analysis.market_price_dynamics?.annual_growth_rate || analysis.market_price_dynamics?.annual_appreciation || 'N/A'}% annually</span>
                         </div>
                         <p class="mb-1"><strong>Period:</strong> ${analysis.market_price_dynamics?.trend_period || 'Recent years'}</p>
                         <p class="mb-2">${analysis.market_price_dynamics?.trend_analysis || 'No trend analysis available'}</p>
+                        ${analysis.market_price_dynamics?.price_forecast ? `
+                        <div class="mb-2">
+                            <strong>Price Forecast:</strong>
+                            <div class="small">
+                                <span class="badge bg-success me-1">1yr: ${analysis.market_price_dynamics.price_forecast['1_year'] || 'N/A'}</span>
+                                <span class="badge bg-info me-1">3yr: ${analysis.market_price_dynamics.price_forecast['3_year'] || 'N/A'}</span>
+                                <span class="badge bg-primary">5yr: ${analysis.market_price_dynamics.price_forecast['5_year'] || 'N/A'}</span>
+                            </div>
+                        </div>
+                        ` : ''}
+                        ${analysis.market_price_dynamics?.price_drivers ? `
+                        <div class="mb-2">
+                            <strong>Price Drivers:</strong>
+                            ${renderListItems(analysis.market_price_dynamics?.price_drivers, '', 'primary')}
+                        </div>
+                        ` : ''}
+                        ${analysis.market_price_dynamics?.market_factors ? `
                         <div class="mb-2">
                             <strong>Market Factors:</strong>
                             ${renderListItems(analysis.market_price_dynamics?.market_factors, '', 'primary')}
                         </div>
+                        ` : ''}
                         <small class="text-muted">${analysis.market_price_dynamics?.future_outlook || ''}</small>
                     ` : '<p class="text-muted">Market dynamics data not available</p>'}
                 </div>
