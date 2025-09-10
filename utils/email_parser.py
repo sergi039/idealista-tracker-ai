@@ -104,8 +104,8 @@ class EmailParser:
             matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
             for match in matches:
                 title = match.strip()
-                # Clean up HTML entities and extra whitespace
-                title = re.sub(r'&[a-zA-Z]+;', ' ', title)
+                # Clean up HTML tags, entities and extra whitespace
+                title = self._clean_html(title)
                 title = re.sub(r'\s+', ' ', title)
                 title = title.strip()
                 
@@ -130,6 +130,19 @@ class EmailParser:
         
         # Last resort: generic but better than email subject
         return "Terreno en Cantabria"
+    
+    def _clean_html(self, text: str) -> str:
+        """Remove HTML tags and clean up the text"""
+        if not text:
+            return ""
+        
+        # Remove HTML tags
+        text = re.sub(r'<[^>]+>', '', text)
+        # Remove HTML entities
+        text = re.sub(r'&[a-zA-Z0-9#]+;', ' ', text)
+        # Remove extra whitespace and normalize
+        text = re.sub(r'\s+', ' ', text)
+        return text.strip()
     
     def _extract_price(self, text: str) -> Optional[float]:
         """Extract price from text"""
