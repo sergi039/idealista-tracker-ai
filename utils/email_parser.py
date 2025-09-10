@@ -136,8 +136,10 @@ class EmailParser:
         if not text:
             return ""
         
-        # Remove HTML tags
+        # Remove complete HTML tags
         text = re.sub(r'<[^>]+>', '', text)
+        # Remove incomplete/broken HTML tags (starting with < but without closing >)
+        text = re.sub(r'<[^<]*$', '', text)
         # Remove HTML entities
         text = re.sub(r'&[a-zA-Z0-9#]+;', ' ', text)
         # Remove extra whitespace and normalize
