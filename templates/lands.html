@@ -952,5 +952,84 @@ function showAIErrorForTable(landId, error) {
         </div>
     `;
 }
+
+// View Switching without page reload
+function switchView(viewType) {
+    const listView = document.getElementById('list-view');
+    const cardsView = document.getElementById('cards-view');
+    const listBtn = document.getElementById('view-list-btn');
+    const cardsBtn = document.getElementById('view-cards-btn');
+    
+    // Add transition classes
+    listView.style.transition = 'opacity 0.3s ease-in-out';
+    cardsView.style.transition = 'opacity 0.3s ease-in-out';
+    
+    if (viewType === 'list') {
+        // Fade out current view
+        cardsView.style.opacity = '0';
+        setTimeout(() => {
+            cardsView.style.display = 'none';
+            listView.style.display = 'block';
+            listView.style.opacity = '0';
+            // Fade in new view
+            setTimeout(() => {
+                listView.style.opacity = '1';
+            }, 10);
+        }, 300);
+        
+        // Update button states
+        listBtn.classList.add('active');
+        cardsBtn.classList.remove('active');
+    } else {
+        // Fade out current view
+        listView.style.opacity = '0';
+        setTimeout(() => {
+            listView.style.display = 'none';
+            cardsView.style.display = 'block';
+            cardsView.style.opacity = '0';
+            // Fade in new view
+            setTimeout(() => {
+                cardsView.style.opacity = '1';
+            }, 10);
+        }, 300);
+        
+        // Update button states
+        cardsBtn.classList.add('active');
+        listBtn.classList.remove('active');
+    }
+    
+    // Update URL without page reload
+    updateViewTypeInUrl(viewType);
+}
+
+function updateViewTypeInUrl(viewType) {
+    const url = new URL(window.location);
+    url.searchParams.set('view_type', viewType);
+    
+    // Update URL without reload
+    window.history.pushState({ viewType: viewType }, '', url.toString());
+}
+
+// Handle browser back/forward buttons
+window.addEventListener('popstate', function(event) {
+    if (event.state && event.state.viewType) {
+        const viewType = event.state.viewType;
+        switchView(viewType);
+    }
+});
+
+// Initialize view on page load
+document.addEventListener('DOMContentLoaded', function() {
+    // Set initial opacity to 1 for visible view
+    const listView = document.getElementById('list-view');
+    const cardsView = document.getElementById('cards-view');
+    
+    if (listView.style.display !== 'none') {
+        listView.style.opacity = '1';
+    }
+    if (cardsView.style.display !== 'none') {
+        cardsView.style.opacity = '1';
+    }
+});
 </script>
 {% endblock %}
