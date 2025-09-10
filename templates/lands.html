@@ -159,7 +159,7 @@
             </div>
             
             <!-- List View (Table) -->
-            {% if current_filters.view_type == 'list' %}
+            <div id="list-view" class="view-container" style="{{ 'display: block;' if current_filters.view_type == 'list' else 'display: none;' }}">
                 <div class="card">
                     <div class="card-body p-0">
                         <div class="table-responsive">
@@ -369,8 +369,10 @@
                         </div>
                     </div>
                 </div>
-            {% else %}
-                <!-- Properties Grid (Cards View) -->
+            </div>
+            
+            <!-- Properties Grid (Cards View) -->
+            <div id="cards-view" class="view-container" style="{{ 'display: block;' if current_filters.view_type == 'cards' or not current_filters.view_type else 'display: none;' }}">
                 <div class="row" id="properties-grid">
                 {% for land in lands %}
                     <div class="col-lg-6 col-xl-4 mb-4">
@@ -517,8 +519,8 @@
                         </div>
                     </div>
                 {% endfor %}
+                </div>
             </div>
-            {% endif %}
                 
                 <!-- Pagination -->
                 {% if pagination and pagination.total > 0 %}
