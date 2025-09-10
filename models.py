@@ -29,6 +29,7 @@ class Land(db.Model):
     
     legal_status = db.Column(db.String(50))
     property_details = db.Column(JSONB)  # AI analysis and property details in JSON format
+    ai_analysis = db.Column(JSONB)  # Structured AI analysis with 5 blocks
     score_total = db.Column(db.Numeric(5, 2))
     
     # Travel times by car (in minutes)
