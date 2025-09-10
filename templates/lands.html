@@ -830,16 +830,17 @@ async function generateAIAnalysisOnly(landId) {
 
         const data = await response.json();
         if (data.success) {
-            // Reset icon styles and redirect to property detail page
+            // Reset icon styles and change to success state - NO REDIRECT
             icon.style.background = '';
             icon.style.animation = '';
             icon.style.webkitBackgroundClip = '';
             icon.style.webkitTextFillColor = '';
             icon.style.backgroundClip = '';
-            button.disabled = false;
             
-            // Redirect to property details page to view analysis
-            window.location.href = `/lands/${landId}`;
+            // Change icon to success color to show analysis is complete
+            icon.style.color = '#28a745'; // Green color to show success
+            button.disabled = false;
+            button.title = 'AI Analysis Complete - Click property to view details';
         } else {
             throw new Error(data.error || 'Analysis failed');
         }
