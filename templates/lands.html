@@ -14,6 +14,9 @@
                 {% else %}
                     <span class="badge bg-secondary">{{ lands|length }}</span>
                 {% endif %}
+                <small class="text-muted ms-3 fw-normal">
+                    Last sync: <span id="last-sync">Loading...</span>
+                </small>
             </h1>
             
             <div>
