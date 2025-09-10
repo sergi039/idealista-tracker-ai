@@ -968,6 +968,9 @@ function switchView(viewType) {
     const listBtn = document.getElementById('view-list-btn');
     const cardsBtn = document.getElementById('view-cards-btn');
     
+    // Save user preference to localStorage
+    localStorage.setItem('preferredViewType', viewType);
+    
     // Add transition classes
     listView.style.transition = 'opacity 0.3s ease-in-out';
     cardsView.style.transition = 'opacity 0.3s ease-in-out';
@@ -1032,11 +1035,31 @@ document.addEventListener('DOMContentLoaded', function() {
     const listView = document.getElementById('list-view');
     const cardsView = document.getElementById('cards-view');
     
-    if (listView.style.display !== 'none') {
-        listView.style.opacity = '1';
-    }
-    if (cardsView.style.display !== 'none') {
-        cardsView.style.opacity = '1';
+    // Load user preference from localStorage
+    const savedViewType = localStorage.getItem('preferredViewType');
+    const currentServerView = '{{ current_filters.view_type or "cards" }}';
+    
+    if (savedViewType && (savedViewType === 'list' || savedViewType === 'cards')) {
+        // Apply saved preference if different from server-side default
+        if (savedViewType !== currentServerView) {
+            switchView(savedViewType);
+        } else {
+            // Set opacity for the current view
+            if (listView.style.display !== 'none') {
+                listView.style.opacity = '1';
+            }
+            if (cardsView.style.display !== 'none') {
+                cardsView.style.opacity = '1';
+            }
+        }
+    } else {
+        // Set opacity for the current view (no saved preference)
+        if (listView.style.display !== 'none') {
+            listView.style.opacity = '1';
+        }
+        if (cardsView.style.display !== 'none') {
+            cardsView.style.opacity = '1';
+        }
     }
 });
 </script>
