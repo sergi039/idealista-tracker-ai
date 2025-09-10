@@ -785,11 +785,26 @@ async function generateAIAnalysisOnly(landId) {
         return;
     }
     
-    // Add gradient animation
-    button.style.background = 'linear-gradient(45deg, #007bff, #0056b3, #007bff)';
-    button.style.backgroundSize = '200% 200%';
-    button.style.animation = 'gradientShift 1.5s ease-in-out infinite';
-    button.innerHTML = '<i class="fas fa-brain text-white"></i> Analyzing...';
+    // Store original button content to preserve exact layout
+    const originalInnerHTML = button.innerHTML;
+    const originalTitle = button.title;
+    const originalOnclick = button.onclick;
+    
+    // Find the icon inside the button (don't change button text/size)
+    const icon = button.querySelector('i.fas.fa-brain');
+    if (!icon) {
+        console.error('Brain icon not found in button');
+        return;
+    }
+    
+    // ONLY change the icon color with gradient - NO text changes
+    icon.style.background = 'linear-gradient(45deg, #007bff, #0056b3, #007bff)';
+    icon.style.backgroundSize = '200% 200%';
+    icon.style.animation = 'gradientShift 1.5s ease-in-out infinite';
+    icon.style.webkitBackgroundClip = 'text';
+    icon.style.webkitTextFillColor = 'transparent';
+    icon.style.backgroundClip = 'text';
+    
     button.disabled = true;
     button.title = 'Generating AI Analysis...';
     
@@ -815,32 +830,38 @@ async function generateAIAnalysisOnly(landId) {
 
         const data = await response.json();
         if (data.success) {
-            // Update button to show "has analysis" state
-            button.classList.remove('btn-outline-secondary');
-            button.classList.add('btn-info');
-            button.style.background = '';
-            button.style.animation = '';
-            button.innerHTML = '<i class="fas fa-brain text-white"></i> AI Analysis';
-            button.title = 'View AI Analysis - Click to go to details';
-            button.onclick = () => viewAIAnalysis(landId);
+            // Reset icon styles and redirect to property detail page
+            icon.style.background = '';
+            icon.style.animation = '';
+            icon.style.webkitBackgroundClip = '';
+            icon.style.webkitTextFillColor = '';
+            icon.style.backgroundClip = '';
+            button.disabled = false;
+            
+            // Redirect to property details page to view analysis
+            window.location.href = `/lands/${landId}`;
         } else {
             throw new Error(data.error || 'Analysis failed');
         }
     } catch (error) {
         console.error('AI Analysis Error:', error);
-        button.classList.remove('btn-info');
-        button.classList.add('btn-outline-secondary');
-        button.style.background = '';
-        button.style.animation = '';
-        button.innerHTML = '<i class="fas fa-brain"></i> AI Analysis';
-        button.title = 'AI Analysis (Failed - Click to retry)';
-        button.onclick = () => generateAIAnalysisOnly(landId);
+        
+        // Reset icon styles to original state
+        icon.style.background = '';
+        icon.style.animation = '';
+        icon.style.webkitBackgroundClip = '';
+        icon.style.webkitTextFillColor = '';
+        icon.style.backgroundClip = '';
+        
+        // Restore original button state completely
+        button.innerHTML = originalInnerHTML;
+        button.title = originalTitle;
+        button.onclick = originalOnclick;
+        button.disabled = false;
         
         // Show user-friendly error message (console only for card view)
         console.warn('AI Analysis failed:', error.message);
     }
-    
-    button.disabled = false;
 }
 
 // View AI Analysis - redirect to details page
