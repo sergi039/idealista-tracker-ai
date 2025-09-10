@@ -292,6 +292,42 @@ def get_description_variants(land_id):
             "error": str(e)
         }), 500
 
+@api_bp.route('/land/<int:land_id>/environment', methods=['POST'])
+def update_environment(land_id):
+    """Update environment data for a land property"""
+    try:
+        land = Land.query.get_or_404(land_id)
+        data = request.get_json()
+        
+        # Update environment data
+        environment = {
+            'sea_view': data.get('sea_view', False),
+            'mountain_view': data.get('mountain_view', False),
+            'forest_view': data.get('forest_view', False),
+            'orientation': data.get('orientation', ''),
+            'buildable_floors': data.get('buildable_floors', ''),
+            'access_type': data.get('access_type', ''),
+            'certified_for': data.get('certified_for', '')
+        }
+        
+        land.environment = environment
+        db.session.commit()
+        
+        logger.info(f"Updated environment data for land {land_id}")
+        
+        return jsonify({
+            "success": True,
+            "message": "Environment data updated successfully",
+            "environment": environment
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to update environment for land {land_id}: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 @api_bp.route('/analyze/property/<int:land_id>', methods=['POST'])
 def analyze_property_ai(land_id):
     """Analyze property using Anthropic Claude AI"""

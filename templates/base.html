@@ -54,16 +54,6 @@
                             Manual Sync
                         </button>
                     </li>
-                    <li class="nav-item">
-                        <button class="btn btn-outline-warning btn-sm" 
-                                hx-post="{{ url_for('api.bulk_enrichment') }}"
-                                hx-trigger="click"
-                                hx-indicator="#enrichment-spinner-bulk"
-                                onclick="if(!confirm('This will enrich all properties missing Google API data. Continue?')) return false;">
-                            <i class="fas fa-map-marked-alt me-1"></i>
-                            Enrich All Properties
-                        </button>
-                    </li>
                 </ul>
             </div>
         </div>
@@ -79,14 +69,6 @@
         </div>
     </div>
     
-    <div id="enrichment-spinner-bulk" class="htmx-indicator">
-        <div class="container mt-3">
-            <div class="alert alert-warning">
-                <i class="fas fa-spinner fa-spin me-2"></i>
-                Enriching all properties with Google API data... This may take several minutes.
-            </div>
-        </div>
-    </div>
 
     <!-- Flash messages -->
     {% with messages = get_flashed_messages(with_categories=true) %}

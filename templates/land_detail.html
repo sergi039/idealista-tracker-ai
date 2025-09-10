@@ -194,10 +194,6 @@
                         {% endif %}
                     </button>
                     
-                    <a href="{{ url_for('main.edit_environment', land_id=land.id) }}" class="btn btn-primary">
-                        <i class="fas fa-edit me-2"></i>
-                        Edit Environment
-                    </a>
                     
                     <!-- Google Enrichment Button - highlighted if enrichment data exists -->
                     {% set has_enrichment = land.infrastructure_basic or land.infrastructure_extended or land.transport or (land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital) %}
@@ -661,20 +657,25 @@
             
             {% if environment_items %}
                 <div class="card mb-4">
-                    <div class="card-header">
+                    <div class="card-header d-flex justify-content-between align-items-center">
                         <h6 class="card-title mb-0">
                             <i class="fas fa-leaf me-2"></i>Environment
                         </h6>
+                        <button class="btn btn-sm btn-outline-primary" onclick="toggleEnvironmentEdit({{ land.id }})" id="env-edit-btn">
+                            <i class="fas fa-edit"></i> Edit
+                        </button>
                     </div>
-                    <div class="card-body">
+                    <div class="card-body" id="environment-display">
                         {% for key, value in environment_items %}
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 {% if key in ['sea_view', 'forest_view', 'mountain_view'] %}
                                     <span class="small">{{ key.replace('_view', '').replace('_', ' ').title() }} View</span>
                                     {% if value is sameas true %}
                                         <i class="fas fa-check-circle text-success"></i>
+                                    {% elif value is sameas false %}
+                                        <i class="fas fa-times-circle text-danger"></i>
                                     {% else %}
-                                        <span class="text-muted small">no data</span>
+                                        <span class="text-muted small">N/A</span>
                                     {% endif %}
                                 {% else %}
                                     <span class="small">{{ key.replace('_', ' ').title() }}</span>
@@ -683,11 +684,57 @@
                                     {% elif value is sameas false %}
                                         <i class="fas fa-times-circle text-danger"></i>
                                     {% else %}
-                                        <span class="text-muted small">{{ value }}</span>
+                                        <span class="text-muted small">{{ value if value else 'N/A' }}</span>
                                     {% endif %}
                                 {% endif %}
                             </div>
                         {% endfor %}
+                    </div>
+                    <!-- Edit Form (hidden by default) -->
+                    <div class="card-body" id="environment-edit" style="display: none;">
+                        <form id="environment-form" onsubmit="saveEnvironment(event, {{ land.id }})">
+                            <div class="mb-3">
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="sea_view" name="sea_view" 
+                                           {{ 'checked' if land.environment.get('sea_view') }}>
+                                    <label class="form-check-label" for="sea_view">Sea View</label>
+                                </div>
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="mountain_view" name="mountain_view" 
+                                           {{ 'checked' if land.environment.get('mountain_view') }}>
+                                    <label class="form-check-label" for="mountain_view">Mountain View</label>
+                                </div>
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="forest_view" name="forest_view" 
+                                           {{ 'checked' if land.environment.get('forest_view') }}>
+                                    <label class="form-check-label" for="forest_view">Forest View</label>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="orientation" class="form-label small">Orientation</label>
+                                <input type="text" class="form-control form-control-sm" id="orientation" name="orientation" 
+                                       value="{{ land.environment.get('orientation', '') }}">
+                            </div>
+                            <div class="mb-3">
+                                <label for="buildable_floors" class="form-label small">Buildable Floors</label>
+                                <input type="text" class="form-control form-control-sm" id="buildable_floors" name="buildable_floors" 
+                                       value="{{ land.environment.get('buildable_floors', '') }}">
+                            </div>
+                            <div class="mb-3">
+                                <label for="access_type" class="form-label small">Access Type</label>
+                                <input type="text" class="form-control form-control-sm" id="access_type" name="access_type" 
+                                       value="{{ land.environment.get('access_type', '') }}">
+                            </div>
+                            <div class="mb-3">
+                                <label for="certified_for" class="form-label small">Certified For</label>
+                                <input type="text" class="form-control form-control-sm" id="certified_for" name="certified_for" 
+                                       value="{{ land.environment.get('certified_for', '') }}">
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button type="submit" class="btn btn-sm btn-success">Save</button>
+                                <button type="button" class="btn btn-sm btn-secondary" onclick="cancelEnvironmentEdit()">Cancel</button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             {% endif %}

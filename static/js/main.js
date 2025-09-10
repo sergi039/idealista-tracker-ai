@@ -831,6 +831,73 @@ function updateUrlParameter(url, param, paramVal) {
     return baseURL + "?" + newAdditionalURL + rows_txt;
 }
 
+// Environment editing functions
+function toggleEnvironmentEdit(landId) {
+    const displayDiv = document.getElementById('environment-display');
+    const editDiv = document.getElementById('environment-edit');
+    const editBtn = document.getElementById('env-edit-btn');
+    
+    if (editDiv.style.display === 'none') {
+        displayDiv.style.display = 'none';
+        editDiv.style.display = 'block';
+        editBtn.innerHTML = '<i class="fas fa-times"></i> Cancel';
+    } else {
+        displayDiv.style.display = 'block';
+        editDiv.style.display = 'none';
+        editBtn.innerHTML = '<i class="fas fa-edit"></i> Edit';
+    }
+}
+
+function cancelEnvironmentEdit() {
+    const displayDiv = document.getElementById('environment-display');
+    const editDiv = document.getElementById('environment-edit');
+    const editBtn = document.getElementById('env-edit-btn');
+    
+    displayDiv.style.display = 'block';
+    editDiv.style.display = 'none';
+    editBtn.innerHTML = '<i class="fas fa-edit"></i> Edit';
+}
+
+function saveEnvironment(event, landId) {
+    event.preventDefault();
+    
+    const form = document.getElementById('environment-form');
+    const formData = new FormData(form);
+    
+    // Build environment object
+    const environment = {
+        sea_view: formData.has('sea_view'),
+        mountain_view: formData.has('mountain_view'),
+        forest_view: formData.has('forest_view'),
+        orientation: formData.get('orientation') || '',
+        buildable_floors: formData.get('buildable_floors') || '',
+        access_type: formData.get('access_type') || '',
+        certified_for: formData.get('certified_for') || ''
+    };
+    
+    // Send update to server
+    fetch(`/api/land/${landId}/environment`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(environment)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Reload page to show updated data
+            location.reload();
+        } else {
+            alert('Failed to update environment data: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        console.error('Error updating environment:', error);
+        alert('Failed to update environment data');
+    });
+}
+
 // Initialize app when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
     window.IdealistaApp.init();
