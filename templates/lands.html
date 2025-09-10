@@ -712,6 +712,24 @@ async function loadAIAnalysis(landId) {
             }
         });
         
+        // Check if response is OK before parsing JSON
+        if (!response.ok) {
+            let errorMsg = 'Analysis service unavailable';
+            try {
+                const errorData = await response.json();
+                errorMsg = errorData.error || errorMsg;
+            } catch (e) {
+                // If JSON parsing fails, use generic error
+                if (response.status === 503) {
+                    errorMsg = 'AI service is temporarily overloaded. Please try again in a few minutes.';
+                } else if (response.status === 500) {
+                    errorMsg = 'Server error occurred. Please try again later.';
+                }
+            }
+            showAIError(landId, errorMsg);
+            return;
+        }
+        
         const data = await response.json();
         
         if (data.success && data.analysis) {
@@ -721,7 +739,7 @@ async function loadAIAnalysis(landId) {
         }
     } catch (error) {
         console.error('AI Analysis Error:', error);
-        showAIError(landId, 'Failed to load AI analysis');
+        showAIError(landId, 'Network error. Please check your connection and try again.');
     }
 }
 
@@ -962,6 +980,24 @@ async function loadAIAnalysisForTable(landId) {
             }
         });
         
+        // Check if response is OK before parsing JSON
+        if (!response.ok) {
+            let errorMsg = 'Analysis service unavailable';
+            try {
+                const errorData = await response.json();
+                errorMsg = errorData.error || errorMsg;
+            } catch (e) {
+                // If JSON parsing fails, use generic error
+                if (response.status === 503) {
+                    errorMsg = 'AI service is temporarily overloaded. Please try again in a few minutes.';
+                } else if (response.status === 500) {
+                    errorMsg = 'Server error occurred. Please try again later.';
+                }
+            }
+            showAIErrorForTable(landId, errorMsg);
+            return;
+        }
+        
         const data = await response.json();
         
         if (data.success && data.analysis) {
@@ -971,7 +1007,7 @@ async function loadAIAnalysisForTable(landId) {
         }
     } catch (error) {
         console.error('AI Analysis Error:', error);
-        showAIErrorForTable(landId, 'Failed to load AI analysis');
+        showAIErrorForTable(landId, 'Network error. Please check your connection and try again.');
     }
 }
 
