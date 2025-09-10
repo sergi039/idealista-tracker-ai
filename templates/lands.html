@@ -120,17 +120,21 @@
                             
                             <!-- View Toggle -->
                             <div class="btn-group" role="group" aria-label="View type">
-                                <input type="radio" class="btn-check" name="view_type" id="view_list" value="list" 
-                                       {{ 'checked' if current_filters.view_type == 'list' else '' }}>
-                                <label class="btn btn-outline-secondary" for="view_list" title="List view">
+                                <button type="button" 
+                                        class="btn btn-outline-secondary {{ 'active' if current_filters.view_type == 'list' else '' }}" 
+                                        id="view-list-btn" 
+                                        onclick="switchView('list')" 
+                                        title="List view">
                                     <i class="fas fa-list"></i>
-                                </label>
+                                </button>
                                 
-                                <input type="radio" class="btn-check" name="view_type" id="view_cards" value="cards" 
-                                       {{ 'checked' if current_filters.view_type == 'cards' or not current_filters.view_type else '' }}>
-                                <label class="btn btn-outline-secondary" for="view_cards" title="Card view">
+                                <button type="button" 
+                                        class="btn btn-outline-secondary {{ 'active' if current_filters.view_type == 'cards' or not current_filters.view_type else '' }}" 
+                                        id="view-cards-btn" 
+                                        onclick="switchView('cards')" 
+                                        title="Card view">
                                     <i class="fas fa-th-large"></i>
-                                </label>
+                                </button>
                             </div>
                         </div>
                     </div>
