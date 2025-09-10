@@ -882,183 +882,74 @@ async function generateAIAnalysisAndRedirect(landId) {
     }
 }
 
-// AI Analysis for Table View
-async function toggleAIAnalysisInTable(landId) {
-    const analysisRow = document.getElementById(`ai-row-${landId}`);
+// Generate AI Analysis only (no display in list)
+async function generateAIAnalysisOnly(landId) {
     const button = document.querySelector(`[data-land-id="${landId}"]`);
-    const content = document.getElementById(`ai-content-table-${landId}`);
     
-    // Check if the property has AI analysis by looking at button class
-    const hasAnalysis = button.classList.contains('btn-info');
+    // Add gradient animation
+    button.style.background = 'linear-gradient(45deg, #007bff, #0056b3, #007bff)';
+    button.style.backgroundSize = '200% 200%';
+    button.style.animation = 'gradientShift 1.5s ease-in-out infinite';
+    button.innerHTML = '<i class="fas fa-brain text-white"></i>';
+    button.disabled = true;
+    button.title = 'Generating AI Analysis...';
     
-    if (!hasAnalysis) {
-        // No analysis yet - generate it first
-        button.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-        button.disabled = true;
-        button.title = 'Generating AI Analysis...';
-        
-        try {
-            const response = await fetch(`/api/analyze/property/${landId}/structured`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                }
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                if (data.success) {
-                    // Update button to show "has analysis" state
-                    button.classList.remove('btn-outline-secondary');
-                    button.classList.add('btn-info');
-                    button.innerHTML = '<i class="fas fa-brain text-white"></i>';
-                    button.title = 'View AI Analysis';
-                    
-                    // Load and show the analysis
-                    await loadAIAnalysisForTable(landId);
-                    analysisRow.style.display = 'table-row';
-                } else {
-                    throw new Error(data.error || 'Analysis failed');
-                }
-            } else {
-                throw new Error('Server error');
-            }
-        } catch (error) {
-            console.error('AI Analysis Error:', error);
-            button.innerHTML = '<i class="fas fa-brain"></i>';
-            button.title = 'AI Analysis (Failed - Click to retry)';
-            alert('Failed to generate AI analysis. Please try again.');
-        }
-        
-        button.disabled = false;
-    } else {
-        // Has analysis - toggle visibility in table
-        if (analysisRow.style.display === 'none') {
-            // Show analysis row
-            analysisRow.style.display = 'table-row';
-            
-            // Load AI analysis if not already loaded
-            if (!content.innerHTML.trim()) {
-                await loadAIAnalysisForTable(landId);
-            }
-            
-            button.title = 'Hide AI Analysis';
-        } else {
-            // Hide analysis row
-            analysisRow.style.display = 'none';
-            button.title = 'View AI Analysis';
-        }
-    }
-}
-
-async function loadAIAnalysisForTable(landId) {
     try {
         const response = await fetch(`/api/analyze/property/${landId}/structured`, {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
             }
         });
-        
-        // Check if response is OK before parsing JSON
+
         if (!response.ok) {
             let errorMsg = 'Analysis service unavailable';
-            try {
-                const errorData = await response.json();
-                errorMsg = errorData.error || errorMsg;
-            } catch (e) {
-                // If JSON parsing fails, use generic error
-                if (response.status === 503) {
-                    errorMsg = 'AI service is temporarily overloaded. Please try again in a few minutes.';
-                } else if (response.status === 500) {
-                    errorMsg = 'Server error occurred. Please try again later.';
-                }
+            if (response.status === 529) {
+                errorMsg = 'Claude AI service is temporarily overloaded. Please try again in a few minutes.';
+            } else if (response.status === 401) {
+                errorMsg = 'API authentication failed. Please check your API key configuration.';
+            } else if (response.status === 429) {
+                errorMsg = 'Too many requests. Please wait a moment before trying again.';
             }
-            showAIErrorForTable(landId, errorMsg);
-            return;
+            throw new Error(errorMsg);
         }
-        
+
         const data = await response.json();
-        
-        if (data.success && data.analysis) {
-            renderAIAnalysisForTable(landId, data.analysis);
+        if (data.success) {
+            // Update button to show "has analysis" state
+            button.classList.remove('btn-outline-secondary');
+            button.classList.add('btn-info');
+            button.style.background = '';
+            button.style.animation = '';
+            button.innerHTML = '<i class="fas fa-brain text-white"></i>';
+            button.title = 'View AI Analysis - Click to go to details';
+            button.onclick = () => viewAIAnalysis(landId);
         } else {
-            showAIErrorForTable(landId, data.error || 'Analysis failed');
+            throw new Error(data.error || 'Analysis failed');
         }
     } catch (error) {
         console.error('AI Analysis Error:', error);
-        showAIErrorForTable(landId, 'Network error. Please check your connection and try again.');
+        button.classList.remove('btn-info');
+        button.classList.add('btn-outline-secondary');
+        button.style.background = '';
+        button.style.animation = '';
+        button.innerHTML = '<i class="fas fa-brain"></i>';
+        button.title = 'AI Analysis (Failed - Click to retry)';
+        button.onclick = () => generateAIAnalysisOnly(landId);
+        
+        // Show user-friendly error message
+        alert(error.message);
     }
+    
+    button.disabled = false;
 }
 
-function renderAIAnalysisForTable(landId, analysis) {
-    const content = document.getElementById(`ai-content-table-${landId}`);
-    
-    const html = `
-        <div class="row">
-            <div class="col-md-6 mb-3">
-                <div class="border rounded p-3 h-100">
-                    <h6><i class="fas fa-euro-sign text-success"></i> Price Analysis</h6>
-                    <span class="badge ${getPriceVerdictClass(analysis.price_analysis?.verdict)}">
-                        ${analysis.price_analysis?.verdict || 'Unknown'}
-                    </span>
-                    <p class="mb-1 mt-2">${analysis.price_analysis?.summary || 'No analysis available'}</p>
-                    <small class="text-muted">${analysis.price_analysis?.recommendation || ''}</small>
-                </div>
-            </div>
-            
-            <div class="col-md-6 mb-3">
-                <div class="border rounded p-3 h-100">
-                    <h6><i class="fas fa-chart-line text-primary"></i> Investment Potential</h6>
-                    <span class="badge ${getInvestmentRatingClass(analysis.investment_potential?.rating)}">
-                        ${analysis.investment_potential?.rating || 'Unknown'} Growth
-                    </span>
-                    <p class="mb-1 mt-2">${analysis.investment_potential?.forecast || 'No forecast available'}</p>
-                    <small class="text-muted">Risk: ${analysis.investment_potential?.risk_level || 'Unknown'}</small>
-                </div>
-            </div>
-        </div>
-        
-        <div class="row">
-            <div class="col-md-6 mb-3">
-                <div class="border rounded p-3 h-100">
-                    <h6><i class="fas fa-exclamation-triangle text-warning"></i> Risks & Advantages</h6>
-                    ${renderListItems(analysis.risks_analysis?.major_risks, 'Risks:', 'danger')}
-                    ${renderListItems(analysis.risks_analysis?.advantages, 'Advantages:', 'success')}
-                    <small class="text-muted">${analysis.risks_analysis?.mitigation || ''}</small>
-                </div>
-            </div>
-            
-            <div class="col-md-6 mb-3">
-                <div class="border rounded p-3 h-100">
-                    <h6><i class="fas fa-hammer text-info"></i> Development Ideas</h6>
-                    <p class="mb-1"><strong>${analysis.development_ideas?.best_use || 'No recommendations'}</strong></p>
-                    <p class="mb-1">${analysis.development_ideas?.building_size || ''}</p>
-                    <small class="text-muted">${analysis.development_ideas?.estimated_cost || ''}</small>
-                </div>
-            </div>
-        </div>
-        
-        <div class="border rounded p-3">
-            <h6><i class="fas fa-balance-scale text-secondary"></i> Market Comparison</h6>
-            <p class="mb-1">${analysis.comparable_analysis?.market_position || 'No comparison data'}</p>
-            ${renderListItems(analysis.comparable_analysis?.advantages_vs_similar, 'Better than similar:', 'success')}
-            ${renderListItems(analysis.comparable_analysis?.disadvantages_vs_similar, 'Worse than similar:', 'danger')}
-        </div>
-    `;
-    
-    content.innerHTML = html;
+// View AI Analysis - redirect to details page
+function viewAIAnalysis(landId) {
+    window.location.href = `/lands/${landId}`;
 }
 
-function showAIErrorForTable(landId, error) {
-    const content = document.getElementById(`ai-content-table-${landId}`);
-    content.innerHTML = `
-        <div class="alert alert-danger">
-            <i class="fas fa-exclamation-triangle me-2"></i>
-            <strong>Analysis Error:</strong> ${error}
-        </div>
-    `;
-}
+
 
 // View Switching without page reload
 function switchView(viewType) {
@@ -1186,4 +1077,22 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 </script>
+
+<style>
+@keyframes gradientShift {
+    0% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+.ai-analyze-btn {
+    transition: all 0.3s ease-in-out;
+}
+</style>
 {% endblock %}
