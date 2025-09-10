@@ -727,19 +727,38 @@
                     {% endif %}
                     <div class="mb-2">
                         <strong>Source Email:</strong> 
-                        {% if land.email_date and land.title %}
-                            {% set email_date_str = land.email_date.strftime('%Y/%m/%d') %}
-                            {% set title_words = land.title.split(' ')[:3]|join(' ') %}
-                            {% set search_query = 'from:idealista.com after:' + email_date_str + ' "' + title_words + '"' %}
-                            <a href="https://mail.google.com/mail/u/0/#search/{{ search_query|urlencode }}" 
+                        {% if land.source_email_id %}
+                            <!-- Direct Gmail link using message ID -->
+                            <a href="https://mail.google.com/mail/u/0/#inbox/{{ land.source_email_id }}" 
                                target="_blank" 
-                               class="btn btn-sm btn-outline-primary"
-                               title="Search for this email in Gmail using date and property title">
-                                <i class="fas fa-envelope me-1"></i>Find in Gmail
+                               class="btn btn-primary btn-sm me-2"
+                               title="Open original email in Gmail">
+                                <i class="fas fa-envelope me-1"></i>Open in Gmail
                             </a>
-                            <small class="text-muted d-block mt-1">Search: {{ title_words }} from {{ email_date_str }}</small>
+                            
+                            <!-- Fallback search link -->
+                            {% if land.email_date and land.title %}
+                                {% set email_date_str = land.email_date.strftime('%Y/%m/%d') %}
+                                {% set title_words = land.title.split(' ')[:3]|join(' ') %}
+                                {% set search_query = 'from:idealista.com after:' + email_date_str + ' "' + title_words + '"' %}
+                                <a href="https://mail.google.com/mail/u/0/#search/{{ search_query|urlencode }}" 
+                                   target="_blank" 
+                                   class="btn btn-sm btn-outline-secondary"
+                                   title="Search for this email in Gmail using date and property title">
+                                    <i class="fas fa-search me-1"></i>Search
+                                </a>
+                            {% endif %}
+                            
+                            <!-- Show email metadata if available -->
+                            {% if land.email_subject %}
+                                <div class="small text-muted mt-1">
+                                    <strong>Subject:</strong> {{ land.email_subject[:60] }}{% if land.email_subject|length > 60 %}...{% endif %}
+                                </div>
+                            {% endif %}
                         {% else %}
-                            <code class="text-muted">{{ land.source_email_id }}</code>
+                            <span class="text-warning">
+                                <i class="fas fa-exclamation-triangle me-1"></i>No email source available
+                            </span>
                         {% endif %}
                     </div>
                 </div>
