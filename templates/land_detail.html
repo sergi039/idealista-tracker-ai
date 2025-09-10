@@ -857,25 +857,18 @@ function analyzeWithClaude(landId) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            // Display the analysis result with proper formatting
+            // Debug: log the response structure
+            console.log('AI Analysis Response:', data);
+            
+            // The analysis data is directly in data.analysis - use it for structured display
             let analysisContent = '';
             
-            // Check if analysis is a string or object
-            if (typeof data.analysis === 'string') {
-                // Try to parse it as JSON for structured display
-                try {
-                    const parsedAnalysis = JSON.parse(data.analysis);
-                    analysisContent = renderStructuredAIAnalysis(parsedAnalysis);
-                } catch (e) {
-                    // If parsing fails, show as formatted text
-                    analysisContent = `<div class="analysis-text">${data.analysis.replace(/\n/g, '<br>')}</div>`;
-                }
-            } else if (typeof data.analysis === 'object' && data.analysis !== null) {
-                // If it's already an object, render it with structured format
+            if (data.analysis && typeof data.analysis === 'object') {
+                // Use the structured analysis directly
                 analysisContent = renderStructuredAIAnalysis(data.analysis);
             } else {
-                // Fallback to plain text
-                analysisContent = `<div class="analysis-text">${data.analysis}</div>`;
+                // Fallback for non-structured responses
+                analysisContent = `<div class="analysis-text">${String(data.analysis).replace(/\n/g, '<br>')}</div>`;
             }
             
             aiContent.innerHTML = `
@@ -1148,22 +1141,31 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             // Try to parse AI analysis as JSON
             const analysisData = {{ land.ai_analysis|tojson|safe }};
+            console.log('Existing AI Analysis Data:', analysisData, typeof analysisData);
             
             if (typeof analysisData === 'string') {
                 // If it's a string, try to parse it as JSON
-                const parsedAnalysis = JSON.parse(analysisData);
-                structuredAnalysis.innerHTML = renderStructuredAIAnalysis(parsedAnalysis);
+                try {
+                    const parsedAnalysis = JSON.parse(analysisData);
+                    structuredAnalysis.innerHTML = renderStructuredAIAnalysis(parsedAnalysis);
+                } catch (parseError) {
+                    console.log('Failed to parse JSON, displaying as formatted text');
+                    structuredAnalysis.innerHTML = `<div class="analysis-text">${analysisData.replace(/\n/g, '<br>')}</div>`;
+                }
             } else if (typeof analysisData === 'object' && analysisData !== null) {
                 // If it's already an object, use it directly
+                console.log('Using structured analysis display');
                 structuredAnalysis.innerHTML = renderStructuredAIAnalysis(analysisData);
             } else {
                 // Fallback to displaying raw content
+                console.log('Fallback: displaying raw content');
                 structuredAnalysis.innerHTML = `<pre class="text-light">${JSON.stringify(analysisData, null, 2)}</pre>`;
             }
         } catch (e) {
+            console.error('Error processing AI analysis:', e);
             // If parsing fails, display raw content
             const rawData = {{ land.ai_analysis|tojson|safe }};
-            structuredAnalysis.innerHTML = `<pre class="text-light bg-dark p-3 rounded">${rawData}</pre>`;
+            structuredAnalysis.innerHTML = `<div class="analysis-text">${String(rawData).replace(/\n/g, '<br>')}</div>`;
         }
     {% endif %}
 });
