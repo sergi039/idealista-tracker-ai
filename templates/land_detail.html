@@ -105,12 +105,17 @@
                 
                 <!-- Property Details from Idealista -->
                 {% if land.property_details %}
-                    <div class="mb-4">
-                        <strong>Property Details:</strong>
-                        <div class="mt-2 p-3 bg-dark rounded">
-                            <pre class="text-light mb-0" style="white-space: pre-wrap; word-wrap: break-word;">{{ land.property_details }}</pre>
+                    {% if land.property_details is string %}
+                        <!-- Display as plain text if it's a string -->
+                        <div class="mb-4">
+                            <strong>Property Details:</strong>
+                            <div class="mt-2 p-3 bg-dark rounded">
+                                <pre class="text-light mb-0" style="white-space: pre-wrap; word-wrap: break-word;">{{ land.property_details }}</pre>
+                            </div>
                         </div>
-                    </div>
+                    {% else %}
+                        <!-- Skip if it's JSON data (AI analysis should go to separate section) -->
+                    {% endif %}
                 {% endif %}
 
                 <!-- AI Analysis Section -->
