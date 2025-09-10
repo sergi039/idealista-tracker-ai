@@ -216,6 +216,82 @@ def analyze_property_structured(land_id):
             "error": str(e)
         }), 500
 
+@api_bp.route('/enhance/description/<int:land_id>', methods=['POST'])
+def enhance_description(land_id):
+    """Enhance property description using AI"""
+    try:
+        land = Land.query.get_or_404(land_id)
+        
+        # Import description service
+        from services.description_service import DescriptionService
+        description_service = DescriptionService()
+        
+        # Prepare property data for context
+        property_data = {
+            'price': float(land.price) if land.price else None,
+            'area': float(land.area) if land.area else None,
+            'municipality': land.municipality,
+            'land_type': land.land_type,
+            'title': land.title
+        }
+        
+        # Enhance the description
+        result = description_service.enhance_description(land.description, property_data)
+        
+        if result.get('processing_status') in ['success', 'fallback']:
+            # Store the enhanced description
+            land.enhanced_description = result
+            db.session.commit()
+            
+            return jsonify({
+                "success": True,
+                "enhanced_description": result.get('enhanced_description'),
+                "original_description": result.get('original_description'),
+                "processing_status": result.get('processing_status'),
+                "key_highlights": result.get('key_highlights', []),
+                "price_info": result.get('price_info', {})
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": result.get('error', 'Enhancement failed'),
+                "original_description": land.description
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Description enhancement failed for land {land_id}: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@api_bp.route('/description/variants/<int:land_id>', methods=['GET'])
+def get_description_variants(land_id):
+    """Get both enhanced and original descriptions for a property"""
+    try:
+        from services.description_service import DescriptionService
+        description_service = DescriptionService()
+        
+        variants = description_service.get_description_variants(land_id)
+        
+        if 'error' in variants:
+            return jsonify({
+                "success": False,
+                "error": variants['error']
+            }), 404
+        
+        return jsonify({
+            "success": True,
+            **variants
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to get description variants for land {land_id}: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 @api_bp.route('/analyze/property/<int:land_id>', methods=['POST'])
 def analyze_property_ai(land_id):
     """Analyze property using Anthropic Claude AI"""
