@@ -109,19 +109,8 @@
                             </div>
                         </div>
                         
-                        <!-- Per Page -->
-                        <div class="col-md-2 mb-3">
-                            <label for="per_page" class="form-label">Per Page</label>
-                            <select class="form-select" id="per_page" name="per_page">
-                                <option value="10" {{ 'selected' if current_filters.per_page == 10 }}>10</option>
-                                <option value="25" {{ 'selected' if current_filters.per_page == 25 }}>25</option>
-                                <option value="50" {{ 'selected' if current_filters.per_page == 50 }}>50</option>
-                                <option value="100" {{ 'selected' if current_filters.per_page == 100 }}>100</option>
-                            </select>
-                        </div>
-                        
                         <!-- Action Buttons -->
-                        <div class="col-md-2 mb-3 d-flex align-items-end">
+                        <div class="col-md-4 mb-3 d-flex align-items-end">
                             <button type="submit" class="btn btn-primary me-2">
                                 <i class="fas fa-search me-1"></i>Apply
                             </button>
@@ -320,14 +309,26 @@
                 {% if pagination and pagination.total > 0 %}
                 <div class="card-footer">
                     <div class="row align-items-center">
-                        <div class="col-md-6">
+                        <div class="col-md-4">
                             <span class="text-muted">
                                 Showing {{ ((pagination.page - 1) * pagination.per_page) + 1 }} - 
                                 {{ (pagination.page * pagination.per_page) if (pagination.page * pagination.per_page) < pagination.total else pagination.total }} 
                                 of {{ pagination.total }} results
                             </span>
                         </div>
-                        <div class="col-md-6 text-end">
+                        <div class="col-md-4 text-center">
+                            <div class="d-inline-flex align-items-center">
+                                <span class="text-muted me-2 small">Show:</span>
+                                <select class="form-select form-select-sm" style="width: auto;" 
+                                        onchange="window.location.href=updateUrlParameter(window.location.href, 'per_page', this.value)">
+                                    <option value="10" {{ 'selected' if current_filters.per_page == 10 }}>10</option>
+                                    <option value="25" {{ 'selected' if current_filters.per_page == 25 }}>25</option>
+                                    <option value="50" {{ 'selected' if current_filters.per_page == 50 }}>50</option>
+                                    <option value="100" {{ 'selected' if current_filters.per_page == 100 }}>100</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-4 text-end">
                             {% if pagination.pages > 1 %}
                             <nav aria-label="Page navigation">
                                 <ul class="pagination pagination-sm mb-0 justify-content-end">
