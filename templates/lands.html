@@ -232,7 +232,11 @@
                                                 {% endif %}
                                             </td>
                                             <td>
-                                                <div class="fw-bold">{{ land.title[:60] }}{% if land.title|length > 60 %}...{% endif %}</div>
+                                                <div class="fw-bold">
+                                                    <a href="{{ url_for('main.land_detail', land_id=land.id) }}" class="text-decoration-none">
+                                                        {{ land.title[:60] }}{% if land.title|length > 60 %}...{% endif %}
+                                                    </a>
+                                                </div>
                                                 {% if land.ai_analysis %}
                                                     <small><i class="fas fa-brain text-info me-1" title="AI Analysis Available"></i>AI Available</small>
                                                 {% endif %}
@@ -400,7 +404,11 @@
                             
                             <!-- Card Body -->
                             <div class="card-body">
-                                <h6 class="card-title">{{ land.title[:80] }}{% if land.title|length > 80 %}...{% endif %}</h6>
+                                <h6 class="card-title">
+                                    <a href="{{ url_for('main.land_detail', land_id=land.id) }}" class="text-decoration-none">
+                                        {{ land.title[:80] }}{% if land.title|length > 80 %}...{% endif %}
+                                    </a>
+                                </h6>
                                 
                                 <!-- Price and Area -->
                                 <div class="row mb-3">
