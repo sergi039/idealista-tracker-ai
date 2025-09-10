@@ -10,6 +10,7 @@ import logging
 from typing import Optional, Dict, Any, List
 import anthropic
 from anthropic import Anthropic
+from sqlalchemy import and_, or_, func
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,157 @@ Format your response in clear sections."""
         except Exception as e:
             logger.error(f"Failed to generate summary: {str(e)}")
             return None
+    
+    def find_similar_properties(self, current_property: Dict[str, Any], limit: int = 3) -> List[Dict[str, Any]]:
+        """
+        Find similar properties based on characteristics
+        
+        Args:
+            current_property: Current property data
+            limit: Maximum number of similar properties to return
+            
+        Returns:
+            List of similar properties
+        """
+        try:
+            # Import here to avoid circular imports
+            from models import Land
+            
+            current_id = current_property.get('id')
+            current_price = current_property.get('price')
+            current_area = current_property.get('area')
+            current_municipality = current_property.get('municipality')
+            current_land_type = current_property.get('land_type')
+            current_beach_time = current_property.get('travel_time_nearest_beach')
+            
+            # Start with base query (exclude current property)
+            query = Land.query.filter(Land.id != current_id)
+            
+            # Build similarity conditions
+            similarity_conditions = []
+            
+            # Same land type (high priority)
+            if current_land_type:
+                similarity_conditions.append(Land.land_type == current_land_type)
+            
+            # Similar price range (±30%)
+            if current_price and current_price > 0:
+                price_min = float(current_price) * 0.7
+                price_max = float(current_price) * 1.3
+                similarity_conditions.append(
+                    and_(Land.price >= price_min, Land.price <= price_max)
+                )
+            
+            # Similar area (±40%)
+            if current_area and current_area > 0:
+                area_min = float(current_area) * 0.6
+                area_max = float(current_area) * 1.4
+                similarity_conditions.append(
+                    and_(Land.area >= area_min, Land.area <= area_max)
+                )
+            
+            # Same municipality (medium priority)
+            if current_municipality:
+                similarity_conditions.append(Land.municipality == current_municipality)
+            
+            # Similar beach access (±20 minutes)
+            if current_beach_time:
+                beach_min = max(1, current_beach_time - 20)
+                beach_max = current_beach_time + 20
+                similarity_conditions.append(
+                    and_(
+                        Land.travel_time_nearest_beach >= beach_min,
+                        Land.travel_time_nearest_beach <= beach_max
+                    )
+                )
+            
+            # Apply conditions with OR (any match gives similarity)
+            if similarity_conditions:
+                query = query.filter(or_(*similarity_conditions))
+            
+            # Order by score (best properties first), then by created date
+            query = query.order_by(
+                Land.score_total.desc().nullslast(),
+                Land.created_at.desc()
+            )
+            
+            # Get similar properties
+            similar_properties = query.limit(limit * 2).all()  # Get more to filter later
+            
+            # Convert to dictionaries with similarity scoring
+            results = []
+            for prop in similar_properties:
+                if len(results) >= limit:
+                    break
+                    
+                similarity_score = self._calculate_similarity_score(current_property, prop)
+                if similarity_score > 0:  # Only include if there's some similarity
+                    prop_dict = {
+                        'id': prop.id,
+                        'title': prop.title,
+                        'price': float(prop.price) if prop.price else None,
+                        'area': float(prop.area) if prop.area else None,
+                        'municipality': prop.municipality,
+                        'land_type': prop.land_type,
+                        'score_total': float(prop.score_total) if prop.score_total else None,
+                        'travel_time_nearest_beach': prop.travel_time_nearest_beach,
+                        'url': prop.url,
+                        'similarity_score': similarity_score
+                    }
+                    results.append(prop_dict)
+            
+            # Sort by similarity score (highest first)
+            results.sort(key=lambda x: x['similarity_score'], reverse=True)
+            
+            return results[:limit]
+            
+        except Exception as e:
+            logger.error(f"Failed to find similar properties: {str(e)}")
+            return []
+    
+    def _calculate_similarity_score(self, current: Dict[str, Any], other) -> float:
+        """Calculate similarity score between two properties"""
+        score = 0.0
+        max_score = 0.0
+        
+        # Land type match (high weight)
+        max_score += 3.0
+        if current.get('land_type') == other.land_type:
+            score += 3.0
+        
+        # Municipality match (medium weight)  
+        max_score += 2.0
+        if current.get('municipality') == other.municipality:
+            score += 2.0
+        
+        # Price similarity (medium weight)
+        max_score += 2.0
+        current_price = current.get('price')
+        other_price = float(other.price) if other.price else None
+        if current_price and other_price and current_price > 0 and other_price > 0:
+            price_ratio = min(current_price, other_price) / max(current_price, other_price)
+            if price_ratio >= 0.7:  # Within 30% difference
+                score += 2.0 * price_ratio
+        
+        # Area similarity (medium weight)
+        max_score += 2.0
+        current_area = current.get('area')
+        other_area = float(other.area) if other.area else None
+        if current_area and other_area and current_area > 0 and other_area > 0:
+            area_ratio = min(current_area, other_area) / max(current_area, other_area)
+            if area_ratio >= 0.6:  # Within 40% difference
+                score += 2.0 * area_ratio
+        
+        # Beach time similarity (low weight)
+        max_score += 1.0
+        current_beach = current.get('travel_time_nearest_beach')
+        other_beach = other.travel_time_nearest_beach
+        if current_beach and other_beach:
+            time_diff = abs(current_beach - other_beach)
+            if time_diff <= 20:  # Within 20 minutes
+                score += 1.0 * (1.0 - time_diff / 20.0)
+        
+        return (score / max_score) if max_score > 0 else 0.0
     
     def analyze_property_structured(self, property_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
