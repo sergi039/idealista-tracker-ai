@@ -31,6 +31,24 @@
     background-color: var(--bs-secondary-bg) !important;
 }
 
+/* Price change styling */
+.price-change {
+    margin-top: 4px;
+    font-size: 0.85em;
+}
+
+.price-change-card {
+    font-size: 0.9em;
+}
+
+.price-reduced .text-success {
+    color: #28a745 !important;
+}
+
+.price-increased .text-danger {
+    color: #dc3545 !important;
+}
+
 /* Filter form styling */
 #filter-form .form-control,
 #filter-form .form-select {

@@ -243,7 +243,30 @@
                                             </td>
                                             <td style="min-width: 120px !important; white-space: nowrap !important;">
                                                 {% if land.price %}
-                                                    <strong>{{ "{:,.0f}".format(land.price) }}€</strong>
+                                                    <div>
+                                                        <strong>{{ "{:,.0f}".format(land.price) }}€</strong>
+                                                        {% if land.previous_price and land.price_change_amount %}
+                                                            {% if land.price_change_amount < 0 %}
+                                                                <div class="price-change price-reduced">
+                                                                    <i class="fas fa-arrow-down me-1"></i>
+                                                                    <small class="text-success fw-bold">
+                                                                        -{{ "{:,.0f}".format(-land.price_change_amount) }}€ 
+                                                                        ({{ "%.1f"|format(-land.price_change_percentage) }}%)
+                                                                    </small>
+                                                                    <br><small class="text-muted">was {{ "{:,.0f}".format(land.previous_price) }}€</small>
+                                                                </div>
+                                                            {% elif land.price_change_amount > 0 %}
+                                                                <div class="price-change price-increased">
+                                                                    <i class="fas fa-arrow-up me-1"></i>
+                                                                    <small class="text-danger fw-bold">
+                                                                        +{{ "{:,.0f}".format(land.price_change_amount) }}€ 
+                                                                        (+{{ "%.1f"|format(land.price_change_percentage) }}%)
+                                                                    </small>
+                                                                    <br><small class="text-muted">was {{ "{:,.0f}".format(land.previous_price) }}€</small>
+                                                                </div>
+                                                            {% endif %}
+                                                        {% endif %}
+                                                    </div>
                                                 {% else %}
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
@@ -391,13 +414,32 @@
                                 <!-- Price and Area -->
                                 <div class="row mb-3">
                                     <div class="col-6">
-                                        <strong class="text-success">
-                                            {% if land.price %}
-                                                €{{ "{:,.0f}".format(land.price) }}
-                                            {% else %}
-                                                <span class="text-muted">Price N/A</span>
-                                            {% endif %}
-                                        </strong>
+                                        {% if land.price %}
+                                            <div>
+                                                <strong class="text-success">€{{ "{:,.0f}".format(land.price) }}</strong>
+                                                {% if land.previous_price and land.price_change_amount %}
+                                                    {% if land.price_change_amount < 0 %}
+                                                        <div class="price-change-card mt-1">
+                                                            <small class="text-success d-flex align-items-center">
+                                                                <i class="fas fa-arrow-down me-1"></i>
+                                                                <span class="fw-bold">-{{ "{:,.0f}".format(-land.price_change_amount) }}€</span>
+                                                            </small>
+                                                            <small class="text-muted">was €{{ "{:,.0f}".format(land.previous_price) }}</small>
+                                                        </div>
+                                                    {% elif land.price_change_amount > 0 %}
+                                                        <div class="price-change-card mt-1">
+                                                            <small class="text-danger d-flex align-items-center">
+                                                                <i class="fas fa-arrow-up me-1"></i>
+                                                                <span class="fw-bold">+{{ "{:,.0f}".format(land.price_change_amount) }}€</span>
+                                                            </small>
+                                                            <small class="text-muted">was €{{ "{:,.0f}".format(land.previous_price) }}</small>
+                                                        </div>
+                                                    {% endif %}
+                                                {% endif %}
+                                            </div>
+                                        {% else %}
+                                            <span class="text-muted">Price N/A</span>
+                                        {% endif %}
                                     </div>
                                     <div class="col-6">
                                         <span class="text-muted">
