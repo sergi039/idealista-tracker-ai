@@ -3,6 +3,7 @@ Anthropic Claude API Service
 Uses claude_key from secrets for authentication
 """
 
+import json
 import os
 import sys
 import logging
@@ -80,7 +81,7 @@ Format your response in clear sections."""
             response_text = ""
             if message.content and len(message.content) > 0:
                 content_block = message.content[0]
-                if hasattr(content_block, 'text'):
+                if hasattr(content_block, 'text') and content_block.text:
                     response_text = content_block.text
             
             return {
@@ -207,12 +208,11 @@ Keep all responses concise and in English. Focus on practical investment insight
             response_text = ""
             if message.content and len(message.content) > 0:
                 content_block = message.content[0]
-                if hasattr(content_block, 'text'):
+                if hasattr(content_block, 'text') and content_block.text:
                     response_text = content_block.text
             
             # Try to parse JSON response
             try:
-                import json
                 analysis_data = json.loads(response_text)
                 return {
                     'structured_analysis': analysis_data,
@@ -228,9 +228,24 @@ Keep all responses concise and in English. Focus on practical investment insight
                 }
             
         except Exception as e:
-            logger.error(f"Failed to analyze property structure with Claude: {str(e)}")
+            error_msg = str(e)
+            logger.error(f"Failed to analyze property structure with Claude: {error_msg}")
+            
+            # Parse specific API errors for better user messages
+            if "529" in error_msg or "overloaded" in error_msg.lower():
+                user_msg = "Claude AI service is temporarily overloaded. Please try again in a few minutes."
+            elif "401" in error_msg or "unauthorized" in error_msg.lower():
+                user_msg = "API authentication failed. Please check your API key configuration."
+            elif "429" in error_msg or "rate limit" in error_msg.lower():
+                user_msg = "Too many requests. Please wait a moment before trying again."
+            elif "timeout" in error_msg.lower():
+                user_msg = "Request timed out. Please try again."
+            else:
+                user_msg = "AI analysis service is temporarily unavailable. Please try again later."
+            
             return {
-                'error': str(e),
+                'error': user_msg,
+                'technical_error': error_msg,
                 'status': 'failed'
             }
     

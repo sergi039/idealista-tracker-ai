@@ -180,11 +180,14 @@ def analyze_property_structured(land_id):
                 "model": result.get('model')
             })
         else:
+            error_msg = result.get('error', 'Analysis failed') if result else 'Analysis service unavailable'
+            status_code = 503 if 'overloaded' in error_msg.lower() or 'temporarily' in error_msg.lower() else 500
+            
             return jsonify({
                 "success": False,
-                "error": result.get('error', 'Analysis failed'),
-                "raw_analysis": result.get('raw_analysis')
-            }), 500
+                "error": error_msg,
+                "raw_analysis": result.get('raw_analysis') if result else None
+            }), status_code
             
     except Exception as e:
         logger.error(f"Structured AI analysis failed for land {land_id}: {str(e)}")
