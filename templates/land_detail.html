@@ -907,37 +907,46 @@ function renderSimilarProperties(similarProperties) {
         const scoreText = prop.score_total ? `${prop.score_total.toFixed(1)}/100` : 'Not scored';
         const scoreClass = prop.score_total ? (prop.score_total >= 70 ? 'text-success' : prop.score_total >= 50 ? 'text-warning' : 'text-danger') : 'text-muted';
         
+        const landTypeClass = prop.land_type === 'developed' ? 'bg-success' : 'bg-warning';
+        
         return `
-            <div class="similar-property-card border rounded p-2 mb-2">
-                <div class="d-flex justify-content-between align-items-start">
+            <div class="similar-property-card border rounded p-3 mb-2" style="background-color: rgba(255,255,255,0.05);">
+                <div class="d-flex justify-content-between align-items-start mb-2">
                     <div class="flex-grow-1">
                         <h6 class="mb-1">
-                            <a href="/land/${prop.id}" class="text-decoration-none text-light" target="_blank">
-                                ${prop.title ? prop.title.substring(0, 60) + (prop.title.length > 60 ? '...' : '') : 'Property #' + prop.id}
+                            <a href="/lands/${prop.id}" class="text-decoration-none text-white">
+                                ${prop.title ? prop.title.substring(0, 50) + (prop.title.length > 50 ? '...' : '') : 'Property #' + prop.id}
                             </a>
                         </h6>
-                        <div class="d-flex flex-wrap gap-3 small text-muted">
-                            <span><i class="fas fa-euro-sign"></i> ${priceText}</span>
-                            <span><i class="fas fa-ruler-combined"></i> ${areaText}</span>
-                            <span><i class="fas fa-map-marker-alt"></i> ${prop.municipality || 'Location N/A'}</span>
+                        <div class="d-flex flex-wrap gap-3 small text-muted mb-2">
+                            <span><i class="fas fa-euro-sign me-1"></i>${priceText}</span>
+                            <span><i class="fas fa-ruler-combined me-1"></i>${areaText}</span>
+                            <span><i class="fas fa-map-marker-alt me-1"></i>${prop.municipality || 'Location N/A'}</span>
                         </div>
                     </div>
                     <div class="text-end">
-                        <span class="badge bg-secondary small">${prop.land_type || 'Unknown'}</span>
+                        <span class="badge ${landTypeClass} small">${(prop.land_type || 'Unknown').charAt(0).toUpperCase() + (prop.land_type || 'unknown').slice(1)}</span>
                         <div class="small ${scoreClass} mt-1">
-                            <i class="fas fa-star"></i> ${scoreText}
+                            <i class="fas fa-star me-1"></i>${scoreText}
                         </div>
                     </div>
+                </div>
+                <div class="d-flex justify-content-between align-items-center">
+                    <div class="d-flex gap-2">
+                        <a href="/lands/${prop.id}" class="btn btn-outline-primary btn-sm">
+                            <i class="fas fa-eye me-1"></i>View Details
+                        </a>
+                        ${prop.url ? `<a href="${prop.url}" target="_blank" class="btn btn-outline-secondary btn-sm">
+                            <i class="fas fa-external-link-alt me-1"></i>Idealista
+                        </a>` : ''}
+                    </div>
+                    <small class="text-muted">Similar property</small>
                 </div>
             </div>
         `;
     }).join('');
     
-    return `
-        <div class="similar-properties-list">
-            ${propertyCards}
-        </div>
-    `;
+    return propertyCards;
 }
 
 function getPriceVerdictClass(verdict) {
