@@ -1130,7 +1130,90 @@ function renderStructuredAIAnalysis(analysis) {
                 </div>
             </div>
         </div>
+        
+        <!-- Rental Market Analysis Section -->
+        ${analysis.rental_market_analysis ? `
+        <div class="border rounded p-3 mt-3">
+            <h6><i class="fas fa-key text-info"></i> Rental Market Analysis</h6>
+            
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <div class="border rounded p-3">
+                        <h6 class="text-warning"><i class="fas fa-coins"></i> Rental Income Estimates</h6>
+                        <div class="row text-center mb-2">
+                            <div class="col-4">
+                                <small class="text-muted d-block">Min Monthly</small>
+                                <strong>€${analysis.rental_market_analysis?.monthly_rent_min?.toLocaleString() || 'N/A'}</strong>
+                            </div>
+                            <div class="col-4">
+                                <div style="background-color: rgba(255,255,255,0.1); border-radius: 5px; padding: 5px;">
+                                    <small class="text-muted d-block">Avg Monthly</small>
+                                    <strong class="text-warning">€${analysis.rental_market_analysis?.monthly_rent_avg?.toLocaleString() || 'N/A'}</strong>
+                                </div>
+                            </div>
+                            <div class="col-4">
+                                <small class="text-muted d-block">Max Monthly</small>
+                                <strong>€${analysis.rental_market_analysis?.monthly_rent_max?.toLocaleString() || 'N/A'}</strong>
+                            </div>
+                        </div>
+                        <p class="mb-1"><strong>Annual Income:</strong> €${analysis.rental_market_analysis?.annual_rent_avg?.toLocaleString() || 'N/A'}/year</p>
+                        <p class="mb-0"><small class="text-muted">Rental Strategy: ${analysis.rental_market_analysis?.rental_strategy || 'Long-term rental'}</small></p>
+                    </div>
+                </div>
+                
+                <div class="col-md-6">
+                    <div class="border rounded p-3">
+                        <h6 class="text-success"><i class="fas fa-chart-pie"></i> Investment Metrics</h6>
+                        <div class="row mb-2">
+                            <div class="col-6">
+                                <small class="text-muted">Rental Yield</small>
+                                <div class="d-flex align-items-center">
+                                    <strong class="${(analysis.rental_market_analysis?.rental_yield > 5) ? 'text-success' : (analysis.rental_market_analysis?.rental_yield > 4) ? 'text-warning' : 'text-danger'}">${analysis.rental_market_analysis?.rental_yield || 'N/A'}%</strong>
+                                    <small class="text-muted ms-2">/year</small>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <small class="text-muted">Cap Rate</small>
+                                <div class="d-flex align-items-center">
+                                    <strong class="${(analysis.rental_market_analysis?.cap_rate > 4) ? 'text-success' : (analysis.rental_market_analysis?.cap_rate > 3) ? 'text-warning' : 'text-danger'}">${analysis.rental_market_analysis?.cap_rate || 'N/A'}%</strong>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-6">
+                                <small class="text-muted">Price/Rent Ratio</small>
+                                <strong>${analysis.rental_market_analysis?.price_to_rent_ratio || 'N/A'}</strong>
+                            </div>
+                            <div class="col-6">
+                                <small class="text-muted">Payback Period</small>
+                                <strong>${analysis.rental_market_analysis?.payback_period_years || 'N/A'} years</strong>
+                            </div>
+                        </div>
+                        <div class="mt-2">
+                            <span class="badge ${getInvestmentRatingClass(analysis.rental_market_analysis?.investment_rating)}">${analysis.rental_market_analysis?.investment_rating || 'Not rated'}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            ${analysis.rental_market_analysis?.demand_factors ? `
+            <div class="border rounded p-2 bg-dark">
+                <strong><i class="fas fa-trending-up text-info"></i> Rental Demand Factors:</strong>
+                ${renderListItems(analysis.rental_market_analysis.demand_factors, '', 'info')}
+            </div>
+            ` : ''}
+        </div>
+        ` : ''}
     `;
+}
+
+// Helper function for investment rating badge color
+function getInvestmentRatingClass(rating) {
+    if (!rating) return 'bg-secondary';
+    if (rating.includes('EXCELLENT')) return 'bg-success';
+    if (rating.includes('GOOD')) return 'bg-primary';
+    if (rating.includes('MODERATE')) return 'bg-warning';
+    return 'bg-danger';
 }
 
 // Initialize structured AI analysis on page load
