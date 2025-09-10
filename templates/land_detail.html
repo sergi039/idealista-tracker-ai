@@ -130,8 +130,8 @@
                         <div class="card-body" id="ai-analysis-content">
                             {% if land.ai_analysis %}
                                 <!-- Display existing AI analysis -->
-                                <div class="analysis-content">
-                                    {{ land.ai_analysis|safe }}
+                                <div class="analysis-content" id="structured-analysis">
+                                    <!-- Content will be populated by JavaScript -->
                                 </div>
                             {% else %}
                                 <!-- Placeholder for new analysis -->
@@ -846,5 +846,118 @@ function analyzeWithClaude(landId) {
         }
     });
 }
+
+// Formatting functions for AI analysis
+function renderListItems(items, label, colorClass) {
+    if (!items || !Array.isArray(items) || items.length === 0) return '';
+    
+    const listItems = items.map(item => 
+        `<li><i class="fas fa-dot-circle text-${colorClass} me-1"></i>${item}</li>`
+    ).join('');
+    
+    return `<div class="mb-2"><strong>${label}</strong><ul class="list-unstyled mb-1">${listItems}</ul></div>`;
+}
+
+function getPriceVerdictClass(verdict) {
+    switch(verdict) {
+        case 'FAIR_PRICE': return 'bg-success';
+        case 'UNDERPRICED': return 'bg-primary';
+        case 'OVERPRICED': return 'bg-danger';
+        default: return 'bg-secondary';
+    }
+}
+
+function getInvestmentRatingClass(rating) {
+    switch(rating) {
+        case 'HIGH': return 'bg-success';
+        case 'MEDIUM': return 'bg-warning';
+        case 'LOW': return 'bg-danger';
+        default: return 'bg-secondary';
+    }
+}
+
+// Render structured AI analysis
+function renderStructuredAIAnalysis(analysis) {
+    return `
+        <div class="row">
+            <div class="col-md-6 mb-3">
+                <div class="border rounded p-3 h-100">
+                    <h6><i class="fas fa-euro-sign text-success"></i> Price Analysis</h6>
+                    <span class="badge ${getPriceVerdictClass(analysis.price_analysis?.verdict)}">
+                        ${analysis.price_analysis?.verdict || 'Unknown'}
+                    </span>
+                    <p class="mb-1 mt-2">${analysis.price_analysis?.summary || 'No analysis available'}</p>
+                    <small class="text-muted">${analysis.price_analysis?.recommendation || ''}</small>
+                </div>
+            </div>
+            
+            <div class="col-md-6 mb-3">
+                <div class="border rounded p-3 h-100">
+                    <h6><i class="fas fa-chart-line text-primary"></i> Investment Potential</h6>
+                    <span class="badge ${getInvestmentRatingClass(analysis.investment_potential?.rating)}">
+                        ${analysis.investment_potential?.rating || 'Unknown'} Growth
+                    </span>
+                    <p class="mb-1 mt-2">${analysis.investment_potential?.forecast || 'No forecast available'}</p>
+                    <small class="text-muted">Risk: ${analysis.investment_potential?.risk_level || 'Unknown'}</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-md-6 mb-3">
+                <div class="border rounded p-3 h-100">
+                    <h6><i class="fas fa-exclamation-triangle text-warning"></i> Risks & Advantages</h6>
+                    ${renderListItems(analysis.risks_analysis?.major_risks, 'Risks:', 'danger')}
+                    ${renderListItems(analysis.risks_analysis?.advantages, 'Advantages:', 'success')}
+                    <small class="text-muted">${analysis.risks_analysis?.mitigation || ''}</small>
+                </div>
+            </div>
+            
+            <div class="col-md-6 mb-3">
+                <div class="border rounded p-3 h-100">
+                    <h6><i class="fas fa-hammer text-info"></i> Development Ideas</h6>
+                    <p class="mb-1"><strong>${analysis.development_ideas?.best_use || 'No recommendations'}</strong></p>
+                    <p class="mb-1">${analysis.development_ideas?.building_size || ''}</p>
+                    <small class="text-muted">${analysis.development_ideas?.estimated_cost || ''}</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="border rounded p-3">
+            <h6><i class="fas fa-balance-scale text-secondary"></i> Market Comparison</h6>
+            <p class="mb-1">${analysis.comparable_analysis?.market_position || 'No comparison data'}</p>
+            ${renderListItems(analysis.comparable_analysis?.advantages_vs_similar, 'Better than similar:', 'success')}
+            ${renderListItems(analysis.comparable_analysis?.disadvantages_vs_similar, 'Worse than similar:', 'danger')}
+        </div>
+    `;
+}
+
+// Initialize structured AI analysis on page load
+document.addEventListener('DOMContentLoaded', function() {
+    const structuredAnalysis = document.getElementById('structured-analysis');
+    
+    {% if land.ai_analysis %}
+        try {
+            // Try to parse AI analysis as JSON
+            const analysisData = {{ land.ai_analysis|tojson|safe }};
+            
+            if (typeof analysisData === 'string') {
+                // If it's a string, try to parse it as JSON
+                const parsedAnalysis = JSON.parse(analysisData);
+                structuredAnalysis.innerHTML = renderStructuredAIAnalysis(parsedAnalysis);
+            } else if (typeof analysisData === 'object' && analysisData !== null) {
+                // If it's already an object, use it directly
+                structuredAnalysis.innerHTML = renderStructuredAIAnalysis(analysisData);
+            } else {
+                // Fallback to displaying raw content
+                structuredAnalysis.innerHTML = `<pre class="text-light">${JSON.stringify(analysisData, null, 2)}</pre>`;
+            }
+        } catch (e) {
+            // If parsing fails, display raw content
+            const rawData = {{ land.ai_analysis|tojson|safe }};
+            structuredAnalysis.innerHTML = `<pre class="text-light bg-dark p-3 rounded">${rawData}</pre>`;
+        }
+    {% endif %}
+});
 </script>
 {% endblock %}
