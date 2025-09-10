@@ -137,7 +137,8 @@ def criteria():
             for criteria_name, weight in Config.DEFAULT_SCORING_WEIGHTS.items():
                 criterion = ScoringCriteria(
                     criteria_name=criteria_name,
-                    weight=weight
+                    weight=weight,
+                    active=True
                 )
                 db.session.add(criterion)
             db.session.commit()
