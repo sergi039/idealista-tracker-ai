@@ -341,30 +341,18 @@
                                                         </a>
                                                     {% endif %}
                                                     {% if land.ai_analysis %}
-                                                        <button onclick="toggleAIAnalysisInTable({{ land.id }})" 
+                                                        <button onclick="viewAIAnalysis({{ land.id }})" 
                                                                 class="btn btn-info btn-sm ai-analyze-btn"
-                                                                data-land-id="{{ land.id }}" title="View AI Analysis">
+                                                                data-land-id="{{ land.id }}" title="View AI Analysis - Click to go to details">
                                                             <i class="fas fa-brain text-white"></i>
                                                         </button>
                                                     {% else %}
-                                                        <button onclick="toggleAIAnalysisInTable({{ land.id }})" 
+                                                        <button onclick="generateAIAnalysisOnly({{ land.id }})" 
                                                                 class="btn btn-outline-secondary btn-sm ai-analyze-btn"
                                                                 data-land-id="{{ land.id }}" title="Generate AI Analysis">
                                                             <i class="fas fa-brain"></i>
                                                         </button>
                                                     {% endif %}
-                                                </div>
-                                            </td>
-                                        </tr>
-                                        <!-- AI Analysis Row (Hidden by default) -->
-                                        <tr id="ai-row-{{ land.id }}" class="ai-analysis-row" style="display: none;">
-                                            <td colspan="10" class="p-0">
-                                                <div class="card border-0 bg-light">
-                                                    <div class="card-body">
-                                                        <div id="ai-content-table-{{ land.id }}" class="ai-content">
-                                                            <!-- AI analysis content will be loaded here -->
-                                                        </div>
-                                                    </div>
                                                 </div>
                                             </td>
                                         </tr>
