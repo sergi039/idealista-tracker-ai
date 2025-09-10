@@ -499,15 +499,19 @@
                                     {% endif %}
                                 </div>
                                 <div>
-                                    <button onclick="toggleAIAnalysis({{ land.id }})" 
-                                            class="btn btn-outline-primary btn-sm ai-analyze-btn"
-                                            data-land-id="{{ land.id }}">
-                                        {% if land.ai_analysis %}
-                                            <i class="fas fa-eye"></i> View AI Analysis
-                                        {% else %}
+                                    {% if land.ai_analysis %}
+                                        <button onclick="viewAIAnalysis({{ land.id }})" 
+                                                class="btn btn-info btn-sm ai-analyze-btn"
+                                                data-land-id="{{ land.id }}" title="View AI Analysis - Click to go to details">
+                                            <i class="fas fa-brain text-white"></i> AI Analysis
+                                        </button>
+                                    {% else %}
+                                        <button onclick="generateAIAnalysisOnly({{ land.id }})" 
+                                                class="btn btn-outline-secondary btn-sm ai-analyze-btn"
+                                                data-land-id="{{ land.id }}" title="Generate AI Analysis">
                                             <i class="fas fa-brain"></i> AI Analysis
-                                        {% endif %}
-                                    </button>
+                                        </button>
+                                    {% endif %}
                                 </div>
                             </div>
                         </div>
@@ -656,31 +660,11 @@ document.addEventListener('htmx:afterRequest', function(evt) {
 });
 
 // AI Analysis Management
+// Legacy function - no longer used in new UI 
+// Cards view now uses generateAIAnalysisOnly() and viewAIAnalysis() like table view
 async function toggleAIAnalysis(landId) {
-    const analysisSection = document.getElementById(`ai-analysis-${landId}`);
-    const button = document.querySelector(`[data-land-id="${landId}"]`);
-    const content = document.getElementById(`ai-content-${landId}`);
-    
-    if (analysisSection.style.display === 'none') {
-        // Show analysis section
-        analysisSection.style.display = 'block';
-        button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
-        button.disabled = true;
-        
-        // Load AI analysis if not already loaded
-        if (!content.innerHTML.trim()) {
-            await loadAIAnalysis(landId);
-        }
-        
-        button.innerHTML = '<i class="fas fa-eye-slash"></i> Hide Analysis';
-        button.disabled = false;
-    } else {
-        // Hide analysis section
-        analysisSection.style.display = 'none';
-        button.innerHTML = button.innerHTML.includes('View AI Analysis') ? 
-            '<i class="fas fa-eye"></i> View AI Analysis' : 
-            '<i class="fas fa-brain"></i> AI Analysis';
-    }
+    // For backwards compatibility only - redirect to detail page
+    window.location.href = `/lands/${landId}`;
 }
 
 async function loadAIAnalysis(landId) {
