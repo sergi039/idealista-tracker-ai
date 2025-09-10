@@ -138,7 +138,7 @@
             </div>
         </div>
 
-        <!-- Properties Cards -->
+        <!-- Properties Display -->
         {% if lands %}
             <div class="mb-3 d-flex justify-content-between align-items-center">
                 <div>
@@ -154,8 +154,220 @@
                 </div>
             </div>
             
-            <!-- Properties Grid -->
-            <div class="row" id="properties-grid">
+            <!-- List View (Table) -->
+            {% if current_filters.view_type == 'list' %}
+                <div class="card">
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-hover mb-0">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th>
+                                            <a href="{{ url_for('main.lands', sort='score_total', order='desc' if current_filters.sort_by == 'score_total' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
+                                               class="text-white text-decoration-none d-flex align-items-center">
+                                                Score
+                                                {% if current_filters.sort_by == 'score_total' %}
+                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
+                                                {% else %}
+                                                    <i class="fas fa-sort ms-1 opacity-50"></i>
+                                                {% endif %}
+                                            </a>
+                                        </th>
+                                        <th>Title</th>
+                                        <th style="min-width: 120px !important; white-space: nowrap !important;">
+                                            <a href="{{ url_for('main.lands', sort='price', order='desc' if current_filters.sort_by == 'price' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
+                                               class="text-white text-decoration-none d-flex align-items-center">
+                                                Price
+                                                {% if current_filters.sort_by == 'price' %}
+                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
+                                                {% else %}
+                                                    <i class="fas fa-sort ms-1 opacity-50"></i>
+                                                {% endif %}
+                                            </a>
+                                        </th>
+                                        <th style="min-width: 100px !important; white-space: nowrap !important;">
+                                            <a href="{{ url_for('main.lands', sort='area', order='desc' if current_filters.sort_by == 'area' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
+                                               class="text-white text-decoration-none d-flex align-items-center">
+                                                Area
+                                                {% if current_filters.sort_by == 'area' %}
+                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
+                                                {% else %}
+                                                    <i class="fas fa-sort ms-1 opacity-50"></i>
+                                                {% endif %}
+                                            </a>
+                                        </th>
+                                        <th>Coordinates</th>
+                                        <th style="min-width: 110px !important; white-space: nowrap !important;">
+                                            <a href="{{ url_for('main.lands', sort='travel_time_nearest_beach', order='asc' if current_filters.sort_by == 'travel_time_nearest_beach' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
+                                               class="text-white text-decoration-none d-flex align-items-center">
+                                                Beach Distance
+                                                {% if current_filters.sort_by == 'travel_time_nearest_beach' %}
+                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
+                                                {% else %}
+                                                    <i class="fas fa-sort ms-1 opacity-50"></i>
+                                                {% endif %}
+                                            </a>
+                                        </th>
+                                        <th>Travel Times</th>
+                                        <th>Type</th>
+                                        <th style="min-width: 120px !important; white-space: nowrap !important;">Added</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for land in lands %}
+                                        <tr class="land-row" data-land-id="{{ land.id }}">
+                                            <td>
+                                                {% if land.score_total %}
+                                                    <span class="badge score-badge" 
+                                                          style="background-color: {{ 'var(--bs-success)' if land.score_total >= 70 else 'var(--bs-warning)' if land.score_total >= 50 else 'var(--bs-danger)' }}">
+                                                        {{ "%.1f"|format(land.score_total) }}
+                                                    </span>
+                                                {% else %}
+                                                    <span class="text-muted">-</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                <div class="fw-bold">{{ land.title[:60] }}{% if land.title|length > 60 %}...{% endif %}</div>
+                                                {% if land.ai_analysis %}
+                                                    <small><i class="fas fa-brain text-info me-1" title="AI Analysis Available"></i>AI Available</small>
+                                                {% endif %}
+                                            </td>
+                                            <td style="min-width: 120px !important; white-space: nowrap !important;">
+                                                {% if land.price %}
+                                                    <strong>{{ "{:,.0f}".format(land.price) }}€</strong>
+                                                {% else %}
+                                                    <span class="text-muted">-</span>
+                                                {% endif %}
+                                            </td>
+                                            <td style="min-width: 100px !important; white-space: nowrap !important;">
+                                                {% if land.area %}
+                                                    {{ "{:,.0f}".format(land.area) }} m²
+                                                {% else %}
+                                                    <span class="text-muted">-</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                {% if land.location_lat and land.location_lon %}
+                                                    <a href="https://www.google.com/maps/search/?api=1&query={{ land.location_lat }},{{ land.location_lon }}" 
+                                                       target="_blank" class="text-decoration-none" 
+                                                       title="{% if land.location_accuracy == 'precise' %}Precise location{% elif land.location_accuracy == 'approximate' %}Approximate location{% else %}Unknown accuracy{% endif %}">
+                                                        {% if land.location_accuracy == 'precise' %}
+                                                            <i class="fas fa-map-marker-alt me-1 text-success" title="Precise location"></i>
+                                                        {% elif land.location_accuracy == 'approximate' %}
+                                                            <i class="fas fa-map-marker-alt me-1 text-danger" title="Approximate location"></i>
+                                                        {% else %}
+                                                            <i class="fas fa-question-circle me-1 text-secondary" title="Unknown accuracy"></i>
+                                                        {% endif %}
+                                                        <small>{{ "%.4f"|format(land.location_lat) }}, {{ "%.4f"|format(land.location_lon) }}</small>
+                                                    </a>
+                                                {% else %}
+                                                    <span class="text-muted" title="Coordinates unavailable">
+                                                        <i class="fas fa-map-marker-slash me-1"></i>
+                                                        {% if land.municipality %}
+                                                            <small>{{ land.municipality }}</small>
+                                                        {% else %}
+                                                            -
+                                                        {% endif %}
+                                                    </span>
+                                                {% endif %}
+                                            </td>
+                                            <td style="min-width: 110px !important; white-space: nowrap !important;">
+                                                {% if land.travel_time_nearest_beach %}
+                                                    <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/{{ land.nearest_beach_name if land.nearest_beach_name else 'Playa' }},+Asturias,+Spain" 
+                                                       target="_blank" class="text-decoration-none text-info d-flex align-items-center" 
+                                                       title="Drive to {{ land.nearest_beach_name if land.nearest_beach_name else 'nearest beach' }}">
+                                                        <i class="fas fa-umbrella-beach me-1"></i>
+                                                        <span class="fw-bold">{{ land.travel_time_nearest_beach }}min</span>
+                                                    </a>
+                                                    {% if land.nearest_beach_name %}
+                                                        <small class="text-muted d-block">{{ land.nearest_beach_name[:15] }}{% if land.nearest_beach_name|length > 15 %}...{% endif %}</small>
+                                                    {% endif %}
+                                                {% else %}
+                                                    <span class="text-muted">-</span>
+                                                {% endif %}
+                                            </td>
+                                            <td style="min-width: 140px !important; white-space: nowrap !important;">
+                                                {% if land.travel_time_oviedo or land.travel_time_gijon %}
+                                                    <div class="d-flex flex-wrap align-items-center gap-1 small">
+                                                        {% if land.travel_time_oviedo %}
+                                                            <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Oviedo,+Asturias,+Spain" 
+                                                               target="_blank" class="text-decoration-none d-inline-flex align-items-center me-2" title="Drive to Oviedo">
+                                                                <i class="fas fa-car me-1 text-primary"></i>
+                                                                <span class="fw-bold">{{ land.travel_time_oviedo }}min</span>
+                                                                <small class="text-muted ms-1">OV</small>
+                                                            </a>
+                                                        {% endif %}
+                                                        {% if land.travel_time_gijon %}
+                                                            <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Gijón,+Asturias,+Spain" 
+                                                               target="_blank" class="text-decoration-none d-inline-flex align-items-center" title="Drive to Gijón">
+                                                                <i class="fas fa-car me-1 text-primary"></i>
+                                                                <span class="fw-bold">{{ land.travel_time_gijon }}min</span>
+                                                                <small class="text-muted ms-1">GJ</small>
+                                                            </a>
+                                                        {% endif %}
+                                                    </div>
+                                                {% else %}
+                                                    <span class="text-muted">-</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                {% if land.land_type %}
+                                                    <span class="badge {{ 'bg-success' if land.land_type == 'developed' else 'bg-warning' }}">
+                                                        {{ land.land_type.title() }}
+                                                    </span>
+                                                {% else %}
+                                                    <span class="text-muted">-</span>
+                                                {% endif %}
+                                            </td>
+                                            <td style="min-width: 120px !important; white-space: nowrap !important;">
+                                                {% if land.created_at %}
+                                                    <small style="white-space: nowrap !important; display: inline-block;">{{ land.created_at.strftime('%d %b %y') }}</small>
+                                                {% else %}
+                                                    <span class="text-muted">-</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                <div class="d-flex gap-1">
+                                                    {% if land.url %}
+                                                        <a href="{{ land.url }}" target="_blank" 
+                                                           class="btn btn-success btn-sm" title="View on Idealista">
+                                                            <i class="fas fa-home"></i>
+                                                        </a>
+                                                    {% endif %}
+                                                    <button onclick="toggleAIAnalysisInTable({{ land.id }})" 
+                                                            class="btn btn-outline-primary btn-sm ai-analyze-btn"
+                                                            data-land-id="{{ land.id }}" title="AI Analysis">
+                                                        {% if land.ai_analysis %}
+                                                            <i class="fas fa-eye"></i>
+                                                        {% else %}
+                                                            <i class="fas fa-brain"></i>
+                                                        {% endif %}
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                        <!-- AI Analysis Row (Hidden by default) -->
+                                        <tr id="ai-row-{{ land.id }}" class="ai-analysis-row" style="display: none;">
+                                            <td colspan="10" class="p-0">
+                                                <div class="card border-0 bg-light">
+                                                    <div class="card-body">
+                                                        <div id="ai-content-table-{{ land.id }}" class="ai-content">
+                                                            <!-- AI analysis content will be loaded here -->
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            {% else %}
+                <!-- Properties Grid (Cards View) -->
+                <div class="row" id="properties-grid">
                 {% for land in lands %}
                     <div class="col-lg-6 col-xl-4 mb-4">
                         <div class="card h-100 property-card" data-land-id="{{ land.id }}">
@@ -302,6 +514,7 @@
                     </div>
                 {% endfor %}
             </div>
+            {% endif %}
                 
                 <!-- Pagination -->
                 {% if pagination and pagination.total > 0 %}
