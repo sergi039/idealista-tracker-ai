@@ -546,7 +546,7 @@
                                     <!-- Previous page -->
                                     {% if pagination.has_prev %}
                                         <li class="page-item">
-                                            <a class="page-link" href="{{ url_for('main.lands', page=pagination.prev_num, per_page=current_filters.per_page, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}">
+                                            <a class="page-link" href="{{ url_for('main.lands', page=pagination.prev_num, per_page=current_filters.per_page, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}">
                                                 <i class="fas fa-chevron-left"></i>
                                             </a>
                                         </li>
@@ -557,7 +557,7 @@
                                         {% if page_num %}
                                             {% if page_num != pagination.page %}
                                                 <li class="page-item">
-                                                    <a class="page-link" href="{{ url_for('main.lands', page=page_num, per_page=current_filters.per_page, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}">
+                                                    <a class="page-link" href="{{ url_for('main.lands', page=page_num, per_page=current_filters.per_page, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}">
                                                         {{ page_num }}
                                                     </a>
                                                 </li>
@@ -576,7 +576,7 @@
                                     <!-- Next page -->
                                     {% if pagination.has_next %}
                                         <li class="page-item">
-                                            <a class="page-link" href="{{ url_for('main.lands', page=pagination.next_num, per_page=current_filters.per_page, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}">
+                                            <a class="page-link" href="{{ url_for('main.lands', page=pagination.next_num, per_page=current_filters.per_page, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}">
                                                 <i class="fas fa-chevron-right"></i>
                                             </a>
                                         </li>
