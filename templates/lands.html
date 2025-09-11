@@ -242,7 +242,7 @@
                                         <th>
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_total', order='desc' if current_filters.sort_by == 'score_total' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
                                                class="text-white text-decoration-none d-flex align-items-center">
-                                                <i class="fas fa-balance-scale me-1"></i>Combined Score
+                                                Score
                                                 {% if current_filters.sort_by == 'score_total' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
                                                 {% else %}
