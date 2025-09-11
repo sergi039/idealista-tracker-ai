@@ -2,6 +2,7 @@ import logging
 from decimal import Decimal
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
 from sqlalchemy import or_, and_
+from sqlalchemy.orm import defer
 from models import Land, ScoringCriteria
 from app import db
 
@@ -43,8 +44,19 @@ def lands():
         # Limit per_page to reasonable values
         per_page = min(max(per_page, 10), 100)
         
-        # Build query
-        query = Land.query
+        # Build query - defer heavy JSONB columns for listing view performance
+        query = Land.query.options(
+            defer(Land.infrastructure_basic),
+            defer(Land.infrastructure_extended),
+            defer(Land.transport),
+            defer(Land.environment),
+            defer(Land.neighborhood),
+            defer(Land.services_quality),
+            defer(Land.ai_analysis),
+            defer(Land.enhanced_description),
+            defer(Land.property_details),
+            defer(Land.description)
+        )
         
         # Apply filters
         if land_type_filter:
@@ -406,8 +418,17 @@ def export_csv():
         search_query = request.args.get('search', '')
         sea_view_filter = request.args.get('sea_view', '') == 'on'
         
-        # Build query with same filters
-        query = Land.query
+        # Build query with same filters - defer heavy columns for export performance
+        query = Land.query.options(
+            defer(Land.infrastructure_basic),
+            defer(Land.infrastructure_extended),
+            defer(Land.transport),
+            defer(Land.environment),
+            defer(Land.neighborhood),
+            defer(Land.services_quality),
+            defer(Land.ai_analysis),
+            defer(Land.enhanced_description)
+        )
         
         if land_type_filter:
             query = query.filter(Land.land_type == land_type_filter)
