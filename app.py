@@ -44,15 +44,22 @@ def create_app():
         # Import and register routes
         from routes.main_routes import main_bp
         from routes.api_routes import api_bp
+        from routes.language_routes import language_bp
         
         app.register_blueprint(main_bp)
         app.register_blueprint(api_bp, url_prefix='/api')
+        app.register_blueprint(language_bp, url_prefix='/api')
         
         # Create all tables
         db.create_all()
         
         # Initialize scheduler
         from services.scheduler_service import init_scheduler
+        
+        # Add localization functions to template context
+        from utils.i18n import t, get_current_language
+        app.jinja_env.globals['t'] = t
+        app.jinja_env.globals['get_current_language'] = get_current_language
         init_scheduler(app)
         
         logger.info("Application initialized successfully")

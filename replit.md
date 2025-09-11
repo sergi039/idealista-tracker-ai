@@ -11,10 +11,11 @@ The application serves as a real estate investment analysis tool, helping users 
 Preferred communication style: Simple, everyday language.
 
 ### Interface Language Policy
-- **All user interfaces must be in English only**
-- Source content (property titles, descriptions from Idealista emails) remains in original Spanish
-- System messages, forms, buttons, labels, confirmations - all in English
-- No Russian, Spanish (except source content), or other languages in UI elements
+- **Bilingual interface support**: English and Spanish language options
+- **Language switcher**: Globe icon next to Manual Sync button for easy language switching
+- **Session-based language storage**: User's language preference persists during session
+- **Source content preservation**: Property titles and descriptions from Idealista emails remain in original Spanish
+- **Localized UI elements**: All buttons, labels, forms, and system messages support both languages
 
 ### Scoring Methodology
 - **MCDM (Multi-Criteria Decision Making) methodology implemented**

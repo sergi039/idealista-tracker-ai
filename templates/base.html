@@ -16,6 +16,29 @@
     
     <!-- Custom CSS -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    
+    <script>
+        function setLanguage(langCode) {
+            fetch('/api/set-language', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ language: langCode })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload();
+                } else {
+                    console.error('Failed to set language:', data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error setting language:', error);
+            });
+        }
+    </script>
 </head>
 <body>
     <!-- Navigation -->
@@ -23,7 +46,7 @@
         <div class="container">
             <a class="navbar-brand" href="{{ url_for('main.index') }}">
                 <i class="fas fa-map-marked-alt me-2"></i>
-                Idealista Land Watch & Rank
+                {{ t('app_title') }}
             </a>
             
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
@@ -34,12 +57,12 @@
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.lands') }}">
-                            <i class="fas fa-list me-1"></i>Properties
+                            <i class="fas fa-list me-1"></i>{{ t('properties') }}
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.criteria') }}">
-                            <i class="fas fa-sliders-h me-1"></i>Scoring Criteria
+                            <i class="fas fa-sliders-h me-1"></i>{{ t('scoring_criteria') }}
                         </a>
                     </li>
                 </ul>
@@ -51,8 +74,31 @@
                                 hx-trigger="click"
                                 hx-indicator="#ingestion-spinner">
                             <i class="fas fa-sync-alt me-1"></i>
-                            Manual Sync
+                            {{ t('manual_sync') }}
                         </button>
+                    </li>
+                    <li class="nav-item">
+                        <div class="dropdown">
+                            <button class="btn btn-outline-secondary btn-sm dropdown-toggle" 
+                                    type="button" 
+                                    id="languageDropdown" 
+                                    data-bs-toggle="dropdown">
+                                <i class="fas fa-globe me-1"></i>
+                                <span id="current-lang">{{ 'EN' if get_current_language() == 'en' else 'ES' }}</span>
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li>
+                                    <a class="dropdown-item" href="#" onclick="setLanguage('en')">
+                                        <i class="flag-icon flag-icon-gb me-2"></i>English
+                                    </a>
+                                </li>
+                                <li>
+                                    <a class="dropdown-item" href="#" onclick="setLanguage('es')">
+                                        <i class="flag-icon flag-icon-es me-2"></i>Español
+                                    </a>
+                                </li>
+                            </ul>
+                        </div>
                     </li>
                 </ul>
             </div>
@@ -64,7 +110,7 @@
         <div class="container mt-3">
             <div class="alert alert-info">
                 <i class="fas fa-spinner fa-spin me-2"></i>
-                Running Gmail ingestion...
+                {{ t('running_gmail_ingestion') }}
             </div>
         </div>
     </div>
