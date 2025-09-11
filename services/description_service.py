@@ -178,7 +178,7 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
                     # Legacy single language format - keep for compatibility
                     enhanced_data['enhanced'] = enhanced_data['enhanced_description']
                     enhanced_data['enhanced_en'] = enhanced_data['enhanced_description']
-                    enhanced_data['enhanced_es'] = raw_description  # Fallback to original
+                    enhanced_data['enhanced_es'] = enhanced_data['enhanced_description']  # SAME content for both languages
                 
                 return enhanced_data
                 
@@ -189,7 +189,7 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
                     'enhanced_description': fallback_desc,
                     'enhanced': fallback_desc,
                     'enhanced_en': fallback_desc,
-                    'enhanced_es': raw_description,
+                    'enhanced_es': fallback_desc,  # SAME content for both languages
                     'original_description': raw_description,
                     'processing_status': 'fallback',
                     'error': 'AI response parsing failed'
@@ -201,7 +201,7 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
                     'enhanced_description': fallback_desc,
                     'enhanced': fallback_desc,
                     'enhanced_en': fallback_desc,
-                    'enhanced_es': raw_description,
+                    'enhanced_es': fallback_desc,  # SAME content for both languages
                     'original_description': raw_description,
                     'processing_status': 'fallback',
                     'error': str(e)
@@ -267,7 +267,7 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
                     return {
                         'enhanced': enhanced_data.get('enhanced_en', enhanced_data.get('enhanced_description', land.description)),
                         'enhanced_en': enhanced_data.get('enhanced_en', enhanced_data.get('enhanced_description', land.description)),
-                        'enhanced_es': enhanced_data.get('enhanced_es', enhanced_data.get('original_description', land.description)),
+                        'enhanced_es': enhanced_data.get('enhanced_es', enhanced_data.get('enhanced_en', enhanced_data.get('enhanced_description', land.description))),  # SAME as English if Spanish missing
                         'original': enhanced_data.get('original_description', land.description),
                         'status': enhanced_data.get('processing_status', 'processed'),
                         'key_highlights': enhanced_data.get('key_highlights', []),
