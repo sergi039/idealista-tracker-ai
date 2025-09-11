@@ -148,11 +148,10 @@ def criteria():
         if not criteria:
             from config import Config
             for criteria_name, weight in Config.DEFAULT_SCORING_WEIGHTS.items():
-                criterion = ScoringCriteria(
-                    criteria_name=criteria_name,
-                    weight=weight,
-                    active=True
-                )
+                criterion = ScoringCriteria()
+                criterion.criteria_name = criteria_name
+                criterion.weight = weight
+                criterion.active = True
                 db.session.add(criterion)
             db.session.commit()
             criteria = ScoringCriteria.query.filter_by(active=True).all()
