@@ -26,8 +26,7 @@
                         role="tab" 
                         aria-controls="investment" 
                         aria-selected="true">
-                    <i class="fas fa-chart-line me-2" style="color: #b8860b;"></i>
-                    <span style="color: #b8860b; font-weight: bold;">Investment Profile</span>
+                    <i class="fas fa-chart-line me-2 text-warning"></i>Investment
                 </button>
             </li>
             <li class="nav-item" role="presentation">
@@ -39,8 +38,7 @@
                         role="tab" 
                         aria-controls="lifestyle" 
                         aria-selected="false">
-                    <i class="fas fa-home me-2" style="color: #198754;"></i>
-                    <span style="color: #198754; font-weight: bold;">Lifestyle Profile</span>
+                    <i class="fas fa-home me-2 text-success"></i>Lifestyle
                 </button>
             </li>
             <li class="nav-item" role="presentation">
@@ -52,7 +50,7 @@
                         role="tab" 
                         aria-controls="combined" 
                         aria-selected="false">
-                    <i class="fas fa-balance-scale me-2"></i>Combined Mix
+                    <i class="fas fa-balance-scale me-2"></i>Combined
                 </button>
             </li>
         </ul>
@@ -61,12 +59,11 @@
         <div class="tab-content" id="profileTabsContent">
             <!-- Investment Profile Tab -->
             <div class="tab-pane fade show active" id="investment" role="tabpanel" aria-labelledby="investment-tab">
-                <div class="card" style="border-color: #b8860b;">
-                    <div class="card-header" style="background-color: #fff8dc; border-color: #b8860b;">
-                        <h5 class="card-title mb-0" style="color: #b8860b;">
-                            <i class="fas fa-chart-line me-2"></i>Investment Profile - Focus on Rental Yield & ROI
+                <div class="card border-warning">
+                    <div class="card-header bg-warning bg-opacity-10">
+                        <h5 class="card-title mb-0 text-warning">
+                            <i class="fas fa-chart-line me-2"></i>Investment Profile
                         </h5>
-                        <p class="text-muted mb-0">Weights optimized for investment returns, rental demand, and property value appreciation</p>
                     </div>
                     <div class="card-body">
                         <form method="POST" action="{{ url_for('main.update_criteria_profile', profile='investment') }}" id="investment-form">
@@ -151,12 +148,11 @@
 
             <!-- Lifestyle Profile Tab -->
             <div class="tab-pane fade" id="lifestyle" role="tabpanel" aria-labelledby="lifestyle-tab">
-                <div class="card" style="border-color: #198754;">
-                    <div class="card-header" style="background-color: #d1e7dd; border-color: #198754;">
-                        <h5 class="card-title mb-0" style="color: #198754;">
-                            <i class="fas fa-home me-2"></i>Lifestyle Profile - Focus on Quality of Life
+                <div class="card border-success">
+                    <div class="card-header bg-success bg-opacity-10">
+                        <h5 class="card-title mb-0 text-success">
+                            <i class="fas fa-home me-2"></i>Lifestyle Profile
                         </h5>
-                        <p class="text-muted mb-0">Weights optimized for daily living, environment, amenities, and family-friendly features</p>
                     </div>
                     <div class="card-body">
                         <form method="POST" action="{{ url_for('main.update_criteria_profile', profile='lifestyle') }}" id="lifestyle-form">
@@ -244,17 +240,16 @@
                 <div class="card">
                     <div class="card-header">
                         <h5 class="card-title mb-0">
-                            <i class="fas fa-balance-scale me-2"></i>Combined Score Mix - Investment vs Lifestyle Balance
+                            <i class="fas fa-balance-scale me-2"></i>Combined Mix
                         </h5>
-                        <p class="text-muted mb-0">Configure the balance between Investment focus and Lifestyle focus for the overall property score</p>
                     </div>
                     <div class="card-body">
                         <form method="POST" action="{{ url_for('main.update_combined_mix') }}" id="combined-form">
                             <div class="row mb-4">
                                 <div class="col-md-6">
                                     <label class="form-label fw-bold">
-                                        <i class="fas fa-chart-line me-2" style="color: #b8860b;"></i>
-                                        Investment Weight
+                                        <i class="fas fa-chart-line me-2 text-warning"></i>
+                                        Investment
                                     </label>
                                     <div class="d-flex align-items-center">
                                         <input type="range" 
@@ -280,8 +275,8 @@
                                 </div>
                                 <div class="col-md-6">
                                     <label class="form-label fw-bold">
-                                        <i class="fas fa-home me-2" style="color: #198754;"></i>
-                                        Lifestyle Weight
+                                        <i class="fas fa-home me-2 text-success"></i>
+                                        Lifestyle
                                     </label>
                                     <div class="d-flex align-items-center">
                                         <input type="range" 
