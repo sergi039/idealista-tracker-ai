@@ -5,6 +5,7 @@ from sqlalchemy import or_, and_
 from sqlalchemy.orm import defer
 from models import Land, ScoringCriteria
 from app import db
+from utils.auth import admin_required
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +209,7 @@ def criteria():
                              criteria_descriptions={})
 
 @main_bp.route('/criteria/update', methods=['POST'])
+@admin_required
 def update_criteria():
     """Update scoring criteria weights"""
     try:
@@ -239,6 +241,7 @@ def update_criteria():
         return redirect(url_for('main.criteria'))
 
 @main_bp.route('/criteria/update_profile/<profile>', methods=['POST'])
+@admin_required
 def update_criteria_profile(profile):
     """Update scoring criteria weights for a specific profile (investment/lifestyle)"""
     try:
@@ -275,7 +278,8 @@ def update_criteria_profile(profile):
         
     return redirect(url_for('main.criteria'))
 
-@main_bp.route('/criteria/update_combined_mix', methods=['POST'])  
+@main_bp.route('/criteria/update_combined_mix', methods=['POST'])
+@admin_required
 def update_combined_mix():
     """Update the Investment vs Lifestyle balance for combined scoring"""
     try:

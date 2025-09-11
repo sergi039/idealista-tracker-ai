@@ -17,10 +17,14 @@ def check_admin_auth():
     # Get admin token from environment
     admin_token = os.environ.get('ADMIN_API_TOKEN')
     
-    # If no admin token is configured, log warning and allow access (for backward compatibility)
+    # FAIL-CLOSED: If no admin token is configured, deny access for security
     if not admin_token:
-        logger.warning("ADMIN_API_TOKEN not configured - admin endpoints are unprotected!")
-        return True
+        # Allow bypass only in explicit development mode
+        if os.environ.get('DEV_MODE') == 'true':
+            logger.warning("ADMIN_API_TOKEN not configured - allowing access in DEV_MODE")
+            return True
+        logger.error("ADMIN_API_TOKEN not configured - denying access for security")
+        return False
     
     # Check Authorization header
     auth_header = request.headers.get('Authorization')

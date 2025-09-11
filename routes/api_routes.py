@@ -79,6 +79,7 @@ def bulk_enrichment():
         }), 500
 
 @api_bp.route('/land/<int:land_id>/enrich', methods=['POST'])
+@rate_limit(max_requests=10, window_seconds=60)  # Protect from abuse
 def manual_enrichment(land_id):
     """Manually trigger data enrichment for a specific property"""
     try:
