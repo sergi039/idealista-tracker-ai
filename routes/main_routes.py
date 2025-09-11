@@ -113,12 +113,6 @@ def land_detail(land_id):
         from utils.property_data import normalize_property_details
         land.property_details = normalize_property_details(land.property_details)
         
-        # Extract idealista status properly - check both possible locations
-        idealista_data = (land.property_details or {}).get('idealista', {})
-        idealista_status = None
-        if idealista_data:
-            # First try meta.status (new structure), then direct status (current structure)
-            idealista_status = (idealista_data.get('meta', {}) or {}).get('status') or idealista_data.get('status')
         
         
         # Get score breakdown from environment field
@@ -129,8 +123,7 @@ def land_detail(land_id):
         return render_template(
             'land_detail.html',
             land=land,
-            score_breakdown=score_breakdown,
-            idealista_status=idealista_status
+            score_breakdown=score_breakdown
         )
         
     except Exception as e:
