@@ -514,7 +514,7 @@
                                             {% if land.score_total is not none %}
                                                 <span class="badge score-badge me-2" 
                                                       style="background-color: {{ 'var(--bs-success)' if land.score_total >= 70 else 'var(--bs-warning)' if land.score_total >= 50 else 'var(--bs-danger)' }}; flex-shrink: 0;">
-                                                    <i class="fas fa-balance-scale me-1"></i>{{ "%.1f"|format(land.score_total) }}
+                                                    {{ "%.1f"|format(land.score_total) }}
                                                 </span>
                                             {% endif %}
                                         {% else %}
@@ -524,14 +524,14 @@
                                                     <span class="badge {{ 'd-none d-md-inline' if current_filters.mode == 'lifestyle' else '' }}" 
                                                           style="background-color: {{ 'var(--bs-success)' if land.score_investment >= 70 else 'var(--bs-warning)' if land.score_investment >= 50 else 'var(--bs-danger)' }}; 
                                                                  {{ 'border: 2px solid #198754; font-weight: bold;' if current_filters.mode == 'investment' else 'opacity: 0.8;' }}">
-                                                        <i class="fas fa-chart-line" style="font-size: 0.7em;"></i>{{ "%.1f"|format(land.score_investment) }}
+                                                        {{ "%.1f"|format(land.score_investment) }}
                                                     </span>
                                                 {% endif %}
                                                 {% if land.score_lifestyle is not none %}
                                                     <span class="badge {{ 'd-none d-md-inline' if current_filters.mode == 'investment' else '' }}" 
                                                           style="background-color: {{ 'var(--bs-success)' if land.score_lifestyle >= 70 else 'var(--bs-warning)' if land.score_lifestyle >= 50 else 'var(--bs-danger)' }}; 
                                                                  {{ 'border: 2px solid #ffc107; font-weight: bold;' if current_filters.mode == 'lifestyle' else 'opacity: 0.8;' }}">
-                                                        <i class="fas fa-home" style="font-size: 0.7em;"></i>{{ "%.1f"|format(land.score_lifestyle) }}
+                                                        {{ "%.1f"|format(land.score_lifestyle) }}
                                                     </span>
                                                 {% endif %}
                                             </div>
