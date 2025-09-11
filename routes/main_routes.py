@@ -120,6 +120,7 @@ def land_detail(land_id):
             # First try meta.status (new structure), then direct status (current structure)
             idealista_status = (idealista_data.get('meta', {}) or {}).get('status') or idealista_data.get('status')
         
+        
         # Get score breakdown from environment field
         score_breakdown = {}
         if land.environment and 'score_breakdown' in land.environment:
