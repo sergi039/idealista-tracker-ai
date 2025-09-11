@@ -252,7 +252,8 @@
                                         </th>
                                         {% else %}
                                         <!-- Dual Score Mode: Show investment and lifestyle columns -->
-                                        <th style="background-color: {{ '#198754' if current_filters.mode == 'investment' else 'rgba(25, 135, 84, 0.3)' }};">
+                                        <th style="background-color: {{ '#198754' if current_filters.mode == 'investment' else 'rgba(25, 135, 84, 0.3)' }};" 
+                                            class="{{ 'd-none d-md-table-cell' if current_filters.mode == 'lifestyle' else '' }}">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_investment', order='desc' if current_filters.sort_by == 'score_investment' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
                                                class="text-white text-decoration-none d-flex align-items-center">
                                                 <i class="fas fa-chart-line me-1"></i>💼 Investment
@@ -263,7 +264,8 @@
                                                 {% endif %}
                                             </a>
                                         </th>
-                                        <th style="background-color: {{ '#ffc107' if current_filters.mode == 'lifestyle' else 'rgba(255, 193, 7, 0.3)' }};">
+                                        <th style="background-color: {{ '#ffc107' if current_filters.mode == 'lifestyle' else 'rgba(255, 193, 7, 0.3)' }};" 
+                                            class="{{ 'd-none d-md-table-cell' if current_filters.mode == 'investment' else '' }}">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_lifestyle', order='desc' if current_filters.sort_by == 'score_lifestyle' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
                                                class="text-white text-decoration-none d-flex align-items-center">
                                                 <i class="fas fa-home me-1"></i>🏡 Lifestyle
@@ -343,7 +345,8 @@
                                             </td>
                                             {% else %}
                                             <!-- Dual Score Mode: Show investment and lifestyle scores -->
-                                            <td style="background-color: {{ 'rgba(25, 135, 84, 0.2)' if current_filters.mode == 'investment' else 'rgba(25, 135, 84, 0.1)' }};">
+                                            <td style="background-color: {{ 'rgba(25, 135, 84, 0.2)' if current_filters.mode == 'investment' else 'rgba(25, 135, 84, 0.1)' }};" 
+                                                class="{{ 'd-none d-md-table-cell' if current_filters.mode == 'lifestyle' else '' }}">
                                                 {% if land.score_investment is not none %}
                                                     <span class="badge" 
                                                           style="background-color: {{ 'var(--bs-success)' if land.score_investment >= 70 else 'var(--bs-warning)' if land.score_investment >= 50 else 'var(--bs-danger)' }}; {{ 'font-weight: bold; font-size: 0.9em;' if current_filters.mode == 'investment' else '' }}">
@@ -353,7 +356,8 @@
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td style="background-color: {{ 'rgba(255, 193, 7, 0.2)' if current_filters.mode == 'lifestyle' else 'rgba(255, 193, 7, 0.1)' }};">
+                                            <td style="background-color: {{ 'rgba(255, 193, 7, 0.2)' if current_filters.mode == 'lifestyle' else 'rgba(255, 193, 7, 0.1)' }};" 
+                                                class="{{ 'd-none d-md-table-cell' if current_filters.mode == 'investment' else '' }}">
                                                 {% if land.score_lifestyle is not none %}
                                                     <span class="badge" 
                                                           style="background-color: {{ 'var(--bs-success)' if land.score_lifestyle >= 70 else 'var(--bs-warning)' if land.score_lifestyle >= 50 else 'var(--bs-danger)' }}; {{ 'font-weight: bold; font-size: 0.9em;' if current_filters.mode == 'lifestyle' else '' }}">
@@ -527,14 +531,14 @@
                                         <!-- Dual Score Mode: Show investment and lifestyle scores -->
                                             <div class="d-flex gap-1 me-2" style="flex-shrink: 0;">
                                                 {% if land.score_investment is not none %}
-                                                    <span class="badge" 
+                                                    <span class="badge {{ 'd-none d-md-inline' if current_filters.mode == 'lifestyle' else '' }}" 
                                                           style="background-color: {{ 'var(--bs-success)' if land.score_investment >= 70 else 'var(--bs-warning)' if land.score_investment >= 50 else 'var(--bs-danger)' }}; 
                                                                  {{ 'border: 2px solid #198754; font-weight: bold;' if current_filters.mode == 'investment' else 'opacity: 0.8;' }}">
                                                         <i class="fas fa-chart-line" style="font-size: 0.7em;"></i>{{ "%.1f"|format(land.score_investment) }}
                                                     </span>
                                                 {% endif %}
                                                 {% if land.score_lifestyle is not none %}
-                                                    <span class="badge" 
+                                                    <span class="badge {{ 'd-none d-md-inline' if current_filters.mode == 'investment' else '' }}" 
                                                           style="background-color: {{ 'var(--bs-success)' if land.score_lifestyle >= 70 else 'var(--bs-warning)' if land.score_lifestyle >= 50 else 'var(--bs-danger)' }}; 
                                                                  {{ 'border: 2px solid #ffc107; font-weight: bold;' if current_filters.mode == 'lifestyle' else 'opacity: 0.8;' }}">
                                                         <i class="fas fa-home" style="font-size: 0.7em;"></i>{{ "%.1f"|format(land.score_lifestyle) }}
