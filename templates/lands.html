@@ -161,7 +161,7 @@
                                         class="btn btn-outline-secondary {{ 'active' if current_filters.view_type == 'list' else '' }}" 
                                         id="view-list-btn" 
                                         onclick="switchView('list')" 
-                                        title="List view">
+                                        title="Table view - Compact data in rows">
                                     <i class="fas fa-list"></i>
                                 </button>
                                 
@@ -169,7 +169,7 @@
                                         class="btn btn-outline-secondary {{ 'active' if current_filters.view_type == 'cards' or not current_filters.view_type else '' }}" 
                                         id="view-cards-btn" 
                                         onclick="switchView('cards')" 
-                                        title="Card view">
+                                        title="Card view - Visual property cards">
                                     <i class="fas fa-th-large"></i>
                                 </button>
                             </div>
@@ -195,25 +195,25 @@
                                 class="btn {{ 'btn-secondary' if current_filters.mode == 'combined' or not current_filters.mode else 'btn-outline-secondary' }}"
                                 onclick="switchMode('combined')" 
                                 id="mode-combined-btn"
-                                title="Combined Analysis">
+                                title="Combined Analysis - Shows overall property rating">
                             <i class="fas fa-balance-scale"></i>
                         </button>
                         <button type="button" 
                                 class="btn {{ 'btn-success' if current_filters.mode == 'investment' else 'btn-outline-secondary' }}"
                                 onclick="switchMode('investment')" 
                                 id="mode-investment-btn"
-                                title="Investment Analysis">
+                                title="Investment Analysis - Focus on rental yield and ROI">
                             <i class="fas fa-chart-line"></i>
                         </button>
                         <button type="button" 
                                 class="btn {{ 'btn-warning' if current_filters.mode == 'lifestyle' else 'btn-outline-secondary' }}"
                                 onclick="switchMode('lifestyle')" 
                                 id="mode-lifestyle-btn"
-                                title="Lifestyle Analysis">
+                                title="Lifestyle Analysis - Focus on quality of life factors">
                             <i class="fas fa-home"></i>
                         </button>
                     </div>
-                    <a href="{{ url_for('main.export_csv', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}" class="btn btn-success btn-sm">
+                    <a href="{{ url_for('main.export_csv', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}" class="btn btn-success btn-sm" title="Download filtered data as CSV file">
                         <i class="fas fa-download me-1"></i>Export CSV
                     </a>
                 </div>
