@@ -5,6 +5,7 @@ import requests
 import time
 from typing import Dict, List, Optional
 from utils.geocoding import GeocodingService
+from services.web_scraper_service import WebScraperService
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,7 @@ class EnrichmentService:
         self.google_places_key = os.environ.get("Google_api") or os.environ.get("GOOGLE_MAPS_API") or os.environ.get("GOOGLE_PLACES_API_KEY")
         self.osm_overpass_url = "https://overpass-api.de/api/interpreter"
         self.geocoding_service = GeocodingService()
+        self.web_scraper = WebScraperService()
         
     def enrich_land(self, land_id: int) -> bool:
         """Main method to enrich a land record with external data"""
@@ -60,7 +62,10 @@ class EnrichmentService:
             travel_service = TravelTimeService()
             travel_service.calculate_travel_times(land_id)
             
-            # Step 7: Calculate final score
+            # Step 7: Scrape Idealista property details
+            self._enrich_with_idealista_data(land)
+            
+            # Step 8: Calculate final score
             from services.scoring_service import ScoringService
             scoring_service = ScoringService()
             scoring_service.calculate_score(land)
@@ -659,3 +664,61 @@ class EnrichmentService:
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
         
         return R * c
+    
+    def _enrich_with_idealista_data(self, land) -> None:
+        """Enrich land data with scraped information from Idealista property page"""
+        try:
+            from app import db
+            from utils.property_data import ensure_property_details_dict, update_property_details_section
+            
+            if not land.url or not self.web_scraper._validate_url(land.url):
+                logger.info(f"No valid Idealista URL found for land {land.id}, skipping web scraping")
+                return
+            
+            logger.info(f"Starting Idealista web scraping for land {land.id}: {land.url}")
+            
+            # Scrape property details from Idealista page
+            scraped_data = self.web_scraper.scrape_property_details(land.url)
+            
+            if not scraped_data:
+                logger.warning(f"Failed to scrape data from Idealista URL: {land.url}")
+                return
+            
+            # Ensure property_details is normalized to dict (handles JSON string conversion)
+            ensure_property_details_dict(land)
+            
+            # Update property_details.idealista with scraped data
+            land.property_details = update_property_details_section(
+                land.property_details, 'idealista', scraped_data
+            )
+            
+            # Mark as updated in database
+            db.session.add(land)
+            
+            logger.info(f"Successfully enriched land {land.id} with Idealista data. Status: {scraped_data['meta']['status']}")
+            
+        except Exception as e:
+            logger.error(f"Error enriching land {land.id} with Idealista data: {e}")
+            # Still save partial data with error status if we have some structure
+            try:
+                from utils.property_data import ensure_property_details_dict, update_property_details_section
+                
+                # Ensure property_details is normalized to dict (handles JSON string conversion)
+                ensure_property_details_dict(land)
+                
+                # Save error state data
+                error_data = {
+                    'basic_features': {'total_area_sqm': None, 'buildable_area_sqm': None, 'main_road_access': None},
+                    'land_type': {'buildable_land': None, 'certifications': []},
+                    'amenities': {'water_supply': None, 'electricity': None, 'sewer_system': None, 'street_lighting': None},
+                    'meta': {'status': 'error', 'last_fetched_at': None, 'source_url': land.url, 'extraction_method': 'trafilatura', 'error_message': str(e)}
+                }
+                
+                land.property_details = update_property_details_section(
+                    land.property_details, 'idealista', error_data
+                )
+                
+                from app import db
+                db.session.add(land)
+            except Exception as save_error:
+                logger.error(f"Failed to save error state for land {land.id}: {save_error}")
