@@ -122,14 +122,10 @@ def manual_ingestion():
         
         from config import Config
         
-        if Config.EMAIL_BACKEND == "imap":
-            from services.imap_service import IMAPService
-            service = IMAPService()
-            backend_name = "IMAP"
-        else:
-            from services.gmail_service import GmailService
-            service = GmailService()
-            backend_name = "Gmail API"
+        # Use IMAP service (Gmail API service has been deprecated)
+        from services.imap_service import IMAPService
+        service = IMAPService()
+        backend_name = "IMAP"
         
         # Choose appropriate method based on sync type
         if sync_type == 'full' and hasattr(service, 'run_full_sync'):

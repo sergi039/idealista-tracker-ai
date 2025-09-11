@@ -53,6 +53,10 @@ def create_app():
         # Create all tables
         db.create_all()
         
+        # Initialize caching
+        from utils.cache import init_cache
+        init_cache(app)
+        
         # Initialize scheduler
         from services.scheduler_service import init_scheduler
         

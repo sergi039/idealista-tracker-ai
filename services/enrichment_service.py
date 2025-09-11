@@ -5,6 +5,7 @@ import requests
 import time
 from typing import Dict, List, Optional
 from utils.geocoding import GeocodingService
+from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 
 logger = logging.getLogger(__name__)
 

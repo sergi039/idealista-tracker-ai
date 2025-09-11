@@ -79,17 +79,11 @@ def run_scheduled_ingestion():
     try:
         from config import Config
         
-        if Config.EMAIL_BACKEND == "imap":
-            logger.info("Starting scheduled IMAP ingestion")
-            from services.imap_service import IMAPService
-            service = IMAPService()
-            processed_count = service.run_ingestion()
-        else:
-            logger.info("Starting scheduled Gmail API ingestion")
-            from services.gmail_service import GmailService
-            service = GmailService()
-            # Gmail service doesn't have run_full_sync, use run_ingestion
-            processed_count = service.run_ingestion()
+        # Use IMAP service for email ingestion
+        logger.info("Starting scheduled IMAP ingestion")
+        from services.imap_service import IMAPService
+        service = IMAPService()
+        processed_count = service.run_ingestion()
         
         logger.info(f"Scheduled ingestion completed. Processed {processed_count} properties")
         
