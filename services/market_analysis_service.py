@@ -65,21 +65,143 @@ class MarketAnalysisService:
         'rural': {'min': 5, 'avg': 7, 'max': 9}         # €/m²/month
     }
     
+    def _evaluate_construction_quality_objective(self, land: Land) -> Dict:
+        """
+        Evaluate construction quality based on objective criteria (score-independent)
+        Returns construction tier and quality factors for transparency
+        """
+        quality_points = 0
+        max_points = 100
+        quality_factors = []
+        
+        # 1. Land Type Quality (25 points max)
+        land_type = land.land_type or 'buildable'
+        if land_type == 'developed':
+            quality_points += 25
+            quality_factors.append("Fully developed land - supports premium construction")
+        elif land_type == 'buildable':
+            quality_points += 20
+            quality_factors.append("Buildable land - suitable for quality construction")
+        
+        # 2. Municipality Quality (20 points max)
+        municipality = (land.municipality or "").lower()
+        major_cities = ['gijón', 'oviedo', 'avilés', 'madrid', 'barcelona']
+        secondary_cities = ['suances', 'ribadedeva', 'llanes', 'ribadesella', 'santander']
+        
+        if any(city in municipality for city in major_cities):
+            quality_points += 20
+            quality_factors.append(f"Premium location: {land.municipality}")
+        elif any(city in municipality for city in secondary_cities):
+            quality_points += 15
+            quality_factors.append(f"Good location: {land.municipality}")
+        else:
+            quality_points += 10
+            quality_factors.append(f"Rural location: {land.municipality or 'Unknown'}")
+        
+        # 3. Infrastructure Basic (20 points max)
+        if land.infrastructure_basic:
+            infra_count = 0
+            basic_utilities = ['electricity', 'water', 'internet', 'gas']
+            for utility in basic_utilities:
+                if land.infrastructure_basic.get(utility):
+                    infra_count += 1
+            
+            infra_score = (infra_count / len(basic_utilities)) * 20
+            quality_points += infra_score
+            quality_factors.append(f"Basic infrastructure: {infra_count}/4 utilities available")
+        
+        # 4. Area Optimization (15 points max)
+        if land.area:
+            area_val = float(land.area)
+            if 1000 <= area_val <= 5000:
+                quality_points += 15
+                quality_factors.append(f"Optimal area: {area_val}m² - ideal for premium construction")
+            elif 500 <= area_val < 1000:
+                quality_points += 10
+                quality_factors.append(f"Adequate area: {area_val}m² - suitable for standard construction")
+            elif area_val > 5000:
+                quality_points += 12
+                quality_factors.append(f"Large area: {area_val}m² - excellent for estate development")
+            else:
+                quality_points += 5
+                quality_factors.append(f"Small area: {area_val}m² - limited construction options")
+        
+        # 5. Transport Accessibility (10 points max)
+        transport_score = 0
+        if land.travel_time_airport and land.travel_time_airport <= 60:
+            transport_score += 3
+        if land.travel_time_train_station and land.travel_time_train_station <= 30:
+            transport_score += 3
+        if land.travel_time_hospital and land.travel_time_hospital <= 20:
+            transport_score += 2
+        if land.travel_time_oviedo and land.travel_time_oviedo <= 45:
+            transport_score += 2
+        
+        quality_points += transport_score
+        if transport_score >= 8:
+            quality_factors.append("Excellent transport connectivity")
+        elif transport_score >= 5:
+            quality_factors.append("Good transport access")
+        else:
+            quality_factors.append("Limited transport connectivity")
+        
+        # 6. Environment Quality (10 points max)
+        if land.environment:
+            env_score = 0
+            if land.environment.get('sea_view'):
+                env_score += 5
+                quality_factors.append("Sea view premium")
+            if land.environment.get('mountain_view'):
+                env_score += 3
+                quality_factors.append("Mountain view")
+            if land.environment.get('forest_view'):
+                env_score += 2
+                quality_factors.append("Forest surroundings")
+            
+            orientation = land.environment.get('orientation', '').lower()
+            if 'south' in orientation:
+                env_score += 2
+                quality_factors.append("Optimal south orientation")
+            
+            quality_points += min(env_score, 10)
+        
+        # Determine construction tier based on total quality points
+        quality_percentage = (quality_points / max_points) * 100
+        
+        if quality_percentage >= 65:
+            return {
+                'construction_tier': 'premium',
+                'quality_score': round(quality_percentage, 1),
+                'quality_factors': quality_factors,
+                'tier_reasoning': f'High quality score ({quality_percentage:.1f}%) indicates premium construction potential'
+            }
+        else:
+            return {
+                'construction_tier': 'basic',
+                'quality_score': round(quality_percentage, 1),
+                'quality_factors': quality_factors,
+                'tier_reasoning': f'Quality score ({quality_percentage:.1f}%) indicates standard construction level'
+            }
+
     def calculate_construction_value(self, land: Land) -> Dict:
         """
-        Calculate construction value estimates based on land characteristics
+        Calculate construction value estimates based on objective land characteristics
+        Uses score-independent criteria to avoid circular dependency
         """
         try:
             area = float(land.area) if land.area else 0
             land_type = land.land_type or 'default'
-            score = float(land.score_total) if land.score_total else 50
+            
+            # Use objective quality evaluation instead of score dependency
+            quality_eval = self._evaluate_construction_quality_objective(land)
+            construction_tier = quality_eval['construction_tier']
             
             # Determine buildable area based on land type
             buildability_ratio = self.BUILDABILITY_RATIOS.get(land_type, self.BUILDABILITY_RATIOS['default'])
             buildable_area = area * buildability_ratio
             
-            # Adjust construction type based on land score
-            if score >= 70:
+            # Select construction costs based on objective quality evaluation
+            if construction_tier == 'premium':
                 costs = self.CONSTRUCTION_COSTS['premium']
                 construction_type = "Premium villa with modern amenities"
             else:
@@ -103,11 +225,13 @@ class MarketAnalysisService:
                 'maximum_value': round(max_value),
                 'buildable_area': round(buildable_area),
                 'construction_type': construction_type,
+                'construction_tier': construction_tier,
                 'value_per_m2': costs['avg'],
                 'total_investment_min': round(total_investment_min),
                 'total_investment_avg': round(total_investment_avg),
                 'total_investment_max': round(total_investment_max),
-                'buildability_ratio': f"{buildability_ratio * 100:.0f}%"
+                'buildability_ratio': f"{buildability_ratio * 100:.0f}%",
+                'quality_evaluation': quality_eval
             }
             
         except Exception as e:
@@ -184,7 +308,19 @@ class MarketAnalysisService:
                     market_factors.append("Major urban center driving demand")
                 if 'beach' in str(land.scoring_results).lower() or land.beach_access_min:
                     market_factors.append("Coastal location premium")
-                if land.score_total and land.score_total > 70:
+                # Check for high-quality infrastructure using objective criteria
+                high_quality_infra = False
+                if land.infrastructure_basic:
+                    basic_count = sum(1 for v in land.infrastructure_basic.values() if v)
+                    if basic_count >= 3:  # Most utilities available
+                        high_quality_infra = True
+                if land.infrastructure_extended:
+                    extended_count = sum(1 for k, v in land.infrastructure_extended.items() 
+                                       if k.endswith('_available') and v)
+                    if extended_count >= 2:  # Multiple amenities available
+                        high_quality_infra = True
+                        
+                if high_quality_infra:
                     market_factors.append("High-quality infrastructure and services")
             
             if not market_factors:

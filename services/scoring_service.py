@@ -427,8 +427,8 @@ class ScoringService:
                 return None
             
             # Extract key metrics
-            rental_yield = rental_analysis.get('rental_yield_avg')
-            cap_rate = rental_analysis.get('cap_rate_avg')
+            rental_yield = rental_analysis.get('rental_yield')
+            cap_rate = rental_analysis.get('cap_rate')
             
             if rental_yield is None and cap_rate is None:
                 logger.debug(f"No yield or cap rate data available for land {land.id}")
