@@ -1,4 +1,5 @@
 import logging
+from decimal import Decimal
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
 from sqlalchemy import or_, and_
 from models import Land, ScoringCriteria
@@ -241,7 +242,8 @@ def update_score(land_id):
                 score_value = float(new_score)
                 # Validate score is between 0 and 100
                 if 0 <= score_value <= 100:
-                    land.score_total = score_value
+                    # Convert to Decimal for proper database storage
+                    land.score_total = Decimal(str(score_value))
                     db.session.commit()
                     flash(f'Score updated to {score_value:.1f}', 'success')
                 else:

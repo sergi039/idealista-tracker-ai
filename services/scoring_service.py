@@ -1,4 +1,5 @@
 import logging
+from decimal import Decimal
 from typing import Dict, Optional
 from config import Config
 
@@ -79,8 +80,8 @@ class ScoringService:
                 # No valid criteria found
                 final_score = 0
             
-            # Update land record
-            land.score_total = round(final_score, 2)
+            # Update land record - convert to Decimal for proper database storage
+            land.score_total = Decimal(str(round(final_score, 2)))
             
             # Store MCDM breakdown for transparency
             if not land.environment:

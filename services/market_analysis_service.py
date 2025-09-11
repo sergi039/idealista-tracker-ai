@@ -247,10 +247,7 @@ class MarketAnalysisService:
             similar_query = db.session.query(Land).filter(
                 and_(
                     Land.id != land.id,
-                    or_(
-                        Land.municipality == land.municipality,
-                        Land.province == land.province
-                    )
+                    Land.municipality == land.municipality
                 )
             )
             
@@ -306,7 +303,7 @@ class MarketAnalysisService:
             if land.municipality:
                 if any(city in land.municipality.lower() for city in ['gijón', 'oviedo', 'avilés']):
                     market_factors.append("Major urban center driving demand")
-                if 'beach' in str(land.scoring_results).lower() or land.beach_access_min:
+                if (land.travel_time_nearest_beach and land.travel_time_nearest_beach <= 30) or (land.environment and land.environment.get('sea_view')):
                     market_factors.append("Coastal location premium")
                 # Check for high-quality infrastructure using objective criteria
                 high_quality_infra = False
@@ -347,7 +344,7 @@ class MarketAnalysisService:
             logger.error(f"Error analyzing market trends: {str(e)}")
             return self._get_default_market_trends()
     
-    def calculate_rental_analysis(self, land: Land, construction_data: Dict = None) -> Dict:
+    def calculate_rental_analysis(self, land: Land, construction_data: Optional[Dict] = None) -> Dict:
         """
         Calculate rental market analysis and investment metrics
         """
