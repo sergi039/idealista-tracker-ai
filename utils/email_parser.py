@@ -25,7 +25,8 @@ class EmailParser:
                 r'Ver anuncio:?\s*(https?://www\.idealista\.com/[^\s]+)'
             ],
             'municipality': [
-                r'(?:en|in)\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ\s,\-]+(?:[A-ZÁÉÍÓÚÑ][a-záéíóúñ\s,\-]*)*)',
+                # Use hardened patterns that avoid capturing "Your Search"
+                r'(?:en|in)\s+(?!And\b|Y\b|E\b|Your\s+Search)([A-ZÁÉÍÓÚÑ][a-záéíóúñ\s,\-]+(?:[A-ZÁÉÍÓÚÑ][a-záéíóúñ\s,\-]*)*)',
                 r'Municipio:?\s*([A-ZÁÉÍÓÚÑ][a-záéíóúñ\s,\-]+)',
                 r'([A-ZÁÉÍÓÚÑ][a-záéíóúñ\s,\-]+),\s*(?:Asturias|Cantabria)'
             ]
@@ -201,14 +202,22 @@ class EmailParser:
         return None
     
     def _extract_municipality(self, text: str) -> Optional[str]:
-        """Extract municipality from text"""
+        """Extract municipality from text, prioritizing title extraction"""
         logger.debug(f"Extracting municipality from text: {text[:200]}...")
         
         # Normalize the text first - fix encoding issues
         normalized_text = self._normalize_email_text(text)
         logger.debug(f"Normalized text: {normalized_text[:200]}...")
         
-        # First try to find location from "Land in [location]" pattern with improved regex
+        # PRIORITY 1: Extract from title line first (most accurate)
+        title_match = self._extract_title(normalized_text)
+        if title_match:
+            title_municipality = self._extract_municipality_from_title(title_match)
+            if title_municipality:
+                logger.debug(f"Extracted municipality from title: '{title_municipality}'")
+                return title_municipality
+        
+        # PRIORITY 2: Try "Land in [location]" pattern with improved regex
         # Use lookahead instead of literal euro symbol to handle different encodings
         land_pattern = r'Land in\s+(.+?)(?=\s+\d{1,3}(?:[.,]\d{3})*(?:\s*[€]|\s*EUR|\s*&euro;|\s*â‚¬)|\s+See\s+\d+|[\r\n]|$)'
         land_match = re.search(land_pattern, normalized_text, re.IGNORECASE)
@@ -224,7 +233,7 @@ class EmailParser:
                     logger.debug(f"Extracted municipality from 'Land in': '{location}'")
                     return location
         
-        # Try to find municipality from other patterns with hardened fallbacks
+        # PRIORITY 3: Try fallback patterns (with strict validation)
         for i, pattern in enumerate(self.patterns['municipality']):
             match = re.search(pattern, normalized_text, re.IGNORECASE)
             if match:
@@ -239,6 +248,47 @@ class EmailParser:
                     logger.debug(f"Rejected municipality '{municipality}' - failed validation")
         
         logger.debug("No municipality found")
+        return None
+    
+    def _extract_municipality_from_title(self, title: str) -> Optional[str]:
+        """Extract municipality specifically from title like 'Land in camino Pinzalez, Porceyo - Cenero, Gijón'"""
+        if not title:
+            return None
+            
+        logger.debug(f"Extracting municipality from title: '{title}'")
+        
+        # Pattern for "Land in [path], [municipality], [province]" 
+        # Examples: "Land in camino Pinzalez, Porceyo - Cenero, Gijón"
+        municipality_patterns = [
+            # Pattern: "Land in [location], [municipality], [province]"  
+            r'Land in\s+[^,]+,\s*([^,]+(?:\s*-\s*[^,]+)*),\s*[^,\d€]+',
+            # Pattern: "Land in [municipality], [details]"
+            r'Land in\s+([A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]+(?:\s+de\s+[A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]*)*),',
+            # Pattern: "Land in [municipality]" (single location)
+            r'Land in\s+([A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]+(?:\s+de\s+[A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]*)*)\s+\d'
+        ]
+        
+        for pattern in municipality_patterns:
+            match = re.search(pattern, title, re.IGNORECASE)
+            if match:
+                municipality = match.group(1).strip()
+                # Clean and validate
+                municipality = re.sub(r'\s+', ' ', municipality)
+                if self._is_valid_municipality(municipality):
+                    logger.debug(f"Extracted municipality from title pattern: '{municipality}'")
+                    return municipality.title()
+        
+        # Fallback: try to extract last meaningful part before number/price
+        # "Land in San Martin de Huerces, 49, La Pedrera" -> "San Martin de Huerces"
+        simple_match = re.search(r'Land in\s+([A-Za-záéíóúñÁÉÍÓÚÑ][^,\d€]+?)(?:[,\d€]|$)', title, re.IGNORECASE)
+        if simple_match:
+            municipality = simple_match.group(1).strip()
+            municipality = re.sub(r'\s+', ' ', municipality)
+            if self._is_valid_municipality(municipality):
+                logger.debug(f"Extracted municipality from title fallback: '{municipality}'")
+                return municipality.title()
+        
+        logger.debug("No municipality found in title")
         return None
     
     def _normalize_email_text(self, text: str) -> str:

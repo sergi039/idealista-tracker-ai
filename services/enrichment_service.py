@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 import requests
 import time
@@ -72,10 +73,96 @@ class EnrichmentService:
             logger.error(f"Failed to enrich land {land_id}: {str(e)}")
             return False
     
+    def _extract_municipality_from_title(self, title: str) -> Optional[str]:
+        """Extract municipality specifically from title like 'Land in camino Pinzalez, Porceyo - Cenero, Gijón'"""
+        
+        if not title:
+            return None
+            
+        logger.debug(f"Extracting municipality from title: '{title}'")
+        
+        # Pattern for "Land in [path], [municipality], [province]" 
+        # Examples: "Land in camino Pinzalez, Porceyo - Cenero, Gijón"
+        municipality_patterns = [
+            # Pattern: "Land in [location], [municipality], [province]"  
+            r'Land in\s+[^,]+,\s*([^,]+(?:\s*-\s*[^,]+)*),\s*[^,\d€]+',
+            # Pattern: "Land in [municipality], [details]"
+            r'Land in\s+([A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]+(?:\s+de\s+[A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]*)*),',
+            # Pattern: "Land in [municipality]" (single location)
+            r'Land in\s+([A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]+(?:\s+de\s+[A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]*)*)\s+\d'
+        ]
+        
+        for pattern in municipality_patterns:
+            match = re.search(pattern, title, re.IGNORECASE)
+            if match:
+                municipality = match.group(1).strip()
+                # Clean and validate
+                municipality = re.sub(r'\s+', ' ', municipality)
+                if self._is_valid_municipality(municipality):
+                    logger.debug(f"Extracted municipality from title pattern: '{municipality}'")
+                    return municipality.title()
+        
+        # Fallback: try to extract last meaningful part before number/price
+        # "Land in San Martin de Huerces, 49, La Pedrera" -> "San Martin de Huerces"
+        simple_match = re.search(r'Land in\s+([A-Za-záéíóúñÁÉÍÓÚÑ][^,\d€]+?)(?:[,\d€]|$)', title, re.IGNORECASE)
+        if simple_match:
+            municipality = simple_match.group(1).strip()
+            municipality = re.sub(r'\s+', ' ', municipality)
+            if self._is_valid_municipality(municipality):
+                logger.debug(f"Extracted municipality from title fallback: '{municipality}'")
+                return municipality.title()
+        
+        logger.debug("No municipality found in title")
+        return None
+    
+    def _is_valid_municipality(self, municipality: str) -> bool:
+        """Validate if a municipality name is legitimate"""
+        if not municipality or len(municipality) <= 2:
+            return False
+        
+        # Reject if contains digits
+        if re.search(r'\d', municipality):
+            return False
+        
+        # Define stopwords (common Spanish/English words that aren't locations)
+        stopwords = {'and', 'en', 'de', 'del', 'la', 'el', 'por', 'con', 'y', 'e', 'with', 'for', 'in', 'of', 'the', 'your', 'search'}
+        
+        # Check if first word is a stopword
+        first_word = municipality.split()[0].lower()
+        if first_word in stopwords:
+            return False
+        
+        # Require either:
+        # a) Contains a comma (e.g., 'Corias, Pravia')
+        # b) Ends with known region
+        # c) Contains at least two meaningful tokens
+        if (',' in municipality or 
+            re.search(r'\b(?:Asturias|Cantabria|Spain)\b', municipality, re.IGNORECASE) or
+            len(municipality.split()) >= 2):
+            return True
+        
+        # Single word must be a proper location name (capitalized, reasonable length)
+        if (municipality.istitle() and 
+            3 <= len(municipality) <= 30 and
+            municipality.isalpha()):
+            return True
+        
+        return False
+    
     def _geocode_with_accuracy(self, land) -> Optional[Dict]:
         """Geocode a land with accuracy determination"""
         if not land.municipality:
-            return None
+            # Try to re-extract municipality from title if missing
+            municipality = self._extract_municipality_from_title(land.title)
+            if municipality:
+                logger.info(f"Re-extracted municipality from title for land {land.id}: '{municipality}'")
+                land.municipality = municipality
+                # Commit immediately so we have the municipality for geocoding
+                from app import db
+                db.session.commit()
+            else:
+                logger.warning(f"No municipality found in title for land {land.id}: '{land.title}'")
+                return None
             
         # Clean and validate municipality data first
         municipality = self._clean_municipality(land.municipality)
