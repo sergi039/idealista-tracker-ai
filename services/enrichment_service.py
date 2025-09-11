@@ -170,6 +170,9 @@ class EnrichmentService:
         if not municipality:
             logger.warning(f"Invalid municipality data for land {land.id}: '{land.municipality}'")
             return None
+        
+        # Normalize address format: replace " - " with ", " for better geocoding
+        municipality = municipality.replace(" - ", ", ")
             
         # Try different address formats in order of precision
         address_attempts = []
@@ -206,16 +209,27 @@ class EnrichmentService:
         for attempt in address_attempts:
             coordinates = self.geocoding_service.geocode_address(attempt['address'])
             if coordinates:
-                # Skip if we got the exact same coordinates as another property (duplicate issue)
-                if not self._is_duplicate_coordinates(coordinates['lat'], coordinates['lng'], land.id):
-                    logger.info(f"Successfully geocoded '{attempt['address']}' with {attempt['accuracy']} accuracy")
+                # Only check for duplicates on precise geocoding results
+                # Allow approximate/regional results even if they're duplicates
+                if attempt['accuracy'] == 'precise':
+                    if not self._is_duplicate_coordinates(coordinates['lat'], coordinates['lng'], land.id):
+                        logger.info(f"Successfully geocoded '{attempt['address']}' with {attempt['accuracy']} accuracy")
+                        return {
+                            'lat': coordinates['lat'],
+                            'lng': coordinates['lng'],
+                            'accuracy': attempt['accuracy']
+                        }
+                    else:
+                        logger.warning(f"Skipping duplicate precise coordinates for '{attempt['address']}'")
+                        continue
+                else:
+                    # Accept approximate/regional results even if duplicated
+                    logger.info(f"Successfully geocoded '{attempt['address']}' with {attempt['accuracy']} accuracy (allowing duplicates)")
                     return {
                         'lat': coordinates['lat'],
                         'lng': coordinates['lng'],
                         'accuracy': attempt['accuracy']
                     }
-                else:
-                    logger.warning(f"Skipping duplicate coordinates for '{attempt['address']}'")
         
         return None
     

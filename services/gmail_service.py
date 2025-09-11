@@ -22,11 +22,10 @@ class GmailService:
     def authenticate(self):
         """Authenticate with Gmail API using service account or OAuth"""
         try:
-            # For production, use service account credentials
-            # For development, this would need OAuth flow
-            api_key = os.environ.get("GMAIL_API_KEY")
+            # Try multiple possible API key names
+            api_key = os.environ.get("Google_api") or os.environ.get("GMAIL_API_KEY")
             if not api_key:
-                logger.error("GMAIL_API_KEY not found in environment variables")
+                logger.error("Google_api or GMAIL_API_KEY not found in environment variables")
                 return False
                 
             self.service = build('gmail', 'v1', developerKey=api_key)
@@ -46,11 +45,15 @@ class GmailService:
         try:
             # Search for emails with Idealista label
             query = 'label:Idealista'
-            results = self.service.users().messages().list(
-                userId='me', 
-                q=query, 
-                maxResults=max_results
-            ).execute()
+            if self.service:
+                results = self.service.users().messages().list(
+                    userId='me', 
+                    q=query, 
+                    maxResults=max_results
+                ).execute()
+            else:
+                logger.error("Gmail service not authenticated")
+                return []
             
             messages = results.get('messages', [])
             logger.info(f"Found {len(messages)} Idealista emails")
@@ -108,6 +111,10 @@ class GmailService:
     def get_email_content(self, message_id):
         """Get the content of a specific email"""
         try:
+            if not self.service:
+                logger.error("Gmail service not authenticated")
+                return None
+                
             message = self.service.users().messages().get(
                 userId='me', 
                 id=message_id, 

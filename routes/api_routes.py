@@ -82,8 +82,8 @@ def manual_enrichment(land_id):
         else:
             return jsonify({
                 "success": False,
-                "error": "Failed to enrich property data"
-            }), 500
+                "error": "Geocoding failed; enrichment skipped. Check that the property has a valid address."
+            }), 200
             
     except Exception as e:
         logger.error(f"Manual enrichment failed for land {land_id}: {str(e)}")

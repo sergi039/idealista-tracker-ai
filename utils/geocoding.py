@@ -25,7 +25,7 @@ class GeocodingService:
                 'region': 'es'  # Bias results to Spain
             }
             
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=10)
             if response.status_code == 200:
                 data = response.json()
                 
@@ -33,6 +33,7 @@ class GeocodingService:
                     result = data['results'][0]
                     location = result['geometry']['location']
                     
+                    logger.info(f"Google geocoding successful for '{address}'")
                     return {
                         'lat': location['lat'],
                         'lng': location['lng'],
@@ -40,10 +41,12 @@ class GeocodingService:
                         'address_components': result.get('address_components', [])
                     }
                 else:
-                    logger.warning(f"Geocoding failed for '{address}': {data.get('status')}")
+                    status = data.get('status', 'UNKNOWN')
+                    error_message = data.get('error_message', '')
+                    logger.warning(f"Google geocoding failed for '{address}': {status} - {error_message}")
                     return self._fallback_geocoding(address)
             else:
-                logger.error(f"Geocoding API request failed: {response.status_code}")
+                logger.error(f"Google geocoding API request failed with status {response.status_code} for '{address}'")
                 return self._fallback_geocoding(address)
                 
         except Exception as e:
