@@ -304,14 +304,13 @@
             <div class="card-header">
                 <h6 class="card-title mb-0">
                     <i class="fas fa-info-circle me-2"></i>Property Features
-                    {% set status = idealista_data.get('meta', {}).get('status') if idealista_data else None %}
-                    {% if status == 'ok' %}
+                    {% if idealista_status == 'ok' %}
                         <span class="badge bg-success ms-2">Idealista</span>
-                    {% elif status == 'fetch_failed' %}
+                    {% elif idealista_status == 'fetch_failed' %}
                         <span class="badge bg-warning ms-2">Fetch Failed</span>
-                    {% elif status == 'no_content' %}
+                    {% elif idealista_status == 'no_content' %}
                         <span class="badge bg-info ms-2">No Content</span>
-                    {% elif status == 'parse_error' %}
+                    {% elif idealista_status == 'parse_error' %}
                         <span class="badge bg-danger ms-2">Parse Error</span>
                     {% else %}
                         <span class="badge bg-secondary ms-2">Not Available</span>
@@ -319,7 +318,7 @@
                 </h6>
             </div>
             <div class="card-body">
-                {% if idealista_data and status == 'ok' %}
+                {% if idealista_data and idealista_status == 'ok' %}
                     <!-- Basic Features -->
                     {% set basic_features = idealista_data.get('basic_features', {}) %}
                     {% if basic_features %}
@@ -413,21 +412,21 @@
                             </small>
                         </div>
                     {% endif %}
-                {% elif status == 'fetch_failed' %}
+                {% elif idealista_status == 'fetch_failed' %}
                     <!-- Fetch Failed State -->
                     <div class="text-center text-warning py-3">
                         <i class="fas fa-exclamation-triangle fa-2x mb-2"></i>
                         <p class="mb-1"><strong>Unable to Access Idealista</strong></p>
                         <p class="mb-0 small">The website blocked our scraper from accessing property details.<br>Try the manual scrape button or check again later.</p>
                     </div>
-                {% elif status == 'no_content' %}
+                {% elif idealista_status == 'no_content' %}
                     <!-- No Content State -->
                     <div class="text-center text-info py-3">
                         <i class="fas fa-info-circle fa-2x mb-2"></i>
                         <p class="mb-1"><strong>No Property Features Found</strong></p>
                         <p class="mb-0 small">The Idealista page was accessed but no property features were found.</p>
                     </div>
-                {% elif status == 'parse_error' %}
+                {% elif idealista_status == 'parse_error' %}
                     <!-- Parse Error State -->
                     <div class="text-center text-danger py-3">
                         <i class="fas fa-bug fa-2x mb-2"></i>
