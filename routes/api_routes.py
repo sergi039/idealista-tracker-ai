@@ -109,7 +109,6 @@ def manual_enrichment(land_id):
         }), 500
 
 @api_bp.route('/ingest/email/run', methods=['POST'])
-@admin_required
 @rate_limit(max_requests=5, window_seconds=60)  # 5 requests per minute
 def manual_ingestion():
     """Manually trigger email ingestion"""
