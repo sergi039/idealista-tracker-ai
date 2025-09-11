@@ -246,7 +246,7 @@
                                             class="{{ 'd-none d-md-table-cell' if current_filters.mode == 'lifestyle' else '' }}">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_investment', order='desc' if current_filters.sort_by == 'score_investment' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
                                                class="text-white text-decoration-none d-flex align-items-center">
-                                                <i class="fas fa-chart-line me-1"></i>💼 Investment
+                                                Inv
                                                 {% if current_filters.sort_by == 'score_investment' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
                                                 {% else %}
@@ -258,7 +258,7 @@
                                             class="{{ 'd-none d-md-table-cell' if current_filters.mode == 'investment' else '' }}">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_lifestyle', order='desc' if current_filters.sort_by == 'score_lifestyle' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
                                                class="text-white text-decoration-none d-flex align-items-center">
-                                                <i class="fas fa-home me-1"></i>🏡 Lifestyle
+                                                Lifestyle
                                                 {% if current_filters.sort_by == 'score_lifestyle' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
                                                 {% else %}
