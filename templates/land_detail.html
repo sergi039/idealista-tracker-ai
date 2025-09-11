@@ -304,8 +304,15 @@
             <div class="card-header">
                 <h6 class="card-title mb-0">
                     <i class="fas fa-info-circle me-2"></i>Property Features
-                    {% if idealista_data and idealista_data.get('meta', {}).get('status') == 'ok' %}
+                    {% set status = idealista_data.get('meta', {}).get('status') if idealista_data else None %}
+                    {% if status == 'ok' %}
                         <span class="badge bg-success ms-2">Idealista</span>
+                    {% elif status == 'fetch_failed' %}
+                        <span class="badge bg-warning ms-2">Fetch Failed</span>
+                    {% elif status == 'no_content' %}
+                        <span class="badge bg-info ms-2">No Content</span>
+                    {% elif status == 'parse_error' %}
+                        <span class="badge bg-danger ms-2">Parse Error</span>
                     {% else %}
                         <span class="badge bg-secondary ms-2">Not Available</span>
                     {% endif %}
@@ -1526,6 +1533,9 @@ function getPaybackPeriodClass(years) {
     if (years < 25) return 'text-warning';        // Average
     return 'text-danger';                         // Poor - very long payback
 }
+
+// Make land data available globally for JavaScript
+window.landData = {{ land.to_dict() | tojson }};
 
 // Initialize structured AI analysis on page load
 document.addEventListener('DOMContentLoaded', function() {

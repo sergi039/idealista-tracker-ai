@@ -109,6 +109,10 @@ def land_detail(land_id):
     try:
         land = Land.query.get_or_404(land_id)
         
+        # Normalize property_details to dict format for template compatibility
+        from utils.property_data import normalize_property_details
+        land.property_details = normalize_property_details(land.property_details)
+        
         # Get score breakdown from environment field
         score_breakdown = {}
         if land.environment and 'score_breakdown' in land.environment:

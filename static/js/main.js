@@ -842,15 +842,31 @@ window.IdealistaApp = {
     },
 
     getOriginalIdealistaDescription: function() {
-        // Try to get original Idealista description from land.property_details.idealista.original_description
-        // For now this will be null until scraper populates it, but we have good fallback chain
+        // Try to get original Idealista description from land.property_details.idealista
         try {
-            // This will be populated by scraper: property_details.idealista.original_description
-            // For now, return null and let fallback chain handle it
-            return null;
+            // First try to get scraped original description
+            if (window.landData && window.landData.property_details && window.landData.property_details.idealista) {
+                const idealistaData = window.landData.property_details.idealista;
+                
+                // If we have scraped data with status ok, return some content
+                if (idealistaData.meta && idealistaData.meta.status === 'ok') {
+                    return idealistaData.original_description || 'Idealista property data available';
+                } else if (idealistaData.meta && idealistaData.meta.status === 'fetch_failed') {
+                    return 'Could not access original Idealista content (site blocked scraping)';
+                } else {
+                    return 'Original Idealista description not yet scraped';
+                }
+            }
+            
+            // Fallback - try to construct from available data
+            if (this.descriptionData && this.descriptionData.original) {
+                return this.descriptionData.original + ' (from email source)';
+            }
+            
+            return 'Original Idealista description not available';
         } catch (e) {
             console.log('[DESC] Could not get original Idealista description:', e);
-            return null;
+            return 'Error loading original Idealista description';
         }
     },
 
