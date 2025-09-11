@@ -83,22 +83,24 @@ PROPERTY METADATA:
 - Type: {property_data.get('land_type', 'N/A')}
 """
             
-            # Create AI prompt for description enhancement
+            # Create AI prompt for bilingual description enhancement
             prompt = f"""{context}
 
-TASK: Create a professional, structured property description in English based on the original content.
+TASK: Create professional, structured property descriptions in BOTH English and Spanish based on the original content.
 
 REQUIREMENTS:
 1. Extract and highlight key information (price, area, location, features)
 2. Remove duplicated information and email-style text
-3. Create a clear, marketing-focused description
+3. Create clear, marketing-focused descriptions
 4. Use professional real estate language
 5. Highlight any special offers or price reductions
-6. Keep it concise but informative
+6. Keep both versions concise but informative
+7. Both descriptions should convey the SAME professional content, just in different languages
 
 Provide response in this JSON format:
 {{
-    "enhanced_description": "Professional English description here",
+    "enhanced_description_en": "Professional English description here",
+    "enhanced_description_es": "Descripción profesional en español aquí", 
     "key_highlights": ["highlight 1", "highlight 2", "highlight 3"],
     "price_info": {{
         "current_price": current_price_if_found,
@@ -110,7 +112,7 @@ Provide response in this JSON format:
     "confidence_score": 0.8
 }}
 
-Focus on creating professional, engaging content that would appeal to potential buyers."""
+IMPORTANT: Create equivalent professional content in both languages - don't just translate word for word, but convey the same professional marketing message in both English and Spanish."""
 
             # Call Claude API
             try:
@@ -166,20 +168,40 @@ Focus on creating professional, engaging content that would appeal to potential 
                 enhanced_data['original_description'] = raw_description
                 enhanced_data['processing_status'] = 'success'
                 
+                # Handle bilingual format - ensure both languages are available
+                if 'enhanced_description_en' in enhanced_data and 'enhanced_description_es' in enhanced_data:
+                    # New bilingual format
+                    enhanced_data['enhanced'] = enhanced_data['enhanced_description_en']  # Default to English
+                    enhanced_data['enhanced_en'] = enhanced_data['enhanced_description_en']
+                    enhanced_data['enhanced_es'] = enhanced_data['enhanced_description_es']
+                elif 'enhanced_description' in enhanced_data:
+                    # Legacy single language format - keep for compatibility
+                    enhanced_data['enhanced'] = enhanced_data['enhanced_description']
+                    enhanced_data['enhanced_en'] = enhanced_data['enhanced_description']
+                    enhanced_data['enhanced_es'] = raw_description  # Fallback to original
+                
                 return enhanced_data
                 
             except json.JSONDecodeError as e:
                 logger.warning(f"Failed to parse AI response as JSON: {e}")
+                fallback_desc = self._create_fallback_description(raw_description, extracted_data)
                 return {
-                    'enhanced_description': self._create_fallback_description(raw_description, extracted_data),
+                    'enhanced_description': fallback_desc,
+                    'enhanced': fallback_desc,
+                    'enhanced_en': fallback_desc,
+                    'enhanced_es': raw_description,
                     'original_description': raw_description,
                     'processing_status': 'fallback',
                     'error': 'AI response parsing failed'
                 }
             except Exception as e:
                 logger.error(f"AI enhancement failed: {e}")
+                fallback_desc = self._create_fallback_description(raw_description, extracted_data)
                 return {
-                    'enhanced_description': self._create_fallback_description(raw_description, extracted_data),
+                    'enhanced_description': fallback_desc,
+                    'enhanced': fallback_desc,
+                    'enhanced_en': fallback_desc,
+                    'enhanced_es': raw_description,
                     'original_description': raw_description,
                     'processing_status': 'fallback',
                     'error': str(e)
@@ -189,6 +211,9 @@ Focus on creating professional, engaging content that would appeal to potential 
             logger.error(f"Description enhancement failed: {e}")
             return {
                 'enhanced_description': raw_description,
+                'enhanced': raw_description,
+                'enhanced_en': raw_description,
+                'enhanced_es': raw_description,
                 'original_description': raw_description,
                 'processing_status': 'failed',
                 'error': str(e)
@@ -240,7 +265,9 @@ Focus on creating professional, engaging content that would appeal to potential 
                         enhanced_data = json.loads(land.enhanced_description)
                     
                     return {
-                        'enhanced': enhanced_data.get('enhanced_description', land.description),
+                        'enhanced': enhanced_data.get('enhanced_en', enhanced_data.get('enhanced_description', land.description)),
+                        'enhanced_en': enhanced_data.get('enhanced_en', enhanced_data.get('enhanced_description', land.description)),
+                        'enhanced_es': enhanced_data.get('enhanced_es', enhanced_data.get('original_description', land.description)),
                         'original': enhanced_data.get('original_description', land.description),
                         'status': enhanced_data.get('processing_status', 'processed'),
                         'key_highlights': enhanced_data.get('key_highlights', []),

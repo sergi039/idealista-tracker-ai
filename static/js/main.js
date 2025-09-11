@@ -736,10 +736,13 @@ window.IdealistaApp = {
 
 
     displayEnhancedDescription: function(data) {
-        // Update enhanced description content
+        // Store description variants for language switching
+        this.descriptionData = data;
+        
+        // Update enhanced description content (default to English)
         const enhancedTextEl = document.getElementById('enhanced-description-text');
         if (enhancedTextEl) {
-            enhancedTextEl.textContent = data.enhanced_description || data.enhanced;
+            enhancedTextEl.textContent = data.enhanced_en || data.enhanced_description || data.enhanced;
         }
 
         // Display key highlights if available
@@ -810,16 +813,15 @@ window.IdealistaApp = {
         if (!event.target.hasAttribute('data-lang')) return;
         
         const lang = event.target.getAttribute('data-lang');
-        const enhancedDiv = document.getElementById('enhanced-description');
-        const originalDiv = document.getElementById('original-description');
+        const enhancedTextEl = document.getElementById('enhanced-description-text');
         
-        // Toggle visibility
-        if (lang === 'enhanced') {
-            if (enhancedDiv) enhancedDiv.style.display = 'block';
-            if (originalDiv) originalDiv.style.display = 'none';
-        } else {
-            if (enhancedDiv) enhancedDiv.style.display = 'none';
-            if (originalDiv) originalDiv.style.display = 'block';
+        // Update content based on language selection  
+        if (enhancedTextEl && this.descriptionData) {
+            if (lang === 'en') {
+                enhancedTextEl.textContent = this.descriptionData.enhanced_en || this.descriptionData.enhanced_description || this.descriptionData.enhanced;
+            } else if (lang === 'es') {
+                enhancedTextEl.textContent = this.descriptionData.enhanced_es || this.descriptionData.original;
+            }
         }
         
         // Update button states
