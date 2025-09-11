@@ -104,6 +104,20 @@ def lands():
         municipalities = [m[0] for m in municipalities if m[0]]
         municipalities.sort()
         
+        # Derive active_mode from sort_by for reliable UI state synchronization
+        if sort_by in ['score_investment']:
+            active_mode = 'investment'
+        elif sort_by in ['score_lifestyle']:
+            active_mode = 'lifestyle'
+        elif sort_by in ['score_total']:
+            active_mode = 'combined'
+        else:
+            # For non-score sorts (price, area, etc.), use explicit mode
+            active_mode = mode
+        
+        # Debug logging (temporary)
+        logger.debug(f"UI params mode={mode!r} sort={sort_by!r} -> active_mode={active_mode}")
+        
         return render_template(
             'lands.html',
             lands=lands,
@@ -117,6 +131,7 @@ def lands():
                 'municipality': municipality_filter,
                 'search': search_query,
                 'sea_view': sea_view_filter,
+                'active_mode': active_mode,
                 'view_type': view_type,
                 'page': page,
                 'per_page': per_page

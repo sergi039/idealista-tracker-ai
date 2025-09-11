@@ -192,21 +192,21 @@
                     <!-- Compact Mode Toggle Buttons -->
                     <div class="btn-group btn-group-sm" role="group" aria-label="Analysis mode">
                         <button type="button" 
-                                class="btn {% if current_filters.sort_by == 'score_total' or (current_filters.mode == 'combined' and current_filters.sort_by not in ['score_investment', 'score_lifestyle']) or (not current_filters.mode and current_filters.sort_by not in ['score_investment', 'score_lifestyle', 'score_total']) %}btn-secondary{% else %}btn-outline-secondary{% endif %}"
+                                class="btn {{ 'btn-secondary' if current_filters.active_mode == 'combined' else 'btn-outline-secondary' }}"
                                 onclick="switchMode('combined')" 
                                 id="mode-combined-btn"
                                 title="Combined Analysis - Shows overall property rating">
                             <i class="fas fa-balance-scale"></i>
                         </button>
                         <button type="button" 
-                                class="btn {% if current_filters.sort_by == 'score_investment' or current_filters.mode == 'investment' %}btn-success{% else %}btn-outline-secondary{% endif %}"
+                                class="btn {{ 'btn-success' if current_filters.active_mode == 'investment' else 'btn-outline-secondary' }}"
                                 onclick="switchMode('investment')" 
                                 id="mode-investment-btn"
                                 title="Investment Analysis - Focus on rental yield and ROI">
                             <i class="fas fa-chart-line"></i>
                         </button>
                         <button type="button" 
-                                class="btn {% if current_filters.sort_by == 'score_lifestyle' or current_filters.mode == 'lifestyle' %}btn-warning{% else %}btn-outline-secondary{% endif %}"
+                                class="btn {{ 'btn-warning' if current_filters.active_mode == 'lifestyle' else 'btn-outline-secondary' }}"
                                 onclick="switchMode('lifestyle')" 
                                 id="mode-lifestyle-btn"
                                 title="Lifestyle Analysis - Focus on quality of life factors">
