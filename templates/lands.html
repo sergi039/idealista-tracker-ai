@@ -8,20 +8,20 @@
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h1>
                 <i class="fas fa-map-marked-alt me-2"></i>
-                Properties
+                {{ t('properties') }}
                 {% if pagination %}
                     <span class="badge bg-secondary">{{ pagination.total }}</span>
                 {% else %}
                     <span class="badge bg-secondary">{{ lands|length }}</span>
                 {% endif %}
                 <small class="text-muted ms-3 fw-normal" style="font-size: 0.75rem;">
-                    Last sync: <span id="last-sync">Loading...</span>
+                    {{ t('last_sync') }}: <span id="last-sync">{{ t('loading') }}...</span>
                 </small>
             </h1>
             
             <div>
                 <a href="{{ url_for('main.export_csv', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}" class="btn btn-success">
-                    <i class="fas fa-download me-1"></i>Export CSV
+                    <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
                 </a>
             </div>
         </div>
@@ -31,7 +31,7 @@
         <div class="card mb-4">
             <div class="card-header">
                 <h5 class="card-title mb-0">
-                    <i class="fas fa-filter me-2"></i>Filters & Search
+                    <i class="fas fa-filter me-2"></i>{{ t('filters_search') }}
                 </h5>
             </div>
             <div class="card-body">
@@ -42,31 +42,31 @@
                     <div class="row">
                         <!-- Search -->
                         <div class="col-md-3 mb-3">
-                            <label for="search" class="form-label">Search</label>
+                            <label for="search" class="form-label">{{ t('search') }}</label>
                             <input type="text" class="form-control" id="search" name="search" 
                                    value="{{ current_filters.search or '' }}" 
-                                   placeholder="Title, description, municipality...">
+                                   placeholder="{{ t('search_properties') }}">
                         </div>
                         
                         <!-- Land Type -->
                         <div class="col-md-2 mb-3">
-                            <label for="land_type" class="form-label">Land Type</label>
+                            <label for="land_type" class="form-label">{{ t('land_type') }}</label>
                             <select class="form-select" id="land_type" name="land_type">
-                                <option value="">All Types</option>
+                                <option value="">{{ t('land_type_all') }}</option>
                                 <option value="developed" {{ 'selected' if current_filters.land_type == 'developed' }}>
-                                    Developed
+                                    {{ t('developed') }}
                                 </option>
                                 <option value="buildable" {{ 'selected' if current_filters.land_type == 'buildable' }}>
-                                    Buildable
+                                    {{ t('buildable') }}
                                 </option>
                             </select>
                         </div>
                         
                         <!-- Municipality -->
                         <div class="col-md-2 mb-3">
-                            <label for="municipality" class="form-label">Municipality</label>
+                            <label for="municipality" class="form-label">{{ t('municipality') }}</label>
                             <select class="form-select" id="municipality" name="municipality">
-                                <option value="">All Municipalities</option>
+                                <option value="">{{ t('all_municipalities') }}</option>
                                 {% for municipality in municipalities %}
                                     <option value="{{ municipality }}" 
                                             {{ 'selected' if current_filters.municipality == municipality }}>
@@ -83,14 +83,14 @@
                                 <input class="form-check-input" type="checkbox" id="sea_view" name="sea_view" 
                                        {{ 'checked' if current_filters.sea_view }}>
                                 <label class="form-check-label" for="sea_view">
-                                    <i class="fas fa-water me-1"></i>Sea View Only
+                                    <i class="fas fa-water me-1"></i>{{ t('sea_view_only') }}
                                 </label>
                             </div>
                         </div>
                         
                         <!-- Sort -->
                         <div class="col-md-3 mb-3">
-                            <label for="sort" class="form-label">Sort By</label>
+                            <label for="sort" class="form-label">{{ t('sort_by') }}</label>
                             <div class="input-group">
                                 <select class="form-select" id="sort" name="sort">
                                     <!-- Mode-based score options -->
@@ -127,16 +127,16 @@
                                     {% endif %}
                                     <!-- Other sort options -->
                                     <option value="price" {{ 'selected' if current_filters.sort_by == 'price' }}>
-                                        Price
+                                        {{ t('price') }}
                                     </option>
                                     <option value="area" {{ 'selected' if current_filters.sort_by == 'area' }}>
-                                        Area
+                                        {{ t('area') }}
                                     </option>
                                     <option value="travel_time_nearest_beach" {{ 'selected' if current_filters.sort_by == 'travel_time_nearest_beach' }}>
-                                        Beach Distance
+                                        {{ t('beach_distance') }}
                                     </option>
                                     <option value="created_at" {{ 'selected' if current_filters.sort_by == 'created_at' }}>
-                                        Date Added
+                                        {{ t('date_added') }}
                                     </option>
                                 </select>
                                 <select class="form-select" name="order" style="max-width: 100px;">
@@ -149,10 +149,10 @@
                         <!-- Action Buttons and View Toggle -->
                         <div class="col-md-4 mb-3 d-flex align-items-end">
                             <button type="submit" class="btn btn-primary me-2">
-                                <i class="fas fa-search me-1"></i>Apply
+                                <i class="fas fa-search me-1"></i>{{ t('apply') }}
                             </button>
                             <a href="{{ url_for('main.lands') }}" class="btn btn-outline-secondary me-3">
-                                <i class="fas fa-times me-1"></i>Clear
+                                <i class="fas fa-times me-1"></i>{{ t('clear') }}
                             </a>
                             
                             <!-- View Toggle -->
@@ -183,7 +183,7 @@
         {% if lands %}
             <div class="mb-3 d-flex justify-content-between align-items-center">
                 <div>
-                    <strong>{{ pagination.total }} properties found</strong>
+                    <strong>{{ pagination.total }} {{ t('properties_found') }}</strong>
                     {% if filters_applied %}
                         <span class="text-muted">(filtered)</span>
                     {% endif %}
@@ -267,11 +267,11 @@
                                             </a>
                                         </th>
                                         {% endif %}
-                                        <th>Title</th>
+                                        <th>{{ t('title') }}</th>
                                         <th style="min-width: 120px !important; white-space: nowrap !important;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='price', order='desc' if current_filters.sort_by == 'price' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
                                                class="text-white text-decoration-none d-flex align-items-center">
-                                                Price
+                                                {{ t('price') }}
                                                 {% if current_filters.sort_by == 'price' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
                                                 {% else %}
@@ -282,7 +282,7 @@
                                         <th style="min-width: 100px !important; white-space: nowrap !important;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='area', order='desc' if current_filters.sort_by == 'area' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
                                                class="text-white text-decoration-none d-flex align-items-center">
-                                                Area
+                                                {{ t('area') }}
                                                 {% if current_filters.sort_by == 'area' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
                                                 {% else %}
@@ -290,11 +290,11 @@
                                                 {% endif %}
                                             </a>
                                         </th>
-                                        <th style="white-space: nowrap;">Coords</th>
+                                        <th style="white-space: nowrap;">{{ t('coords') }}</th>
                                         <th style="min-width: 110px !important; white-space: nowrap !important;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='travel_time_nearest_beach', order='asc' if current_filters.sort_by == 'travel_time_nearest_beach' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
                                                class="text-white text-decoration-none d-flex align-items-center">
-                                                Beach
+                                                {{ t('beach') }}
                                                 {% if current_filters.sort_by == 'travel_time_nearest_beach' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
                                                 {% else %}
@@ -302,12 +302,12 @@
                                                 {% endif %}
                                             </a>
                                         </th>
-                                        <th style="white-space: nowrap;">Travel</th>
-                                        <th>Type</th>
+                                        <th style="white-space: nowrap;">{{ t('travel') }}</th>
+                                        <th>{{ t('type') }}</th>
                                         <th style="min-width: 120px !important; white-space: nowrap !important;">
                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='created_at', order='desc' if current_filters.sort_by == 'created_at' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
                                class="text-white text-decoration-none d-flex align-items-center">
-                                Added
+                                {{ t('added') }}
                                 {% if current_filters.sort_by == 'created_at' %}
                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
                                 {% else %}
@@ -315,7 +315,7 @@
                                 {% endif %}
                             </a>
                         </th>
-                                        <th style="white-space: nowrap;">Actions</th>
+                                        <th style="white-space: nowrap;">{{ t('actions') }}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
