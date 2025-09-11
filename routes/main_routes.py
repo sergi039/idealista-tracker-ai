@@ -233,10 +233,12 @@ def update_score(land_id):
         new_score = request.form.get('score')
         if new_score:
             try:
-                # Guard against NaN and infinity injection
-                score_value = float(new_score)
-                if not (score_value == score_value and score_value != float('inf') and score_value != float('-inf')):
+                # Guard against NaN and infinity injection - validate before conversion
+                new_score_lower = new_score.lower().strip()
+                if new_score_lower in ('nan', 'inf', 'infinity', '-inf', '-infinity'):
                     raise ValueError("NaN and infinity values not allowed")
+                
+                score_value = float(new_score)
                 # Validate score is between 0 and 100
                 if 0 <= score_value <= 100:
                     land.score_total = score_value
