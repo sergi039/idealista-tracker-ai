@@ -32,8 +32,12 @@ def bulk_enrichment():
         lands_to_enrich = Land.query.filter(
             (Land.infrastructure_extended.is_(None)) |
             (Land.environment.is_(None)) |
+            (Land.transport.is_(None)) |
+            (Land.services_quality.is_(None)) |
             (Land.infrastructure_extended == {}) |
-            (Land.environment == {})
+            (Land.environment == {}) |
+            (Land.transport == {}) |
+            (Land.services_quality == {})
         ).all()
         
         enrichment_service = EnrichmentService()
