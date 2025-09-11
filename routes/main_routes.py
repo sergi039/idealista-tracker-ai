@@ -19,7 +19,17 @@ def lands():
     """Main lands listing page with filtering and sorting"""
     try:
         # Get query parameters
-        sort_by = request.args.get('sort', 'score_total')
+        mode = request.args.get('mode', 'combined')  # combined, investment, lifestyle
+        
+        # Smart sorting defaults based on mode
+        mode_sort_defaults = {
+            'combined': 'score_total',
+            'investment': 'score_investment', 
+            'lifestyle': 'score_lifestyle'
+        }
+        default_sort = mode_sort_defaults.get(mode, 'score_total')
+        
+        sort_by = request.args.get('sort', default_sort)
         sort_order = request.args.get('order', 'desc')
         land_type_filter = request.args.get('land_type', '')
         municipality_filter = request.args.get('municipality', '')
@@ -87,6 +97,7 @@ def lands():
             pagination=pagination,
             municipalities=municipalities,
             current_filters={
+                'mode': mode,
                 'sort_by': sort_by,
                 'order': sort_order,
                 'land_type': land_type_filter,
@@ -269,6 +280,7 @@ def export_csv():
         import io
         
         # Get same filters as lands page
+        mode = request.args.get('mode', 'combined')
         land_type_filter = request.args.get('land_type', '')
         municipality_filter = request.args.get('municipality', '')
         search_query = request.args.get('search', '')
@@ -296,20 +308,27 @@ def export_csv():
         if sea_view_filter:
             query = query.filter(Land.environment['sea_view'].astext == 'true')
         
-        lands = query.order_by(Land.score_total.desc()).all()
+        # Apply mode-based sorting for CSV export
+        mode_sort_mapping = {
+            'combined': Land.score_total,
+            'investment': Land.score_investment,
+            'lifestyle': Land.score_lifestyle
+        }
+        sort_column = mode_sort_mapping.get(mode, Land.score_total)
+        lands = query.order_by(sort_column.desc().nullslast()).all()
         
         # Create CSV
         output = io.StringIO()
         writer = csv.writer(output)
         
-        # Header
+        # Header - include dual scores
         writer.writerow([
             'ID', 'Title', 'URL', 'Price (€)', 'Area (m²)', 'Municipality',
-            'Land Type', 'Legal Status', 'Score Total', 'Latitude', 'Longitude',
-            'Created At'
+            'Land Type', 'Legal Status', 'Score Total', 'Score Investment', 'Score Lifestyle', 
+            'Latitude', 'Longitude', 'Created At'
         ])
         
-        # Data rows
+        # Data rows - include dual scores
         for land in lands:
             writer.writerow([
                 land.id,
@@ -321,6 +340,8 @@ def export_csv():
                 land.land_type,
                 land.legal_status,
                 land.score_total,
+                land.score_investment,
+                land.score_lifestyle,
                 land.location_lat,
                 land.location_lon,
                 land.created_at.isoformat() if land.created_at else ''
