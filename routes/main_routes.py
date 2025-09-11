@@ -281,6 +281,17 @@ def export_csv():
         
         # Get same filters as lands page
         mode = request.args.get('mode', 'combined')
+        
+        # Smart sorting defaults based on mode (same as main lands route)
+        mode_sort_defaults = {
+            'combined': 'score_total',
+            'investment': 'score_investment', 
+            'lifestyle': 'score_lifestyle'
+        }
+        default_sort = mode_sort_defaults.get(mode, 'score_total')
+        
+        sort_by = request.args.get('sort', default_sort)
+        sort_order = request.args.get('order', 'desc')
         land_type_filter = request.args.get('land_type', '')
         municipality_filter = request.args.get('municipality', '')
         search_query = request.args.get('search', '')
@@ -308,14 +319,22 @@ def export_csv():
         if sea_view_filter:
             query = query.filter(Land.environment['sea_view'].astext == 'true')
         
-        # Apply mode-based sorting for CSV export
-        mode_sort_mapping = {
-            'combined': Land.score_total,
-            'investment': Land.score_investment,
-            'lifestyle': Land.score_lifestyle
-        }
-        sort_column = mode_sort_mapping.get(mode, Land.score_total)
-        lands = query.order_by(sort_column.desc().nullslast()).all()
+        # Apply sorting with same logic as main lands route
+        if hasattr(Land, sort_by):
+            sort_column = getattr(Land, sort_by)
+            if sort_order == 'asc':
+                # For ascending, NULLs go last
+                lands = query.order_by(sort_column.asc().nullslast()).all()
+            else:
+                # For descending (default for scores), NULLs go last
+                lands = query.order_by(sort_column.desc().nullslast()).all()
+        else:
+            # Fallback to mode default if invalid sort field
+            fallback_column = getattr(Land, default_sort)
+            if sort_order == 'asc':
+                lands = query.order_by(fallback_column.asc().nullslast()).all()
+            else:
+                lands = query.order_by(fallback_column.desc().nullslast()).all()
         
         # Create CSV
         output = io.StringIO()
