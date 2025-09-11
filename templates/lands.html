@@ -127,9 +127,39 @@
                             <label for="sort" class="form-label">Sort By</label>
                             <div class="input-group">
                                 <select class="form-select" id="sort" name="sort">
-                                    <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
-                                        Score Total
-                                    </option>
+                                    <!-- Mode-based score options -->
+                                    {% if current_filters.mode == 'investment' %}
+                                        <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
+                                            💼 Investment Score
+                                        </option>
+                                        <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
+                                            🏡 Lifestyle Score
+                                        </option>
+                                        <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
+                                            Combined Score
+                                        </option>
+                                    {% elif current_filters.mode == 'lifestyle' %}
+                                        <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
+                                            🏡 Lifestyle Score
+                                        </option>
+                                        <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
+                                            💼 Investment Score
+                                        </option>
+                                        <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
+                                            Combined Score
+                                        </option>
+                                    {% else %}
+                                        <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
+                                            Combined Score
+                                        </option>
+                                        <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
+                                            💼 Investment Score
+                                        </option>
+                                        <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
+                                            🏡 Lifestyle Score
+                                        </option>
+                                    {% endif %}
+                                    <!-- Other sort options -->
                                     <option value="price" {{ 'selected' if current_filters.sort_by == 'price' }}>
                                         Price
                                     </option>
@@ -207,10 +237,12 @@
                             <table class="table table-hover mb-0">
                                 <thead class="table-dark">
                                     <tr>
+                                        <!-- Combined Mode: Show total score -->
+                                        {% if current_filters.mode == 'combined' or not current_filters.mode %}
                                         <th>
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_total', order='desc' if current_filters.sort_by == 'score_total' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
                                                class="text-white text-decoration-none d-flex align-items-center">
-                                                Score
+                                                <i class="fas fa-balance-scale me-1"></i>Combined Score
                                                 {% if current_filters.sort_by == 'score_total' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
                                                 {% else %}
@@ -218,6 +250,31 @@
                                                 {% endif %}
                                             </a>
                                         </th>
+                                        {% else %}
+                                        <!-- Dual Score Mode: Show investment and lifestyle columns -->
+                                        <th style="background-color: {{ '#198754' if current_filters.mode == 'investment' else 'rgba(25, 135, 84, 0.3)' }};">
+                                            <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_investment', order='desc' if current_filters.sort_by == 'score_investment' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
+                                               class="text-white text-decoration-none d-flex align-items-center">
+                                                <i class="fas fa-chart-line me-1"></i>💼 Investment
+                                                {% if current_filters.sort_by == 'score_investment' %}
+                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
+                                                {% else %}
+                                                    <i class="fas fa-sort ms-1 opacity-50"></i>
+                                                {% endif %}
+                                            </a>
+                                        </th>
+                                        <th style="background-color: {{ '#ffc107' if current_filters.mode == 'lifestyle' else 'rgba(255, 193, 7, 0.3)' }};">
+                                            <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_lifestyle', order='desc' if current_filters.sort_by == 'score_lifestyle' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
+                                               class="text-white text-decoration-none d-flex align-items-center">
+                                                <i class="fas fa-home me-1"></i>🏡 Lifestyle
+                                                {% if current_filters.sort_by == 'score_lifestyle' %}
+                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
+                                                {% else %}
+                                                    <i class="fas fa-sort ms-1 opacity-50"></i>
+                                                {% endif %}
+                                            </a>
+                                        </th>
+                                        {% endif %}
                                         <th>Title</th>
                                         <th style="min-width: 120px !important; white-space: nowrap !important;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='price', order='desc' if current_filters.sort_by == 'price' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
@@ -272,8 +329,10 @@
                                 <tbody>
                                     {% for land in lands %}
                                         <tr class="land-row" data-land-id="{{ land.id }}">
+                                            <!-- Combined Mode: Show total score -->
+                                            {% if current_filters.mode == 'combined' or not current_filters.mode %}
                                             <td>
-                                                {% if land.score_total %}
+                                                {% if land.score_total is not none %}
                                                     <span class="badge score-badge" 
                                                           style="background-color: {{ 'var(--bs-success)' if land.score_total >= 70 else 'var(--bs-warning)' if land.score_total >= 50 else 'var(--bs-danger)' }}">
                                                         {{ "%.1f"|format(land.score_total) }}
@@ -282,6 +341,29 @@
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
+                                            {% else %}
+                                            <!-- Dual Score Mode: Show investment and lifestyle scores -->
+                                            <td style="background-color: {{ 'rgba(25, 135, 84, 0.2)' if current_filters.mode == 'investment' else 'rgba(25, 135, 84, 0.1)' }};">
+                                                {% if land.score_investment is not none %}
+                                                    <span class="badge" 
+                                                          style="background-color: {{ 'var(--bs-success)' if land.score_investment >= 70 else 'var(--bs-warning)' if land.score_investment >= 50 else 'var(--bs-danger)' }}; {{ 'font-weight: bold; font-size: 0.9em;' if current_filters.mode == 'investment' else '' }}">
+                                                        {{ "%.1f"|format(land.score_investment) }}
+                                                    </span>
+                                                {% else %}
+                                                    <span class="text-muted">-</span>
+                                                {% endif %}
+                                            </td>
+                                            <td style="background-color: {{ 'rgba(255, 193, 7, 0.2)' if current_filters.mode == 'lifestyle' else 'rgba(255, 193, 7, 0.1)' }};">
+                                                {% if land.score_lifestyle is not none %}
+                                                    <span class="badge" 
+                                                          style="background-color: {{ 'var(--bs-success)' if land.score_lifestyle >= 70 else 'var(--bs-warning)' if land.score_lifestyle >= 50 else 'var(--bs-danger)' }}; {{ 'font-weight: bold; font-size: 0.9em;' if current_filters.mode == 'lifestyle' else '' }}">
+                                                        {{ "%.1f"|format(land.score_lifestyle) }}
+                                                    </span>
+                                                {% else %}
+                                                    <span class="text-muted">-</span>
+                                                {% endif %}
+                                            </td>
+                                            {% endif %}
                                             <td>
                                                 <div class="fw-bold">
                                                     <a href="{{ url_for('main.land_detail', land_id=land.id) }}" class="text-decoration-none">
