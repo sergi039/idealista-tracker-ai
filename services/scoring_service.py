@@ -41,6 +41,7 @@ class ScoringService:
             scores = {}
             
             # Calculate individual scores (each returns 0-100)
+            scores['investment_yield'] = self._score_investment_yield(land)
             scores['location_quality'] = self._score_location_quality(land)
             scores['transport'] = self._score_transport(land)
             scores['infrastructure_basic'] = self._score_infrastructure_basic(land)
@@ -69,8 +70,14 @@ class ScoringService:
                     total_score += score * weight
                     weight_sum_used += weight
             
-            # Final score with MCDM validation
-            final_score = min(100, max(0, total_score))
+            # Final score with MCDM validation - normalize by actually used weights
+            if weight_sum_used > 0:
+                # Correct MCDM: normalize by used weights to account for missing data
+                normalized_score = total_score / weight_sum_used
+                final_score = min(100, max(0, normalized_score))
+            else:
+                # No valid criteria found
+                final_score = 0
             
             # Update land record
             land.score_total = round(final_score, 2)
@@ -405,6 +412,82 @@ class ScoringService:
         except Exception as e:
             logger.error(f"Failed to score development potential: {str(e)}")
             return 50  # Default middle score
+    
+    def _score_investment_yield(self, land) -> Optional[float]:
+        """Score investment yield based on rental potential and cap rate
+        Uses MarketAnalysisService to calculate rental analysis metrics"""
+        try:
+            from services.market_analysis_service import MarketAnalysisService
+            
+            market_service = MarketAnalysisService()
+            rental_analysis = market_service.calculate_rental_analysis(land)
+            
+            if not rental_analysis:
+                logger.debug(f"No rental analysis data available for land {land.id}")
+                return None
+            
+            # Extract key metrics
+            rental_yield = rental_analysis.get('rental_yield_avg')
+            cap_rate = rental_analysis.get('cap_rate_avg')
+            
+            if rental_yield is None and cap_rate is None:
+                logger.debug(f"No yield or cap rate data available for land {land.id}")
+                return None
+            
+            # Score rental yield (0-100 scale)
+            yield_score = 0
+            if rental_yield is not None:
+                if rental_yield >= 6.0:
+                    # 6%+ yield = 90-100 points (scale with yield up to 10%)
+                    yield_score = min(100, 90 + (rental_yield - 6.0) * 2.5)
+                elif rental_yield >= 4.0:
+                    # 4-6% yield = 75 points
+                    yield_score = 75
+                elif rental_yield >= 2.0:
+                    # 2-4% yield = 50 points
+                    yield_score = 50
+                else:
+                    # 0-2% yield = 20 points
+                    yield_score = 20
+            
+            # Score cap rate (0-100 scale, similar logic)
+            cap_score = 0
+            if cap_rate is not None:
+                if cap_rate >= 6.0:
+                    cap_score = min(100, 90 + (cap_rate - 6.0) * 2.5)
+                elif cap_rate >= 4.0:
+                    cap_score = 75
+                elif cap_rate >= 2.0:
+                    cap_score = 50
+                else:
+                    cap_score = 20
+            
+            # Combine scores: rental_yield (60%) + cap_rate (40%)
+            final_score = 0
+            weight_sum = 0
+            
+            if rental_yield is not None:
+                final_score += yield_score * 0.6
+                weight_sum += 0.6
+            
+            if cap_rate is not None:
+                final_score += cap_score * 0.4
+                weight_sum += 0.4
+            
+            if weight_sum > 0:
+                # Normalize by available weights
+                normalized_score = final_score / weight_sum
+                result = min(100, max(0, normalized_score))
+                
+                logger.info(f"Investment yield score for land {land.id}: {result:.1f} "
+                           f"(rental_yield={rental_yield}%, cap_rate={cap_rate}%)")
+                return result
+            else:
+                return None
+            
+        except Exception as e:
+            logger.error(f"Failed to score investment yield for land {land.id}: {str(e)}")
+            return None
     
     def update_weights(self, new_weights: Dict[str, float]) -> bool:
         """Update scoring weights and rescore all lands"""

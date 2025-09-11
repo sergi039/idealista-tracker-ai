@@ -45,24 +45,27 @@ class Config:
     OSM_OVERPASS_URL = "https://overpass-api.de/api/interpreter"
     
     # Professional scoring weights based on Spanish/European standards
-    # Total must equal 1.0 (100%)
+    # Total must equal 1.0 (100%) - Updated to include Investment Yield
     DEFAULT_SCORING_WEIGHTS = {
-        # Location & Accessibility (35%)
-        'location_quality': 0.20,          # Proximity to urban centers, neighborhood
-        'transport': 0.15,                 # Public transport, road access
+        # Investment & Financial Returns (20%) - NEW CRITERION
+        'investment_yield': 0.20,          # Rental yield, cap rate, investment metrics
         
-        # Infrastructure & Utilities (30%)
-        'infrastructure_basic': 0.20,      # Water, electricity, sewerage, internet
-        'infrastructure_extended': 0.10,   # Gas, telecommunications, public services
+        # Location & Accessibility (28%)
+        'location_quality': 0.16,          # Proximity to urban centers, neighborhood
+        'transport': 0.12,                 # Public transport, road access
         
-        # Physical & Environmental (15%)
-        'environment': 0.10,               # Environmental quality, natural features
-        'physical_characteristics': 0.05,  # Topography, size, shape
+        # Infrastructure & Utilities (24%)
+        'infrastructure_basic': 0.16,      # Water, electricity, sewerage, internet
+        'infrastructure_extended': 0.08,   # Gas, telecommunications, public services
         
-        # Services & Amenities (10%)
-        'services_quality': 0.10,          # Schools, hospitals, shopping
+        # Physical & Environmental (12%)
+        'environment': 0.08,               # Environmental quality, natural features
+        'physical_characteristics': 0.04,  # Topography, size, shape
         
-        # Legal & Development (10%)
-        'legal_status': 0.05,              # Zoning status, building permissions
-        'development_potential': 0.05      # Future development possibilities
+        # Services & Amenities (8%)
+        'services_quality': 0.08,          # Schools, hospitals, shopping
+        
+        # Legal & Development (8%)
+        'legal_status': 0.04,              # Zoning status, building permissions
+        'development_potential': 0.04      # Future development possibilities
     }
