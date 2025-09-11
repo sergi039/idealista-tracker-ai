@@ -226,8 +226,8 @@
             </div>
         </div>
 
-        <!-- Dual Scoring System -->
-        {% if land.score_investment or land.score_lifestyle or score_breakdown %}
+        <!-- Dual Scoring System - Hidden since we show compact version in sidebar -->
+        {% if False %}
             <div class="card mb-4">
                 <div class="card-header">
                     <h5 class="card-title mb-0">
@@ -332,12 +332,47 @@
             </div>
         </div>
         
+        <!-- Compact Dual Scoring Analysis -->
+        {% if land.score_investment or land.score_lifestyle %}
+            <div class="card mb-3" style="border: 1px solid #495057;">
+                <div class="card-body p-3">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="mb-0 text-light">
+                            <i class="fas fa-chart-bar me-1"></i>{{ t('dual_scoring_analysis') }}
+                        </h6>
+                    </div>
+                    <div class="row g-2">
+                        {% if land.score_investment %}
+                            <div class="col-6">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <small class="text-warning fw-bold">
+                                        <i class="fas fa-coins"></i> {{ t('investment_score') }}
+                                    </small>
+                                    <span class="badge bg-warning text-dark">{{ "%.0f"|format(land.score_investment) }}</span>
+                                </div>
+                            </div>
+                        {% endif %}
+                        {% if land.score_lifestyle %}
+                            <div class="col-6">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <small class="text-success fw-bold">
+                                        <i class="fas fa-home"></i> {{ t('lifestyle_score') }}
+                                    </small>
+                                    <span class="badge bg-success">{{ "%.0f"|format(land.score_lifestyle) }}</span>
+                                </div>
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        {% endif %}
+
         <!-- Travel Times to Cities & Beaches -->
         {% if land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital or land.travel_time_police or land.distance_airport or land.distance_train_station %}
             <div class="card mb-4">
                 <div class="card-header">
                     <h6 class="card-title mb-0">
-                        <i class="fas fa-map-marked-alt me-2"></i>Travel Times & Distances
+                        <i class="fas fa-map-marked-alt me-2"></i>{{ t('travel_times_distances') }}
                     </h6>
                 </div>
                 <div class="card-body">
