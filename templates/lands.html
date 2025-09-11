@@ -295,10 +295,8 @@
                                                        title="{% if land.location_accuracy == 'precise' %}Precise location{% elif land.location_accuracy == 'approximate' %}Approximate location{% else %}Unknown accuracy{% endif %}">
                                                         {% if land.location_accuracy == 'precise' %}
                                                             <i class="fas fa-map-marker-alt me-1 text-success" title="Precise location"></i>
-                                                        {% elif land.location_accuracy == 'approximate' %}
-                                                            <i class="fas fa-map-marker-alt me-1 text-danger" title="Approximate location"></i>
                                                         {% else %}
-                                                            <i class="fas fa-question-circle me-1 text-secondary" title="Unknown accuracy"></i>
+                                                            <i class="fas fa-map-marker-alt me-1 text-danger" title="Approximate location"></i>
                                                         {% endif %}
                                                         <small>{{ "%.4f"|format(land.location_lat) }}, {{ "%.4f"|format(land.location_lon) }}</small>
                                                     </a>
@@ -469,10 +467,8 @@
                                            target="_blank" class="text-decoration-none d-flex align-items-center">
                                             {% if land.location_accuracy == 'precise' %}
                                                 <i class="fas fa-map-marker-alt me-2 text-success"></i>
-                                            {% elif land.location_accuracy == 'approximate' %}
-                                                <i class="fas fa-map-marker-alt me-2 text-warning"></i>
                                             {% else %}
-                                                <i class="fas fa-question-circle me-2 text-secondary"></i>
+                                                <i class="fas fa-map-marker-alt me-2 text-warning"></i>
                                             {% endif %}
                                             <small>{{ land.municipality or 'Unknown location' }}</small>
                                         </a>
