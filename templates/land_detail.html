@@ -319,7 +319,7 @@
                 </h6>
             </div>
             <div class="card-body">
-                {% if idealista_data %}
+                {% if idealista_data and status == 'ok' %}
                     <!-- Basic Features -->
                     {% set basic_features = idealista_data.get('basic_features', {}) %}
                     {% if basic_features %}
@@ -413,6 +413,27 @@
                             </small>
                         </div>
                     {% endif %}
+                {% elif status == 'fetch_failed' %}
+                    <!-- Fetch Failed State -->
+                    <div class="text-center text-warning py-3">
+                        <i class="fas fa-exclamation-triangle fa-2x mb-2"></i>
+                        <p class="mb-1"><strong>Unable to Access Idealista</strong></p>
+                        <p class="mb-0 small">The website blocked our scraper from accessing property details.<br>Try the manual scrape button or check again later.</p>
+                    </div>
+                {% elif status == 'no_content' %}
+                    <!-- No Content State -->
+                    <div class="text-center text-info py-3">
+                        <i class="fas fa-info-circle fa-2x mb-2"></i>
+                        <p class="mb-1"><strong>No Property Features Found</strong></p>
+                        <p class="mb-0 small">The Idealista page was accessed but no property features were found.</p>
+                    </div>
+                {% elif status == 'parse_error' %}
+                    <!-- Parse Error State -->
+                    <div class="text-center text-danger py-3">
+                        <i class="fas fa-bug fa-2x mb-2"></i>
+                        <p class="mb-1"><strong>Data Processing Error</strong></p>
+                        <p class="mb-0 small">Property data was found but couldn't be processed correctly.</p>
+                    </div>
                 {% else %}
                     <!-- Empty State -->
                     <div class="text-center text-muted py-3">
