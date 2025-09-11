@@ -1174,6 +1174,16 @@ function switchMode(mode) {
     const url = new URL(window.location);
     url.searchParams.set('mode', mode);
     
+    // Auto-sync sort with mode selection for better UX
+    const currentSort = url.searchParams.get('sort');
+    if (mode === 'investment' && currentSort !== 'score_investment') {
+        url.searchParams.set('sort', 'score_investment');
+    } else if (mode === 'lifestyle' && currentSort !== 'score_lifestyle') {
+        url.searchParams.set('sort', 'score_lifestyle');
+    } else if (mode === 'combined' && currentSort !== 'score_total') {
+        url.searchParams.set('sort', 'score_total');
+    }
+    
     // Reset to first page when changing mode
     url.searchParams.delete('page');
     
