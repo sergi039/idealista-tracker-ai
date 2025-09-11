@@ -105,13 +105,19 @@ class ScoringCriteria(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     criteria_name = db.Column(db.String(100), nullable=False)
+    profile = db.Column(db.String(20), nullable=True, default='combined')  # 'investment', 'lifestyle', 'combined'
     weight = db.Column(db.Numeric(3, 2), default=1.0)
     active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
+    # Unique constraint for criteria_name + profile combination
+    __table_args__ = (
+        db.UniqueConstraint('criteria_name', 'profile', name='uq_criteria_profile'),
+    )
+    
     def __repr__(self):
-        return f'<ScoringCriteria {self.criteria_name}: {self.weight}>'
+        return f'<ScoringCriteria {self.criteria_name}[{self.profile}]: {self.weight}>'
 
 class SyncHistory(db.Model):
     __tablename__ = 'sync_history'

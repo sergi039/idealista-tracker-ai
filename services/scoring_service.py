@@ -11,11 +11,16 @@ class ScoringService:
         self.load_custom_weights()
     
     def load_custom_weights(self):
-        """Load custom scoring weights from database and normalize using MCDM methodology"""
+        """Load custom scoring weights from database and normalize using MCDM methodology
+        Falls back to Config profiles when no profile-specific DB weights exist"""
         try:
             from models import ScoringCriteria
             
-            criteria = ScoringCriteria.query.filter_by(active=True).all()
+            # Load legacy weights (profile=NULL or 'combined') for backward compatibility
+            criteria = ScoringCriteria.query.filter_by(active=True).filter(
+                (ScoringCriteria.profile == 'combined') | (ScoringCriteria.profile == None)
+            ).all()
+            
             if criteria:
                 custom_weights = {}
                 for criterion in criteria:
@@ -30,71 +35,78 @@ class ScoringService:
                             custom_weights[key] = custom_weights[key] / total_weight
                     
                     self.weights.update(custom_weights)
-                    logger.info(f"Loaded and normalized MCDM weights (sum={sum(custom_weights.values()):.3f}): {custom_weights}")
+                    logger.info(f"Loaded and normalized legacy MCDM weights (sum={sum(custom_weights.values()):.3f}): {custom_weights}")
+            
+            # Validate profiles on load
+            self._validate_profiles()
             
         except Exception as e:
             logger.error(f"Failed to load custom weights: {str(e)}")
     
     def calculate_score(self, land) -> float:
-        """Calculate total score using MCDM methodology (Multi-Criteria Decision Making)
+        """Calculate dual scores using MCDM methodology (Multi-Criteria Decision Making)
+        Computes Investment Score, Lifestyle Score, and Combined Score
         Compliant with ISO 31000 and RICS professional real estate evaluation standards"""
         try:
-            scores = {}
+            # Calculate individual criterion scores once (each returns 0-100)
+            individual_scores = {}
+            individual_scores['investment_yield'] = self._score_investment_yield(land)
+            individual_scores['location_quality'] = self._score_location_quality(land)
+            individual_scores['transport'] = self._score_transport(land)
+            individual_scores['infrastructure_basic'] = self._score_infrastructure_basic(land)
+            individual_scores['infrastructure_extended'] = self._score_infrastructure_extended(land)
+            individual_scores['environment'] = self._score_environment(land)
+            individual_scores['physical_characteristics'] = self._score_physical_characteristics(land)
+            individual_scores['services_quality'] = self._score_services_quality(land)
+            individual_scores['legal_status'] = self._score_legal_status(land)
+            individual_scores['development_potential'] = self._score_development_potential(land)
             
-            # Calculate individual scores (each returns 0-100)
-            scores['investment_yield'] = self._score_investment_yield(land)
-            scores['location_quality'] = self._score_location_quality(land)
-            scores['transport'] = self._score_transport(land)
-            scores['infrastructure_basic'] = self._score_infrastructure_basic(land)
-            scores['infrastructure_extended'] = self._score_infrastructure_extended(land)
-            scores['environment'] = self._score_environment(land)
-            scores['physical_characteristics'] = self._score_physical_characteristics(land)
-            scores['services_quality'] = self._score_services_quality(land)
-            scores['legal_status'] = self._score_legal_status(land)
-            scores['development_potential'] = self._score_development_potential(land)
+            # Calculate Investment Score using Investment Profile
+            investment_score = self._calculate_profile_score(individual_scores, 'investment')
             
-            # Ensure weights are normalized (MCDM requirement)
-            total_weight = sum(self.weights.values())
-            if abs(total_weight - 1.0) > 0.001:
-                logger.warning(f"Weights not properly normalized (sum={total_weight:.3f}), normalizing...")
-                for key in self.weights:
-                    self.weights[key] = self.weights[key] / total_weight if total_weight > 0 else 0
+            # Calculate Lifestyle Score using Lifestyle Profile
+            lifestyle_score = self._calculate_profile_score(individual_scores, 'lifestyle')
             
-            # Calculate MCDM weighted score (0-100 scale)
-            total_score = 0
-            weight_sum_used = 0
+            # Calculate Combined Score using COMBINED_MIX
+            from config import Config
+            mix = Config.COMBINED_MIX
+            combined_score = (investment_score * mix['investment'] + 
+                            lifestyle_score * mix['lifestyle'])
             
-            for criterion, score in scores.items():
-                if score is not None and criterion in self.weights:
-                    weight = self.weights[criterion]
-                    # MCDM: score * normalized_weight (where weights sum to 1.0)
-                    total_score += score * weight
-                    weight_sum_used += weight
+            # Update land record with all three scores
+            land.score_investment = Decimal(str(round(investment_score, 2)))
+            land.score_lifestyle = Decimal(str(round(lifestyle_score, 2)))
+            land.score_total = Decimal(str(round(combined_score, 2)))
             
-            # Final score with MCDM validation - normalize by actually used weights
-            if weight_sum_used > 0:
-                # Correct MCDM: normalize by used weights to account for missing data
-                normalized_score = total_score / weight_sum_used
-                final_score = min(100, max(0, normalized_score))
-            else:
-                # No valid criteria found
-                final_score = 0
-            
-            # Update land record - convert to Decimal for proper database storage
-            land.score_total = Decimal(str(round(final_score, 2)))
-            
-            # Store MCDM breakdown for transparency
+            # Store comprehensive MCDM breakdown for transparency
             if not land.environment:
                 land.environment = {}
-            land.environment['score_breakdown'] = scores
-            land.environment['mcdm_weights_used'] = dict(self.weights)
-            land.environment['mcdm_weight_sum'] = weight_sum_used
             
-            logger.info(f"MCDM score calculated for land {land.id}: {final_score} (weights_sum={weight_sum_used:.3f})")
-            return final_score
+            land.environment['scoring'] = {
+                'individual_scores': individual_scores,
+                'profiles': {
+                    'investment': {
+                        'score': investment_score,
+                        'weights_used': self._get_profile_weights_used(individual_scores, 'investment'),
+                        'score_breakdown': self._get_profile_breakdown(individual_scores, 'investment')
+                    },
+                    'lifestyle': {
+                        'score': lifestyle_score,
+                        'weights_used': self._get_profile_weights_used(individual_scores, 'lifestyle'),
+                        'score_breakdown': self._get_profile_breakdown(individual_scores, 'lifestyle')
+                    }
+                },
+                'combined_mix': mix,
+                'combined_score': combined_score
+            }
+            
+            logger.info(f"Dual MCDM scores calculated for land {land.id}: "
+                       f"Investment={investment_score:.1f}, Lifestyle={lifestyle_score:.1f}, "
+                       f"Combined={combined_score:.1f}")
+            return combined_score
             
         except Exception as e:
-            logger.error(f"Failed to calculate MCDM score for land {land.id}: {str(e)}")
+            logger.error(f"Failed to calculate dual MCDM scores for land {land.id}: {str(e)}")
             return 0
     
     def _score_infrastructure_basic(self, land) -> Optional[float]:
@@ -490,16 +502,22 @@ class ScoringService:
             logger.error(f"Failed to score investment yield for land {land.id}: {str(e)}")
             return None
     
-    def update_weights(self, new_weights: Dict[str, float]) -> bool:
-        """Update scoring weights and rescore all lands"""
+    def update_weights(self, new_weights: Dict[str, float], profile: str = 'combined') -> bool:
+        """Update scoring weights for a specific profile and rescore all lands"""
         try:
             from models import ScoringCriteria, Land
             from app import db
             
-            # Update or create criteria records
+            # Validate profile
+            if profile not in ['combined', 'investment', 'lifestyle']:
+                logger.error(f"Invalid profile: {profile}")
+                return False
+            
+            # Update or create criteria records for this profile
             for criteria_name, weight in new_weights.items():
                 criterion = ScoringCriteria.query.filter_by(
-                    criteria_name=criteria_name
+                    criteria_name=criteria_name,
+                    profile=profile
                 ).first()
                 
                 if criterion:
@@ -507,28 +525,204 @@ class ScoringService:
                 else:
                     criterion = ScoringCriteria()
                     criterion.criteria_name = criteria_name
+                    criterion.profile = profile
                     criterion.weight = weight
                     db.session.add(criterion)
             
             db.session.commit()
             
-            # Update local weights
-            self.weights.update(new_weights)
+            # Update local weights only if profile is 'combined' (legacy compatibility)
+            if profile == 'combined':
+                self.weights.update(new_weights)
             
-            # Rescore all lands
+            # Rescore all lands (they will use new profile weights)
             lands = Land.query.all()
             for land in lands:
                 self.calculate_score(land)
             
             db.session.commit()
             
-            logger.info(f"Updated scoring weights and rescored {len(lands)} lands")
+            logger.info(f"Updated {profile} profile weights and rescored {len(lands)} lands")
             return True
             
         except Exception as e:
-            logger.error(f"Failed to update weights: {str(e)}")
+            logger.error(f"Failed to update weights for profile {profile}: {str(e)}")
             return False
     
     def get_current_weights(self) -> Dict[str, float]:
         """Get current scoring weights"""
         return self.weights.copy()
+    
+    def _calculate_profile_score(self, individual_scores: Dict[str, float], profile: str) -> float:
+        """Calculate MCDM score for a specific profile (investment or lifestyle)"""
+        try:
+            from config import Config
+            
+            if profile not in Config.SCORING_PROFILES:
+                logger.error(f"Unknown scoring profile: {profile}")
+                return 0
+            
+            profile_weights = Config.SCORING_PROFILES[profile]
+            
+            # Ensure profile weights are normalized (MCDM requirement)
+            total_weight = sum(profile_weights.values())
+            if abs(total_weight - 1.0) > 0.001:
+                logger.warning(f"Profile '{profile}' weights not properly normalized (sum={total_weight:.3f})")
+                # Normalize on the fly
+                profile_weights = {k: v / total_weight for k, v in profile_weights.items() if total_weight > 0}
+            
+            # Calculate MCDM weighted score for this profile
+            total_score = 0
+            weight_sum_used = 0
+            
+            for criterion, weight in profile_weights.items():
+                if criterion in individual_scores and individual_scores[criterion] is not None:
+                    score = individual_scores[criterion]
+                    # MCDM: score * normalized_weight (where weights sum to 1.0)
+                    total_score += score * weight
+                    weight_sum_used += weight
+            
+            # Final score with MCDM validation - normalize by actually used weights
+            if weight_sum_used > 0:
+                # Correct MCDM: normalize by used weights to account for missing data
+                normalized_score = total_score / weight_sum_used
+                final_score = min(100, max(0, normalized_score))
+            else:
+                # No valid criteria found for this profile
+                final_score = 0
+            
+            logger.debug(f"Profile '{profile}' score: {final_score:.1f} (weights_sum={weight_sum_used:.3f})")
+            return final_score
+            
+        except Exception as e:
+            logger.error(f"Failed to calculate profile score for '{profile}': {str(e)}")
+            return 0
+    
+    def _get_profile_weights_used(self, individual_scores: Dict[str, float], profile: str) -> Dict[str, float]:
+        """Get the actual weights used for a profile (excluding criteria with None scores)
+        Loads from database first, falls back to Config if not found"""
+        try:
+            # Get profile weights (DB first, then Config fallback)
+            profile_weights = self._load_profile_weights(profile)
+            
+            if not profile_weights:
+                return {}
+            
+            weights_used = {}
+            
+            for criterion, weight in profile_weights.items():
+                if criterion in individual_scores and individual_scores[criterion] is not None:
+                    weights_used[criterion] = weight
+            
+            return weights_used
+            
+        except Exception as e:
+            logger.error(f"Failed to get profile weights used for '{profile}': {str(e)}")
+            return {}
+    
+    def _get_profile_breakdown(self, individual_scores: Dict[str, float], profile: str) -> Dict[str, float]:
+        """Get score breakdown for a profile (only criteria with non-None scores)"""
+        try:
+            from config import Config
+            
+            if profile not in Config.SCORING_PROFILES:
+                return {}
+            
+            profile_weights = Config.SCORING_PROFILES[profile]
+            breakdown = {}
+            
+            for criterion, weight in profile_weights.items():
+                if criterion in individual_scores and individual_scores[criterion] is not None:
+                    breakdown[criterion] = individual_scores[criterion]
+            
+            return breakdown
+            
+        except Exception as e:
+            logger.error(f"Failed to get profile breakdown for '{profile}': {str(e)}")
+            return {}
+    
+    def _load_profile_weights(self, profile: str) -> Dict[str, float]:
+        """Load weights for a specific profile from database, fallback to Config"""
+        try:
+            from models import ScoringCriteria
+            from config import Config
+            
+            # First try to load from database
+            criteria = ScoringCriteria.query.filter_by(
+                active=True,
+                profile=profile
+            ).all()
+            
+            if criteria:
+                db_weights = {}
+                for criterion in criteria:
+                    db_weights[criterion.criteria_name] = float(criterion.weight)
+                
+                # Normalize DB weights (MCDM requirement)
+                total_weight = sum(db_weights.values())
+                if total_weight > 0:
+                    normalized_weights = {k: v / total_weight for k, v in db_weights.items()}
+                    logger.info(f"Loaded {profile} profile weights from DB: {normalized_weights}")
+                    return normalized_weights
+            
+            # Fallback to Config if no DB weights found
+            if hasattr(Config, 'SCORING_PROFILES') and profile in Config.SCORING_PROFILES:
+                config_weights = Config.SCORING_PROFILES[profile].copy()
+                logger.info(f"Using Config fallback for {profile} profile: {config_weights}")
+                return config_weights
+            
+            logger.warning(f"No weights found for profile '{profile}' in DB or Config")
+            return {}
+            
+        except Exception as e:
+            logger.error(f"Failed to load profile weights for '{profile}': {str(e)}")
+            return {}
+
+    def _validate_profiles(self):
+        """Validate that SCORING_PROFILES and COMBINED_MIX are properly configured
+        Called during service initialization to ensure data integrity"""
+        try:
+            from config import Config
+            
+            # Validate SCORING_PROFILES
+            if not hasattr(Config, 'SCORING_PROFILES'):
+                logger.error("SCORING_PROFILES not found in config")
+                return
+            
+            for profile_name, weights in Config.SCORING_PROFILES.items():
+                if not isinstance(weights, dict):
+                    logger.error(f"Profile '{profile_name}' weights must be a dictionary")
+                    continue
+                
+                # Check that weights sum to 1.0 (±0.001 tolerance)
+                total_weight = sum(weights.values())
+                if abs(total_weight - 1.0) > 0.001:
+                    logger.warning(f"Profile '{profile_name}' weights sum to {total_weight:.3f}, expected 1.0. "
+                                 f"Weights will be normalized at runtime.")
+                
+                # Check for unknown criteria
+                valid_criteria = set(Config.DEFAULT_SCORING_WEIGHTS.keys())
+                for criterion in weights.keys():
+                    if criterion not in valid_criteria:
+                        logger.warning(f"Profile '{profile_name}' contains unknown criterion: '{criterion}'")
+            
+            # Validate COMBINED_MIX
+            if not hasattr(Config, 'COMBINED_MIX'):
+                logger.error("COMBINED_MIX not found in config")
+                return
+            
+            mix = Config.COMBINED_MIX
+            required_keys = {'investment', 'lifestyle'}
+            mix_keys = set(mix.keys())
+            
+            if mix_keys != required_keys:
+                logger.error(f"COMBINED_MIX must contain exactly {required_keys}, got {mix_keys}")
+            
+            mix_sum = sum(mix.values())
+            if abs(mix_sum - 1.0) > 0.001:
+                logger.warning(f"COMBINED_MIX weights sum to {mix_sum:.3f}, expected 1.0")
+            
+            logger.info("Profile validation completed successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to validate profiles: {str(e)}")

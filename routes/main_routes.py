@@ -129,8 +129,8 @@ def land_detail(land_id):
         
         # Get score breakdown from environment field
         score_breakdown = {}
-        if land.environment and 'score_breakdown' in land.environment:
-            score_breakdown = land.environment['score_breakdown']
+        if land.environment and 'scoring' in land.environment:
+            score_breakdown = land.environment['scoring']
         
         return render_template(
             'land_detail.html',
@@ -145,28 +145,55 @@ def land_detail(land_id):
 
 @main_bp.route('/criteria')
 def criteria():
-    """Scoring criteria management page"""
+    """Scoring criteria management page with dual scoring profiles"""
     try:
-        criteria = ScoringCriteria.query.filter_by(active=True).all()
+        from config import Config
+        from services.scoring_service import ScoringService
         
-        # If no criteria exist, create defaults
-        if not criteria:
-            from config import Config
-            for criteria_name, weight in Config.DEFAULT_SCORING_WEIGHTS.items():
-                criterion = ScoringCriteria()
-                criterion.criteria_name = criteria_name
-                criterion.weight = weight
-                criterion.active = True
-                db.session.add(criterion)
-            db.session.commit()
-            criteria = ScoringCriteria.query.filter_by(active=True).all()
+        # Load profile weights using ScoringService for consistency
+        scoring_service = ScoringService()
         
-        return render_template('criteria.html', criteria=criteria)
+        # Get investment profile weights (DB first, Config fallback)
+        investment_weights = scoring_service._load_profile_weights('investment')
+        if not investment_weights and hasattr(Config, 'SCORING_PROFILES'):
+            investment_weights = Config.SCORING_PROFILES.get('investment', {})
+        
+        # Get lifestyle profile weights (DB first, Config fallback)
+        lifestyle_weights = scoring_service._load_profile_weights('lifestyle')
+        if not lifestyle_weights and hasattr(Config, 'SCORING_PROFILES'):
+            lifestyle_weights = Config.SCORING_PROFILES.get('lifestyle', {})
+        
+        # Get combined mix ratio
+        combined_mix = getattr(Config, 'COMBINED_MIX', {'investment': 0.32, 'lifestyle': 0.68})
+        
+        # Get criteria descriptions for display
+        criteria_descriptions = {
+            'investment_yield': 'Rental yield, cap rate, investment metrics and return potential',
+            'location_quality': 'Proximity to urban centers, municipality prestige, neighborhood quality',
+            'transport': 'Public transport access, highways, airports, train stations',
+            'infrastructure_basic': 'Water, electricity, sewerage, internet connectivity',
+            'infrastructure_extended': 'Gas, telecommunications, public services infrastructure',
+            'environment': 'Environmental quality, views, natural features, orientation',
+            'physical_characteristics': 'Land size, shape, topography, price per square meter',
+            'services_quality': 'Schools, hospitals, shopping, restaurants quality ratings',
+            'legal_status': 'Zoning status, building permissions, land classification',
+            'development_potential': 'Future development possibilities, urbanization plans'
+        }
+        
+        return render_template('criteria.html', 
+                             investment_weights=investment_weights,
+                             lifestyle_weights=lifestyle_weights,
+                             combined_mix=combined_mix,
+                             criteria_descriptions=criteria_descriptions)
         
     except Exception as e:
         logger.error(f"Failed to load criteria page: {str(e)}")
         flash(f"Error loading criteria: {str(e)}", 'error')
-        return render_template('criteria.html', criteria=[])
+        return render_template('criteria.html', 
+                             investment_weights={},
+                             lifestyle_weights={},
+                             combined_mix={'investment': 0.32, 'lifestyle': 0.68},
+                             criteria_descriptions={})
 
 @main_bp.route('/criteria/update', methods=['POST'])
 def update_criteria():
@@ -187,7 +214,7 @@ def update_criteria():
         from services.scoring_service import ScoringService
         scoring_service = ScoringService()
         
-        if scoring_service.update_weights(weights):
+        if scoring_service.update_weights(weights, profile='combined'):
             flash('Scoring criteria updated successfully. All lands have been rescored.', 'success')
         else:
             flash('Failed to update scoring criteria', 'error')
@@ -198,6 +225,88 @@ def update_criteria():
         logger.error(f"Failed to update criteria: {str(e)}")
         flash(f"Error updating criteria: {str(e)}", 'error')
         return redirect(url_for('main.criteria'))
+
+@main_bp.route('/criteria/update_profile/<profile>', methods=['POST'])
+def update_criteria_profile(profile):
+    """Update scoring criteria weights for a specific profile (investment/lifestyle)"""
+    try:
+        # Validate profile
+        if profile not in ['investment', 'lifestyle']:
+            flash(f'Invalid profile: {profile}', 'error')
+            return redirect(url_for('main.criteria'))
+        
+        # Parse form data to get new weights
+        weights = {}
+        for key, value in request.form.items():
+            if key.startswith('weight_'):
+                criteria_name = key.replace('weight_', '')
+                try:
+                    weights[criteria_name] = float(value)
+                except ValueError:
+                    flash(f"Invalid weight value for {criteria_name}", 'error')
+                    return redirect(url_for('main.criteria'))
+        
+        logger.info(f"Updating {profile} profile weights: {weights}")
+        
+        # Use ScoringService to update weights for specific profile
+        from services.scoring_service import ScoringService
+        scoring_service = ScoringService()
+        
+        if scoring_service.update_weights(weights, profile=profile):
+            flash(f'{profile.title()} profile weights updated and all properties rescored successfully!', 'success')
+        else:
+            flash(f'Failed to update {profile} profile weights.', 'error')
+            
+    except Exception as e:
+        logger.error(f"Failed to update {profile} profile criteria: {str(e)}")
+        flash(f'Error updating {profile} profile: {str(e)}', 'error')
+        
+    return redirect(url_for('main.criteria'))
+
+@main_bp.route('/criteria/update_combined_mix', methods=['POST'])  
+def update_combined_mix():
+    """Update the Investment vs Lifestyle balance for combined scoring"""
+    try:
+        # Parse form data
+        investment_weight = float(request.form.get('investment_weight', 0.32))
+        lifestyle_weight = float(request.form.get('lifestyle_weight', 0.68))
+        
+        # Validate weights sum to 1.0
+        total_weight = investment_weight + lifestyle_weight
+        if abs(total_weight - 1.0) > 0.01:
+            flash(f'Combined mix weights must sum to 1.0, got {total_weight:.3f}', 'error')
+            return redirect(url_for('main.criteria'))
+        
+        logger.info(f"Updating combined mix: Investment={investment_weight:.3f}, Lifestyle={lifestyle_weight:.3f}")
+        
+        # Update config (in a real app, this would update database or config file)
+        # For now, we'll update the runtime config and rescore all properties
+        from config import Config
+        Config.COMBINED_MIX = {
+            'investment': investment_weight,
+            'lifestyle': lifestyle_weight
+        }
+        
+        # Rescore all lands with new mix
+        from models import Land
+        from services.scoring_service import ScoringService
+        from app import db
+        
+        scoring_service = ScoringService()
+        lands = Land.query.all()
+        
+        for land in lands:
+            scoring_service.calculate_score(land)
+            
+        db.session.commit()
+        
+        flash(f'Combined mix updated to {investment_weight*100:.0f}% Investment + {lifestyle_weight*100:.0f}% Lifestyle. All properties rescored!', 'success')
+        
+    except Exception as e:
+        logger.error(f"Failed to update combined mix: {str(e)}")
+        flash(f'Error updating combined mix: {str(e)}', 'error')
+        
+    return redirect(url_for('main.criteria'))
 
 @main_bp.route('/land/<int:land_id>/edit-environment', methods=['GET', 'POST'])
 def edit_environment(land_id):
