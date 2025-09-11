@@ -214,32 +214,97 @@
             </div>
         </div>
 
-        <!-- Score Breakdown -->
-        {% if score_breakdown %}
+        <!-- Dual Scoring System -->
+        {% if land.score_investment or land.score_lifestyle or score_breakdown %}
             <div class="card mb-4">
                 <div class="card-header">
                     <h5 class="card-title mb-0">
-                        <i class="fas fa-chart-bar me-2"></i>Score Breakdown
+                        <i class="fas fa-chart-bar me-2"></i>Dual Scoring Analysis
                     </h5>
                 </div>
                 <div class="card-body">
-                    <div class="row">
-                        {% for criteria, score in score_breakdown.items() %}
-                            {% if score is not none %}
+                    <!-- Investment vs Lifestyle Scores -->
+                    {% if land.score_investment or land.score_lifestyle %}
+                        <div class="row mb-4">
+                            {% if land.score_investment %}
                                 <div class="col-md-6 mb-3">
-                                    <div class="d-flex justify-content-between align-items-center mb-1">
-                                        <span class="fw-bold">{{ criteria.replace('_', ' ').title() }}</span>
-                                        <span class="badge bg-secondary">{{ "%.1f"|format(score) }}</span>
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <span class="fw-bold text-warning">
+                                            <i class="fas fa-chart-line me-1"></i>Investment Score
+                                        </span>
+                                        <span class="badge bg-warning text-dark fs-6">{{ "%.1f"|format(land.score_investment) }}</span>
                                     </div>
-                                    <div class="progress">
-                                        <div class="progress-bar" 
-                                             style="width: {{ score }}%; background-color: {{ 'var(--bs-success)' if score >= 70 else 'var(--bs-warning)' if score >= 50 else 'var(--bs-danger)' }};">
+                                    <div class="progress mb-1" style="height: 8px;">
+                                        <div class="progress-bar bg-warning" 
+                                             style="width: {{ land.score_investment }}%;">
                                         </div>
                                     </div>
+                                    <small class="text-muted">Rental yield, ROI, value appreciation</small>
                                 </div>
                             {% endif %}
-                        {% endfor %}
-                    </div>
+                            {% if land.score_lifestyle %}
+                                <div class="col-md-6 mb-3">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <span class="fw-bold text-success">
+                                            <i class="fas fa-home me-1"></i>Lifestyle Score
+                                        </span>
+                                        <span class="badge bg-success fs-6">{{ "%.1f"|format(land.score_lifestyle) }}</span>
+                                    </div>
+                                    <div class="progress mb-1" style="height: 8px;">
+                                        <div class="progress-bar bg-success" 
+                                             style="width: {{ land.score_lifestyle }}%;">
+                                        </div>
+                                    </div>
+                                    <small class="text-muted">Environment, amenities, quality of life</small>
+                                </div>
+                            {% endif %}
+                        </div>
+                        <hr>
+                    {% endif %}
+
+                    <!-- Detailed Criteria Breakdown -->
+                    {% if score_breakdown %}
+                        {% if score_breakdown.get('score_breakdown') %}
+                            <h6 class="mb-3">Criteria Breakdown</h6>
+                            <div class="row">
+                                {% for criteria, score in score_breakdown.get('score_breakdown', {}).items() %}
+                                    {% if score is not none %}
+                                        <div class="col-md-6 mb-3">
+                                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                                <span class="small">{{ criteria.replace('_', ' ').title() }}</span>
+                                                <span class="badge bg-secondary">{{ "%.1f"|format(score) }}</span>
+                                            </div>
+                                            <div class="progress" style="height: 6px;">
+                                                <div class="progress-bar" 
+                                                     style="width: {{ score }}%; background-color: {{ 'var(--bs-success)' if score >= 70 else 'var(--bs-warning)' if score >= 50 else 'var(--bs-danger)' }};">
+                                                </div>
+                                            </div>
+                                        </div>
+                                    {% endif %}
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                        
+                        <!-- Combined Mix Information -->
+                        {% if score_breakdown.get('combined_mix') %}
+                            <hr>
+                            <div class="mt-3">
+                                <h6 class="mb-2">Score Composition</h6>
+                                <div class="d-flex align-items-center">
+                                    <span class="small me-2">Investment {{ (score_breakdown.combined_mix.investment * 100)|round }}%</span>
+                                    <div class="progress flex-grow-1 me-2" style="height: 20px;">
+                                        <div class="progress-bar bg-warning" 
+                                             style="width: {{ (score_breakdown.combined_mix.investment * 100)|round }}%;">
+                                        </div>
+                                        <div class="progress-bar bg-success" 
+                                             style="width: {{ (score_breakdown.combined_mix.lifestyle * 100)|round }}%;">
+                                        </div>
+                                    </div>
+                                    <span class="small">Lifestyle {{ (score_breakdown.combined_mix.lifestyle * 100)|round }}%</span>
+                                </div>
+                            </div>
+                        {% endif %}
+                    {% endif %}
                 </div>
             </div>
         {% endif %}
@@ -783,6 +848,115 @@
                             {% endif %}
                         </div>
                     {% endfor %}
+                </div>
+            </div>
+        {% endif %}
+
+        <!-- Investment Analysis -->
+        {% if land.ai_analysis %}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h6 class="card-title mb-0">
+                        <i class="fas fa-chart-line me-2"></i>Investment Analysis
+                    </h6>
+                </div>
+                <div class="card-body">
+                    <!-- Rental Market Data -->
+                    {% if land.ai_analysis.get('rental_market_analysis') %}
+                        {% set rental_data = land.ai_analysis.rental_market_analysis %}
+                        {% if rental_data.get('expected_monthly_rent') or rental_data.get('rental_yield') %}
+                            <div class="mb-3">
+                                <h6 class="small fw-bold mb-2">Rental Market</h6>
+                                {% if rental_data.get('expected_monthly_rent') %}
+                                    <div class="d-flex justify-content-between mb-1">
+                                        <span class="small">Monthly Rent</span>
+                                        <span class="badge bg-success">€{{ rental_data.expected_monthly_rent }}/month</span>
+                                    </div>
+                                {% endif %}
+                                {% if rental_data.get('rental_yield') %}
+                                    <div class="d-flex justify-content-between mb-1">
+                                        <span class="small">Rental Yield</span>
+                                        <span class="badge bg-warning">{{ rental_data.rental_yield }}%</span>
+                                    </div>
+                                {% endif %}
+                                {% if rental_data.get('cap_rate') %}
+                                    <div class="d-flex justify-content-between mb-1">
+                                        <span class="small">Cap Rate</span>
+                                        <span class="badge bg-info">{{ rental_data.cap_rate }}%</span>
+                                    </div>
+                                {% endif %}
+                            </div>
+                        {% endif %}
+                    {% endif %}
+
+                    <!-- Investment Potential -->
+                    {% if land.ai_analysis.get('investment_potential') %}
+                        {% set investment = land.ai_analysis.investment_potential %}
+                        <div class="mb-3">
+                            <h6 class="small fw-bold mb-2">Investment Rating</h6>
+                            {% if investment.get('rating') %}
+                                <div class="d-flex justify-content-between mb-1">
+                                    <span class="small">Rating</span>
+                                    <span class="badge {{ 'bg-success' if investment.rating == 'HIGH' else 'bg-warning' if investment.rating == 'MEDIUM' else 'bg-secondary' }}">
+                                        {{ investment.rating }}
+                                    </span>
+                                </div>
+                            {% endif %}
+                            {% if investment.get('risk_level') %}
+                                <div class="d-flex justify-content-between mb-1">
+                                    <span class="small">Risk Level</span>
+                                    <span class="badge {{ 'bg-danger' if investment.risk_level == 'HIGH' else 'bg-warning' if investment.risk_level == 'MEDIUM' else 'bg-success' }}">
+                                        {{ investment.risk_level }}
+                                    </span>
+                                </div>
+                            {% endif %}
+                            {% if investment.get('forecast') %}
+                                <div class="mb-1">
+                                    <small class="text-muted">{{ investment.forecast }}</small>
+                                </div>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+
+                    <!-- Market Position -->
+                    {% if land.ai_analysis.get('comparable_analysis') %}
+                        {% set comparable = land.ai_analysis.comparable_analysis %}
+                        <div class="mb-3">
+                            <h6 class="small fw-bold mb-2">Market Position</h6>
+                            {% if comparable.get('market_position') %}
+                                <div class="mb-1">
+                                    <small class="text-info">{{ comparable.market_position }}</small>
+                                </div>
+                            {% endif %}
+                            {% if comparable.get('price_comparison') %}
+                                <div class="mb-1">
+                                    <small class="text-muted">{{ comparable.price_comparison }}</small>
+                                </div>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+
+                    <!-- Construction Value -->
+                    {% if land.ai_analysis.get('construction_value_estimation') %}
+                        {% set construction = land.ai_analysis.construction_value_estimation %}
+                        {% if construction.get('total_investment') or construction.get('value_per_m2') %}
+                            <div class="mb-3">
+                                <h6 class="small fw-bold mb-2">Development Cost</h6>
+                                {% if construction.get('total_investment') %}
+                                    <div class="d-flex justify-content-between mb-1">
+                                        <span class="small">Total Investment</span>
+                                        <span class="badge bg-primary">{{ construction.total_investment }}</span>
+                                    </div>
+                                {% endif %}
+                                {% if construction.get('value_per_m2') %}
+                                    <div class="d-flex justify-content-between mb-1">
+                                        <span class="small">Cost per m²</span>
+                                        <span class="badge bg-secondary">€{{ construction.value_per_m2 }}/m²</span>
+                                    </div>
+                                {% endif %}
+                            </div>
+                        {% endif %}
+                    {% endif %}
                 </div>
             </div>
         {% endif %}
