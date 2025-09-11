@@ -505,10 +505,9 @@ class ScoringService:
                 if criterion:
                     criterion.weight = weight
                 else:
-                    criterion = ScoringCriteria(
-                        criteria_name=criteria_name,
-                        weight=weight
-                    )
+                    criterion = ScoringCriteria()
+                    criterion.criteria_name = criteria_name
+                    criterion.weight = weight
                     db.session.add(criterion)
             
             db.session.commit()
