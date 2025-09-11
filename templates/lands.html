@@ -192,21 +192,21 @@
                     <!-- Compact Mode Toggle Buttons -->
                     <div class="btn-group btn-group-sm" role="group" aria-label="Analysis mode">
                         <button type="button" 
-                                class="btn {{ 'btn-secondary' if current_filters.mode == 'combined' or not current_filters.mode else 'btn-outline-secondary' }}"
+                                class="btn {{ 'btn-secondary' if (current_filters.mode == 'combined' or not current_filters.mode) or current_filters.sort_by == 'score_total' else 'btn-outline-secondary' }}"
                                 onclick="switchMode('combined')" 
                                 id="mode-combined-btn"
                                 title="Combined Analysis - Shows overall property rating">
                             <i class="fas fa-balance-scale"></i>
                         </button>
                         <button type="button" 
-                                class="btn {{ 'btn-success' if current_filters.mode == 'investment' else 'btn-outline-secondary' }}"
+                                class="btn {{ 'btn-success' if current_filters.mode == 'investment' or current_filters.sort_by == 'score_investment' else 'btn-outline-secondary' }}"
                                 onclick="switchMode('investment')" 
                                 id="mode-investment-btn"
                                 title="Investment Analysis - Focus on rental yield and ROI">
                             <i class="fas fa-chart-line"></i>
                         </button>
                         <button type="button" 
-                                class="btn {{ 'btn-warning' if current_filters.mode == 'lifestyle' else 'btn-outline-secondary' }}"
+                                class="btn {{ 'btn-warning' if current_filters.mode == 'lifestyle' or current_filters.sort_by == 'score_lifestyle' else 'btn-outline-secondary' }}"
                                 onclick="switchMode('lifestyle')" 
                                 id="mode-lifestyle-btn"
                                 title="Lifestyle Analysis - Focus on quality of life factors">
