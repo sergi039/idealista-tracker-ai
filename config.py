@@ -69,3 +69,41 @@ class Config:
         'legal_status': 0.04,              # Zoning status, building permissions
         'development_potential': 0.04      # Future development possibilities
     }
+    
+    # Dual Scoring System - MCDM Profiles for Investment vs Lifestyle analysis
+    SCORING_PROFILES = {
+        # Investment Profile - Focus on rental yield, location value, and development potential
+        'investment': {
+            'investment_yield': 0.35,          # Primary factor for investment returns
+            'location_quality': 0.20,          # Location drives property values
+            'legal_status': 0.10,              # Legal clarity essential for investment
+            'transport': 0.10,                 # Accessibility affects rental demand
+            'infrastructure_basic': 0.10,      # Basic utilities needed for rentals
+            'development_potential': 0.08,     # Future value appreciation
+            'physical_characteristics': 0.05,  # Size/shape for development
+            'infrastructure_extended': 0.02,   # Nice-to-have for investments
+            'services_quality': 0.00,          # Minimal impact on investment returns
+            'environment': 0.00                # Minimal impact on investment returns
+        },
+        
+        # Lifestyle Profile - Focus on quality of life, environment, and daily amenities
+        'lifestyle': {
+            'environment': 0.22,               # Views, nature, air quality for living
+            'services_quality': 0.18,          # Schools, healthcare, shopping for family
+            'location_quality': 0.20,          # Neighborhood quality for living
+            'transport': 0.12,                 # Daily commute and accessibility
+            'infrastructure_extended': 0.10,   # Gas, telecommunications for comfort
+            'infrastructure_basic': 0.08,      # Essential utilities
+            'physical_characteristics': 0.05,  # Land shape/size for personal use
+            'legal_status': 0.03,              # Less critical for personal residence
+            'development_potential': 0.02,     # Future changes can be disruptive
+            'investment_yield': 0.00           # Not relevant for personal residence
+        }
+    }
+    
+    # Combined Score Mix - Weighted combination of Investment and Lifestyle scores
+    # Based on user preferences: Investment (32%) + Lifestyle (68%)
+    COMBINED_MIX = {
+        'investment': 0.32,  # Weight for investment score in combined calculation
+        'lifestyle': 0.68    # Weight for lifestyle score in combined calculation
+    }
