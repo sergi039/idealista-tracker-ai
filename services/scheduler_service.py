@@ -1,5 +1,7 @@
 import os
 import logging
+import fcntl
+import tempfile
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import atexit
@@ -7,13 +9,26 @@ import atexit
 logger = logging.getLogger(__name__)
 
 scheduler = None
+scheduler_lock_file = None
 
 def init_scheduler(app):
-    """Initialize the background scheduler"""
-    global scheduler
+    """Initialize the background scheduler with protection against duplicate instances"""
+    global scheduler, scheduler_lock_file
     
     if scheduler is not None:
         return scheduler
+    
+    # Try to acquire an exclusive lock to prevent duplicate schedulers
+    lock_path = os.path.join(tempfile.gettempdir(), 'idealista_scheduler.lock')
+    try:
+        scheduler_lock_file = open(lock_path, 'w')
+        fcntl.flock(scheduler_lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        scheduler_lock_file.write(str(os.getpid()))
+        scheduler_lock_file.flush()
+        logger.info(f"Acquired scheduler lock (PID: {os.getpid()})")
+    except IOError:
+        logger.info("Another scheduler instance is already running, skipping initialization")
+        return None
     
     try:
         scheduler = BackgroundScheduler()
@@ -23,7 +38,7 @@ def init_scheduler(app):
             func=run_scheduled_ingestion,
             trigger=CronTrigger(hour=7, minute=0, timezone='Europe/Madrid'),
             id='morning_ingestion',
-            name='Morning Gmail Ingestion',
+            name='Morning IMAP Ingestion',
             replace_existing=True
         )
         
@@ -31,14 +46,26 @@ def init_scheduler(app):
             func=run_scheduled_ingestion,
             trigger=CronTrigger(hour=19, minute=0, timezone='Europe/Madrid'),
             id='evening_ingestion',
-            name='Evening Gmail Ingestion',
+            name='Evening IMAP Ingestion',
             replace_existing=True
         )
         
         scheduler.start()
         
-        # Shut down the scheduler when exiting the app
-        atexit.register(lambda: scheduler.shutdown())
+        # Shut down the scheduler and release lock when exiting the app
+        def cleanup():
+            global scheduler_lock_file
+            if scheduler:
+                scheduler.shutdown()
+            if scheduler_lock_file:
+                try:
+                    fcntl.flock(scheduler_lock_file.fileno(), fcntl.LOCK_UN)
+                    scheduler_lock_file.close()
+                    os.remove(scheduler_lock_file.name)
+                except:
+                    pass
+        
+        atexit.register(cleanup)
         
         logger.info("Scheduler initialized with ingestion jobs at 07:00 and 19:00 CET")
         return scheduler
@@ -61,6 +88,7 @@ def run_scheduled_ingestion():
             logger.info("Starting scheduled Gmail API ingestion")
             from services.gmail_service import GmailService
             service = GmailService()
+            # Gmail service doesn't have run_full_sync, use run_ingestion
             processed_count = service.run_ingestion()
         
         logger.info(f"Scheduled ingestion completed. Processed {processed_count} properties")

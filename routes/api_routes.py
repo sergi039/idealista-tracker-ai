@@ -3,6 +3,7 @@ import os
 from flask import Blueprint, jsonify, request, send_from_directory
 from models import Land, ScoringCriteria, SyncHistory
 from app import db
+from utils.auth import admin_required, rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +19,21 @@ def download_project():
     """Download project archive"""
     try:
         static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static')
-        return send_from_directory(static_dir, 'idealista-project.zip', as_attachment=True)
+        # Check which archive file exists
+        if os.path.exists(os.path.join(static_dir, 'idealista-project-new.zip')):
+            filename = 'idealista-project-new.zip'
+        elif os.path.exists(os.path.join(static_dir, 'idealista-project.tar.gz')):
+            filename = 'idealista-project.tar.gz'
+        else:
+            return jsonify({"error": "Project archive not found"}), 404
+        
+        return send_from_directory(static_dir, filename, as_attachment=True)
     except Exception as e:
         return jsonify({"error": str(e)}), 404
 
 @api_bp.route('/lands/enrich-all', methods=['POST'])
+@admin_required
+@rate_limit(max_requests=2, window_seconds=300)  # 2 requests per 5 minutes
 def bulk_enrichment():
     """Enrich all properties that are missing extended infrastructure or environment data"""
     try:
@@ -97,6 +108,8 @@ def manual_enrichment(land_id):
         }), 500
 
 @api_bp.route('/ingest/email/run', methods=['POST'])
+@admin_required
+@rate_limit(max_requests=5, window_seconds=60)  # 5 requests per minute
 def manual_ingestion():
     """Manually trigger email ingestion"""
     try:
@@ -119,13 +132,10 @@ def manual_ingestion():
             backend_name = "Gmail API"
         
         # Choose appropriate method based on sync type
-        if sync_type == 'full':
-            if hasattr(service, 'run_full_sync'):
-                processed_count = service.run_full_sync()
-            else:
-                # Fallback for services without full sync support
-                processed_count = service.run_ingestion()
+        if sync_type == 'full' and hasattr(service, 'run_full_sync'):
+            processed_count = service.run_full_sync()
         else:
+            # Use regular ingestion for incremental or if full sync not available
             processed_count = service.run_ingestion()
         
         return jsonify({
@@ -479,6 +489,8 @@ def get_criteria():
         }), 500
 
 @api_bp.route('/criteria', methods=['PUT'])
+@admin_required
+@rate_limit(max_requests=10, window_seconds=60)  # 10 requests per minute
 def update_criteria():
     """Update scoring criteria weights"""
     try:
