@@ -107,6 +107,9 @@
                                     <button type="button" class="btn btn-outline-light" data-lang="es">
                                         <i class="fas fa-language me-1"></i>Spanish
                                     </button>
+                                    <button type="button" class="btn btn-outline-light" data-lang="original">
+                                        <i class="fas fa-home me-1"></i>Idealista
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -294,6 +297,124 @@
                 </div>
             </div>
         {% endif %}
+
+        <!-- Property Features from Idealista -->
+        {% set idealista_data = land.property_details.get('idealista', {}) if land.property_details else {} %}
+        <div class="card mb-4">
+            <div class="card-header">
+                <h6 class="card-title mb-0">
+                    <i class="fas fa-info-circle me-2"></i>Property Features
+                    {% if idealista_data and idealista_data.get('meta', {}).get('status') == 'ok' %}
+                        <span class="badge bg-success ms-2">Idealista</span>
+                    {% else %}
+                        <span class="badge bg-secondary ms-2">Not Available</span>
+                    {% endif %}
+                </h6>
+            </div>
+            <div class="card-body">
+                {% if idealista_data %}
+                    <!-- Basic Features -->
+                    {% set basic_features = idealista_data.get('basic_features', {}) %}
+                    {% if basic_features %}
+                        <div class="mb-3">
+                            <strong class="text-primary">Basic Features</strong>
+                            {% if basic_features.get('total_land_area_m2') %}
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <span class="small">Total Land Area</span>
+                                    <span class="badge bg-info">{{ "{:,.0f}".format(basic_features.total_land_area_m2) }} m²</span>
+                                </div>
+                            {% endif %}
+                            {% if basic_features.get('buildable_area_m2') %}
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <span class="small">Buildable Area</span>
+                                    <span class="badge bg-info">{{ "{:,.0f}".format(basic_features.buildable_area_m2) }} m²</span>
+                                </div>
+                            {% endif %}
+                            {% if basic_features.get('min_area_for_sale_m2') %}
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <span class="small">Min. Area for Sale</span>
+                                    <span class="badge bg-info">{{ "{:,.0f}".format(basic_features.min_area_for_sale_m2) }} m²</span>
+                                </div>
+                            {% endif %}
+                            {% if basic_features.get('main_road_access') is not none %}
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <span class="small">Main Road Access</span>
+                                    {% if basic_features.main_road_access %}
+                                        <i class="fas fa-check-circle text-success"></i>
+                                    {% else %}
+                                        <i class="fas fa-times-circle text-danger"></i>
+                                    {% endif %}
+                                </div>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+
+                    <!-- Land Type -->
+                    {% set land_type = idealista_data.get('land_type', {}) %}
+                    {% if land_type %}
+                        <div class="mb-3">
+                            <strong class="text-primary">Land Type</strong>
+                            {% if land_type.get('buildable_land') %}
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <span class="small">Buildable Land</span>
+                                    <i class="fas fa-check-circle text-success"></i>
+                                </div>
+                            {% endif %}
+                            {% if land_type.get('certifications') %}
+                                <div class="mb-1">
+                                    <span class="small">Certifications:</span>
+                                    <div class="mt-1">
+                                        {% for cert in land_type.certifications %}
+                                            <span class="badge bg-secondary me-1 mb-1">{{ cert }}</span>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+
+                    <!-- Amenities -->
+                    {% set amenities = idealista_data.get('amenities', {}) %}
+                    {% if amenities %}
+                        <div class="mb-3">
+                            <strong class="text-primary">Amenities</strong>
+                            {% for amenity, available in amenities.items() %}
+                                {% if available is not none %}
+                                    <div class="d-flex justify-content-between align-items-center mb-1">
+                                        <span class="small">{{ amenity.replace('_', ' ').title() }}</span>
+                                        {% if available %}
+                                            <i class="fas fa-check-circle text-success"></i>
+                                        {% else %}
+                                            <i class="fas fa-times-circle text-danger"></i>
+                                        {% endif %}
+                                    </div>
+                                {% endif %}
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                    
+                    <!-- Meta Info -->
+                    {% set meta = idealista_data.get('meta', {}) %}
+                    {% if meta.get('last_fetched_at') %}
+                        <div class="text-muted">
+                            <small>
+                                <i class="fas fa-clock me-1"></i>
+                                Updated: {{ meta.last_fetched_at[:10] }}
+                                {% if meta.get('error_message') %}
+                                    <br><i class="fas fa-exclamation-triangle text-warning me-1"></i>{{ meta.error_message }}
+                                {% endif %}
+                            </small>
+                        </div>
+                    {% endif %}
+                {% else %}
+                    <!-- Empty State -->
+                    <div class="text-center text-muted py-3">
+                        <i class="fas fa-info-circle fa-2x mb-2 opacity-50"></i>
+                        <p class="mb-0 small">Property features will appear here<br>when Idealista data is available</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
 
         <!-- Infrastructure Basic -->
         {% if land.infrastructure_basic %}

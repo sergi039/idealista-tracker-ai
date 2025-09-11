@@ -800,10 +800,16 @@ window.IdealistaApp = {
             langToggle.style.display = 'block';
             
             // Ensure English button is active
-            const enhancedBtn = document.querySelector('[data-lang="enhanced"]');
+            const enBtn = document.querySelector('[data-lang="en"]');
+            const esBtn = document.querySelector('[data-lang="es"]'); 
             const originalBtn = document.querySelector('[data-lang="original"]');
-            if (enhancedBtn && originalBtn) {
-                enhancedBtn.classList.add('active');
+            if (enBtn) {
+                enBtn.classList.add('active');
+            }
+            if (esBtn) {
+                esBtn.classList.remove('active');
+            }
+            if (originalBtn) {
                 originalBtn.classList.remove('active');
             }
         }
@@ -821,6 +827,10 @@ window.IdealistaApp = {
                 enhancedTextEl.textContent = this.descriptionData.enhanced_en || this.descriptionData.enhanced_description || this.descriptionData.enhanced;
             } else if (lang === 'es') {
                 enhancedTextEl.textContent = this.descriptionData.enhanced_es || this.descriptionData.original;
+            } else if (lang === 'original') {
+                // Show original Idealista description if available, else fallback to email description
+                const originalIdealistaDesc = this.getOriginalIdealistaDescription();
+                enhancedTextEl.textContent = originalIdealistaDesc || this.descriptionData.original || 'Original Idealista description not available';
             }
         }
         
@@ -829,6 +839,19 @@ window.IdealistaApp = {
             btn.classList.remove('active');
         });
         event.target.classList.add('active');
+    },
+
+    getOriginalIdealistaDescription: function() {
+        // Try to get original Idealista description from land.property_details.idealista.original_description
+        // For now this will be null until scraper populates it, but we have good fallback chain
+        try {
+            // This will be populated by scraper: property_details.idealista.original_description
+            // For now, return null and let fallback chain handle it
+            return null;
+        } catch (e) {
+            console.log('[DESC] Could not get original Idealista description:', e);
+            return null;
+        }
     },
 
     showDescriptionLoading: function(show) {
