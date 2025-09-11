@@ -360,8 +360,10 @@
                                             {% endif %}
                                             <td>
                                                 <div class="fw-bold">
-                                                    <a href="{{ url_for('main.land_detail', land_id=land.id) }}" class="text-decoration-none">
-                                                        {{ land.title[:60] }}{% if land.title|length > 60 %}...{% endif %}
+                                                    <a href="{{ url_for('main.land_detail', land_id=land.id) }}" 
+                                                       class="text-decoration-none table-title" 
+                                                       title="{{ land.title }}">
+                                                        {{ land.title }}
                                                     </a>
                                                 </div>
                                             </td>
@@ -434,7 +436,7 @@
                                                         <span class="fw-bold">{{ land.travel_time_nearest_beach }}min</span>
                                                     </a>
                                                     {% if land.nearest_beach_name %}
-                                                        <small class="text-muted d-block">{{ land.nearest_beach_name[:15] }}{% if land.nearest_beach_name|length > 15 %}...{% endif %}</small>
+                                                        <small class="text-muted d-block compact-text" title="{{ land.nearest_beach_name }}">{{ land.nearest_beach_name }}</small>
                                                     {% endif %}
                                                 {% else %}
                                                     <span class="text-muted">-</span>
@@ -549,8 +551,11 @@
                             <!-- Card Body -->
                             <div class="card-body">
                                 <h6 class="card-title">
-                                    <a href="{{ url_for('main.land_detail', land_id=land.id) }}" class="text-decoration-none">
-                                        {{ land.title[:80] }}{% if land.title|length > 80 %}...{% endif %}
+                                    <a href="{{ url_for('main.land_detail', land_id=land.id) }}" 
+                                       class="text-decoration-none table-title" 
+                                       title="{{ land.title }}" 
+                                       style="max-width: 300px;">
+                                        {{ land.title }}
                                     </a>
                                 </h6>
                                 

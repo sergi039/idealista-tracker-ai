@@ -1,5 +1,41 @@
 /* Custom styles for Idealista Land Watch & Rank */
 
+/* Text truncation with ellipsis and tooltips */
+.text-truncate-with-tooltip {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    display: inline-block;
+    cursor: help;
+}
+
+.compact-text {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    max-width: 120px;
+    display: inline-block;
+}
+
+.compact-header {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    max-width: 180px;
+    display: inline-block;
+}
+
+/* Table cell truncation for property titles */
+.table-title {
+    max-width: 200px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    display: inline-block;
+    cursor: help;
+}
+
 /* HTMX indicators */
 .htmx-indicator {
     display: none;
