@@ -116,7 +116,7 @@ class IMAPService:
         
         return '\n'.join(text_parts)
     
-    def get_idealista_emails(self, max_results: int = None) -> List[Dict]:
+    def get_idealista_emails(self, max_results: Optional[int] = None) -> List[Dict]:
         """Fetch and parse Idealista emails via IMAP"""
         if not self.user or not self.password:
             logger.error("IMAP credentials not configured")
@@ -140,14 +140,14 @@ class IMAPService:
                     # Упрощенный поиск - только по отправителю
                     gm_query = 'from:noresponder@idealista.com'
                     try:
-                        uids = client.search(['X-GM-RAW', gm_query])
+                        uids = client.search('X-GM-RAW', gm_query)
                         logger.info(f"Gmail X-GM-RAW search found {len(uids)} emails")
                     except Exception as e:
                         logger.warning(f"X-GM-RAW not available: {e}, falling back to ALL")
-                        uids = client.search(['ALL'])
+                        uids = client.search('ALL')
                 else:
                     client.select_folder(self.folder or "INBOX", readonly=True)
-                    uids = client.search(['ALL'])
+                    uids = client.search('ALL')
 
                 logger.info(f"Total emails found: {len(uids)}")
 
@@ -167,7 +167,12 @@ class IMAPService:
                 for uid in uids:
                     try:
                         raw_email = fetch_data[uid][b'RFC822']
-                        msg = message_from_bytes(raw_email)
+                        # Ensure raw_email is bytes
+                        if isinstance(raw_email, bytes):
+                            msg = message_from_bytes(raw_email)
+                        else:
+                            logger.error(f"Invalid email data type for UID {uid}: {type(raw_email)}")
+                            continue
 
                         html_parts = self._extract_html_parts(msg)
                         body = '\n'.join(html_parts) or self._extract_text_parts(msg)
@@ -274,11 +279,10 @@ class IMAPService:
         start_time = datetime.utcnow()
         
         # Create sync history record
-        sync_history = SyncHistory(
-            sync_type=sync_type,
-            backend='imap',
-            started_at=start_time
-        )
+        sync_history = SyncHistory()
+        sync_history.sync_type = sync_type
+        sync_history.backend = 'imap'
+        sync_history.started_at = start_time
         db.session.add(sync_history)
         db.session.commit()
         
