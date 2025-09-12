@@ -399,7 +399,7 @@ class EnrichmentService:
                     'key': self.google_places_key
                 }
                 
-                response = requests.get(url, params=params)
+                response = requests.get(url, params=params, timeout=15)
                 if response.status_code == 200:
                     data = response.json()
                     for place in data.get('results', []):
@@ -533,7 +533,7 @@ class EnrichmentService:
                 'key': self.google_maps_key
             }
             
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=15)
             if response.status_code == 200:
                 data = response.json()
                 if data.get('rows') and data['rows'][0].get('elements'):
@@ -569,7 +569,8 @@ class EnrichmentService:
             response = requests.post(
                 self.osm_overpass_url,
                 data=overpass_query,
-                headers={'Content-Type': 'application/x-www-form-urlencoded'}
+                headers={'Content-Type': 'application/x-www-form-urlencoded'},
+                timeout=10  # 10 second timeout to prevent worker hangs
             )
             
             if response.status_code == 200:
