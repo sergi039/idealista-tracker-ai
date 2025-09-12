@@ -10,9 +10,9 @@
                 <i class="fas fa-map-marked-alt me-2"></i>
                 {{ t('properties') }}
                 {% if pagination %}
-                    <span class="badge bg-secondary">{{ pagination.total }}</span>
+                    <span class="chip chip-secondary">{{ pagination.total }}</span>
                 {% else %}
-                    <span class="badge bg-secondary">{{ lands|length }}</span>
+                    <span class="chip chip-secondary">{{ lands|length }}</span>
                 {% endif %}
                 <small class="text-muted ms-3 fw-normal" style="font-size: 0.75rem;">
                     {{ t('last_sync') }}: <span id="last-sync">{{ t('loading') }}...</span>
@@ -80,7 +80,7 @@
                         <div class="col-md-2 mb-3">
                             <label class="form-label">&nbsp;</label>
                             <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="sea_view" name="sea_view" 
+                                <input class="form-input" type="checkbox" id="sea_view" name="sea_view" 
                                        {{ 'checked' if current_filters.sea_view }}>
                                 <label class="form-check-label" for="sea_view">
                                     <i class="fas fa-water me-1"></i>{{ t('sea_view_only') }}
@@ -139,7 +139,7 @@
                                         {{ t('date_added') }}
                                     </option>
                                 </select>
-                                <select class="form-select" name="order" style="max-width: 100px;">
+                                <select class="form-input" name="order" style="max-width: 100px;">
                                     <option value="desc" {{ 'selected' if current_filters.order == 'desc' }}>↓</option>
                                     <option value="asc" {{ 'selected' if current_filters.order == 'asc' }}>↑</option>
                                 </select>
