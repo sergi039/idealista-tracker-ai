@@ -879,21 +879,6 @@
         {% endif %}
 
         <!-- Investment Analysis Summary -->
-        {% if land.ai_analysis %}
-            <div class="card mb-md3-4">
-                <div class="card-body p-md3-3">
-                    <div class="text-center">
-                        <i class="fas fa-chart-line fa-2x text-info mb-md3-2"></i>
-                        <h6 class="mb-md3-2">{{ t('investment_analysis_available') }}</h6>
-                        <p class="small text-on-surface-variant mb-md3-3">{{ t('detailed_rental_construction_analysis') }}</p>
-                        <button onclick="document.getElementById('ai-analysis-section').scrollIntoView({behavior: 'smooth'})" 
-                                class="btn-outlined btn-small">
-                            <i class="fas fa-arrow-down me-md3-2"></i>{{ t('view_detailed_analysis') }}
-                        </button>
-                    </div>
-                </div>
-            </div>
-        {% endif %}
 
         <!-- Meta Information -->
         <div class="card">
