@@ -325,26 +325,22 @@
                         </h6>
                     </div>
                     <div class="row g-2">
-                        {% if land.score_investment %}
-                            <div class="col-12 mb-md3-2">
-                                <div class="d-flex justify-content-between align-items-center">
-                                    <small class=" fw-bold">
-                                        <i class="fas fa-coins me-md3-2"></i>{{ t('investment') }}
-                                    </small>
-                                    <span class="chip chip-warning text-dark">{{ "%.0f"|format(land.score_investment) }}</span>
-                                </div>
+                        <div class="col-6">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <small class=" fw-bold">
+                                    <i class="fas fa-coins me-md3-2"></i>{{ t('investment') }}
+                                </small>
+                                <span class="chip chip-warning text-dark">{{ "%.0f"|format(land.score_investment or 0) }}</span>
                             </div>
-                        {% endif %}
-                        {% if land.score_lifestyle %}
-                            <div class="col-12 mb-md3-2">
-                                <div class="d-flex justify-content-between align-items-center">
-                                    <small class=" fw-bold">
-                                        <i class="fas fa-home me-md3-2"></i>{{ t('lifestyle') }}
-                                    </small>
-                                    <span class="chip chip-success">{{ "%.0f"|format(land.score_lifestyle) }}</span>
-                                </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <small class=" fw-bold">
+                                    <i class="fas fa-home me-md3-2"></i>{{ t('lifestyle') }}
+                                </small>
+                                <span class="chip chip-success">{{ "%.0f"|format(land.score_lifestyle or 0) }}</span>
                             </div>
-                        {% endif %}
+                        </div>
                     </div>
                 </div>
             </div>
