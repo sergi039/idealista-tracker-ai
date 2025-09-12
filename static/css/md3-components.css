@@ -693,6 +693,281 @@
   }
 }
 
+/* Critical Mobile Fixes for Criteria Page */
+@media (max-width: 480px) {
+  /* Typography size reductions */
+  .title-large { font-size: 16px !important; line-height: 1.2; }
+  .title-medium { font-size: 14px !important; line-height: 1.2; }
+  .body-large { font-size: 12px !important; }
+  .body-medium { font-size: 11px !important; }
+  .body-small { font-size: 10px !important; }
+  
+  /* Container adjustments */
+  .md3-container {
+    padding: 0 var(--md-sys-spacing-2) !important;
+    max-width: 100% !important;
+    box-sizing: border-box;
+  }
+  
+  /* Prevent horizontal overflow */
+  body {
+    overflow-x: hidden;
+  }
+  
+  /* Page header mobile */
+  .md3-page-header {
+    padding: var(--md-sys-spacing-3) 0;
+    margin-bottom: var(--md-sys-spacing-4);
+  }
+  
+  .md3-page-title {
+    font-size: 16px !important;
+    gap: var(--md-sys-spacing-2) !important;
+  }
+  
+  /* Tab system mobile fixes */
+  .md3-tabs {
+    flex-wrap: wrap;
+    gap: 0;
+    margin-bottom: var(--md-sys-spacing-4);
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  
+  .md3-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  
+  .md3-tab {
+    min-height: 40px;
+    padding: var(--md-sys-spacing-2) var(--md-sys-spacing-3);
+    font-size: 12px !important;
+    gap: var(--md-sys-spacing-1) !important;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  
+  /* Card system mobile */
+  .md3-card {
+    margin-bottom: var(--md-sys-spacing-4);
+    border-radius: var(--md-sys-shape-corner-small);
+  }
+  
+  .md3-card__header {
+    padding: var(--md-sys-spacing-4);
+  }
+  
+  .md3-card__content {
+    padding: var(--md-sys-spacing-3);
+  }
+  
+  /* Form rows mobile - single column */
+  .md3-form-row {
+    grid-template-columns: 1fr !important;
+    gap: var(--md-sys-spacing-3);
+    margin-bottom: var(--md-sys-spacing-4);
+  }
+  
+  /* Form groups mobile */
+  .md3-form-group {
+    gap: var(--md-sys-spacing-1);
+  }
+  
+  .md3-form-group label {
+    font-size: 12px !important;
+    margin-bottom: var(--md-sys-spacing-1);
+  }
+  
+  /* Form controls mobile - stack vertically */
+  .md3-form-controls {
+    flex-direction: column;
+    gap: var(--md-sys-spacing-2) !important;
+    width: 100%;
+    align-items: stretch;
+  }
+  
+  /* Slider system mobile fixes */
+  .md3-slider {
+    width: 100% !important;
+    flex-grow: 1;
+    order: 2; /* Put slider in middle */
+  }
+  
+  .md3-slider__input {
+    width: 100% !important;
+    height: 6px;
+    margin: 8px 0;
+  }
+  
+  .md3-slider__input::-webkit-slider-thumb {
+    width: 24px;
+    height: 24px;
+    -webkit-appearance: none;
+    appearance: none;
+    border-radius: 50%;
+    background: var(--md-sys-color-primary);
+    cursor: pointer;
+    border: 2px solid white;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  }
+  
+  .md3-slider__input::-moz-range-thumb {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--md-sys-color-primary);
+    cursor: pointer;
+    border: 2px solid white;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  }
+  
+  /* Weight adjustment buttons mobile */
+  .weight-adjust {
+    width: 32px !important;
+    height: 32px !important;
+    min-height: 32px !important;
+    padding: 0 !important;
+    flex-shrink: 0;
+    border-radius: 50%;
+  }
+  
+  .weight-adjust:first-child {
+    order: 1; /* Minus button first */
+  }
+  
+  .weight-adjust:last-child {
+    order: 3; /* Plus button last */
+  }
+  
+  /* Number input fields mobile */
+  .md3-number-field {
+    width: 60px !important;
+    order: 4; /* Number input at the end */
+  }
+  
+  .md3-text-field__input {
+    padding: var(--md-sys-spacing-2) !important;
+    font-size: 11px !important;
+    height: 32px;
+    text-align: center;
+    border-radius: var(--md-sys-shape-corner-small);
+  }
+  
+  /* Progress bars mobile */
+  .md3-progress {
+    height: 20px !important;
+    margin-top: var(--md-sys-spacing-2);
+    border-radius: var(--md-sys-shape-corner-small);
+    overflow: hidden;
+  }
+  
+  .md3-progress-label {
+    font-size: 10px !important;
+    padding: 2px 4px;
+    line-height: 1;
+  }
+  
+  /* Total weight indicators */
+  .md3-info-container {
+    padding: var(--md-sys-spacing-2) !important;
+    margin-top: var(--md-sys-spacing-2);
+  }
+  
+  .md3-info-container .md3-progress {
+    width: 150px !important;
+    height: 24px !important;
+    margin: var(--md-sys-spacing-1) 0;
+  }
+  
+  /* Form helpers mobile */
+  .md3-form-helper {
+    font-size: 10px !important;
+    line-height: 1.2;
+    margin-top: var(--md-sys-spacing-1);
+  }
+  
+  /* Buttons mobile */
+  .md3-button {
+    padding: var(--md-sys-spacing-2) var(--md-sys-spacing-3) !important;
+    font-size: 11px !important;
+    min-height: 36px !important;
+    gap: var(--md-sys-spacing-1) !important;
+  }
+  
+  .md3-button--icon {
+    width: 32px !important;
+    height: 32px !important;
+    min-height: 32px !important;
+  }
+  
+  /* Card actions mobile */
+  .md3-card__actions {
+    padding: var(--md-sys-spacing-3) !important;
+    flex-direction: column;
+    gap: var(--md-sys-spacing-2) !important;
+  }
+  
+  .md3-card__actions button {
+    width: 100% !important;
+  }
+  
+  /* Dividers mobile */
+  .md3-divider {
+    margin: var(--md-sys-spacing-4) 0 !important;
+  }
+  
+  /* Material symbols mobile */
+  .material-symbols-outlined {
+    font-size: 18px !important;
+  }
+  
+  /* Combined tab specific fixes */
+  .md3-grid--2-col {
+    grid-template-columns: 1fr !important;
+    gap: var(--md-sys-spacing-3) !important;
+  }
+  
+  /* Combined mix sliders */
+  .md3-form-controls span {
+    font-size: 11px !important;
+    min-width: 40px;
+  }
+  
+  /* Visual composition bars */
+  .md3-progress[style*="height: 40px"] {
+    height: 30px !important;
+  }
+  
+  .md3-progress[style*="height: 40px"] .md3-progress-label {
+    font-size: 9px !important;
+  }
+}
+
+/* Ultra-small screens */
+@media (max-width: 320px) {
+  .md3-container {
+    padding: 0 var(--md-sys-spacing-1) !important;
+  }
+  
+  .md3-card__content {
+    padding: var(--md-sys-spacing-2) !important;
+  }
+  
+  .md3-form-controls {
+    gap: var(--md-sys-spacing-1) !important;
+  }
+  
+  .md3-number-field {
+    width: 50px !important;
+  }
+  
+  .md3-text-field__input {
+    font-size: 10px !important;
+    padding: 4px !important;
+  }
+}
+
 /* Tablet breakpoint */
 @media (max-width: 1024px) and (min-width: 769px) {
   .md3-container {
