@@ -6,6 +6,8 @@ from sqlalchemy.orm import defer
 from models import Land, ScoringCriteria
 from app import db
 from utils.auth import admin_required
+from services.land_service import LandService
+from utils.validators import validate_filters
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,7 @@ def lands():
     try:
         # Get query parameters
         mode = request.args.get('mode', 'combined')  # combined, investment, lifestyle
+        view_type = request.args.get('view_type', 'cards')  # Default to cards
         
         # Smart sorting defaults based on mode
         mode_sort_defaults = {
@@ -31,69 +34,41 @@ def lands():
         }
         default_sort = mode_sort_defaults.get(mode, 'score_total')
         
-        sort_by = request.args.get('sort', default_sort)
-        sort_order = request.args.get('order', 'desc')
-        land_type_filter = request.args.get('land_type', '')
-        municipality_filter = request.args.get('municipality', '')
-        search_query = request.args.get('search', '')
-        sea_view_filter = request.args.get('sea_view', '') == 'on'
-        view_type = request.args.get('view_type', 'cards')  # Default to cards
+        # Build filter parameters for validation and service
+        filter_params = {
+            'sort': request.args.get('sort', default_sort),
+            'order': request.args.get('order', 'desc'),
+            'land_type': request.args.get('land_type', ''),
+            'municipality': request.args.get('municipality', ''),
+            'search': request.args.get('search', ''),
+            'sea_view': request.args.get('sea_view', '') == 'on',
+            'min_price': request.args.get('min_price', type=float),
+            'max_price': request.args.get('max_price', type=float),
+            'min_area': request.args.get('min_area', type=float),
+            'max_area': request.args.get('max_area', type=float),
+            'page': request.args.get('page', 1, type=int),
+            'per_page': min(max(request.args.get('per_page', 25, type=int), 10), 100)
+        }
         
-        # Pagination parameters
-        page = request.args.get('page', 1, type=int)
-        per_page = request.args.get('per_page', 25, type=int)
-        # Limit per_page to reasonable values
-        per_page = min(max(per_page, 10), 100)
+        # Validate filters using the validation layer
+        try:
+            validated_filters = validate_filters(filter_params)
+        except ValueError as e:
+            logger.warning(f"Filter validation failed: {e}")
+            # Use safe defaults if validation fails
+            validated_filters = {
+                'sort': default_sort,
+                'order': 'desc', 
+                'page': 1,
+                'per_page': 25
+            }
         
-        # Build query - defer heavy JSONB columns for listing view performance
-        query = Land.query.options(
-            defer(Land.infrastructure_basic),
-            defer(Land.infrastructure_extended),
-            defer(Land.transport),
-            defer(Land.environment),
-            defer(Land.neighborhood),
-            defer(Land.services_quality),
-            defer(Land.ai_analysis),
-            defer(Land.enhanced_description),
-            defer(Land.property_details),
-            defer(Land.description)
-        )
-        
-        # Apply filters
-        if land_type_filter:
-            query = query.filter(Land.land_type == land_type_filter)
-        
-        if municipality_filter:
-            query = query.filter(Land.municipality.ilike(f'%{municipality_filter}%'))
-        
-        if search_query:
-            search_pattern = f'%{search_query}%'
-            query = query.filter(
-                or_(
-                    Land.title.ilike(search_pattern),
-                    Land.description.ilike(search_pattern),
-                    Land.municipality.ilike(search_pattern)
-                )
-            )
-        
-        if sea_view_filter:
-            query = query.filter(Land.environment['sea_view'].astext == 'true')
-        
-        # Apply sorting with NULL values last
-        if hasattr(Land, sort_by):
-            sort_column = getattr(Land, sort_by)
-            if sort_order == 'asc':
-                # For ascending, NULLs go last
-                query = query.order_by(sort_column.asc().nullslast())
-            else:
-                # For descending (default for score), NULLs go last
-                query = query.order_by(sort_column.desc().nullslast())
-        
-        # Get paginated results
-        pagination = query.paginate(
-            page=page,
-            per_page=per_page,
-            error_out=False
+        # Use service layer to get filtered lands
+        pagination = LandService.get_filtered_lands(
+            filters=validated_filters,
+            page=validated_filters['page'],
+            per_page=validated_filters['per_page'],
+            detail_view=False  # Defer heavy JSONB fields for listing performance
         )
         lands = pagination.items
         
@@ -105,11 +80,12 @@ def lands():
         municipalities.sort()
         
         # Derive active_mode from sort_by for reliable UI state synchronization
-        if sort_by in ['score_investment']:
+        sort_by = validated_filters.get('sort', default_sort)
+        if sort_by == 'score_investment':
             active_mode = 'investment'
-        elif sort_by in ['score_lifestyle']:
+        elif sort_by == 'score_lifestyle':
             active_mode = 'lifestyle'
-        elif sort_by in ['score_total']:
+        elif sort_by == 'score_total':
             active_mode = 'combined'
         else:
             # For non-score sorts (price, area, etc.), use explicit mode
@@ -126,15 +102,19 @@ def lands():
             current_filters={
                 'mode': mode,
                 'sort_by': sort_by,
-                'order': sort_order,
-                'land_type': land_type_filter,
-                'municipality': municipality_filter,
-                'search': search_query,
-                'sea_view': sea_view_filter,
+                'order': validated_filters.get('order', 'desc'),
+                'land_type': validated_filters.get('land_type', ''),
+                'municipality': validated_filters.get('municipality', ''),
+                'search': validated_filters.get('search', ''),
+                'sea_view': validated_filters.get('sea_view', False),
+                'min_price': validated_filters.get('min_price'),
+                'max_price': validated_filters.get('max_price'),
+                'min_area': validated_filters.get('min_area'),
+                'max_area': validated_filters.get('max_area'),
                 'active_mode': active_mode,
                 'view_type': view_type,
-                'page': page,
-                'per_page': per_page
+                'page': validated_filters['page'],
+                'per_page': validated_filters['per_page']
             }
         )
         
@@ -147,13 +127,15 @@ def lands():
 def land_detail(land_id):
     """Detailed view of a specific land"""
     try:
-        land = Land.query.get_or_404(land_id)
+        # Use service layer for consistency
+        land = LandService.get_land_by_id(land_id)
+        if not land:
+            flash("Land not found", 'error')
+            return redirect(url_for('main.lands'))
         
         # Normalize property_details to dict format for template compatibility
         from utils.property_data import normalize_property_details
         land.property_details = normalize_property_details(land.property_details)
-        
-        
         
         # Get score breakdown from environment field
         score_breakdown = {}
