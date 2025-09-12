@@ -890,9 +890,9 @@ function renderSimilarProperties(similarProperties) {
 
 function getPriceVerdictClass(verdict) {
     switch(verdict) {
-        case 'FAIR_PRICE': return 'bg-success';
-        case 'UNDERPRICED': return 'bg-primary';
-        case 'OVERPRICED': return 'bg-danger';
+        case 'Fair Price': return 'bg-success';
+        case 'Underpriced': return 'bg-primary';
+        case 'Overpriced': return 'bg-danger';
         default: return 'bg-secondary';
     }
 }
@@ -904,6 +904,24 @@ function getInvestmentRatingClass(rating) {
         case 'LOW': return 'bg-danger';
         default: return 'bg-secondary';
     }
+}
+
+function formatUIText(value) {
+    if (!value) return 'Unknown';
+    // Convert values for better UI display
+    const formatMap = {
+        'HIGH': 'High',
+        'MEDIUM': 'Medium', 
+        'LOW': 'Low',
+        'RISING': 'Rising',
+        'STABLE': 'Stable',
+        'DECLINING': 'Declining',
+        'EXCELLENT': 'Excellent',
+        'GOOD': 'Good',
+        'MODERATE': 'Moderate',
+        'BELOW AVERAGE': 'Below Average'
+    };
+    return formatMap[value] || value;
 }
 
 

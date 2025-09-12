@@ -945,7 +945,7 @@
                                 <div class="d-flex justify-content-between mb-1">
                                     <span class="small">Rating</span>
                                     <span class="badge {{ 'bg-success' if investment.rating == 'HIGH' else 'bg-warning' if investment.rating == 'MEDIUM' else 'bg-secondary' }}">
-                                        {{ investment.rating }}
+                                        {{ investment.rating|replace('HIGH', 'High')|replace('MEDIUM', 'Medium')|replace('LOW', 'Low') }}
                                     </span>
                                 </div>
                             {% endif %}
@@ -953,7 +953,7 @@
                                 <div class="d-flex justify-content-between mb-1">
                                     <span class="small">Risk Level</span>
                                     <span class="badge {{ 'bg-danger' if investment.risk_level == 'HIGH' else 'bg-warning' if investment.risk_level == 'MEDIUM' else 'bg-success' }}">
-                                        {{ investment.risk_level }}
+                                        {{ investment.risk_level|replace('HIGH', 'High')|replace('MEDIUM', 'Medium')|replace('LOW', 'Low') }}
                                     </span>
                                 </div>
                             {% endif %}
@@ -1371,9 +1371,9 @@ function renderSimilarProperties(similarProperties) {
 
 function getPriceVerdictClass(verdict) {
     switch(verdict) {
-        case 'FAIR_PRICE': return 'bg-success';
-        case 'UNDERPRICED': return 'bg-primary';
-        case 'OVERPRICED': return 'bg-danger';
+        case 'Fair Price': return 'bg-success';
+        case 'Underpriced': return 'bg-primary';
+        case 'Overpriced': return 'bg-danger';
         default: return 'bg-secondary';
     }
 }
@@ -1387,6 +1387,24 @@ function getPriceTrendClass(trend) {
         case 'DECLINING': return 'bg-danger';
         default: return 'bg-secondary';
     }
+}
+
+function formatUIText(value) {
+    if (!value) return 'Unknown';
+    // Convert values for better UI display
+    const formatMap = {
+        'HIGH': 'High',
+        'MEDIUM': 'Medium', 
+        'LOW': 'Low',
+        'RISING': 'Rising',
+        'STABLE': 'Stable',
+        'DECLINING': 'Declining',
+        'EXCELLENT': 'Excellent',
+        'GOOD': 'Good',
+        'MODERATE': 'Moderate',
+        'BELOW AVERAGE': 'Below Average'
+    };
+    return formatMap[value] || value;
 }
 
 // Render structured AI analysis
@@ -1406,7 +1424,7 @@ function renderStructuredAIAnalysis(analysis) {
                         <h6><i class="fas fa-euro-sign text-success"></i> Price Analysis</h6>
                         ${analysis.price_analysis ? `
                             <span class="badge ${getPriceVerdictClass(analysis.price_analysis.verdict)}">
-                                ${analysis.price_analysis.verdict || 'Unknown'}
+                                ${formatUIText(analysis.price_analysis.verdict)}
                             </span>
                             <p class="mb-1 mt-2">${analysis.price_analysis.summary || 'No analysis available'}</p>
                             <small class="text-muted">${analysis.price_analysis.recommendation || ''}</small>
@@ -1422,10 +1440,10 @@ function renderStructuredAIAnalysis(analysis) {
                         <h6><i class="fas fa-chart-line text-primary"></i> Investment Potential</h6>
                         ${analysis.investment_potential ? `
                             <span class="badge ${getInvestmentRatingClass(analysis.investment_potential.rating)}">
-                                ${analysis.investment_potential.rating || 'Unknown'} Growth
+                                ${formatUIText(analysis.investment_potential.rating)} Growth
                             </span>
                             <p class="mb-1 mt-2">${analysis.investment_potential.forecast || 'No forecast available'}</p>
-                            <small class="text-muted">Risk: ${analysis.investment_potential.risk_level || 'Unknown'}</small>
+                            <small class="text-muted">Risk: ${formatUIText(analysis.investment_potential.risk_level)}</small>
                             ${analysis.investment_potential.key_drivers ? renderListItems(analysis.investment_potential.key_drivers, 'Key Drivers:', 'info') : ''}
                         ` : `
                             <span class="badge bg-secondary">Analysis Pending</span>
@@ -1501,7 +1519,7 @@ function renderStructuredAIAnalysis(analysis) {
         <div class="border rounded p-3 mb-3">
             <h6><i class="fas fa-chart-line text-warning"></i> Market Price Dynamics</h6>
             <div class="mb-2">
-                <span class="badge ${getPriceTrendClass(analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend)}">${analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend || 'Unknown'} Trend</span>
+                <span class="badge ${getPriceTrendClass(analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend)}">${formatUIText(analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend)} Trend</span>
                 <span class="badge bg-info ms-1">${analysis.market_price_dynamics.annual_growth_rate || analysis.market_price_dynamics.annual_appreciation || 'N/A'}% annually</span>
             </div>
             <p class="mb-2">${analysis.market_price_dynamics.trend_analysis || 'No trend analysis available'}</p>
