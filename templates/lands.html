@@ -28,30 +28,32 @@
 
 
         <!-- Filters -->
-        <div class="card mb-4">
+        <div class="card-elevated" style="margin-bottom: var(--md-sys-spacing-8);">
             <div class="card-header">
-                <h5 class="card-title mb-0">
-                    <i class="fas fa-filter me-2"></i>{{ t('filters_search') }}
+                <h5 class="title-medium" style="margin-bottom: 0; color: var(--md-sys-color-on-surface);">
+                    <i class="fas fa-filter" style="margin-right: var(--md-sys-spacing-2); color: var(--md-sys-color-primary);"></i>{{ t('filters_search') }}
                 </h5>
             </div>
-            <div class="card-body">
+            <div style="padding: var(--md-sys-spacing-6);">
                 <form method="GET" id="filter-form">
                     <!-- Hidden inputs to preserve state -->
                     <input type="hidden" name="mode" value="{{ current_filters.mode or 'combined' }}">
                     <input type="hidden" name="view_type" value="{{ current_filters.view_type or 'cards' }}">
-                    <div class="row">
+                    <div class="form-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--md-sys-spacing-4); margin-bottom: var(--md-sys-spacing-6);">
                         <!-- Search -->
-                        <div class="col-md-3 mb-3">
-                            <label for="search" class="form-label">{{ t('search') }}</label>
-                            <input type="text" class="form-input" id="search" name="search" 
+                        <div class="form-field">
+                            <label for="search" class="form-label label-large" style="color: var(--md-sys-color-on-surface-variant);">{{ t('search') }}</label>
+                            <input type="text" class="form-input body-large" id="search" name="search" 
                                    value="{{ current_filters.search or '' }}" 
-                                   placeholder="{{ t('search_properties') }}">
+                                   placeholder="{{ t('search_properties') }}"
+                                   style="height: 48px; font: var(--md-sys-typescale-body-large-font);">
                         </div>
                         
                         <!-- Land Type -->
-                        <div class="col-md-2 mb-3">
-                            <label for="land_type" class="form-label">{{ t('land_type') }}</label>
-                            <select class="form-select form-input" id="land_type" name="land_type">
+                        <div class="form-field">
+                            <label for="land_type" class="form-label label-large" style="color: var(--md-sys-color-on-surface-variant);">{{ t('land_type') }}</label>
+                            <select class="form-select form-input body-large" id="land_type" name="land_type"
+                                    style="height: 48px; font: var(--md-sys-typescale-body-large-font);">
                                 <option value="">{{ t('land_type_all') }}</option>
                                 <option value="developed" {{ 'selected' if current_filters.land_type == 'developed' }}>
                                     {{ t('developed') }}
@@ -63,9 +65,10 @@
                         </div>
                         
                         <!-- Municipality -->
-                        <div class="col-md-2 mb-3">
-                            <label for="municipality" class="form-label">{{ t('municipality') }}</label>
-                            <select class="form-select form-input" id="municipality" name="municipality">
+                        <div class="form-field">
+                            <label for="municipality" class="form-label label-large" style="color: var(--md-sys-color-on-surface-variant);">{{ t('municipality') }}</label>
+                            <select class="form-select form-input body-large" id="municipality" name="municipality"
+                                    style="height: 48px; font: var(--md-sys-typescale-body-large-font);">
                                 <option value="">{{ t('all_municipalities') }}</option>
                                 {% for municipality in municipalities %}
                                     <option value="{{ municipality }}" 
@@ -77,22 +80,21 @@
                         </div>
                         
                         <!-- Sea View Filter -->
-                        <div class="col-md-2 mb-3">
-                            <label class="form-label">&nbsp;</label>
-                            <div class="form-check">
-                                <input class="form-input" type="checkbox" id="sea_view" name="sea_view" 
-                                       {{ 'checked' if current_filters.sea_view }}>
-                                <label class="form-check-label" for="sea_view">
-                                    <i class="fas fa-water me-1"></i>{{ t('sea_view_only') }}
-                                </label>
-                            </div>
+                        <div class="form-field" style="display: flex; align-items: center; height: 48px; margin-top: var(--md-sys-spacing-6);">
+                            <input class="form-input" type="checkbox" id="sea_view" name="sea_view" 
+                                   {{ 'checked' if current_filters.sea_view }}
+                                   style="width: 20px; height: 20px; margin-right: var(--md-sys-spacing-3); accent-color: var(--md-sys-color-primary);">
+                            <label class="form-check-label label-large" for="sea_view" style="color: var(--md-sys-color-on-surface); cursor: pointer;">
+                                <i class="fas fa-water" style="margin-right: var(--md-sys-spacing-1); color: var(--md-sys-color-primary);"></i>{{ t('sea_view_only') }}
+                            </label>
                         </div>
                         
                         <!-- Sort -->
-                        <div class="col-md-3 mb-3">
-                            <label for="sort" class="form-label">{{ t('sort_by') }}</label>
-                            <div class="input-group">
-                                <select class="form-select form-input" id="sort" name="sort">
+                        <div class="form-field" style="grid-column: span 2;">
+                            <label for="sort" class="form-label label-large" style="color: var(--md-sys-color-on-surface-variant);">{{ t('sort_by') }}</label>
+                            <div style="display: flex; gap: var(--md-sys-spacing-2);">
+                                <select class="form-select form-input body-large" id="sort" name="sort"
+                                        style="height: 48px; font: var(--md-sys-typescale-body-large-font); flex: 1;">
                                     <!-- Mode-based score options -->
                                     {% if current_filters.mode == 'investment' %}
                                         <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
@@ -139,42 +141,47 @@
                                         {{ t('date_added') }}
                                     </option>
                                 </select>
-                                <select class="form-input" name="order" style="max-width: 100px;">
+                                <select class="form-input body-large" name="order" 
+                                        style="height: 48px; width: 60px; font: var(--md-sys-typescale-body-large-font); text-align: center;">
                                     <option value="desc" {{ 'selected' if current_filters.order == 'desc' }}>↓</option>
                                     <option value="asc" {{ 'selected' if current_filters.order == 'asc' }}>↑</option>
                                 </select>
                             </div>
                         </div>
                         
-                        <!-- Action Buttons and View Toggle -->
-                        <div class="col-md-4 mb-3 d-flex align-items-end">
-                            <button type="submit" class="btn btn-primary me-2">
-                                <i class="fas fa-search me-1"></i>{{ t('apply') }}
-                            </button>
-                            <a href="{{ url_for('main.lands') }}" class="btn btn-outline-secondary me-3">
-                                <i class="fas fa-times me-1"></i>{{ t('clear') }}
-                            </a>
-                            
-                            <!-- View Toggle -->
-                            <div class="btn-group" role="group" aria-label="View type">
-                                <button type="button" 
-                                        class="btn btn-outline-secondary {{ 'active' if current_filters.view_type == 'list' else '' }}" 
-                                        id="view-list-btn" 
-                                        onclick="switchView('list')" 
-                                        title="Table view - Compact data in rows">
-                                    <i class="fas fa-list"></i>
-                                </button>
-                                
-                                <button type="button" 
-                                        class="btn btn-outline-secondary {{ 'active' if current_filters.view_type == 'cards' or not current_filters.view_type else '' }}" 
-                                        id="view-cards-btn" 
-                                        onclick="switchView('cards')" 
-                                        title="Card view - Visual property cards">
-                                    <i class="fas fa-th-large"></i>
-                                </button>
-                            </div>
-                        </div>
                     </div>
+                    
+                    <!-- Action Buttons and View Toggle -->
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: var(--md-sys-spacing-4); padding-top: var(--md-sys-spacing-6); border-top: 1px solid var(--md-sys-color-outline-variant);">
+                        <div style="display: flex; gap: var(--md-sys-spacing-3);">
+                            <button type="submit" class="btn-filled">
+                                <i class="fas fa-search" style="margin-right: var(--md-sys-spacing-2);"></i>{{ t('apply') }}
+                            </button>
+                            <a href="{{ url_for('main.lands') }}" class="btn-outlined">
+                                <i class="fas fa-times" style="margin-right: var(--md-sys-spacing-2);"></i>{{ t('clear') }}
+                            </a>
+                        </div>
+                        
+                        <!-- View Toggle -->
+                        <div style="display: flex; border: 1px solid var(--md-sys-color-outline); border-radius: var(--md-sys-shape-corner-large); overflow: hidden;" role="group" aria-label="View type">
+                            <button type="button" 
+                                    class="btn-icon {{ 'btn-filled' if current_filters.view_type == 'list' else 'btn-text' }}" 
+                                    id="view-list-btn" 
+                                    onclick="switchView('list')" 
+                                    title="Table view - Compact data in rows"
+                                    style="border-radius: 0; border: none; width: 48px; height: 48px;">
+                                <i class="fas fa-list"></i>
+                            </button>
+                            
+                            <button type="button" 
+                                    class="btn-icon {{ 'btn-filled' if current_filters.view_type == 'cards' or not current_filters.view_type else 'btn-text' }}" 
+                                    id="view-cards-btn" 
+                                    onclick="switchView('cards')" 
+                                    title="Card view - Visual property cards"
+                                    style="border-radius: 0; border: none; border-left: 1px solid var(--md-sys-color-outline-variant); width: 48px; height: 48px;">
+                                <i class="fas fa-th-large"></i>
+                            </button>
+                        </div>
                 </form>
             </div>
         </div>
