@@ -512,6 +512,171 @@
     -webkit-font-smoothing: antialiased;
 }
 
+/* Material Design 3 Chips */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--md-sys-spacing-1) var(--md-sys-spacing-3);
+  border-radius: var(--md-sys-shape-corner-extra-large);
+  font: var(--md-sys-typescale-label-small-font);
+  font-weight: 500;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+}
+
+.chip-success {
+  background-color: color-mix(in srgb, #4caf50 20%, transparent);
+  color: #2e7d32;
+  border-color: color-mix(in srgb, #4caf50 30%, transparent);
+}
+
+.chip-warning {
+  background-color: color-mix(in srgb, #ff9800 20%, transparent);
+  color: #f57c00;
+  border-color: color-mix(in srgb, #ff9800 30%, transparent);
+}
+
+.chip-danger {
+  background-color: color-mix(in srgb, #f44336 20%, transparent);
+  color: #d32f2f;
+  border-color: color-mix(in srgb, #f44336 30%, transparent);
+}
+
+.chip-info {
+  background-color: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  border-color: var(--md-sys-color-primary);
+}
+
+.chip-secondary {
+  background-color: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  border-color: var(--md-sys-color-secondary);
+}
+
+.chip-light {
+  background-color: rgba(255, 255, 255, 0.9);
+  color: #1a1a1a;
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+/* Additional Button Variants */
+.btn-outline-info {
+  background-color: transparent;
+  color: #17a2b8;
+  border: 1px solid #17a2b8;
+  border-radius: var(--md-sys-shape-corner-large);
+  padding: var(--md-sys-spacing-3) var(--md-sys-spacing-6);
+  font: var(--md-sys-typescale-label-large-font);
+  transition: all 0.2s ease;
+}
+
+.btn-outline-info:hover {
+  background-color: color-mix(in srgb, #17a2b8 8%, transparent);
+  border-color: #17a2b8;
+}
+
+.btn-outline-warning {
+  background-color: transparent;
+  color: #f57c00;
+  border: 1px solid #f57c00;
+  border-radius: var(--md-sys-shape-corner-large);
+  padding: var(--md-sys-spacing-3) var(--md-sys-spacing-6);
+  font: var(--md-sys-typescale-label-large-font);
+  transition: all 0.2s ease;
+}
+
+.btn-outline-warning:hover {
+  background-color: color-mix(in srgb, #f57c00 8%, transparent);
+  border-color: #f57c00;
+}
+
+.btn-success {
+  background-color: #4caf50;
+  color: white;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-large);
+  padding: var(--md-sys-spacing-3) var(--md-sys-spacing-6);
+  font: var(--md-sys-typescale-label-large-font);
+  box-shadow: var(--md-sys-elevation-level-1);
+  transition: all 0.2s ease;
+}
+
+.btn-success:hover {
+  background-color: #45a049;
+  box-shadow: var(--md-sys-elevation-level-2);
+}
+
+/* Material Design 3 Color Utilities */
+.text-on-surface {
+  color: var(--md-sys-color-on-surface) !important;
+}
+
+.text-on-surface-variant {
+  color: var(--md-sys-color-on-surface-variant) !important;
+}
+
+.text-primary {
+  color: var(--md-sys-color-primary) !important;
+}
+
+.text-secondary {
+  color: var(--md-sys-color-on-surface-variant) !important;
+}
+
+/* MD3 Spacing Utilities */
+.gap-md3-2 {
+  gap: var(--md-sys-spacing-2);
+}
+
+.gap-md3-3 {
+  gap: var(--md-sys-spacing-3);
+}
+
+.gap-md3-4 {
+  gap: var(--md-sys-spacing-4);
+}
+
+.mb-md3-2 {
+  margin-bottom: var(--md-sys-spacing-2);
+}
+
+.mb-md3-3 {
+  margin-bottom: var(--md-sys-spacing-3);
+}
+
+.mb-md3-4 {
+  margin-bottom: var(--md-sys-spacing-4);
+}
+
+.mb-md3-6 {
+  margin-bottom: var(--md-sys-spacing-6);
+}
+
+.ms-md3-1 {
+  margin-inline-start: var(--md-sys-spacing-1);
+}
+
+.ms-md3-2 {
+  margin-inline-start: var(--md-sys-spacing-2);
+}
+
+.me-md3-2 {
+  margin-inline-end: var(--md-sys-spacing-2);
+}
+
+.mt-md3-2 {
+  margin-top: var(--md-sys-spacing-2);
+}
+
+.mt-md3-4 {
+  margin-top: var(--md-sys-spacing-4);
+}
+
+.p-md3-3 {
+  padding: var(--md-sys-spacing-3);
+}
+
 /* Responsive adjustments for scoring */
 @media (max-width: 768px) {
     .scoring-grid {
