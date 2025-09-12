@@ -3,975 +3,804 @@
 {% block title %}{{ land.title }} - Idealista Land Watch{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12 mb-md3-4">
-        <div class="d-flex justify-content-between align-items-center">
-            <h1 class="title-large mb-0">
-                <i class="fas fa-map-marker-alt me-md3-2"></i>
-                {{ land.title[:60] }}{% if land.title|length > 60 %}...{% endif %}
-            </h1>
-            <a href="{{ url_for('main.lands', sort=request.args.get('sort'), order=request.args.get('order'), land_type=request.args.get('land_type'), municipality=request.args.get('municipality'), search=request.args.get('search'), per_page=request.args.get('per_page')) }}" class="btn-outlined btn-small">
-                <i class="fas fa-arrow-left me-md3-2"></i>{{ t('back') }}
+<!-- MD3 Page Container -->
+<div class="md3-container">
+    <!-- MD3 Page Header -->
+    <div class="md3-page-header">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: var(--md-sys-spacing-4);">
+            <div class="flex-grow-1">
+                <h1 class="md3-page-title">
+                    <span class="material-symbols-outlined">location_on</span>
+                    {{ land.title[:60] }}{% if land.title|length > 60 %}...{% endif %}
+                </h1>
+            </div>
+            <a href="{{ url_for('main.lands', sort=request.args.get('sort'), order=request.args.get('order'), land_type=request.args.get('land_type'), municipality=request.args.get('municipality'), search=request.args.get('search'), per_page=request.args.get('per_page')) }}" class="md3-button md3-button--outlined">
+                <span class="material-symbols-outlined">arrow_back</span>
+                {{ t('back') }}
             </a>
         </div>
     </div>
-</div>
 
-<div class="row" data-land-id="{{ land.id }}">
-    <!-- Main Info -->
-    <div class="col-lg-8">
-        <div class="card mb-md3-4">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h3 class="card-title mb-0">{{ land.title }}</h3>
-                <div class="d-flex align-items-center gap-md3-2">
-                    {% if land.score_total %}
-                        <span class="chip chip-{{ 'success' if land.score_total >= 70 else 'warning' if land.score_total >= 50 else 'danger' }}">
-                            {{ t('score') }}: {{ "%.1f"|format(land.score_total) }}
-                        </span>
-                    {% endif %}
-                    <button type="button" class="btn-icon btn-small" data-bs-toggle="modal" data-bs-target="#editScoreModal">
-                        <i class="fas fa-edit"></i>
-                    </button>
-                </div>
-            </div>
-            <div class="card-body">
-                <!-- Basic Info -->
-                <div class="row mb-md3-4">
-                    <div class="col-md-3">
-                        <strong>{{ t('price') }}:</strong><br>
-                        {% if land.price %}
-                            <span class="fs-4 ">{{ "{:,.0f}".format(land.price) }}€</span>
-                        {% else %}
-                            <span class="text-on-surface-variant">Not specified</span>
-                        {% endif %}
-                    </div>
-                    <div class="col-md-3">
-                        <strong>{{ t('area') }}:</strong><br>
-                        {% if land.area %}
-                            <span class="fs-5">{{ "{:,.0f}".format(land.area) }} m²</span>
-                        {% else %}
-                            <span class="text-on-surface-variant">Not specified</span>
-                        {% endif %}
-                    </div>
-                    <div class="col-md-3">
-                        <strong>{{ t('municipality') }}:</strong><br>
-                        <span class="fs-6">{{ land.municipality or 'Unknown' }}</span>
-                    </div>
-                    <div class="col-md-3">
-                        <strong>{{ t('type') }}:</strong><br>
-                        {% if land.land_type %}
-                            <span class="chip chip-{{ 'success' if land.land_type == 'developed' else 'warning' }}">
-                                {{ land.land_type.title() }}
-                            </span>
-                        {% else %}
-                            <span class="text-on-surface-variant">Unknown</span>
-                        {% endif %}
-                    </div>
-                </div>
-
-                <!-- Location -->
-                {% if land.location_lat and land.location_lon %}
-                    <div class="mb-md3-4">
-                        <strong>{{ t('location') }}:</strong><br>
-                        <i class="fas fa-map-marker-alt me-md3-2"></i>
-                        {{ "%.6f"|format(land.location_lat) }}, {{ "%.6f"|format(land.location_lon) }}
-                        <a href="https://www.google.com/maps/search/?api=1&query={{ land.location_lat }},{{ land.location_lon }}" 
-                           target="_blank" rel="noopener noreferrer" class="btn-outlined btn-small ms-md3-2">
-                            <i class="fas fa-external-link-alt me-md3-2"></i>{{ t('view_on_maps') }}
-                        </a>
-                        {% if land.url %}
-                        <a href="{{ land.url }}" 
-                           target="_blank" rel="noopener noreferrer" class="btn-outlined btn-small ms-md3-2">
-                            <i class="fas fa-home me-md3-2"></i>{{ t('view_on_idealista') }}
-                        </a>
-                        {% endif %}
-                    </div>
-                {% elif land.municipality %}
-                    <div class="mb-md3-4">
-                        <strong>{{ t('location') }}:</strong><br>
-                        <i class="fas fa-map-marker-alt me-md3-2"></i>
-                        {{ land.municipality }}
-                        <a href="https://www.google.com/maps/search/{{ land.municipality|urlencode }},+Spain" 
-                           target="_blank" rel="noopener noreferrer" class="btn-outlined btn-small ms-md3-2">
-                            <i class="fas fa-external-link-alt me-md3-2"></i>{{ t('view_on_maps') }}
-                        </a>
-                        {% if land.url %}
-                        <a href="{{ land.url }}" 
-                           target="_blank" rel="noopener noreferrer" class="btn-outlined btn-small ms-md3-2">
-                            <i class="fas fa-home me-md3-2"></i>{{ t('view_on_idealista') }}
-                        </a>
-                        {% endif %}
-                    </div>
-                {% endif %}
-
-                <!-- Enhanced Description -->
-                {% if land.description %}
-                    <div class="mb-md3-4" id="description-section">
-                        <div class="d-flex justify-content-between align-items-center mb-md3-2">
-                            <strong>{{ t('property_description') }}:</strong>
-                            <div class="d-flex gap-md3-2">
-                                <!-- Language Toggle -->
-                                <div class="btn-group btn-group-sm" role="group" id="description-language-toggle" style="display: none;">
-                                    <button type="button" class="btn-outlined active" data-lang="en">
-                                        <i class="fas fa-language me-md3-2"></i>{{ t('english') }}
-                                    </button>
-                                    <button type="button" class="btn-outlined" data-lang="es">
-                                        <i class="fas fa-language me-md3-2"></i>{{ t('spanish') }}
-                                    </button>
-                                    <button type="button" class="btn-outlined" data-lang="original">
-                                        <i class="fas fa-home me-md3-2"></i>{{ t('idealista') }}
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <!-- Description Content -->
-                        <div class="mt-md3-2 p-md3-3 bg-dark rounded position-relative" id="description-content">
-                            
-                            <!-- Enhanced Description -->
-                            <div id="enhanced-description" style="display: none;">
-                                <div class="text-light" id="enhanced-description-text"></div>
-                                <div class="mt-md3-2" id="description-highlights" style="display: none;">
-                                    <small class="text-on-surface-variant d-block mb-1">{{ t('key_highlights') }}:</small>
-                                    <div id="highlights-list"></div>
-                                </div>
-                                <div class="mt-md3-2" id="price-info-section" style="display: none;">
-                                    <small class="">💰 <span id="price-info-text"></span></small>
-                                </div>
-                            </div>
-                            
-                            <!-- Original Description -->
-                            <div id="original-description">
-                                {{ land.description }}
-                            </div>
-                        </div>
-                    </div>
-                {% endif %}
-                
-                <!-- Property Details from Idealista -->
-                {% if land.property_details %}
-                    {% if land.property_details is string %}
-                        <!-- Display as plain text if it's a string -->
-                        <div class="mb-md3-4">
-                            <strong>{{ t('property_details') }}:</strong>
-                            <div class="mt-md3-2 p-md3-3 bg-dark rounded">
-                                <pre class="text-light mb-0" style="white-space: pre-wrap; word-wrap: break-word;">{{ land.property_details }}</pre>
-                            </div>
-                        </div>
-                    {% else %}
-                        <!-- Skip if it's JSON data (AI analysis should go to separate section) -->
-                    {% endif %}
-                {% endif %}
-
-                <!-- AI Analysis Section -->
-                <div id="ai-analysis-section" class="mt-md3-4" style="{{ 'display: block;' if land.ai_analysis else 'display: none;' }}">
-                    <div class="card">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <h3 class="card-title mb-0">
-                                <i class="fas fa-brain me-md3-2"></i>{{ t('ai_investment_analysis') }}
-                            </h3>
-                            <small class="text-on-surface-variant">{{ t('powered_by_claude_ai') }}</small>
-                        </div>
-                        <div class="card-body" id="ai-analysis-content">
-                            {% if land.ai_analysis %}
-                                <!-- Display existing AI analysis -->
-                                <div class="analysis-content" id="structured-analysis">
-                                    <!-- Content will be populated by JavaScript -->
-                                </div>
-                            {% else %}
-                                <!-- Placeholder for new analysis -->
-                                <div class="text-center text-on-surface-variant">
-                                    <i class="fas fa-robot fa-3x mb-md3-3 opacity-50"></i>
-                                    <p>{{ t('click_ai_analysis_button') }}</p>
-                                </div>
-                            {% endif %}
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Actions -->
-                <div class="mt-md3-4 d-flex justify-content-center gap-md3-2" style="flex-wrap: nowrap;">
-                    {% if land.url %}
-                        <a href="{{ land.url }}" target="_blank" rel="noopener noreferrer" class="btn-filled">
-                            <i class="fas fa-home me-md3-2"></i>
-                            {{ t('view_on_idealista') }}
-                        </a>
-                    {% endif %}
-                    
-                    <!-- AI Analysis Button - highlighted if analysis exists -->
-                    <button onclick="analyzeWithClaude({{ land.id }})" 
-                            class="btn {{ 'btn-success' if land.ai_analysis else 'btn-outline-info' }}">
-                        <i class="fas fa-brain me-md3-2"></i>
-                        {{ t('ai_analysis') }}
-                    </button>
-                    
-                    
-                    <!-- Google Enrichment Button - highlighted if enrichment data exists -->
-                    {% set has_enrichment = land.infrastructure_basic or land.infrastructure_extended or land.transport or (land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital) %}
-                    <button class="btn {{ 'btn-success' if has_enrichment else 'btn-outline-warning' }}" 
-                            hx-post="{{ url_for('api.manual_enrichment', land_id=land.id) }}"
-                            hx-trigger="click"
-                            hx-indicator="#enrichment-spinner">
-                        <i class="fas fa-sync me-md3-2 {{ 'text-white' if has_enrichment else '' }}"></i>
-                        {{ t('enrich_google_api') }}
-                    </button>
-                </div>
-            </div>
-        </div>
-
-    </div>
-
-    <!-- Sidebar -->
-    <div class="col-lg-4">
-        <!-- Loading indicator for enrichment -->
-        <div id="enrichment-spinner" class="htmx-indicator">
-            <div class="alert alert-info">
-                <i class="fas fa-spinner fa-spin me-md3-2"></i>
-                {{ t('enriching_property_google_api') }}
-            </div>
-        </div>
+    <!-- MD3 Main Content Grid -->
+    <div class="md3-grid" style="grid-template-columns: 2fr 1fr; gap: var(--md-sys-spacing-6);" data-land-id="{{ land.id }}">
         
-        <!-- Compact Dual Scoring Analysis -->
-        {% if land.score_investment or land.score_lifestyle %}
-            <div class="card mb-md3-3">
-                <div class="card-body p-md3-3">
-                    <div class="d-flex justify-content-between align-items-center mb-md3-2">
-                        <h6 class="mb-0">
-                            <i class="fas fa-chart-bar me-md3-2"></i>{{ t('scores') }}
-                        </h6>
+        <!-- Main Property Information Column -->
+        <div class="md3-main-column">
+            <!-- Main Property Card -->
+            <div class="md3-card md3-card--elevated md3-mb-6">
+                <div class="md3-card__header">
+                    <div style="flex: 1;">
+                        <h2 class="title-large" style="margin: 0;">{{ land.title }}</h2>
                     </div>
-                    <div class="row g-2">
-                        <div class="col-6">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <small class=" fw-bold">
-                                    <i class="fas fa-coins me-md3-2"></i>{{ t('investment') }}
-                                </small>
-                                <span class="chip chip-warning text-dark">{{ "%.0f"|format(land.score_investment or 0) }}</span>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <small class=" fw-bold">
-                                    <i class="fas fa-home me-md3-2"></i>{{ t('lifestyle') }}
-                                </small>
-                                <span class="chip chip-success">{{ "%.0f"|format(land.score_lifestyle or 0) }}</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        {% endif %}
-
-        <!-- Travel Times to Cities & Beaches -->
-        {% if land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital or land.travel_time_police or land.distance_airport or land.distance_train_station %}
-            <div class="card mb-md3-4">
-                <div class="card-header">
-                    <h3 class="card-title mb-0" title="{{ t('travel_times_distances') }}">
-                        <i class="fas fa-map-marked-alt me-md3-2"></i>{{ t('travel_times_distances') }}
-                    </h3>
-                </div>
-                <div class="card-body">
-                    <!-- Major Cities & Transport Hubs -->
-                    {% if land.travel_time_airport or land.distance_airport %}
-                        <div class="d-flex justify-content-between align-items-center mb-md3-2">
-                            <span class="body-small" title="{{ t('nearest_airport') }}"><i class="fas fa-plane me-md3-2"></i>{{ t('nearest_airport') }}</span>
-                            <div>
-                                {% if land.travel_time_airport %}<span class="chip chip-info me-md3-2">{{ land.travel_time_airport }}min</span>{% endif %}
-                                {% if land.distance_airport %}<span class="chip chip-secondary">{{ land.distance_airport }}km</span>{% endif %}
-                            </div>
-                        </div>
-                    {% endif %}
-                    
-                    {% if land.travel_time_train_station or land.distance_train_station %}
-                        <div class="d-flex justify-content-between align-items-center mb-md3-2">
-                            <span class="body-small" title="{{ t('train_station') }}"><i class="fas fa-train me-md3-2"></i>{{ t('train_station') }}</span>
-                            <div>
-                                {% if land.travel_time_train_station %}<span class="chip chip-info me-md3-2">{{ land.travel_time_train_station }}min</span>{% endif %}
-                                {% if land.distance_train_station %}<span class="chip chip-secondary">{{ land.distance_train_station }}km</span>{% endif %}
-                            </div>
-                        </div>
-                    {% endif %}
-                    
-                    {% if land.travel_time_hospital or land.distance_hospital %}
-                        <div class="d-flex justify-content-between align-items-center mb-md3-2">
-                            <span class="body-small" title="{{ t('hospital') }}"><i class="fas fa-hospital me-md3-2"></i>{{ t('hospital') }}</span>
-                            <div>
-                                {% if land.travel_time_hospital %}<span class="chip chip-info me-md3-2">{{ land.travel_time_hospital }}min</span>{% endif %}
-                                {% if land.distance_hospital %}<span class="chip chip-secondary">{{ land.distance_hospital }}km</span>{% endif %}
-                            </div>
-                        </div>
-                    {% endif %}
-                </div>
-            </div>
-        {% endif %}
-
-
-        <!-- Infrastructure Basic -->
-        {% if land.infrastructure_basic %}
-            <div class="card mb-md3-4">
-                <div class="card-header">
-                    <h3 class="card-title mb-0" title="{{ t('basic_infrastructure') }}">
-                        <i class="fas fa-tools me-md3-2"></i>{{ t('basic_infrastructure') }}
-                    </h3>
-                </div>
-                <div class="card-body">
-                    {% for key, value in land.infrastructure_basic.items() %}
-                        <div class="d-flex justify-content-between align-items-center mb-md3-2">
-                            <span>{{ format_field_name(key) }}</span>
-                            {% if value is sameas true %}
-                                <i class="fas fa-check-circle "></i>
-                            {% elif value is sameas false %}
-                                <i class="fas fa-times-circle "></i>
-                            {% else %}
-                                <span class="text-on-surface-variant">{{ value }}</span>
-                            {% endif %}
-                        </div>
-                    {% endfor %}
-                </div>
-            </div>
-        {% endif %}
-
-        <!-- Infrastructure Extended -->
-        {% if land.infrastructure_extended %}
-            <div class="card mb-md3-4">
-                <div class="card-header">
-                    <h3 class="card-title mb-0" title="{{ t('extended_infrastructure') }}">
-                        <i class="fas fa-building me-md3-2"></i>{{ t('extended_infrastructure') }}
-                    </h3>
-                </div>
-                <div class="card-body">
-                    {% for key, value in land.infrastructure_extended.items() %}
-                        {% if key == 'osm_amenities' and value is mapping %}
-                            <div class="mb-md3-3">
-                                <span class="small fw-bold">{{ t('nearby_amenities') }}:</span>
-                                <div class="mt-md3-2">
-                                    <!-- Priority Amenities (Top of list) -->
-                                    {% for priority_amenity in ['hospital', 'pharmacy', 'police', 'bank'] %}
-                                        {% if priority_amenity in value %}
-                                            <div class="d-flex justify-content-between align-items-center mb-1">
-                                                <span class="small text-capitalize fw-bold">
-                                                    {% if priority_amenity == 'hospital' %}
-                                                        <i class="fas fa-hospital me-md3-2 "></i> Hospitals
-                                                    {% elif priority_amenity == 'pharmacy' %}
-                                                        <i class="fas fa-pills me-md3-2 "></i> Pharmacies
-                                                    {% elif priority_amenity == 'police' %}
-                                                        <i class="fas fa-shield-alt me-md3-2 "></i> Police Stations
-                                                    {% elif priority_amenity == 'bank' %}
-                                                        <i class="fas fa-university me-md3-2 text-info"></i> Banks
-                                                    {% endif %}
-                                                </span>
-                                                <span class="chip chip-primary">{{ value[priority_amenity] }} nearby</span>
-                                            </div>
-                                        {% endif %}
-                                    {% endfor %}
-                                    
-                                    <!-- Separator if we have priority amenities -->
-                                    {% if (value.get('hospital') or value.get('pharmacy') or value.get('police') or value.get('bank')) and value.items()|length > (1 if (value.get('hospital') or value.get('pharmacy') or value.get('police') or value.get('bank')) else 0) %}
-                                        <hr class="my-2">
-                                    {% endif %}
-                                    
-                                    <!-- Regular Amenities -->
-                                    {% for amenity, count in value.items() %}
-                                        {% if amenity not in ['hospital', 'pharmacy', 'police', 'bank'] %}
-                                            <div class="d-flex justify-content-between align-items-center mb-1">
-                                                <span class="small text-capitalize">
-                                                    {% if amenity == 'cafe' %}
-                                                        <i class="fas fa-coffee me-md3-2"></i> Cafes
-                                                    {% elif amenity == 'restaurant' %}
-                                                        <i class="fas fa-utensils me-md3-2"></i> Restaurants
-                                                    {% elif amenity == 'school' %}
-                                                        <i class="fas fa-graduation-cap me-md3-2"></i> Schools
-                                                    {% elif amenity == 'fuel' %}
-                                                        <i class="fas fa-gas-pump me-md3-2"></i> Gas Stations
-                                                    {% elif amenity == 'supermarket' %}
-                                                        <i class="fas fa-shopping-cart me-md3-2"></i> Supermarkets
-                                                    {% else %}
-                                                        <i class="fas fa-map-marker-alt me-md3-2"></i> {{ format_field_name(amenity) }}
-                                                    {% endif %}
-                                                </span>
-                                                <span class="chip chip-primary">{{ count }} nearby</span>
-                                            </div>
-                                        {% endif %}
-                                    {% endfor %}
-                                </div>
-                            </div>
-                        {% else %}
-                            {% set base_key = key.replace('_available', '').replace('_distance', '').replace('_travel_time', '') %}
-                            {% set has_distance = land.infrastructure_extended.get(base_key + '_distance') if land.infrastructure_extended else None %}
-                            {% set has_travel_time = land.infrastructure_extended.get(base_key + '_travel_time') if land.infrastructure_extended else None %}
-                            
-                            <!-- Skip 'available' fields if we have distance/travel_time data, and skip zero distances -->
-                            {% if not (
-                                key.endswith('_available') and (has_distance or has_travel_time)
-                            ) and not (
-                                key.endswith('_distance') and value == 0
-                            ) %}
-                                <div class="d-flex justify-content-between align-items-center mb-md3-2">
-                                    <span class="small">{{ format_field_name(key) }}</span>
-                                    {% if value is sameas true %}
-                                        <i class="fas fa-check-circle "></i>
-                                    {% elif value is sameas false %}
-                                        <i class="fas fa-times-circle "></i>
-                                    {% elif value is number %}
-                                        {% if 'distance' in key %}
-                                            {% set distance_km = value/1000 %}
-                                            {% set travel_time_value = land.infrastructure_extended.get(base_key + '_travel_time') if land.infrastructure_extended else None %}
-                                            <div class="d-flex align-items-center">
-                                                {% if travel_time_value %}
-                                                    <!-- Car time -->
-                                                    <span class="chip chip-info me-md3-2">
-                                                        <i class="fas fa-car me-md3-2"></i>{{ travel_time_value }}min
-                                                    </span>
-                                                    {% set walking_time = (travel_time_value * 4)|int %}
-                                                    {% if walking_time <= 15 %}
-                                                        <!-- Walking time (only if <= 15 min) -->
-                                                        <span class="chip chip-success me-md3-2">
-                                                            <i class="fas fa-walking me-md3-2"></i>{{ walking_time }}min
-                                                        </span>
-                                                    {% endif %}
-                                                {% endif %}
-                                                <span class="chip chip-secondary">{{ "%.1f"|format(distance_km) }}km</span>
-                                            </div>
-                                        {% elif 'travel_time' in key %}
-                                            {% set distance_value = land.infrastructure_extended.get(base_key + '_distance') if land.infrastructure_extended else None %}
-                                            <div class="d-flex align-items-center">
-                                                <!-- Car time -->
-                                                <span class="chip chip-info me-md3-2">
-                                                    <i class="fas fa-car me-md3-2"></i>{{ value }}min
-                                                </span>
-                                                {% set walking_time = (value * 4)|int %}
-                                                {% if walking_time <= 15 %}
-                                                    <!-- Walking time (only if <= 15 min) -->
-                                                    <span class="chip chip-success me-md3-2">
-                                                        <i class="fas fa-walking me-md3-2"></i>{{ walking_time }}min
-                                                    </span>
-                                                {% endif %}
-                                                {% if distance_value %}
-                                                    <span class="chip chip-secondary">{{ "%.1f"|format(distance_value/1000) }}km</span>
-                                                {% endif %}
-                                            </div>
-                                        {% else %}
-                                            {% if 'duration' in key or 'time' in key %}
-                                                <span class="chip chip-info">{{ value }}min</span>
-                                            {% elif 'distance' in key %}
-                                                <span class="chip chip-secondary">{{ "%.1f"|format(value/1000) }}km</span>
-                                            {% else %}
-                                                <span class="chip chip-secondary">{{ value }}</span>
-                                            {% endif %}
-                                        {% endif %}
-                                    {% elif value is mapping %}
-                                        <!-- Handle other dictionary values -->
-                                        <div class="small">
-                                            {% for k, v in value.items() %}
-                                                <div>{{ k }}: {{ v }}</div>
-                                            {% endfor %}
-                                        </div>
-                                    {% else %}
-                                        <span class="text-on-surface-variant small">{{ value }}</span>
-                                    {% endif %}
-                                </div>
-                            {% endif %}
+                    <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-2);">
+                        {% if land.score_total %}
+                            <span class="md3-chip md3-chip--{{ 'success' if land.score_total >= 70 else 'warning' if land.score_total >= 50 else 'error' }}">
+                                {{ t('score') }}: {{ "%.1f"|format(land.score_total) }}
+                            </span>
                         {% endif %}
-                    {% endfor %}
-                </div>
-            </div>
-        {% endif %}
-
-        <!-- Transport -->
-        {% if land.transport or land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital or land.travel_time_police %}
-            <div class="card mb-md3-4">
-                <div class="card-header">
-                    <h3 class="card-title mb-0" title="{{ t('transport') }}">
-                        <i class="fas fa-route me-md3-2"></i>{{ t('transport') }}
-                    </h3>
-                </div>
-                <div class="card-body">
-                    <!-- Priority Infrastructure (Top of list) -->
-                    {% if land.transport and land.transport.get('airport_available') == false %}
-                        <div class="d-flex justify-content-between align-items-center mb-md3-2">
-                            <span class="small fw-bold"><i class="fas fa-plane me-md3-2"></i>Airport</span>
-                            <div>
-                                <i class="fas fa-times-circle "></i>
-                                <small class="text-on-surface-variant ms-md3-1">Not available</small>
-                            </div>
-                        </div>
-                    {% elif land.travel_time_airport %}
-                        <div class="d-flex justify-content-between align-items-center mb-md3-2">
-                            <span class="small fw-bold">Airport Distance</span>
-                            <div class="d-flex align-items-center">
-                                <span class="chip chip-info me-md3-2">
-                                    <i class="fas fa-car me-md3-2"></i>{{ land.travel_time_airport }}min
-                                </span>
-                                {% if land.distance_airport %}
-                                    {% set walking_time = (land.travel_time_airport * 4)|int %}
-                                    {% if walking_time <= 15 %}
-                                        <span class="chip chip-success me-md3-2">
-                                            <i class="fas fa-walking me-md3-2"></i>{{ walking_time }}min
-                                        </span>
-                                    {% endif %}
-                                    <span class="chip chip-secondary">{{ land.distance_airport }}km</span>
-                                {% endif %}
-                            </div>
-                        </div>
-                    {% endif %}
-                    {% if land.travel_time_train_station %}
-                        <div class="d-flex justify-content-between align-items-center mb-md3-2">
-                            <span class="small fw-bold">Train Station Distance</span>
-                            <div class="d-flex align-items-center">
-                                <span class="chip chip-info me-md3-2">
-                                    <i class="fas fa-car me-md3-2"></i>{{ land.travel_time_train_station }}min
-                                </span>
-                                {% if land.distance_train_station %}
-                                    {% set walking_time = (land.travel_time_train_station * 4)|int %}
-                                    {% if walking_time <= 15 %}
-                                        <span class="chip chip-success me-md3-2">
-                                            <i class="fas fa-walking me-md3-2"></i>{{ walking_time }}min
-                                        </span>
-                                    {% endif %}
-                                    <span class="chip chip-secondary">{{ land.distance_train_station }}km</span>
-                                {% endif %}
-                            </div>
-                        </div>
-                    {% endif %}
-                    {% if land.travel_time_hospital %}
-                        <div class="d-flex justify-content-between align-items-center mb-md3-2">
-                            <span class="small fw-bold">Hospital Distance</span>
-                            <div class="d-flex align-items-center">
-                                <span class="chip chip-info me-md3-2">
-                                    <i class="fas fa-car me-md3-2"></i>{{ land.travel_time_hospital }}min
-                                </span>
-                                {% if land.distance_hospital %}
-                                    {% set walking_time = (land.travel_time_hospital * 4)|int %}
-                                    {% if walking_time <= 15 %}
-                                        <span class="chip chip-success me-md3-2">
-                                            <i class="fas fa-walking me-md3-2"></i>{{ walking_time }}min
-                                        </span>
-                                    {% endif %}
-                                    <span class="chip chip-secondary">{{ land.distance_hospital }}km</span>
-                                {% endif %}
-                            </div>
-                        </div>
-                    {% endif %}
-                    {% if land.travel_time_police %}
-                        <div class="d-flex justify-content-between align-items-center mb-md3-2">
-                            <span class="small fw-bold">Police Station Distance</span>
-                            <div class="d-flex align-items-center">
-                                <span class="chip chip-info me-md3-2">
-                                    <i class="fas fa-car me-md3-2"></i>{{ land.travel_time_police }}min
-                                </span>
-                                {% if land.distance_police %}
-                                    {% set walking_time = (land.travel_time_police * 4)|int %}
-                                    {% if walking_time <= 15 %}
-                                        <span class="chip chip-success me-md3-2">
-                                            <i class="fas fa-walking me-md3-2"></i>{{ walking_time }}min
-                                        </span>
-                                    {% endif %}
-                                    <span class="chip chip-secondary">{{ land.distance_police }}km</span>
-                                {% endif %}
-                            </div>
-                        </div>
-                    {% endif %}
-                    
-                    <!-- Separator if we have both priority and regular transport data -->
-                    {% if (land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital or land.travel_time_police) and land.transport %}
-                        <hr class="my-3">
-                    {% endif %}
-                    
-                    <!-- Regular Transport Data -->
-                    {% if land.transport %}
-                        {% for key, value in land.transport.items() %}
-                            {% set base_key = key.replace('_available', '').replace('_distance', '').replace('_travel_time', '') %}
-                            {% set has_distance_field = land.transport.get(base_key + '_distance') if land.transport else None %}
-                            {% set has_travel_time_field = land.transport.get(base_key + '_travel_time') if land.transport else None %}
-                            
-                            <!-- Skip 'available' and individual 'travel_time' fields if we already show combined data above -->
-                            {% if not (
-                                (key.endswith('_available') and (has_distance_field or has_travel_time_field)) or
-                                (key.endswith('_travel_time') and has_distance_field) or
-                                (key.startswith('duration_to_')) or
-                                (key == 'airport_available' and land.travel_time_airport)
-                            ) %}
-                            <div class="d-flex justify-content-between align-items-center mb-md3-2">
-                                <span class="small">{{ format_field_name(key) }}</span>
-                                {% if value is sameas true %}
-                                    <i class="fas fa-check-circle "></i>
-                                {% elif value is sameas false %}
-                                    <i class="fas fa-times-circle "></i>
-                                {% elif value is number and 'distance' in key %}
-                                    <div class="d-flex align-items-center">
-                                        {% if key.startswith('distance_to_') %}
-                                            <!-- Major cities: show car time + distance in one line -->
-                                            {% set duration_key = key.replace('distance_to_', 'duration_to_') %}
-                                            {% set duration_value = land.transport.get(duration_key) %}
-                                            {% if value == 0 and not duration_value %}
-                                                <span class="text-on-surface-variant small">no data</span>
-                                            {% else %}
-                                                {% if duration_value %}
-                                                    <span class="chip chip-info me-md3-2">
-                                                        <i class="fas fa-car me-md3-2"></i>{{ "%.0f"|format(duration_value/60) }}min
-                                                    </span>
-                                                {% endif %}
-                                                <span class="chip chip-secondary">
-                                                    <i class="fas fa-road me-md3-2"></i>{{ "%.0f"|format(value/1000) }}km
-                                                </span>
-                                            {% endif %}
-                                        {% else %}
-                                            <!-- Local transport: show car time + walking time + distance -->
-                                            {% set transport_type = key.replace('_distance', '') %}
-                                            {% if land.transport and land.transport.get(transport_type + '_travel_time') %}
-                                                <span class="chip chip-info me-md3-2">
-                                                    <i class="fas fa-car me-md3-2"></i>{{ land.transport[transport_type + '_travel_time'] }}min
-                                                </span>
-                                                {% set walking_time = (land.transport[transport_type + '_travel_time'] * 4)|int %}
-                                                {% if walking_time <= 15 %}
-                                                    <span class="chip chip-success me-md3-2">
-                                                        <i class="fas fa-walking me-md3-2"></i>{{ walking_time }}min
-                                                    </span>
-                                                {% endif %}
-                                            {% endif %}
-                                            {% if value < 1000 %}
-                                                <span class="chip chip-secondary">
-                                                    <i class="fas fa-road me-md3-2"></i>{{ "%.1f"|format(value/1000) }}km
-                                                </span>
-                                            {% else %}
-                                                <span class="chip chip-secondary">
-                                                    <i class="fas fa-road me-md3-2"></i>{{ "%.0f"|format(value/1000) }}km
-                                                </span>
-                                            {% endif %}
-                                        {% endif %}
-                                    </div>
-                                {% elif value is number and 'duration' in key %}
-                                    <span class="chip chip-info">{{ "%.0f"|format(value/60) }}min</span>
-                                {% elif value is number and key.endswith('_travel_time') %}
-                                    <span class="chip chip-info">
-                                        <i class="fas fa-car me-md3-2"></i>{{ value }}min
-                                    </span>
-                                {% else %}
-                                    <span class="text-on-surface-variant small">{{ value }}</span>
-                                {% endif %}
-                            </div>
-                            {% endif %}
-                        {% endfor %}
-                    {% endif %}
-                </div>
-            </div>
-        {% endif %}
-
-        <!-- Environment -->
-        {% if land.environment %}
-            {% set environment_items = [] %}
-            {% for key, value in land.environment.items() %}
-                {% if key != 'score_breakdown' %}
-                    {% set _ = environment_items.append((key, value)) %}
-                {% endif %}
-            {% endfor %}
-            
-            {% if environment_items %}
-                <div class="card mb-md3-4">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <h6 class="card-title mb-0">
-                            <i class="fas fa-leaf me-md3-2"></i>{{ t('environment') }}
-                        </h6>
-                        <button class="btn-outlined btn-small" onclick="toggleEnvironmentEdit({{ land.id }})" id="env-edit-btn">
-                            <i class="fas fa-edit"></i> Edit
+                        <button type="button" class="md3-button md3-button--icon" onclick="openScoreModal()">
+                            <span class="material-symbols-outlined">edit</span>
                         </button>
                     </div>
-                    <div class="card-body" id="environment-display">
-                        {% for key, value in environment_items %}
-                            <div class="d-flex justify-content-between align-items-center mb-md3-2">
-                                {% if key in ['sea_view', 'forest_view', 'mountain_view'] %}
-                                    <span class="small">{{ format_field_name(key) }}</span>
-                                    {% if value is sameas true %}
-                                        <i class="fas fa-check-circle "></i>
-                                    {% elif value is sameas false %}
-                                        <i class="fas fa-times-circle "></i>
-                                    {% else %}
-                                        <span class="text-on-surface-variant small">N/A</span>
-                                    {% endif %}
-                                {% else %}
-                                    <span class="small">{{ format_field_name(key) }}</span>
-                                    {% if value is sameas true %}
-                                        <i class="fas fa-check-circle "></i>
-                                    {% elif value is sameas false %}
-                                        <i class="fas fa-times-circle "></i>
-                                    {% else %}
-                                        <span class="text-on-surface-variant small">{{ value if value else 'N/A' }}</span>
-                                    {% endif %}
+                </div>
+                
+                <div class="md3-card__content">
+                    <!-- Basic Property Information Grid -->
+                    <div class="md3-grid md3-grid--4-col md3-mb-6">
+                        <div class="md3-info-item">
+                            <div class="label-medium" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-1);">{{ t('price') }}</div>
+                            {% if land.price %}
+                                <div class="title-medium" style="color: var(--md-sys-color-primary);">{{ "{:,.0f}".format(land.price) }}€</div>
+                            {% else %}
+                                <div class="body-medium" style="color: var(--md-sys-color-on-surface-variant);">Not specified</div>
+                            {% endif %}
+                        </div>
+                        <div class="md3-info-item">
+                            <div class="label-medium" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-1);">{{ t('area') }}</div>
+                            {% if land.area %}
+                                <div class="title-medium">{{ "{:,.0f}".format(land.area) }} m²</div>
+                            {% else %}
+                                <div class="body-medium" style="color: var(--md-sys-color-on-surface-variant);">Not specified</div>
+                            {% endif %}
+                        </div>
+                        <div class="md3-info-item">
+                            <div class="label-medium" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-1);">{{ t('municipality') }}</div>
+                            <div class="body-large">{{ land.municipality or 'Unknown' }}</div>
+                        </div>
+                        <div class="md3-info-item">
+                            <div class="label-medium" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-1);">{{ t('type') }}</div>
+                            {% if land.land_type %}
+                                <span class="md3-chip md3-chip--{{ 'success' if land.land_type == 'developed' else 'warning' }}">
+                                    {{ land.land_type.title() }}
+                                </span>
+                            {% else %}
+                                <div class="body-medium" style="color: var(--md-sys-color-on-surface-variant);">Unknown</div>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <!-- Location Information -->
+                    {% if land.location_lat and land.location_lon %}
+                        <div class="md3-mb-6">
+                            <div class="label-large" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-2);">{{ t('location') }}</div>
+                            <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-3); flex-wrap: wrap;">
+                                <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-2);">
+                                    <span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">location_on</span>
+                                    <span class="body-medium">{{ "%.6f"|format(land.location_lat) }}, {{ "%.6f"|format(land.location_lon) }}</span>
+                                </div>
+                                <a href="https://www.google.com/maps/search/?api=1&query={{ land.location_lat }},{{ land.location_lon }}" 
+                                   target="_blank" rel="noopener noreferrer" class="md3-button md3-button--outlined">
+                                    <span class="material-symbols-outlined">open_in_new</span>
+                                    {{ t('view_on_maps') }}
+                                </a>
+                                {% if land.url %}
+                                <a href="{{ land.url }}" 
+                                   target="_blank" rel="noopener noreferrer" class="md3-button md3-button--outlined">
+                                    <span class="material-symbols-outlined">home</span>
+                                    {{ t('view_on_idealista') }}
+                                </a>
                                 {% endif %}
                             </div>
-                        {% endfor %}
+                        </div>
+                    {% elif land.municipality %}
+                        <div class="md3-mb-6">
+                            <div class="label-large" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-2);">{{ t('location') }}</div>
+                            <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-3); flex-wrap: wrap;">
+                                <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-2);">
+                                    <span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">location_on</span>
+                                    <span class="body-medium">{{ land.municipality }}</span>
+                                </div>
+                                <a href="https://www.google.com/maps/search/{{ land.municipality|urlencode }},+Spain" 
+                                   target="_blank" rel="noopener noreferrer" class="md3-button md3-button--outlined">
+                                    <span class="material-symbols-outlined">open_in_new</span>
+                                    {{ t('view_on_maps') }}
+                                </a>
+                                {% if land.url %}
+                                <a href="{{ land.url }}" 
+                                   target="_blank" rel="noopener noreferrer" class="md3-button md3-button--outlined">
+                                    <span class="material-symbols-outlined">home</span>
+                                    {{ t('view_on_idealista') }}
+                                </a>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% endif %}
+
+                    <!-- Property Description -->
+                    {% if land.description %}
+                        <div class="md3-mb-6" id="description-section">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--md-sys-spacing-3);">
+                                <div class="label-large" style="color: var(--md-sys-color-on-surface-variant);">{{ t('property_description') }}</div>
+                                <div style="display: flex; gap: var(--md-sys-spacing-2);">
+                                    <!-- Language Toggle -->
+                                    <div class="md3-segmented-button-group" role="group" id="description-language-toggle" style="display: none;">
+                                        <button type="button" class="md3-button md3-button--outlined active" data-lang="en">
+                                            <span class="material-symbols-outlined">language</span>
+                                            {{ t('english') }}
+                                        </button>
+                                        <button type="button" class="md3-button md3-button--outlined" data-lang="es">
+                                            <span class="material-symbols-outlined">language</span>
+                                            {{ t('spanish') }}
+                                        </button>
+                                        <button type="button" class="md3-button md3-button--outlined" data-lang="original">
+                                            <span class="material-symbols-outlined">home</span>
+                                            {{ t('idealista') }}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Description Content Card -->
+                            <div class="md3-card" id="description-content" style="background-color: var(--md-sys-color-surface-container-highest);">
+                                <div class="md3-card__content">
+                                    <!-- Enhanced Description -->
+                                    <div id="enhanced-description" style="display: none;">
+                                        <div class="body-medium" id="enhanced-description-text" style="color: var(--md-sys-color-on-surface);"></div>
+                                        <div style="margin-top: var(--md-sys-spacing-3);" id="description-highlights" style="display: none;">
+                                            <div class="label-small" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-1);">{{ t('key_highlights') }}:</div>
+                                            <div id="highlights-list"></div>
+                                        </div>
+                                        <div style="margin-top: var(--md-sys-spacing-3);" id="price-info-section" style="display: none;">
+                                            <div class="body-small">💰 <span id="price-info-text"></span></div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Original Description -->
+                                    <div id="original-description" class="body-medium">
+                                        {{ land.description }}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    {% endif %}
+                    
+                    <!-- Property Details from Idealista -->
+                    {% if land.property_details %}
+                        {% if land.property_details is string %}
+                            <div class="md3-mb-6">
+                                <div class="label-large" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-3);">{{ t('property_details') }}</div>
+                                <div class="md3-card" style="background-color: var(--md-sys-color-surface-container-highest);">
+                                    <div class="md3-card__content">
+                                        <pre class="body-medium" style="white-space: pre-wrap; word-wrap: break-word; margin: 0;">{{ land.property_details }}</pre>
+                                    </div>
+                                </div>
+                            </div>
+                        {% endif %}
+                    {% endif %}
+
+                    <!-- AI Analysis Section -->
+                    <div id="ai-analysis-section" class="md3-mb-6" style="{{ 'display: block;' if land.ai_analysis else 'display: none;' }}">
+                        <div class="md3-card md3-card--elevated">
+                            <div class="md3-card__header">
+                                <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-3);">
+                                    <span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">psychology</span>
+                                    <h3 class="title-medium" style="margin: 0;">{{ t('ai_investment_analysis') }}</h3>
+                                </div>
+                                <div class="label-small" style="color: var(--md-sys-color-on-surface-variant);">{{ t('powered_by_claude_ai') }}</div>
+                            </div>
+                            <div class="md3-card__content" id="ai-analysis-content">
+                                {% if land.ai_analysis %}
+                                    <!-- Display existing AI analysis -->
+                                    <div class="analysis-content" id="structured-analysis">
+                                        <!-- Content will be populated by JavaScript -->
+                                    </div>
+                                {% else %}
+                                    <!-- Placeholder for new analysis -->
+                                    <div style="text-align: center; color: var(--md-sys-color-on-surface-variant); padding: var(--md-sys-spacing-8) 0;">
+                                        <span class="material-symbols-outlined" style="font-size: 48px; margin-bottom: var(--md-sys-spacing-4); opacity: 0.5;">smart_toy</span>
+                                        <div class="body-medium">{{ t('click_ai_analysis_button') }}</div>
+                                    </div>
+                                {% endif %}
+                            </div>
+                        </div>
                     </div>
-                    <!-- Edit Form (hidden by default) -->
-                    <div class="card-body" id="environment-edit" style="display: none;">
-                        <form id="environment-form" onsubmit="saveEnvironment(event, {{ land.id }})">
-                            <div class="mb-md3-3">
-                                <div class="form-check mb-md3-2">
-                                    <input class="form-check-input" type="checkbox" id="sea_view" name="sea_view" 
-                                           {{ 'checked' if land.environment.get('sea_view') }}>
-                                    <label class="form-check-label" for="sea_view">Sea View</label>
+
+                    <!-- Action Buttons -->
+                    <div style="display: flex; justify-content: center; gap: var(--md-sys-spacing-3); flex-wrap: wrap;">
+                        {% if land.url %}
+                            <a href="{{ land.url }}" target="_blank" rel="noopener noreferrer" class="md3-button md3-button--filled">
+                                <span class="material-symbols-outlined">home</span>
+                                {{ t('view_on_idealista') }}
+                            </a>
+                        {% endif %}
+                        
+                        <!-- AI Analysis Button -->
+                        <button onclick="analyzeWithClaude({{ land.id }})" 
+                                class="md3-button {{ 'md3-button--filled' if land.ai_analysis else 'md3-button--outlined' }}" style="{{ 'background-color: var(--md-sys-color-tertiary); color: var(--md-sys-color-on-tertiary);' if land.ai_analysis else '' }}">
+                            <span class="material-symbols-outlined">psychology</span>
+                            {{ t('ai_analysis') }}
+                        </button>
+                        
+                        <!-- Google Enrichment Button -->
+                        {% set has_enrichment = land.infrastructure_basic or land.infrastructure_extended or land.transport or (land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital) %}
+                        <button class="md3-button {{ 'md3-button--filled' if has_enrichment else 'md3-button--outlined' }}" 
+                                style="{{ 'background-color: var(--md-sys-color-secondary); color: var(--md-sys-color-on-secondary);' if has_enrichment else '' }}"
+                                hx-post="{{ url_for('api.manual_enrichment', land_id=land.id) }}"
+                                hx-trigger="click"
+                                hx-indicator="#enrichment-spinner">
+                            <span class="material-symbols-outlined md3-spinner" style="{{ 'color: var(--md-sys-color-on-secondary);' if has_enrichment else '' }}">sync</span>
+                            {{ t('enrich_google_api') }}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar Column -->
+        <div class="md3-sidebar-column">
+            <!-- Loading indicator for enrichment -->
+            <div id="enrichment-spinner" class="htmx-indicator md3-mb-4">
+                <div class="md3-card md3-secondary-container">
+                    <div class="md3-card__content">
+                        <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-2);">
+                            <span class="material-symbols-outlined md3-spinner">sync</span>
+                            <span class="body-medium">{{ t('enriching_property_google_api') }}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Compact Dual Scoring Analysis -->
+            {% if land.score_investment or land.score_lifestyle %}
+                <div class="md3-card md3-mb-4">
+                    <div class="md3-card__content" style="padding: var(--md-sys-spacing-4);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--md-sys-spacing-3);">
+                            <div class="title-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin: 0;">
+                                <span class="material-symbols-outlined">bar_chart</span>
+                                {{ t('scores') }}
+                            </div>
+                        </div>
+                        <div class="md3-grid md3-grid--2-col" style="gap: var(--md-sys-spacing-2);">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div class="label-medium" style="display: flex; align-items: center; gap: var(--md-sys-spacing-1);">
+                                    <span class="material-symbols-outlined" style="font-size: 16px;">attach_money</span>
+                                    {{ t('investment') }}
                                 </div>
-                                <div class="form-check mb-md3-2">
-                                    <input class="form-check-input" type="checkbox" id="mountain_view" name="mountain_view" 
-                                           {{ 'checked' if land.environment.get('mountain_view') }}>
-                                    <label class="form-check-label" for="mountain_view">Mountain View</label>
+                                <span class="md3-chip md3-chip--warning">{{ "%.0f"|format(land.score_investment or 0) }}</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div class="label-medium" style="display: flex; align-items: center; gap: var(--md-sys-spacing-1);">
+                                    <span class="material-symbols-outlined" style="font-size: 16px;">home</span>
+                                    {{ t('lifestyle') }}
                                 </div>
-                                <div class="form-check mb-md3-2">
-                                    <input class="form-check-input" type="checkbox" id="forest_view" name="forest_view" 
-                                           {{ 'checked' if land.environment.get('forest_view') }}>
-                                    <label class="form-check-label" for="forest_view">Forest View</label>
-                                </div>
+                                <span class="md3-chip md3-chip--success">{{ "%.0f"|format(land.score_lifestyle or 0) }}</span>
                             </div>
-                            <div class="mb-md3-3">
-                                <label for="orientation" class="form-label small">Orientation</label>
-                                <input type="text" class="form-input form-input-sm" id="orientation" name="orientation" 
-                                       value="{{ land.environment.get('orientation', '') }}">
-                            </div>
-                            <div class="mb-md3-3">
-                                <label for="buildable_floors" class="form-label small">Buildable Floors</label>
-                                <input type="text" class="form-input form-input-sm" id="buildable_floors" name="buildable_floors" 
-                                       value="{{ land.environment.get('buildable_floors', '') }}">
-                            </div>
-                            <div class="mb-md3-3">
-                                <label for="access_type" class="form-label small">Access Type</label>
-                                <input type="text" class="form-input form-input-sm" id="access_type" name="access_type" 
-                                       value="{{ land.environment.get('access_type', '') }}">
-                            </div>
-                            <div class="mb-md3-3">
-                                <label for="certified_for" class="form-label small">Certified For</label>
-                                <input type="text" class="form-input form-input-sm" id="certified_for" name="certified_for" 
-                                       value="{{ land.environment.get('certified_for', '') }}">
-                            </div>
-                            <div class="d-flex gap-md3-2">
-                                <button type="submit" class="btn-filledsm btn-success">Save</button>
-                                <button type="button" class="btn-filledsm btn-secondary" onclick="cancelEnvironmentEdit()">Cancel</button>
-                            </div>
-                        </form>
+                        </div>
                     </div>
                 </div>
             {% endif %}
-        {% endif %}
 
-        <!-- Services Quality -->
-        {% if land.services_quality %}
-            <div class="card mb-md3-4">
-                <div class="card-header">
-                    <h6 class="card-title mb-0">
-                        <i class="fas fa-star me-md3-2"></i>{{ t('services_quality') }}
-                    </h6>
+            <!-- Travel Times to Cities & Beaches -->
+            {% if land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital or land.travel_time_police or land.distance_airport or land.distance_train_station %}
+                <div class="md3-card md3-mb-6">
+                    <div class="md3-card__header">
+                        <h3 class="title-medium" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin: 0;" title="{{ t('travel_times_distances') }}">
+                            <span class="material-symbols-outlined">map</span>
+                            {{ t('travel_times_distances') }}
+                        </h3>
+                    </div>
+                    <div class="md3-card__content">
+                        <!-- Travel Time Items -->
+                        {% if land.travel_time_airport or land.distance_airport %}
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--md-sys-spacing-3);">
+                                <div class="body-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2);" title="{{ t('nearest_airport') }}">
+                                    <span class="material-symbols-outlined" style="font-size: 16px;">flight</span>
+                                    {{ t('nearest_airport') }}
+                                </div>
+                                <div style="display: flex; gap: var(--md-sys-spacing-1);">
+                                    {% if land.travel_time_airport %}<span class="md3-chip md3-chip--info">{{ land.travel_time_airport }}min</span>{% endif %}
+                                    {% if land.distance_airport %}<span class="md3-chip md3-chip--secondary">{{ land.distance_airport }}km</span>{% endif %}
+                                </div>
+                            </div>
+                        {% endif %}
+                        
+                        {% if land.travel_time_train_station or land.distance_train_station %}
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--md-sys-spacing-3);">
+                                <div class="body-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2);" title="{{ t('train_station') }}">
+                                    <span class="material-symbols-outlined" style="font-size: 16px;">train</span>
+                                    {{ t('train_station') }}
+                                </div>
+                                <div style="display: flex; gap: var(--md-sys-spacing-1);">
+                                    {% if land.travel_time_train_station %}<span class="md3-chip md3-chip--info">{{ land.travel_time_train_station }}min</span>{% endif %}
+                                    {% if land.distance_train_station %}<span class="md3-chip md3-chip--secondary">{{ land.distance_train_station }}km</span>{% endif %}
+                                </div>
+                            </div>
+                        {% endif %}
+                        
+                        {% if land.travel_time_hospital or land.distance_hospital %}
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--md-sys-spacing-3);">
+                                <div class="body-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2);" title="{{ t('hospital') }}">
+                                    <span class="material-symbols-outlined" style="font-size: 16px;">local_hospital</span>
+                                    {{ t('hospital') }}
+                                </div>
+                                <div style="display: flex; gap: var(--md-sys-spacing-1);">
+                                    {% if land.travel_time_hospital %}<span class="md3-chip md3-chip--info">{{ land.travel_time_hospital }}min</span>{% endif %}
+                                    {% if land.distance_hospital %}<span class="md3-chip md3-chip--secondary">{{ land.distance_hospital }}km</span>{% endif %}
+                                </div>
+                            </div>
+                        {% endif %}
+                    </div>
                 </div>
-                <div class="card-body">
-                    {% for key, value in land.services_quality.items() %}
-                        <div class="d-flex justify-content-between align-items-center mb-md3-2">
-                            <span class="small">{{ format_field_name(key) }}</span>
-                            {% if value is number %}
-                                <div class="d-flex align-items-center">
-                                    <span class="chip chip-warning me-md3-2">{{ "%.1f"|format(value) }}/5</span>
-                                    <div class="small">
-                                        {% set rounded_rating = (value * 2)|round / 2 %}
-                                        {% set full_stars = rounded_rating|int %}
-                                        {% set has_half = (rounded_rating - full_stars) >= 0.5 %}
+            {% endif %}
+
+            <!-- Infrastructure Basic -->
+            {% if land.infrastructure_basic %}
+                <div class="md3-card md3-mb-6">
+                    <div class="md3-card__header">
+                        <h3 class="title-medium" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin: 0;" title="{{ t('basic_infrastructure') }}">
+                            <span class="material-symbols-outlined">build</span>
+                            {{ t('basic_infrastructure') }}
+                        </h3>
+                    </div>
+                    <div class="md3-card__content">
+                        {% for key, value in land.infrastructure_basic.items() %}
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--md-sys-spacing-2);">
+                                <span class="body-medium">{{ format_field_name(key) }}</span>
+                                {% if value is sameas true %}
+                                    <span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">check_circle</span>
+                                {% elif value is sameas false %}
+                                    <span class="material-symbols-outlined" style="color: var(--md-sys-color-error);">cancel</span>
+                                {% else %}
+                                    <span class="body-medium" style="color: var(--md-sys-color-on-surface-variant);">{{ value }}</span>
+                                {% endif %}
+                            </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            {% endif %}
+
+            <!-- Infrastructure Extended -->
+            {% if land.infrastructure_extended %}
+                <div class="md3-card md3-mb-6">
+                    <div class="md3-card__header">
+                        <h3 class="title-medium" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin: 0;" title="{{ t('extended_infrastructure') }}">
+                            <span class="material-symbols-outlined">apartment</span>
+                            {{ t('extended_infrastructure') }}
+                        </h3>
+                    </div>
+                    <div class="md3-card__content">
+                        {% for key, value in land.infrastructure_extended.items() %}
+                            {% if key == 'osm_amenities' and value is mapping %}
+                                <div style="margin-bottom: var(--md-sys-spacing-4);">
+                                    <div class="label-medium" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-3);">{{ t('nearby_amenities') }}:</div>
+                                    <div>
+                                        <!-- Priority Amenities -->
+                                        {% for priority_amenity in ['hospital', 'pharmacy', 'police', 'bank'] %}
+                                            {% if priority_amenity in value %}
+                                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--md-sys-spacing-2);">
+                                                    <div class="body-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2);">
+                                                        {% if priority_amenity == 'hospital' %}
+                                                            <span class="material-symbols-outlined" style="font-size: 16px; color: var(--md-sys-color-error);">local_hospital</span>
+                                                            Hospitals
+                                                        {% elif priority_amenity == 'pharmacy' %}
+                                                            <span class="material-symbols-outlined" style="font-size: 16px; color: var(--md-sys-color-primary);">medication</span>
+                                                            Pharmacies
+                                                        {% elif priority_amenity == 'police' %}
+                                                            <span class="material-symbols-outlined" style="font-size: 16px; color: var(--md-sys-color-secondary);">shield</span>
+                                                            Police Stations
+                                                        {% elif priority_amenity == 'bank' %}
+                                                            <span class="material-symbols-outlined" style="font-size: 16px; color: var(--md-sys-color-tertiary);">account_balance</span>
+                                                            Banks
+                                                        {% endif %}
+                                                    </div>
+                                                    <span class="md3-chip md3-chip--primary">{{ value[priority_amenity] }} nearby</span>
+                                                </div>
+                                            {% endif %}
+                                        {% endfor %}
                                         
-                                        {% for i in range(1, 6) %}
-                                            {% if i <= full_stars %}
-                                                <!-- Full star -->
-                                                <i class="fas fa-star "></i>
-                                            {% elif i == full_stars + 1 and has_half %}
-                                                <!-- Half star -->
-                                                <i class="fas fa-star-half-alt "></i>
-                                            {% else %}
-                                                <!-- Empty star -->
-                                                <i class="far fa-star text-on-surface-variant"></i>
+                                        <!-- Separator -->
+                                        {% if (value.get('hospital') or value.get('pharmacy') or value.get('police') or value.get('bank')) and value.items()|length > (1 if (value.get('hospital') or value.get('pharmacy') or value.get('police') or value.get('bank')) else 0) %}
+                                            <hr style="border: none; height: 1px; background-color: var(--md-sys-color-outline-variant); margin: var(--md-sys-spacing-2) 0;">
+                                        {% endif %}
+                                        
+                                        <!-- Regular Amenities -->
+                                        {% for amenity, count in value.items() %}
+                                            {% if amenity not in ['hospital', 'pharmacy', 'police', 'bank'] %}
+                                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--md-sys-spacing-2);">
+                                                    <div class="body-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2);">
+                                                        {% if amenity == 'cafe' %}
+                                                            <span class="material-symbols-outlined" style="font-size: 16px;">local_cafe</span>
+                                                            Cafes
+                                                        {% elif amenity == 'restaurant' %}
+                                                            <span class="material-symbols-outlined" style="font-size: 16px;">restaurant</span>
+                                                            Restaurants
+                                                        {% elif amenity == 'school' %}
+                                                            <span class="material-symbols-outlined" style="font-size: 16px;">school</span>
+                                                            Schools
+                                                        {% elif amenity == 'fuel' %}
+                                                            <span class="material-symbols-outlined" style="font-size: 16px;">local_gas_station</span>
+                                                            Gas Stations
+                                                        {% elif amenity == 'supermarket' %}
+                                                            <span class="material-symbols-outlined" style="font-size: 16px;">shopping_cart</span>
+                                                            Supermarkets
+                                                        {% else %}
+                                                            <span class="material-symbols-outlined" style="font-size: 16px;">place</span>
+                                                            {{ format_field_name(amenity) }}
+                                                        {% endif %}
+                                                    </div>
+                                                    <span class="md3-chip md3-chip--primary">{{ count }} nearby</span>
+                                                </div>
                                             {% endif %}
                                         {% endfor %}
                                     </div>
                                 </div>
                             {% else %}
-                                <span class="text-on-surface-variant small">{{ value }}</span>
+                                {% set base_key = key.replace('_available', '').replace('_distance', '').replace('_travel_time', '') %}
+                                {% set has_distance = land.infrastructure_extended.get(base_key + '_distance') if land.infrastructure_extended else None %}
+                                {% set has_travel_time = land.infrastructure_extended.get(base_key + '_travel_time') if land.infrastructure_extended else None %}
+                                
+                                {% if not (has_distance or has_travel_time) or key == base_key + '_available' %}
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--md-sys-spacing-2);">
+                                        <span class="body-medium">{{ format_field_name(key) }}</span>
+                                        {% if value is sameas true %}
+                                            <span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">check_circle</span>
+                                        {% elif value is sameas false %}
+                                            <span class="material-symbols-outlined" style="color: var(--md-sys-color-error);">cancel</span>
+                                        {% else %}
+                                            <span class="body-medium" style="color: var(--md-sys-color-on-surface-variant);">{{ value }}</span>
+                                        {% endif %}
+                                    </div>
+                                {% endif %}
                             {% endif %}
-                        </div>
-                    {% endfor %}
-                </div>
-            </div>
-        {% endif %}
-
-        <!-- Investment Analysis Summary -->
-
-        <!-- Meta Information -->
-        <div class="card">
-            <div class="card-header">
-                <h6 class="card-title mb-0">
-                    <i class="fas fa-info-circle me-md3-2"></i>{{ t('information') }}
-                </h6>
-            </div>
-            <div class="card-body">
-                <div class="small">
-                    <div class="mb-md3-2">
-                        <strong>{{ t('legal_status') }}:</strong> {{ land.legal_status or t('unknown') }}
-                    </div>
-                    <div class="mb-md3-2">
-                        <strong>{{ t('added') }}:</strong> {% if land.created_at %}{{ land.created_at.strftime('%B %d, %Y at %H:%M') }}{% else %}{{ t('unknown') }}{% endif %}
-                    </div>
-                    {% if land.email_date %}
-                        <div class="mb-md3-2">
-                            <strong>{{ t('email_received') }}:</strong> {{ land.email_date.strftime('%B %d, %Y at %H:%M') }}
-                        </div>
-                    {% endif %}
-                    <div class="mb-md3-2">
-                        <strong>{{ t('source_email') }}:</strong> 
-                        {% if land.source_email_id %}
-                            <!-- Check if it's IMAP (not a real Gmail ID) or Gmail API message -->
-                            {% if not land.source_email_id.startswith('imap_') %}
-                                <!-- Direct Gmail link using message ID (only for Gmail API messages) -->
-                                <a href="https://mail.google.com/mail/u/0/#inbox/{{ land.source_email_id }}" 
-                                   target="_blank" rel="noopener noreferrer" 
-                                   class="btn-filled btn-sm me-md3-2"
-                                   title="Open original email in Gmail">
-                                    <i class="fas fa-envelope me-md3-2"></i>{{ t('open_in_gmail') }}
-                                </a>
-                            {% endif %}
-                            
-                            <!-- Always show search link - build best possible query with available data -->
-                            {% set search_parts = [] %}
-                            {% set _ = search_parts.append('from:idealista.com') %}
-                            
-                            {% if land.email_date %}
-                                {% set email_date_str = land.email_date.strftime('%Y/%m/%d') %}
-                                {% set _ = search_parts.append('after:' + email_date_str) %}
-                            {% endif %}
-                            
-                            {% if land.price %}
-                                {% set price_str = (land.price|int)|string %}
-                                {% set _ = search_parts.append('"' + price_str + '€"') %}
-                            {% endif %}
-                            
-                            {% if land.area %}
-                                {% set area_str = (land.area|int)|string + ' m²' %}
-                                {% set _ = search_parts.append('"' + area_str + '"') %}
-                            {% endif %}
-                            
-                            {% if land.municipality %}
-                                {% set _ = search_parts.append('"' + land.municipality + '"') %}
-                            {% endif %}
-                            
-                            {% set search_query = search_parts|join(' ') %}
-                            
-                            <a href="https://mail.google.com/mail/u/0/#search/{{ search_query|urlencode }}" 
-                               target="_blank" rel="noopener noreferrer" 
-                               class="btn-filled{% if land.source_email_id.startswith('imap_') %}primary{% else %}outline-secondary{% endif %} btn-sm"
-                               title="Search for this email in Gmail">
-                                <i class="fas fa-{% if land.source_email_id.startswith('imap_') %}envelope{% else %}search{% endif %} me-md3-2"></i>
-                                {% if land.source_email_id.startswith('imap_') %}{{ t('find_in_gmail') }}{% else %}{{ t('search_in_gmail') }}{% endif %}
-                            </a>
-                            
-                            <!-- Show email metadata if available -->
-                            {% if land.email_subject %}
-                                <div class="small text-on-surface-variant mt-1">
-                                    <strong>{{ t('subject') }}:</strong> {{ land.email_subject[:60] }}{% if land.email_subject|length > 60 %}...{% endif %}
-                                </div>
-                            {% endif %}
-                            {% if land.email_sender %}
-                                <div class="small text-on-surface-variant">
-                                    <strong>{{ t('from') }}:</strong> {{ land.email_sender }}
-                                </div>
-                            {% endif %}
-                        {% else %}
-                            <span class="">
-                                <i class="fas fa-exclamation-triangle me-md3-2"></i>{{ t('no_email_source') }}
-                            </span>
-                        {% endif %}
+                        {% endfor %}
                     </div>
                 </div>
-            </div>
+            {% endif %}
+
+            <!-- Transport Information -->
+            {% if land.transport %}
+                <div class="md3-card md3-mb-6">
+                    <div class="md3-card__header">
+                        <h3 class="title-medium" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin: 0;" title="{{ t('transport') }}">
+                            <span class="material-symbols-outlined">directions_bus</span>
+                            {{ t('transport') }}
+                        </h3>
+                    </div>
+                    <div class="md3-card__content">
+                        {% for key, value in land.transport.items() %}
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--md-sys-spacing-2);">
+                                <span class="body-medium">{{ format_field_name(key) }}</span>
+                                {% if value is sameas true %}
+                                    <span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">check_circle</span>
+                                {% elif value is sameas false %}
+                                    <span class="material-symbols-outlined" style="color: var(--md-sys-color-error);">cancel</span>
+                                {% else %}
+                                    <span class="body-medium" style="color: var(--md-sys-color-on-surface-variant);">{{ value }}</span>
+                                {% endif %}
+                            </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            {% endif %}
+
+            <!-- Regulatory Information -->
+            {% if land.regulatory %}
+                <div class="md3-card md3-mb-6">
+                    <div class="md3-card__header">
+                        <h3 class="title-medium" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin: 0;" title="{{ t('regulatory') }}">
+                            <span class="material-symbols-outlined">gavel</span>
+                            {{ t('regulatory') }}
+                        </h3>
+                    </div>
+                    <div class="md3-card__content">
+                        {% for key, value in land.regulatory.items() %}
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--md-sys-spacing-2);">
+                                <span class="body-medium">{{ format_field_name(key) }}</span>
+                                {% if value is sameas true %}
+                                    <span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">check_circle</span>
+                                {% elif value is sameas false %}
+                                    <span class="material-symbols-outlined" style="color: var(--md-sys-color-error);">cancel</span>
+                                {% else %}
+                                    <span class="body-medium" style="color: var(--md-sys-color-on-surface-variant);">{{ value }}</span>
+                                {% endif %}
+                            </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            {% endif %}
+
+            <!-- Land Quality -->
+            {% if land.land_quality %}
+                <div class="md3-card md3-mb-6">
+                    <div class="md3-card__header">
+                        <h3 class="title-medium" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin: 0;" title="{{ t('land_quality') }}">
+                            <span class="material-symbols-outlined">landscape</span>
+                            {{ t('land_quality') }}
+                        </h3>
+                    </div>
+                    <div class="md3-card__content">
+                        {% for key, value in land.land_quality.items() %}
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--md-sys-spacing-2);">
+                                <span class="body-medium">{{ format_field_name(key) }}</span>
+                                {% if value is sameas true %}
+                                    <span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">check_circle</span>
+                                {% elif value is sameas false %}
+                                    <span class="material-symbols-outlined" style="color: var(--md-sys-color-error);">cancel</span>
+                                {% else %}
+                                    <span class="body-medium" style="color: var(--md-sys-color-on-surface-variant);">{{ value }}</span>
+                                {% endif %}
+                            </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            {% endif %}
+
+            <!-- Environmental Impact -->
+            {% if land.environmental_impact %}
+                <div class="md3-card md3-mb-6">
+                    <div class="md3-card__header">
+                        <h3 class="title-medium" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin: 0;" title="{{ t('environmental_impact') }}">
+                            <span class="material-symbols-outlined">eco</span>
+                            {{ t('environmental_impact') }}
+                        </h3>
+                    </div>
+                    <div class="md3-card__content">
+                        {% for key, value in land.environmental_impact.items() %}
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--md-sys-spacing-2);">
+                                <span class="body-medium">{{ format_field_name(key) }}</span>
+                                {% if value is sameas true %}
+                                    <span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">check_circle</span>
+                                {% elif value is sameas false %}
+                                    <span class="material-symbols-outlined" style="color: var(--md-sys-color-error);">cancel</span>
+                                {% else %}
+                                    <span class="body-medium" style="color: var(--md-sys-color-on-surface-variant);">{{ value }}</span>
+                                {% endif %}
+                            </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            {% endif %}
+
         </div>
     </div>
 </div>
 
-<!-- Edit Score Modal -->
+<!-- Edit Score Modal (keeping existing modal structure) -->
 <div class="modal fade" id="editScoreModal" tabindex="-1" aria-labelledby="editScoreModalLabel" aria-hidden="true">
     <div class="modal-dialog">
-        <div class="modal-content">
-            <form method="POST" action="{{ url_for('main.update_score', land_id=land.id) }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <div class="modal-header">
-                    <h3 class="modal-title" id="editScoreModalLabel">{{ t('edit_score') }}</h3>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <div class="mb-md3-3">
-                        <label for="score" class="form-label">{{ t('manual_score_0_100') }}</label>
-                        <input type="number" class="form-input" id="score" name="score" 
-                               min="0" max="100" step="0.1" 
-                               value="{{ '%.1f'|format(land.score_total) if land.score_total else 0 }}" required>
-                        <div class="form-text">
-                            {{ t('enter_score_description') }}
+        <div class="modal-content bg-dark text-white">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editScoreModalLabel">{{ t('edit_scoring_weights') }}</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="scoring-weights-form" action="{{ url_for('main.update_scoring_weights') }}" method="POST">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6><i class="fas fa-coins me-md3-2"></i>{{ t('investment_weights') }}</h6>
+                            <div class="mb-md3-3">
+                                <label class="form-label">{{ t('price_score_weight') }}</label>
+                                <input type="range" class="form-range" name="price_weight" min="0" max="100" value="{{ scoring_config.price_weight or 25 }}" id="priceWeight">
+                                <small class="text-on-surface-variant">{{ t('current') }}: <span id="priceWeightValue">{{ scoring_config.price_weight or 25 }}</span>%</small>
+                            </div>
+                            <div class="mb-md3-3">
+                                <label class="form-label">{{ t('location_score_weight') }}</label>
+                                <input type="range" class="form-range" name="location_weight" min="0" max="100" value="{{ scoring_config.location_weight or 25 }}" id="locationWeight">
+                                <small class="text-on-surface-variant">{{ t('current') }}: <span id="locationWeightValue">{{ scoring_config.location_weight or 25 }}</span>%</small>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <h6><i class="fas fa-home me-md3-2"></i>{{ t('lifestyle_weights') }}</h6>
+                            <div class="mb-md3-3">
+                                <label class="form-label">{{ t('infrastructure_score_weight') }}</label>
+                                <input type="range" class="form-range" name="infrastructure_weight" min="0" max="100" value="{{ scoring_config.infrastructure_weight or 25 }}" id="infrastructureWeight">
+                                <small class="text-on-surface-variant">{{ t('current') }}: <span id="infrastructureWeightValue">{{ scoring_config.infrastructure_weight or 25 }}</span>%</small>
+                            </div>
+                            <div class="mb-md3-3">
+                                <label class="form-label">{{ t('accessibility_score_weight') }}</label>
+                                <input type="range" class="form-range" name="accessibility_weight" min="0" max="100" value="{{ scoring_config.accessibility_weight or 25 }}" id="accessibilityWeight">
+                                <small class="text-on-surface-variant">{{ t('current') }}: <span id="accessibilityWeightValue">{{ scoring_config.accessibility_weight or 25 }}</span>%</small>
+                            </div>
                         </div>
                     </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn-outlined" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn-filled">{{ t('save_score') }}</button>
-                </div>
-            </form>
+                </form>
+            </div>
+
+<!-- MD3 Edit Score Modal -->
+<div id="editScoreModal" class="md3-modal" style="display: none;">
+    <div class="md3-modal-backdrop" onclick="closeScoreModal()"></div>
+    <div class="md3-modal-dialog">
+        <div class="md3-card">
+            <div class="md3-card__header">
+                <h2 class="title-large" style="margin: 0;">{{ t('edit_score') }}</h2>
+                <button type="button" class="md3-button md3-button--icon" onclick="closeScoreModal()">
+                    <span class="material-symbols-outlined">close</span>
+                </button>
+            </div>
+            <div class="md3-card__content">
+                <form method="POST" action="{{ url_for('main.update_score', land_id=land.id) }}">
+                    <div style="margin-bottom: var(--md-sys-spacing-4);">
+                        <label for="score-input" class="label-medium" style="display: block; margin-bottom: var(--md-sys-spacing-2); color: var(--md-sys-color-on-surface);">{{ t('manual_score_0_100') }}</label>
+                        <input type="number" id="score-input" name="score" min="0" max="100" step="0.1" 
+                               value="{{ land.score_total if land.score_total else '' }}" 
+                               class="md3-text-field" 
+                               placeholder="Enter score (0-100)"
+                               required>
+                    </div>
+                    <div style="margin-bottom: var(--md-sys-spacing-4);">
+                        <div class="body-small" style="color: var(--md-sys-color-on-surface-variant);">{{ t('enter_score_description') }}</div>
+                    </div>
+                    <div style="display: flex; justify-content: flex-end; gap: var(--md-sys-spacing-3);">
+                        <button type="button" class="md3-button md3-button--outlined" onclick="closeScoreModal()">
+                            {{ t('cancel') }}
+                        </button>
+                        <button type="submit" class="md3-button md3-button--filled">
+                            <span class="material-symbols-outlined">save</span>
+                            {{ t('save_score') }}
+                        </button>
+                    </div>
+                </form>
+            </div>
         </div>
     </div>
 </div>
 
 <script>
+// Modal functionality
+function openScoreModal() {
+    const modal = document.getElementById('editScoreModal');
+    const scoreInput = document.getElementById('score-input');
+    
+    if (modal) {
+        modal.style.display = 'flex';
+        setTimeout(() => {
+            modal.classList.add('show');
+        }, 10);
+        
+        // Focus on the input field after modal opens
+        setTimeout(() => {
+            if (scoreInput) {
+                scoreInput.focus();
+                scoreInput.select(); // Select existing value for easy editing
+            }
+        }, 300);
+    }
+}
+
+function closeScoreModal() {
+    const modal = document.getElementById('editScoreModal');
+    
+    if (modal) {
+        modal.classList.remove('show');
+        setTimeout(() => {
+            modal.style.display = 'none';
+        }, 250);
+    }
+}
+
+// Close modal on Escape key
+document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+        closeScoreModal();
+    }
+});
+
+// Enhanced description setup and AI analysis functionality
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('[DESC] Setting up description enhancement...');
+    
+    // Check if we have a description section
+    const descSection = document.getElementById('description-section');
+    if (!descSection) {
+        console.log('[DESC] No description section found, skipping');
+        return;
+    }
+    
+    // Initialize existing AI analysis if available
+    const existingAnalysis = {{ land.ai_analysis|tojson if land.ai_analysis else 'null' }};
+    if (existingAnalysis && typeof existingAnalysis === 'object') {
+        console.log('[DESC] Found existing AI analysis, rendering structured content');
+        const structuredAnalysisDiv = document.getElementById('structured-analysis');
+        if (structuredAnalysisDiv) {
+            structuredAnalysisDiv.innerHTML = renderStructuredAIAnalysis(existingAnalysis);
+        }
+    }
+});
+
+// Weight update sliders
+document.addEventListener('DOMContentLoaded', function() {
+    const weightSliders = [
+        'priceWeight', 'locationWeight', 'infrastructureWeight', 'accessibilityWeight'
+    ];
+    
+    weightSliders.forEach(sliderId => {
+        const slider = document.getElementById(sliderId);
+        const valueSpan = document.getElementById(sliderId + 'Value');
+        
+        if (slider && valueSpan) {
+            slider.addEventListener('input', function() {
+                valueSpan.textContent = slider.value;
+            });
+        }
+    });
+});
+
+// Update scoring weights function
+function updateScoringWeights(landId) {
+    const form = document.getElementById('scoring-weights-form');
+    const formData = new FormData(form);
+    formData.append('land_id', landId);
+    
+    fetch(form.action, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Close modal and refresh page to show updated scores
+            closeScoreModal();
+            location.reload();
+        } else {
+            alert(data.error || 'Failed to update weights');
+        }
+    })
+    .catch(error => {
+        console.error('Error updating weights:', error);
+        alert('Network error occurred');
+    });
+}
+
+// AI Analysis Function
 function analyzeWithClaude(landId) {
+    console.log('Starting AI analysis for land ID:', landId);
+    
     const button = event.target.closest('button');
     const originalContent = button.innerHTML;
-    const aiSection = document.getElementById('ai-analysis-section');
-    const aiContent = document.getElementById('ai-analysis-content');
-    
-    // Check if there's existing analysis for enrichment
-    let existingAnalysis = null;
-    let isEnrichment = false;
-    
-    try {
-        {% if land.ai_analysis %}
-            const currentData = {{ land.ai_analysis|tojson|safe }};
-            if (currentData && typeof currentData === 'object') {
-                existingAnalysis = currentData;
-                isEnrichment = true;
-            }
-        {% endif %}
-    } catch (e) {
-        console.log('No valid existing analysis found, performing fresh analysis');
-    }
     
     // Show loading state
     button.disabled = true;
-    const loadingText = isEnrichment ? 'Enriching Analysis...' : 'Analyzing...';
-    button.innerHTML = `<i class="fas fa-spinner fa-spin me-md3-2"></i>${loadingText}`;
+    button.innerHTML = `<span class="material-symbols-outlined md3-spinner">psychology</span>Analyzing...`;
     
-    // Show AI section and display loading
-    aiSection.style.display = 'block';
+    // Show analysis section
+    const analysisSection = document.getElementById('ai-analysis-section');
+    analysisSection.style.display = 'block';
     
-    // For enrichment, don't clear existing content - just show loading overlay
-    if (isEnrichment) {
-        const existingContent = aiContent.innerHTML;
+    const aiContent = document.getElementById('ai-analysis-content');
+    
+    // Check if we have existing analysis for enrichment
+    const existingAnalysis = {{ land.ai_analysis|tojson if land.ai_analysis else 'null' }};
+    
+    if (existingAnalysis && typeof existingAnalysis === 'object') {
+        // For existing analysis, show enrichment overlay
         aiContent.innerHTML = `
-            <div class="position-relative">
-                <div class="analysis-loading-overlay position-absolute w-100 h-100 d-flex align-items-center justify-content-center" style="background: rgba(0,0,0,0.7); z-index: 10; border-radius: 0.375rem;">
-                    <div class="text-center text-white">
-                        <div class="spinner-border text-light mb-md3-3" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                        <p class="mb-1">Enriching existing analysis...</p>
-                        <small>Adding new insights and rental market data</small>
+            <div class="analysis-content">
+                ${renderStructuredAIAnalysis(existingAnalysis)}
+                <div class="analysis-loading-overlay" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; border-radius: var(--md-sys-shape-corner-medium);">
+                    <div class="md3-card md3-secondary-container" style="padding: var(--md-sys-spacing-6); text-align: center;">
+                        <span class="material-symbols-outlined md3-spinner" style="font-size: 32px; margin-bottom: var(--md-sys-spacing-2);">psychology</span>
+                        <div class="body-medium">Enriching existing analysis...</div>
                     </div>
                 </div>
-                ${existingContent}
             </div>
         `;
     } else {
+        // For new analysis, show simple loading
         aiContent.innerHTML = `
-            <div class="text-center">
-                <div class="spinner-border  mb-md3-3" role="status">
-                    <span class="visually-hidden">Loading...</span>
-                </div>
-                <p class="text-on-surface-variant">Claude AI is analyzing this property...</p>
-                <small class="text-on-surface-variant">This may take 10-30 seconds</small>
+            <div style="text-align: center; padding: var(--md-sys-spacing-8) 0;">
+                <span class="material-symbols-outlined md3-spinner" style="font-size: 48px; margin-bottom: var(--md-sys-spacing-4);">psychology</span>
+                <div class="body-medium">Analyzing property with Claude AI...</div>
+                <div class="body-small" style="color: var(--md-sys-color-on-surface-variant); margin-top: var(--md-sys-spacing-2);">This may take a few moments</div>
             </div>
         `;
     }
@@ -1020,10 +849,14 @@ function analyzeWithClaude(landId) {
                 // Update existing content with enriched data
                 aiContent.innerHTML = `
                     <div class="analysis-content">
-                        <div class="alert alert-info alert-dismissible fade show" role="alert" id="success-alert">
-                            <i class="fas fa-plus-circle me-md3-2"></i>
-                            ${successText}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        <div class="md3-card md3-secondary-container" style="margin-bottom: var(--md-sys-spacing-4);" id="success-alert">
+                            <div class="md3-card__content" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2);">
+                                <span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">check_circle</span>
+                                <span class="body-medium">${successText}</span>
+                                <button type="button" onclick="this.parentElement.parentElement.style.display='none'" style="margin-left: auto; background: none; border: none; color: var(--md-sys-color-on-secondary-container);">
+                                    <span class="material-symbols-outlined">close</span>
+                                </button>
+                            </div>
                         </div>
                         ${analysisContent}
                     </div>
@@ -1032,10 +865,14 @@ function analyzeWithClaude(landId) {
                 // New analysis - replace entirely
                 aiContent.innerHTML = `
                     <div class="analysis-content">
-                        <div class="alert alert-success alert-dismissible fade show" role="alert" id="success-alert">
-                            <i class="fas fa-check-circle me-md3-2"></i>
-                            ${successText}
-                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        <div class="md3-card md3-primary-container" style="margin-bottom: var(--md-sys-spacing-4);" id="success-alert">
+                            <div class="md3-card__content" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2);">
+                                <span class="material-symbols-outlined" style="color: var(--md-sys-color-on-primary-container);">check_circle</span>
+                                <span class="body-medium">${successText}</span>
+                                <button type="button" onclick="this.parentElement.parentElement.style.display='none'" style="margin-left: auto; background: none; border: none; color: var(--md-sys-color-on-primary-container);">
+                                    <span class="material-symbols-outlined">close</span>
+                                </button>
+                            </div>
                         </div>
                         ${analysisContent}
                     </div>
@@ -1046,26 +883,32 @@ function analyzeWithClaude(landId) {
             setTimeout(() => {
                 const successAlert = document.getElementById('success-alert');
                 if (successAlert) {
-                    const bsAlert = new bootstrap.Alert(successAlert);
-                    bsAlert.close();
+                    successAlert.style.display = 'none';
                 }
             }, 3000);
             
             // Update button to show success state
-            button.classList.remove('btn-outline-info');
-            button.classList.add('btn-success');
+            button.classList.remove('md3-button--outlined');
+            button.classList.add('md3-button--filled');
+            button.style.backgroundColor = 'var(--md-sys-color-tertiary)';
+            button.style.color = 'var(--md-sys-color-on-tertiary)';
             const buttonText = data.is_enrichment ? 'Analysis Enriched' : 'AI Analysis';
-            button.innerHTML = `<i class="fas fa-brain me-md3-2"></i>${buttonText}`;
+            button.innerHTML = `<span class="material-symbols-outlined">psychology</span>${buttonText}`;
         } else {
             // Display error in the analysis section
             aiContent.innerHTML = `
-                <div class="alert alert-danger" role="alert">
-                    <i class="fas fa-exclamation-triangle me-md3-2"></i>
-                    <strong>Analysis Failed:</strong> ${data.error || 'Unknown error occurred'}
+                <div class="md3-card md3-error-container" style="margin-bottom: var(--md-sys-spacing-4);">
+                    <div class="md3-card__content">
+                        <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin-bottom: var(--md-sys-spacing-2);">
+                            <span class="material-symbols-outlined" style="color: var(--md-sys-color-on-error-container);">warning</span>
+                            <span class="label-large" style="color: var(--md-sys-color-on-error-container);">Analysis Failed</span>
+                        </div>
+                        <div class="body-medium" style="color: var(--md-sys-color-on-error-container);">${data.error || 'Unknown error occurred'}</div>
+                    </div>
                 </div>
-                <div class="text-center text-on-surface-variant">
-                    <i class="fas fa-robot fa-3x mb-md3-3 opacity-50"></i>
-                    <p>Please try again or contact support if the problem persists</p>
+                <div style="text-align: center; color: var(--md-sys-color-on-surface-variant); padding: var(--md-sys-spacing-4) 0;">
+                    <span class="material-symbols-outlined" style="font-size: 48px; margin-bottom: var(--md-sys-spacing-3); opacity: 0.5;">smart_toy</span>
+                    <div class="body-medium">Please try again or contact support if the problem persists</div>
                 </div>
             `;
         }
@@ -1073,19 +916,24 @@ function analyzeWithClaude(landId) {
     .catch(error => {
         // Display network error in the analysis section
         aiContent.innerHTML = `
-            <div class="alert alert-danger" role="alert">
-                <i class="fas fa-wifi me-md3-2"></i>
-                <strong>Network Error:</strong> Unable to connect to AI service. Please check your connection and try again.
+            <div class="md3-card md3-error-container" style="margin-bottom: var(--md-sys-spacing-4);">
+                <div class="md3-card__content">
+                    <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin-bottom: var(--md-sys-spacing-2);">
+                        <span class="material-symbols-outlined" style="color: var(--md-sys-color-on-error-container);">wifi_off</span>
+                        <span class="label-large" style="color: var(--md-sys-color-on-error-container);">Network Error</span>
+                    </div>
+                    <div class="body-medium" style="color: var(--md-sys-color-on-error-container);">Unable to connect to AI service. Please check your connection and try again.</div>
+                </div>
             </div>
-            <div class="text-center text-on-surface-variant">
-                <i class="fas fa-robot fa-3x mb-md3-3 opacity-50"></i>
-                <p>Connection failed. Please try again in a moment.</p>
+            <div style="text-align: center; color: var(--md-sys-color-on-surface-variant); padding: var(--md-sys-spacing-4) 0;">
+                <span class="material-symbols-outlined" style="font-size: 48px; margin-bottom: var(--md-sys-spacing-3); opacity: 0.5;">smart_toy</span>
+                <div class="body-medium">Connection failed. Please try again in a moment.</div>
             </div>
         `;
     })
     .finally(() => {
         // Restore button (unless it was successful)
-        if (!button.classList.contains('btn-success')) {
+        if (!button.classList.contains('md3-button--filled') || !button.style.backgroundColor) {
             button.disabled = false;
             button.innerHTML = originalContent;
         } else {
@@ -1099,57 +947,58 @@ function renderListItems(items, label, colorClass) {
     if (!items || !Array.isArray(items) || items.length === 0) return '';
     
     const listItems = items.map(item => 
-        `<li><i class="fas fa-dot-circle text-${colorClass} me-md3-2"></i>${item}</li>`
+        `<li style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin-bottom: var(--md-sys-spacing-1);"><span class="material-symbols-outlined" style="font-size: 16px; color: var(--md-sys-color-${colorClass});">circle</span>${item}</li>`
     ).join('');
     
-    return `<div class="mb-md3-2"><strong>${label}</strong><ul class="list-unstyled mb-1">${listItems}</ul></div>`;
+    return `<div style="margin-bottom: var(--md-sys-spacing-3);"><div class="label-medium" style="margin-bottom: var(--md-sys-spacing-2);">${label}</div><ul style="list-style: none; padding: 0; margin: 0;">${listItems}</ul></div>`;
 }
 
 function renderSimilarProperties(similarProperties) {
     if (!similarProperties || !Array.isArray(similarProperties) || similarProperties.length === 0) {
-        return '<p class="text-on-surface-variant">No similar properties found</p>';
+        return '<div class="body-medium" style="color: var(--md-sys-color-on-surface-variant);">No similar properties found</div>';
     }
     
     const propertyCards = similarProperties.map(prop => {
         const priceText = prop.price ? `€${prop.price.toLocaleString()}` : 'Price N/A';
         const areaText = prop.area ? `${prop.area.toLocaleString()}m²` : 'Area N/A';
         const scoreText = prop.score_total ? `${prop.score_total.toFixed(1)}/100` : 'Not scored';
-        const scoreClass = prop.score_total ? (prop.score_total >= 70 ? '' : prop.score_total >= 50 ? '' : '') : 'text-on-surface-variant';
         
-        const landTypeClass = prop.land_type === 'developed' ? 'bg-success' : 'bg-warning';
+        const landTypeClass = prop.land_type === 'developed' ? 'md3-chip--success' : 'md3-chip--warning';
         
         return `
-            <div class="similar-property-card border rounded p-md3-3 mb-md3-2" style="background-color: rgba(255,255,255,0.05);">
-                <div class="d-flex justify-content-between align-items-start mb-md3-2">
-                    <div class="flex-grow-1">
-                        <h6 class="mb-1">
-                            <a href="/lands/${prop.id}" class="text-decoration-none text-white">
-                                ${prop.title ? prop.title.substring(0, 50) + (prop.title.length > 50 ? '...' : '') : 'Property #' + prop.id}
+            <div class="md3-card" style="margin-bottom: var(--md-sys-spacing-3); background-color: var(--md-sys-color-surface-container);">
+                <div class="md3-card__content">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: var(--md-sys-spacing-3);">
+                        <div style="flex: 1;">
+                            <h6 class="title-small" style="margin-bottom: var(--md-sys-spacing-1);">
+                                <a href="/lands/${prop.id}" class="md3-link">
+                                    ${prop.title ? prop.title.substring(0, 50) + (prop.title.length > 50 ? '...' : '') : 'Property #' + prop.id}
+                                </a>
+                            </h6>
+                            <div style="display: flex; flex-wrap: wrap; gap: var(--md-sys-spacing-2); margin-bottom: var(--md-sys-spacing-2);">
+                                <div class="body-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-1);"><span class="material-symbols-outlined" style="font-size: 14px;">euro</span>${priceText}</div>
+                                <div class="body-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-1);"><span class="material-symbols-outlined" style="font-size: 14px;">straighten</span>${areaText}</div>
+                                <div class="body-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-1);"><span class="material-symbols-outlined" style="font-size: 14px;">location_on</span>${prop.municipality || 'Location N/A'}</div>
+                            </div>
+                        </div>
+                        <div style="text-align: end;">
+                            <span class="md3-chip ${landTypeClass}">${(prop.land_type || 'Unknown').charAt(0).toUpperCase() + (prop.land_type || 'unknown').slice(1)}</span>
+                            <div class="body-small" style="margin-top: var(--md-sys-spacing-1); display: flex; align-items: center; gap: var(--md-sys-spacing-1);">
+                                <span class="material-symbols-outlined" style="font-size: 14px;">star</span>${scoreText}
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div style="display: flex; gap: var(--md-sys-spacing-2);">
+                            <a href="/lands/${prop.id}" class="md3-button md3-button--filled">
+                                <span class="material-symbols-outlined">visibility</span>View Details
                             </a>
-                        </h6>
-                        <div class="d-flex flex-wrap gap-md3-3 small text-on-surface-variant mb-md3-2">
-                            <span><i class="fas fa-euro-sign me-md3-2"></i>${priceText}</span>
-                            <span><i class="fas fa-ruler-combined me-md3-2"></i>${areaText}</span>
-                            <span><i class="fas fa-map-marker-alt me-md3-2"></i>${prop.municipality || 'Location N/A'}</span>
+                            ${prop.url ? `<a href="${prop.url}" target="_blank" class="md3-button md3-button--outlined">
+                                <span class="material-symbols-outlined">open_in_new</span>Idealista
+                            </a>` : ''}
                         </div>
+                        <div class="label-small" style="color: var(--md-sys-color-on-surface-variant);">Similar property</div>
                     </div>
-                    <div class="text-end">
-                        <span class="badge ${landTypeClass} small">${(prop.land_type || 'Unknown').charAt(0).toUpperCase() + (prop.land_type || 'unknown').slice(1)}</span>
-                        <div class="small ${scoreClass} mt-1">
-                            <i class="fas fa-star me-md3-2"></i>${scoreText}
-                        </div>
-                    </div>
-                </div>
-                <div class="d-flex justify-content-between align-items-center">
-                    <div class="d-flex gap-md3-2">
-                        <a href="/lands/${prop.id}" class="btn-filledoutline-primary btn-sm">
-                            <i class="fas fa-eye me-md3-2"></i>View Details
-                        </a>
-                        ${prop.url ? `<a href="${prop.url}" target="_blank" class="btn-filledoutline-secondary btn-sm">
-                            <i class="fas fa-external-link-alt me-md3-2"></i>Idealista
-                        </a>` : ''}
-                    </div>
-                    <small class="text-on-surface-variant">Similar property</small>
                 </div>
             </div>
         `;
@@ -1160,21 +1009,19 @@ function renderSimilarProperties(similarProperties) {
 
 function getPriceVerdictClass(verdict) {
     switch(verdict) {
-        case 'Fair Price': return 'bg-success';
-        case 'Underpriced': return 'bg-primary';
-        case 'Overpriced': return 'bg-danger';
-        default: return 'bg-secondary';
+        case 'Fair Price': return 'md3-chip--success';
+        case 'Underpriced': return 'md3-chip--primary';
+        case 'Overpriced': return 'md3-chip--error';
+        default: return 'md3-chip--secondary';
     }
 }
 
-// Removed duplicate - see consolidated version below
-
 function getPriceTrendClass(trend) {
     switch(trend) {
-        case 'RISING': return 'bg-success';
-        case 'STABLE': return 'bg-info';
-        case 'DECLINING': return 'bg-danger';
-        default: return 'bg-secondary';
+        case 'RISING': return 'md3-chip--success';
+        case 'STABLE': return 'md3-chip--info';
+        case 'DECLINING': return 'md3-chip--error';
+        default: return 'md3-chip--secondary';
     }
 }
 
@@ -1206,102 +1053,106 @@ function renderStructuredAIAnalysis(analysis) {
     
     // Safety check for empty analysis
     if (!analysis || typeof analysis !== 'object') {
-        return '<div class="alert alert-warning">No analysis data available</div>';
+        return '<div class="md3-card md3-error-container"><div class="md3-card__content"><div class="body-medium">No analysis data available</div></div></div>';
     }
     
     try {
         return `
-            <div class="row">
-                <div class="col-md-6 mb-md3-3">
-                    <div class="border rounded p-md3-3 h-100">
-                        <h6><i class="fas fa-euro-sign "></i> Price Analysis</h6>
+            <div class="md3-grid md3-grid--2-col" style="margin-bottom: var(--md-sys-spacing-4);">
+                <div class="md3-card" style="height: 100%;">
+                    <div class="md3-card__content">
+                        <h6 class="title-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin-bottom: var(--md-sys-spacing-3);"><span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">euro</span>Price Analysis</h6>
                         ${analysis.price_analysis ? `
-                            <span class="badge ${getPriceVerdictClass(analysis.price_analysis.verdict)}">
+                            <span class="md3-chip ${getPriceVerdictClass(analysis.price_analysis.verdict)}" style="margin-bottom: var(--md-sys-spacing-2);">
                                 ${formatUIText(analysis.price_analysis.verdict)}
                             </span>
-                            <p class="mb-1 mt-md3-2">${analysis.price_analysis.summary || 'No analysis available'}</p>
-                            <small class="text-on-surface-variant">${analysis.price_analysis.recommendation || ''}</small>
+                            <div class="body-medium" style="margin-bottom: var(--md-sys-spacing-2);">${analysis.price_analysis.summary || 'No analysis available'}</div>
+                            <div class="body-small" style="color: var(--md-sys-color-on-surface-variant);">${analysis.price_analysis.recommendation || ''}</div>
                         ` : `
-                            <span class="chip chip-secondary">Analysis Pending</span>
-                            <p class="mb-1 mt-md3-2 text-on-surface-variant">Price analysis will be available after next AI enrichment</p>
+                            <span class="md3-chip md3-chip--secondary" style="margin-bottom: var(--md-sys-spacing-2);">Analysis Pending</span>
+                            <div class="body-medium" style="color: var(--md-sys-color-on-surface-variant);">Price analysis will be available after next AI enrichment</div>
                         `}
                     </div>
                 </div>
                 
-                <div class="col-md-6 mb-md3-3">
-                    <div class="border rounded p-md3-3 h-100">
-                        <h6><i class="fas fa-chart-line "></i> Investment Potential</h6>
+                <div class="md3-card" style="height: 100%;">
+                    <div class="md3-card__content">
+                        <h6 class="title-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin-bottom: var(--md-sys-spacing-3);"><span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">trending_up</span>Investment Potential</h6>
                         ${analysis.investment_potential ? `
-                            <span class="badge ${getInvestmentRatingClass(analysis.investment_potential.rating)}">
+                            <span class="md3-chip ${getInvestmentRatingClass(analysis.investment_potential.rating)}" style="margin-bottom: var(--md-sys-spacing-2);">
                                 ${formatUIText(analysis.investment_potential.rating)} Growth
                             </span>
-                            <p class="mb-1 mt-md3-2">${analysis.investment_potential.forecast || 'No forecast available'}</p>
-                            <small class="text-on-surface-variant">Risk: ${formatUIText(analysis.investment_potential.risk_level)}</small>
-                            ${analysis.investment_potential.key_drivers ? renderListItems(analysis.investment_potential.key_drivers, 'Key Drivers:', 'info') : ''}
+                            <div class="body-medium" style="margin-bottom: var(--md-sys-spacing-2);">${analysis.investment_potential.forecast || 'No forecast available'}</div>
+                            <div class="body-small" style="color: var(--md-sys-color-on-surface-variant);">Risk: ${formatUIText(analysis.investment_potential.risk_level)}</div>
+                            ${analysis.investment_potential.key_drivers ? renderListItems(analysis.investment_potential.key_drivers, 'Key Drivers:', 'tertiary') : ''}
                         ` : `
-                            <span class="chip chip-secondary">Analysis Pending</span>
-                            <p class="mb-1 mt-md3-2 text-on-surface-variant">Investment analysis will be available after next AI enrichment</p>
+                            <span class="md3-chip md3-chip--secondary" style="margin-bottom: var(--md-sys-spacing-2);">Analysis Pending</span>
+                            <div class="body-medium" style="color: var(--md-sys-color-on-surface-variant);">Investment analysis will be available after next AI enrichment</div>
                         `}
                     </div>
                 </div>
             </div>
             
-            <div class="row">
-                <div class="col-md-6 mb-md3-3">
-                    <div class="border rounded p-md3-3 h-100">
-                        <h6><i class="fas fa-exclamation-triangle "></i> Risks & Advantages</h6>
+            <div class="md3-grid md3-grid--2-col" style="margin-bottom: var(--md-sys-spacing-4);">
+                <div class="md3-card" style="height: 100%;">
+                    <div class="md3-card__content">
+                        <h6 class="title-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin-bottom: var(--md-sys-spacing-3);"><span class="material-symbols-outlined" style="color: var(--md-sys-color-error);">warning</span>Risks & Advantages</h6>
                         ${analysis.risks_analysis ? `
-                            ${renderListItems(analysis.risks_analysis.major_risks, 'Risks:', 'danger')}
-                            ${renderListItems(analysis.risks_analysis.advantages, 'Advantages:', 'success')}
-                            <small class="text-on-surface-variant">${analysis.risks_analysis.mitigation || ''}</small>
+                            ${renderListItems(analysis.risks_analysis.major_risks, 'Risks:', 'error')}
+                            ${renderListItems(analysis.risks_analysis.advantages, 'Advantages:', 'primary')}
+                            <div class="body-small" style="color: var(--md-sys-color-on-surface-variant);">${analysis.risks_analysis.mitigation || ''}</div>
                         ` : analysis.comparable_analysis ? `
-                            ${renderListItems(analysis.comparable_analysis.advantages_vs_similar, 'Advantages:', 'success')}
-                            ${renderListItems(analysis.comparable_analysis.disadvantages_vs_similar, 'Disadvantages:', 'danger')}
-                            <small class="text-on-surface-variant">Based on market comparison data</small>
+                            ${renderListItems(analysis.comparable_analysis.advantages_vs_similar, 'Advantages:', 'primary')}
+                            ${renderListItems(analysis.comparable_analysis.disadvantages_vs_similar, 'Disadvantages:', 'error')}
+                            <div class="body-small" style="color: var(--md-sys-color-on-surface-variant);">Based on market comparison data</div>
                         ` : `
-                            <p class="text-on-surface-variant">Risk analysis will be available after next AI enrichment</p>
+                            <div class="body-medium" style="color: var(--md-sys-color-on-surface-variant);">Risk analysis will be available after next AI enrichment</div>
                         `}
                     </div>
                 </div>
                 
-                <div class="col-md-6 mb-md3-3">
-                    <div class="border rounded p-md3-3 h-100">
-                        <h6><i class="fas fa-hammer text-info"></i> Development Ideas</h6>
+                <div class="md3-card" style="height: 100%;">
+                    <div class="md3-card__content">
+                        <h6 class="title-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin-bottom: var(--md-sys-spacing-3);"><span class="material-symbols-outlined" style="color: var(--md-sys-color-tertiary);">construction</span>Development Ideas</h6>
                         ${analysis.development_ideas ? `
-                            <p class="mb-1"><strong>${analysis.development_ideas.best_use || 'No recommendations'}</strong></p>
-                            <p class="mb-1">${analysis.development_ideas.building_size || ''}</p>
-                            <small class="text-on-surface-variant">${analysis.development_ideas.estimated_cost || ''}</small>
-                            ${analysis.development_ideas.special_features ? `<div class="mt-md3-2"><small class="text-info">${analysis.development_ideas.special_features}</small></div>` : ''}
+                            <div class="body-medium" style="margin-bottom: var(--md-sys-spacing-2);"><strong>${analysis.development_ideas.best_use || 'No recommendations'}</strong></div>
+                            <div class="body-medium" style="margin-bottom: var(--md-sys-spacing-2);">${analysis.development_ideas.building_size || ''}</div>
+                            <div class="body-small" style="color: var(--md-sys-color-on-surface-variant);">${analysis.development_ideas.estimated_cost || ''}</div>
+                            ${analysis.development_ideas.special_features ? `<div style="margin-top: var(--md-sys-spacing-2);"><div class="body-small" style="color: var(--md-sys-color-tertiary);">${analysis.development_ideas.special_features}</div></div>` : ''}
                         ` : `
-                            <p class="text-on-surface-variant">Development ideas will be available after next AI enrichment</p>
+                            <div class="body-medium" style="color: var(--md-sys-color-on-surface-variant);">Development ideas will be available after next AI enrichment</div>
                         `}
                     </div>
                 </div>
             </div>
             
             ${analysis.comparable_analysis ? `
-            <div class="border rounded p-md3-3 mb-md3-3">
-                <h6><i class="fas fa-balance-scale text-secondary"></i> Market Comparison</h6>
-                <p class="mb-1">${analysis.comparable_analysis.market_position || 'No comparison data'}</p>
-                <small class="text-on-surface-variant">${analysis.comparable_analysis.price_comparison || ''}</small>
+            <div class="md3-card" style="margin-bottom: var(--md-sys-spacing-4);">
+                <div class="md3-card__content">
+                    <h6 class="title-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin-bottom: var(--md-sys-spacing-3);"><span class="material-symbols-outlined" style="color: var(--md-sys-color-secondary);">balance</span>Market Comparison</h6>
+                    <div class="body-medium" style="margin-bottom: var(--md-sys-spacing-2);">${analysis.comparable_analysis.market_position || 'No comparison data'}</div>
+                    <div class="body-small" style="color: var(--md-sys-color-on-surface-variant);">${analysis.comparable_analysis.price_comparison || ''}</div>
+                </div>
             </div>
             ` : ''}
             
             ${analysis.construction_value_estimation ? `
-            <div class="border rounded p-md3-3 mb-md3-3">
-                <h6><i class="fas fa-calculator "></i> Construction Value Estimation</h6>
-                <div class="row">
-                    <div class="col-md-4">
-                        <small class="text-on-surface-variant d-block">Construction Type</small>
-                        <strong>${analysis.construction_value_estimation.construction_type || 'Standard construction'}</strong>
-                    </div>
-                    <div class="col-md-4">
-                        <small class="text-on-surface-variant d-block">Est. Construction Value</small>
-                        <strong>€${(analysis.construction_value_estimation.minimum_value || 0).toLocaleString()} - €${(analysis.construction_value_estimation.maximum_value || 0).toLocaleString()}</strong>
-                    </div>
-                    <div class="col-md-4">
-                        <small class="text-on-surface-variant d-block">Total Investment</small>
-                        <strong class="">${analysis.construction_value_estimation.total_investment || 'N/A'}</strong>
+            <div class="md3-card" style="margin-bottom: var(--md-sys-spacing-4);">
+                <div class="md3-card__content">
+                    <h6 class="title-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin-bottom: var(--md-sys-spacing-3);"><span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">calculate</span>Construction Value Estimation</h6>
+                    <div class="md3-grid md3-grid--3-col">
+                        <div>
+                            <div class="label-small" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-1);">Construction Type</div>
+                            <div class="body-medium">${analysis.construction_value_estimation.construction_type || 'Standard construction'}</div>
+                        </div>
+                        <div>
+                            <div class="label-small" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-1);">Est. Construction Value</div>
+                            <div class="body-medium">€${(analysis.construction_value_estimation.minimum_value || 0).toLocaleString()} - €${(analysis.construction_value_estimation.maximum_value || 0).toLocaleString()}</div>
+                        </div>
+                        <div>
+                            <div class="label-small" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-1);">Total Investment</div>
+                            <div class="body-medium" style="color: var(--md-sys-color-primary);">${analysis.construction_value_estimation.total_investment || 'N/A'}</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1309,194 +1160,333 @@ function renderStructuredAIAnalysis(analysis) {
         
         <!-- Market Price Dynamics Section -->
         ${analysis.market_price_dynamics ? `
-        <div class="border rounded p-md3-3 mb-md3-3">
-            <h6><i class="fas fa-chart-line "></i> Market Price Dynamics</h6>
-            <div class="mb-md3-2">
-                <span class="badge ${getPriceTrendClass(analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend)}">${formatUIText(analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend)} Trend</span>
-                <span class="chip chip-info ms-md3-1">${analysis.market_price_dynamics.annual_growth_rate || analysis.market_price_dynamics.annual_appreciation || 'N/A'}% annually</span>
+        <div class="md3-card" style="margin-bottom: var(--md-sys-spacing-4);">
+            <div class="md3-card__content">
+                <h6 class="title-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin-bottom: var(--md-sys-spacing-3);"><span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">trending_up</span>Market Price Dynamics</h6>
+                <div style="margin-bottom: var(--md-sys-spacing-3);">
+                    <span class="md3-chip ${getPriceTrendClass(analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend)}" style="margin-right: var(--md-sys-spacing-2);">${formatUIText(analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend)} Trend</span>
+                    <span class="md3-chip md3-chip--info">${analysis.market_price_dynamics.annual_growth_rate || analysis.market_price_dynamics.annual_appreciation || 'N/A'}% annually</span>
+                </div>
+                <div class="body-medium" style="margin-bottom: var(--md-sys-spacing-3);">${analysis.market_price_dynamics.trend_analysis || 'No trend analysis available'}</div>
+                ${analysis.market_price_dynamics.market_factors ? renderListItems(analysis.market_price_dynamics.market_factors, 'Market Factors:', 'primary') : ''}
+                <div class="body-small" style="color: var(--md-sys-color-on-surface-variant);">${analysis.market_price_dynamics.future_outlook || ''}</div>
             </div>
-            <p class="mb-md3-2">${analysis.market_price_dynamics.trend_analysis || 'No trend analysis available'}</p>
-            ${analysis.market_price_dynamics.market_factors ? renderListItems(analysis.market_price_dynamics.market_factors, 'Market Factors:', 'primary') : ''}
-            <small class="text-on-surface-variant">${analysis.market_price_dynamics.future_outlook || ''}</small>
         </div>
         ` : ''}
         
         <!-- Rental Market Analysis Section -->
         ${analysis.rental_market_analysis ? `
-        <div class="border rounded p-md3-3 mb-md3-3">
-            <h6><i class="fas fa-key text-info"></i> Rental Market Analysis</h6>
-            
-            <div class="row mb-md3-3">
-                <div class="col-md-6">
-                    <div class="border rounded p-md3-3">
-                        <h6 class=""><i class="fas fa-coins"></i> Rental Income Estimates</h6>
-                        <div class="row text-center mb-md3-2">
-                            <div class="col-4">
-                                <small class="text-on-surface-variant d-block">Min Monthly</small>
-                                <strong>€${(analysis.rental_market_analysis.monthly_rent_min || 0).toLocaleString()}</strong>
-                            </div>
-                            <div class="col-4">
-                                <div style="background-color: rgba(255,255,255,0.1); border-radius: 5px; padding: 5px;">
-                                    <small class="text-on-surface-variant d-block">Avg Monthly</small>
-                                    <strong class="">€${(analysis.rental_market_analysis.monthly_rent_avg || 0).toLocaleString()}</strong>
+        <div class="md3-card" style="margin-bottom: var(--md-sys-spacing-4);">
+            <div class="md3-card__content">
+                <h6 class="title-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin-bottom: var(--md-sys-spacing-3);"><span class="material-symbols-outlined" style="color: var(--md-sys-color-tertiary);">key</span>Rental Market Analysis</h6>
+                
+                <div class="md3-grid md3-grid--2-col" style="margin-bottom: var(--md-sys-spacing-4);">
+                    <div class="md3-card md3-card--outlined">
+                        <div class="md3-card__content">
+                            <h6 class="title-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin-bottom: var(--md-sys-spacing-3);"><span class="material-symbols-outlined">attach_money</span>Rental Income Estimates</h6>
+                            <div class="md3-grid md3-grid--3-col" style="text-align: center; margin-bottom: var(--md-sys-spacing-3);">
+                                <div>
+                                    <div class="label-small" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-1);">Min Monthly</div>
+                                    <div class="body-medium">€${(analysis.rental_market_analysis.monthly_rent_min || 0).toLocaleString()}</div>
+                                </div>
+                                <div class="md3-primary-container" style="border-radius: var(--md-sys-shape-corner-small); padding: var(--md-sys-spacing-2);">
+                                    <div class="label-small" style="margin-bottom: var(--md-sys-spacing-1);">Avg Monthly</div>
+                                    <div class="body-medium">€${(analysis.rental_market_analysis.monthly_rent_avg || 0).toLocaleString()}</div>
+                                </div>
+                                <div>
+                                    <div class="label-small" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-1);">Max Monthly</div>
+                                    <div class="body-medium">€${(analysis.rental_market_analysis.monthly_rent_max || 0).toLocaleString()}</div>
                                 </div>
                             </div>
-                            <div class="col-4">
-                                <small class="text-on-surface-variant d-block">Max Monthly</small>
-                                <strong>€${(analysis.rental_market_analysis.monthly_rent_max || 0).toLocaleString()}</strong>
+                            <div class="body-medium" style="margin-bottom: var(--md-sys-spacing-2);"><strong>Annual Income:</strong> €${(analysis.rental_market_analysis.annual_rent_avg || 0).toLocaleString()}/year</div>
+                            <div class="body-small" style="color: var(--md-sys-color-on-surface-variant);">Strategy: ${analysis.rental_market_analysis.rental_strategy || 'Long-term rental'}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="md3-card md3-card--outlined">
+                        <div class="md3-card__content">
+                            <h6 class="title-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin-bottom: var(--md-sys-spacing-3);"><span class="material-symbols-outlined">pie_chart</span>Investment Metrics</h6>
+                            <div class="md3-grid md3-grid--2-col" style="margin-bottom: var(--md-sys-spacing-3);">
+                                <div>
+                                    <div class="label-small" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-1);">Rental Yield</div>
+                                    <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-1);">
+                                        <div class="body-medium" style="color: ${(analysis.rental_market_analysis.rental_yield && analysis.rental_market_analysis.rental_yield > 5) ? 'var(--md-sys-color-primary)' : (analysis.rental_market_analysis.rental_yield && analysis.rental_market_analysis.rental_yield > 4) ? 'var(--md-sys-color-secondary)' : 'var(--md-sys-color-on-surface)'}">${analysis.rental_market_analysis.rental_yield || 'N/A'}%</div>
+                                        <div class="label-small" style="color: var(--md-sys-color-on-surface-variant);">/year</div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div class="label-small" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-1);">Cap Rate</div>
+                                    <div class="body-medium" style="color: ${(analysis.rental_market_analysis.cap_rate && analysis.rental_market_analysis.cap_rate > 4) ? 'var(--md-sys-color-primary)' : (analysis.rental_market_analysis.cap_rate && analysis.rental_market_analysis.cap_rate > 3) ? 'var(--md-sys-color-secondary)' : 'var(--md-sys-color-on-surface)'}">${analysis.rental_market_analysis.cap_rate || 'N/A'}%</div>
+                                </div>
+                            </div>
+                            <div class="md3-grid md3-grid--2-col" style="margin-bottom: var(--md-sys-spacing-3);">
+                                <div>
+                                    <div class="label-small" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-1);">Price/Rent Ratio</div>
+                                    <div class="body-medium">${analysis.rental_market_analysis.price_to_rent_ratio || 'N/A'}</div>
+                                </div>
+                                <div>
+                                    <div class="label-small" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-1);">Payback Period</div>
+                                    <div class="body-medium">${analysis.rental_market_analysis.payback_period_years || 'N/A'} years</div>
+                                </div>
+                            </div>
+                            <div>
+                                <span class="md3-chip ${getInvestmentRatingClass(analysis.rental_market_analysis.investment_rating)}">${analysis.rental_market_analysis.investment_rating || 'Not rated'}</span>
                             </div>
                         </div>
-                        <p class="mb-1"><strong>Annual Income:</strong> €${(analysis.rental_market_analysis.annual_rent_avg || 0).toLocaleString()}/year</p>
-                        <p class="mb-0"><small class="text-on-surface-variant">Strategy: ${analysis.rental_market_analysis.rental_strategy || 'Long-term rental'}</small></p>
                     </div>
                 </div>
                 
-                <div class="col-md-6">
-                    <div class="border rounded p-md3-3">
-                        <h6 class=""><i class="fas fa-chart-pie"></i> Investment Metrics</h6>
-                        <div class="row mb-md3-2">
-                            <div class="col-6">
-                                <small class="text-on-surface-variant d-block">Rental Yield</small>
-                                <div class="d-flex align-items-center">
-                                    <strong class="${(analysis.rental_market_analysis.rental_yield && analysis.rental_market_analysis.rental_yield > 5) ? '' : (analysis.rental_market_analysis.rental_yield && analysis.rental_market_analysis.rental_yield > 4) ? '' : ''}">${analysis.rental_market_analysis.rental_yield || 'N/A'}%</strong>
-                                    <small class="text-on-surface-variant ms-md3-2">/year</small>
-                                </div>
-                            </div>
-                            <div class="col-6">
-                                <small class="text-on-surface-variant d-block">Cap Rate</small>
-                                <div class="d-flex align-items-center">
-                                    <strong class="${(analysis.rental_market_analysis.cap_rate && analysis.rental_market_analysis.cap_rate > 4) ? '' : (analysis.rental_market_analysis.cap_rate && analysis.rental_market_analysis.cap_rate > 3) ? '' : ''}">${analysis.rental_market_analysis.cap_rate || 'N/A'}%</strong>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="row">
-                            <div class="col-6">
-                                <small class="text-on-surface-variant d-block">Price/Rent Ratio</small>
-                                <strong class="${getPriceToRentClass(analysis.rental_market_analysis.price_to_rent_ratio)}">${analysis.rental_market_analysis.price_to_rent_ratio || 'N/A'}</strong>
-                            </div>
-                            <div class="col-6">
-                                <small class="text-on-surface-variant d-block">Payback Period</small>
-                                <strong class="${getPaybackPeriodClass(analysis.rental_market_analysis.payback_period_years)}">${analysis.rental_market_analysis.payback_period_years || 'N/A'} years</strong>
-                            </div>
-                        </div>
-                        <div class="mt-md3-2">
-                            <span class="badge ${getInvestmentRatingClass(analysis.rental_market_analysis.investment_rating)}">${analysis.rental_market_analysis.investment_rating || 'Not rated'}</span>
-                        </div>
+                ${analysis.rental_market_analysis.demand_factors ? `
+                <div class="md3-card md3-card--outlined">
+                    <div class="md3-card__content">
+                        <div class="title-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin-bottom: var(--md-sys-spacing-2);"><span class="material-symbols-outlined" style="color: var(--md-sys-color-tertiary);">trending_up</span>Rental Demand Factors:</div>
+                        ${renderListItems(analysis.rental_market_analysis.demand_factors, '', 'tertiary')}
                     </div>
                 </div>
+                ` : ''}
             </div>
-            
-            ${analysis.rental_market_analysis.demand_factors ? `
-            <div class="border rounded p-2 bg-dark">
-                <strong><i class="fas fa-trending-up text-info"></i> Rental Demand Factors:</strong>
-                ${renderListItems(analysis.rental_market_analysis.demand_factors, '', 'info')}
-            </div>
-            ` : ''}
         </div>
         ` : ''}
         
         <!-- Similar Objects - Additional Information -->
         ${analysis.similar_objects ? `
-        <div class="border rounded p-md3-3 mt-md3-4" style="background-color: rgba(255,255,255,0.02);">
-            <h6><i class="fas fa-link "></i> Similar Objects</h6>
-            <p class="mb-md3-3 small text-on-surface-variant">${analysis.similar_objects.comparison_summary || 'Similar properties from our database:'}</p>
-            ${renderSimilarProperties(analysis.similar_properties_data || [])}
+        <div class="md3-card" style="margin-top: var(--md-sys-spacing-6); background-color: var(--md-sys-color-surface-container-highest);">
+            <div class="md3-card__content">
+                <h6 class="title-small" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin-bottom: var(--md-sys-spacing-3);"><span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">link</span>Similar Objects</h6>
+                <div class="body-small" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-4);">${analysis.similar_objects.comparison_summary || 'Similar properties from our database:'}</div>
+                ${renderSimilarProperties(analysis.similar_properties_data || [])}
+            </div>
         </div>
         ` : ''}
     `;
     } catch (renderError) {
         console.error('Template rendering error:', renderError);
-        return '<div class="alert alert-danger">Error rendering analysis template. Please refresh the page.</div>';
+        return '<div class="md3-card md3-error-container"><div class="md3-card__content"><div class="body-medium">Error rendering analysis template. Please refresh the page.</div></div></div>';
     }
 }
 
 // Helper function for investment rating badge color (consolidated version)
 function getInvestmentRatingClass(rating) {
-    if (!rating) return 'bg-secondary';
+    if (!rating) return 'md3-chip--secondary';
     
     // Convert to uppercase for comparison
     const upperRating = String(rating).toUpperCase();
     
     // Check for both styles of ratings
-    if (upperRating === 'HIGH' || upperRating.includes('EXCELLENT')) return 'bg-success';
-    if (upperRating.includes('GOOD')) return 'bg-primary';
-    if (upperRating === 'MEDIUM' || upperRating.includes('MODERATE')) return 'bg-warning';
-    if (upperRating === 'LOW' || upperRating.includes('POOR') || upperRating.includes('BELOW')) return 'bg-danger';
-    
-    return 'bg-secondary';
+    if (upperRating.includes('HIGH') || upperRating.includes('EXCELLENT') || upperRating === 'A') {
+        return 'md3-chip--success';
+    } else if (upperRating.includes('MEDIUM') || upperRating.includes('GOOD') || upperRating === 'B') {
+        return 'md3-chip--warning';
+    } else if (upperRating.includes('LOW') || upperRating.includes('POOR') || upperRating === 'C') {
+        return 'md3-chip--error';
+    } else {
+        return 'md3-chip--secondary';
+    }
 }
 
-// Helper function for Price/Rent Ratio color
 function getPriceToRentClass(ratio) {
-    if (!ratio) return 'text-on-surface-variant';
-    if (ratio < 15) return '';        // Good - low ratio means faster payback
-    if (ratio < 20) return '';        // Average 
-    return '';                         // Poor - high ratio means slow payback
+    if (!ratio) return '';
+    const numRatio = parseFloat(ratio);
+    if (numRatio <= 15) return 'text-success';
+    if (numRatio <= 25) return 'text-warning';
+    return 'text-danger';
 }
 
-// Helper function for Payback Period color  
 function getPaybackPeriodClass(years) {
-    if (!years) return 'text-on-surface-variant';
-    if (years < 15) return '';        // Good - quick payback
-    if (years < 25) return '';        // Average
-    return '';                         // Poor - very long payback
+    if (!years) return '';
+    const numYears = parseFloat(years);
+    if (numYears <= 15) return 'text-success';
+    if (numYears <= 25) return 'text-warning';  
+    return 'text-danger';
+}
+</script>
+
+<style>
+/* MD3 Custom Components and Utilities */
+.md3-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--md-sys-spacing-1);
+    padding: var(--md-sys-spacing-1) var(--md-sys-spacing-3);
+    border-radius: var(--md-sys-shape-corner-full);
+    font: var(--md-sys-typescale-label-small);
+    border: 1px solid var(--md-sys-color-outline);
+    background-color: var(--md-sys-color-surface-container-highest);
+    color: var(--md-sys-color-on-surface);
+    transition: all 200ms ease;
 }
 
-// Make land data available globally for JavaScript
-window.landData = {{ land.to_dict() | tojson }};
+.md3-chip--primary {
+    background-color: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
+    border-color: var(--md-sys-color-primary);
+}
 
-// Initialize structured AI analysis on page load
-document.addEventListener('DOMContentLoaded', function() {
-    const structuredAnalysis = document.getElementById('structured-analysis');
+.md3-chip--success {
+    background-color: color-mix(in srgb, #4caf50 20%, var(--md-sys-color-surface));
+    color: #2e7d32;
+    border-color: #4caf50;
+}
+
+.md3-chip--warning {
+    background-color: color-mix(in srgb, #ff9800 20%, var(--md-sys-color-surface));
+    color: #f57c00;
+    border-color: #ff9800;
+}
+
+.md3-chip--error {
+    background-color: var(--md-sys-color-error-container);
+    color: var(--md-sys-color-on-error-container);
+    border-color: var(--md-sys-color-error);
+}
+
+.md3-chip--secondary {
+    background-color: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+    border-color: var(--md-sys-color-secondary);
+}
+
+.md3-chip--info {
+    background-color: color-mix(in srgb, #2196f3 20%, var(--md-sys-color-surface));
+    color: #1976d2;
+    border-color: #2196f3;
+}
+
+.md3-link {
+    color: var(--md-sys-color-primary);
+    text-decoration: none;
+    transition: color 200ms ease;
+}
+
+.md3-link:hover {
+    color: var(--md-sys-color-primary);
+    text-decoration: underline;
+}
+
+.md3-segmented-button-group {
+    display: flex;
+    border-radius: var(--md-sys-shape-corner-full);
+    overflow: hidden;
+}
+
+.md3-segmented-button-group .md3-button {
+    border-radius: 0;
+    border-right: none;
+}
+
+.md3-segmented-button-group .md3-button:first-child {
+    border-radius: var(--md-sys-shape-corner-full) 0 0 var(--md-sys-shape-corner-full);
+}
+
+.md3-segmented-button-group .md3-button:last-child {
+    border-radius: 0 var(--md-sys-shape-corner-full) var(--md-sys-shape-corner-full) 0;
+    border-right: 1px solid var(--md-sys-color-outline);
+}
+
+/* MD3 Modal Styles */
+.md3-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 250ms ease;
+}
+
+.md3-modal.show {
+    opacity: 1;
+    visibility: visible;
+}
+
+.md3-modal-backdrop {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(2px);
+}
+
+.md3-modal-dialog {
+    position: relative;
+    max-width: 500px;
+    width: 90%;
+    max-height: 90vh;
+    overflow-y: auto;
+    transform: scale(0.8);
+    transition: transform 250ms ease;
+}
+
+.md3-modal.show .md3-modal-dialog {
+    transform: scale(1);
+}
+
+.md3-modal .md3-card__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--md-sys-spacing-6);
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.md3-modal .md3-card__content {
+    padding: var(--md-sys-spacing-6);
+}
+
+.md3-text-field {
+    width: 100%;
+    padding: var(--md-sys-spacing-3) var(--md-sys-spacing-4);
+    border: 1px solid var(--md-sys-color-outline);
+    border-radius: var(--md-sys-shape-corner-extra-small);
+    background-color: var(--md-sys-color-surface);
+    color: var(--md-sys-color-on-surface);
+    font: var(--md-sys-typescale-body-large);
+    transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+
+.md3-text-field:focus {
+    outline: none;
+    border-color: var(--md-sys-color-primary);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--md-sys-color-primary) 20%, transparent);
+}
+
+/* Responsive adjustments */
+@media (max-width: 1024px) {
+    .md3-grid[style*="grid-template-columns: 2fr 1fr"] {
+        grid-template-columns: 1fr !important;
+    }
     
-    {% if land.ai_analysis %}
-        try {
-            // Try to parse AI analysis as JSON
-            const analysisData = {{ land.ai_analysis|tojson|safe }};
-            console.log('Existing AI Analysis Data:', analysisData, typeof analysisData);
-            
-            if (typeof analysisData === 'string') {
-                // If it's a string, try to parse it as JSON
-                try {
-                    const parsedAnalysis = JSON.parse(analysisData);
-                    structuredAnalysis.innerHTML = renderStructuredAIAnalysis(parsedAnalysis);
-                } catch (parseError) {
-                    console.log('Failed to parse JSON, displaying as formatted text');
-                    structuredAnalysis.innerHTML = `<div class="analysis-text">${analysisData.replace(/\n/g, '<br>')}</div>`;
-                }
-            } else if (typeof analysisData === 'object' && analysisData !== null) {
-                // If it's already an object, use it directly
-                console.log('Using structured analysis display');
-                try {
-                    const renderedHTML = renderStructuredAIAnalysis(analysisData);
-                    console.log('Rendered HTML length:', renderedHTML.length);
-                    structuredAnalysis.innerHTML = renderedHTML;
-                    console.log('Successfully rendered AI analysis');
-                } catch (renderError) {
-                    console.error('Error in renderStructuredAIAnalysis:', renderError);
-                    console.error('Error details:', renderError.message, renderError.stack);
-                    structuredAnalysis.innerHTML = '<div class="alert alert-warning">Error rendering analysis. Please try refreshing the page.</div>';
-                }
-            } else {
-                // Fallback to displaying raw content
-                console.log('Fallback: displaying raw content');
-                structuredAnalysis.innerHTML = `<pre class="text-light">${JSON.stringify(analysisData, null, 2)}</pre>`;
-            }
-        } catch (e) {
-            console.error('Error processing AI analysis:', e);
-            console.error('Error message:', e.message);
-            console.error('Error stack:', e.stack);
-            // If parsing fails, display raw content properly
-            const rawData = {{ land.ai_analysis|tojson|safe }};
-            if (typeof rawData === 'object' && rawData !== null) {
-                // For objects, display as formatted JSON
-                structuredAnalysis.innerHTML = `<pre class="text-light">${JSON.stringify(rawData, null, 2)}</pre>`;
-            } else {
-                // For strings, display with line breaks
-                structuredAnalysis.innerHTML = `<div class="analysis-text">${String(rawData).replace(/\n/g, '<br>')}</div>`;
-            }
-        }
-    {% endif %}
-});
-</script>
+    .md3-grid--4-col {
+        grid-template-columns: repeat(2, 1fr) !important;
+    }
+    
+    .md3-modal-dialog {
+        max-width: 95%;
+        margin: var(--md-sys-spacing-4);
+    }
+}
+
+@media (max-width: 768px) {
+    .md3-container {
+        padding: 0 var(--md-sys-spacing-4);
+    }
+    
+    .md3-page-header [style*="flex-wrap"] {
+        flex-wrap: wrap !important;
+    }
+    
+    .md3-grid--2-col,
+    .md3-grid--3-col,
+    .md3-grid--4-col {
+        grid-template-columns: 1fr !important;
+    }
+}
+</style>
 {% endblock %}
