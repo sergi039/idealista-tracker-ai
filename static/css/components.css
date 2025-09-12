@@ -114,8 +114,9 @@
   color: var(--md-sys-color-on-surface);
   transition: all 0.2s ease;
   height: 48px;
-  display: flex;
-  align-items: center;
+  display: block;
+  box-sizing: border-box;
+  line-height: 1.5;
 }
 
 .form-input::placeholder {
@@ -141,13 +142,36 @@
   display: block;
 }
 
-.form-select {
+.md-select {
+  width: 100%;
+  background-color: var(--md-sys-color-surface);
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-extra-small);
+  padding: var(--md-sys-spacing-4) var(--md-sys-spacing-4);
+  font: var(--md-sys-typescale-body-large-font);
+  color: var(--md-sys-color-on-surface);
+  transition: all 0.2s ease;
+  height: 48px;
+  display: block;
+  box-sizing: border-box;
+  line-height: 1.5;
   appearance: none;
   background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23ffffff' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right var(--md-sys-spacing-3) center;
   background-size: 16px 12px;
   padding-right: var(--md-sys-spacing-10);
+}
+
+.md-select:focus {
+  outline: none;
+  border-color: var(--md-sys-color-primary);
+  border-width: 2px;
+  background-color: var(--md-sys-color-surface);
+}
+
+.md-select:hover:not(:focus) {
+  border-color: var(--md-sys-color-on-surface);
 }
 
 /* Dark theme form adjustments */
@@ -162,8 +186,10 @@
   opacity: 0.7;
 }
 
-[data-bs-theme="dark"] .form-select {
-  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23ffffff' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3E%3C/svg%3E");
+[data-bs-theme="dark"] .md-select {
+  background-color: var(--md-sys-color-surface-variant);
+  color: var(--md-sys-color-on-surface);
+  border-color: var(--md-sys-color-outline);
 }
 
 /* Form field groups */
