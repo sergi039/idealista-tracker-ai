@@ -10,7 +10,7 @@
                 <i class="fas fa-map-marker-alt me-2"></i>
                 {{ land.title[:60] }}{% if land.title|length > 60 %}...{% endif %}
             </h1>
-            <a href="{{ url_for('main.lands', sort=request.args.get('sort'), order=request.args.get('order'), land_type=request.args.get('land_type'), municipality=request.args.get('municipality'), search=request.args.get('search'), per_page=request.args.get('per_page')) }}" class="btn btn-outline-secondary">
+            <a href="{{ url_for('main.lands', sort=request.args.get('sort'), order=request.args.get('order'), land_type=request.args.get('land_type'), municipality=request.args.get('municipality'), search=request.args.get('search'), per_page=request.args.get('per_page')) }}" class="btn-outlined">
                 <i class="fas fa-arrow-left me-1"></i>Back to Properties
             </a>
         </div>
@@ -25,12 +25,11 @@
                 <h2 class="card-title mb-0">{{ land.title }}</h2>
                 <div class="d-flex align-items-center gap-2">
                     {% if land.score_total %}
-                        <span class="badge score-badge fs-5" 
-                              style="background-color: {{ 'var(--bs-success)' if land.score_total >= 70 else 'var(--bs-warning)' if land.score_total >= 50 else 'var(--bs-danger)' }}">
+                        <span class="score-badge score-{{ 'high' if land.score_total >= 70 else 'medium' if land.score_total >= 50 else 'low' }}">
                             Score: {{ "%.1f"|format(land.score_total) }}
                         </span>
                     {% endif %}
-                    <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#editScoreModal">
+                    <button type="button" class="btn-icon btn-small" data-bs-toggle="modal" data-bs-target="#editScoreModal">
                         <i class="fas fa-edit"></i>
                     </button>
                 </div>
@@ -61,7 +60,7 @@
                     <div class="col-md-3">
                         <strong>Type:</strong><br>
                         {% if land.land_type %}
-                            <span class="badge {{ 'bg-success' if land.land_type == 'developed' else 'bg-warning' }} fs-6">
+                            <span class="chip chip-{{ 'success' if land.land_type == 'developed' else 'warning' }}">
                                 {{ land.land_type.title() }}
                             </span>
                         {% else %}
@@ -77,12 +76,12 @@
                         <i class="fas fa-map-marker-alt me-2"></i>
                         {{ "%.6f"|format(land.location_lat) }}, {{ "%.6f"|format(land.location_lon) }}
                         <a href="https://www.google.com/maps/search/?api=1&query={{ land.location_lat }},{{ land.location_lon }}" 
-                           target="_blank" class="btn btn-sm btn-outline-primary ms-2">
+                           target="_blank" class="btn-outlined btn-small ms-2">
                             <i class="fas fa-external-link-alt me-1"></i>{{ t('view_on_maps') }}
                         </a>
                         {% if land.url %}
                         <a href="{{ land.url }}" 
-                           target="_blank" class="btn btn-sm btn-outline-info ms-2">
+                           target="_blank" class="btn-outlined btn-small ms-2">
                             <i class="fas fa-home me-1"></i>{{ t('view_on_idealista') }}
                         </a>
                         {% endif %}
@@ -93,12 +92,12 @@
                         <i class="fas fa-map-marker-alt me-2"></i>
                         {{ land.municipality }}
                         <a href="https://www.google.com/maps/search/{{ land.municipality|urlencode }},+Spain" 
-                           target="_blank" class="btn btn-sm btn-outline-primary ms-2">
+                           target="_blank" class="btn-outlined btn-small ms-2">
                             <i class="fas fa-external-link-alt me-1"></i>{{ t('view_on_maps') }}
                         </a>
                         {% if land.url %}
                         <a href="{{ land.url }}" 
-                           target="_blank" class="btn btn-sm btn-outline-info ms-2">
+                           target="_blank" class="btn-outlined btn-small ms-2">
                             <i class="fas fa-home me-1"></i>{{ t('view_on_idealista') }}
                         </a>
                         {% endif %}
@@ -113,13 +112,13 @@
                             <div class="d-flex gap-2">
                                 <!-- Language Toggle -->
                                 <div class="btn-group btn-group-sm" role="group" id="description-language-toggle" style="display: none;">
-                                    <button type="button" class="btn btn-outline-light active" data-lang="en">
+                                    <button type="button" class="btn-outlined active" data-lang="en">
                                         <i class="fas fa-language me-1"></i>English
                                     </button>
-                                    <button type="button" class="btn btn-outline-light" data-lang="es">
+                                    <button type="button" class="btn-outlined" data-lang="es">
                                         <i class="fas fa-language me-1"></i>Spanish
                                     </button>
-                                    <button type="button" class="btn btn-outline-light" data-lang="original">
+                                    <button type="button" class="btn-outlined" data-lang="original">
                                         <i class="fas fa-home me-1"></i>Idealista
                                     </button>
                                 </div>
@@ -193,7 +192,7 @@
                 <!-- Actions -->
                 <div class="mt-4 d-flex justify-content-center gap-2" style="flex-wrap: nowrap;">
                     {% if land.url %}
-                        <a href="{{ land.url }}" target="_blank" class="btn btn-success">
+                        <a href="{{ land.url }}" target="_blank" class="btn-filledsuccess">
                             <i class="fas fa-home me-2"></i>
                             View on Idealista
                         </a>
@@ -205,7 +204,7 @@
                         <i class="fas fa-brain me-2 {{ 'text-white' if land.ai_analysis else '' }}"></i>
                         AI Analysis
                         {% if land.ai_analysis %}
-                            <span class="badge bg-light text-dark ms-1">✓</span>
+                            <span class="chip chip-light text-dark ms-1">✓</span>
                         {% endif %}
                     </button>
                     
@@ -219,7 +218,7 @@
                         <i class="fas fa-sync me-2 {{ 'text-white' if has_enrichment else '' }}"></i>
                         Enrich with Google APIs
                         {% if has_enrichment %}
-                            <span class="badge bg-light text-dark ms-1">✓</span>
+                            <span class="chip chip-light text-dark ms-1">✓</span>
                         {% endif %}
                     </button>
                 </div>
@@ -244,7 +243,7 @@
                                         <span class="fw-bold text-warning">
                                             <i class="fas fa-chart-line me-1"></i>Investment Score
                                         </span>
-                                        <span class="badge bg-warning text-dark fs-6">{{ "%.1f"|format(land.score_investment) }}</span>
+                                        <span class="chip chip-warning text-dark fs-6">{{ "%.1f"|format(land.score_investment) }}</span>
                                     </div>
                                     <div class="progress mb-1" style="height: 8px;">
                                         <div class="progress-bar bg-warning" 
@@ -260,7 +259,7 @@
                                         <span class="fw-bold text-success">
                                             <i class="fas fa-home me-1"></i>Lifestyle Score
                                         </span>
-                                        <span class="badge bg-success fs-6">{{ "%.1f"|format(land.score_lifestyle) }}</span>
+                                        <span class="chip chip-success fs-6">{{ "%.1f"|format(land.score_lifestyle) }}</span>
                                     </div>
                                     <div class="progress mb-1" style="height: 8px;">
                                         <div class="progress-bar bg-success" 
@@ -284,7 +283,7 @@
                                         <div class="col-md-6 mb-3">
                                             <div class="d-flex justify-content-between align-items-center mb-1">
                                                 <span class="small">{{ criteria.replace('_', ' ').title() }}</span>
-                                                <span class="badge bg-secondary">{{ "%.1f"|format(score) }}</span>
+                                                <span class="chip chip-secondary">{{ "%.1f"|format(score) }}</span>
                                             </div>
                                             <div class="progress" style="height: 6px;">
                                                 <div class="progress-bar" 
@@ -348,7 +347,7 @@
                                     <small class="text-warning fw-bold compact-text" title="{{ t('investment_score') }}">
                                         <i class="fas fa-coins"></i> {{ t('investment_score') }}
                                     </small>
-                                    <span class="badge bg-warning text-dark">{{ "%.0f"|format(land.score_investment) }}</span>
+                                    <span class="chip chip-warning text-dark">{{ "%.0f"|format(land.score_investment) }}</span>
                                 </div>
                             </div>
                         {% endif %}
@@ -358,7 +357,7 @@
                                     <small class="text-success fw-bold compact-text" title="{{ t('lifestyle_score') }}">
                                         <i class="fas fa-home"></i> {{ t('lifestyle_score') }}
                                     </small>
-                                    <span class="badge bg-success">{{ "%.0f"|format(land.score_lifestyle) }}</span>
+                                    <span class="chip chip-success">{{ "%.0f"|format(land.score_lifestyle) }}</span>
                                 </div>
                             </div>
                         {% endif %}
@@ -381,8 +380,8 @@
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold compact-text" title="{{ t('nearest_airport') }}"><i class="fas fa-plane me-1 text-primary"></i>{{ t('nearest_airport') }}</span>
                             <div>
-                                {% if land.travel_time_airport %}<span class="badge bg-info me-1">{{ land.travel_time_airport }}min</span>{% endif %}
-                                {% if land.distance_airport %}<span class="badge bg-secondary">{{ land.distance_airport }}km</span>{% endif %}
+                                {% if land.travel_time_airport %}<span class="chip chip-info me-1">{{ land.travel_time_airport }}min</span>{% endif %}
+                                {% if land.distance_airport %}<span class="chip chip-secondary">{{ land.distance_airport }}km</span>{% endif %}
                             </div>
                         </div>
                     {% endif %}
@@ -391,8 +390,8 @@
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold compact-text" title="{{ t('train_station') }}"><i class="fas fa-train me-1 text-success"></i>{{ t('train_station') }}</span>
                             <div>
-                                {% if land.travel_time_train_station %}<span class="badge bg-info me-1">{{ land.travel_time_train_station }}min</span>{% endif %}
-                                {% if land.distance_train_station %}<span class="badge bg-secondary">{{ land.distance_train_station }}km</span>{% endif %}
+                                {% if land.travel_time_train_station %}<span class="chip chip-info me-1">{{ land.travel_time_train_station }}min</span>{% endif %}
+                                {% if land.distance_train_station %}<span class="chip chip-secondary">{{ land.distance_train_station }}km</span>{% endif %}
                             </div>
                         </div>
                     {% endif %}
@@ -401,8 +400,8 @@
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold compact-text" title="{{ t('hospital') }}"><i class="fas fa-hospital me-1 text-danger"></i>{{ t('hospital') }}</span>
                             <div>
-                                {% if land.travel_time_hospital %}<span class="badge bg-info me-1">{{ land.travel_time_hospital }}min</span>{% endif %}
-                                {% if land.distance_hospital %}<span class="badge bg-secondary">{{ land.distance_hospital }}km</span>{% endif %}
+                                {% if land.travel_time_hospital %}<span class="chip chip-info me-1">{{ land.travel_time_hospital }}min</span>{% endif %}
+                                {% if land.distance_hospital %}<span class="chip chip-secondary">{{ land.distance_hospital }}km</span>{% endif %}
                             </div>
                         </div>
                     {% endif %}
@@ -465,7 +464,7 @@
                                                         <i class="fas fa-university me-1 text-info"></i> Banks
                                                     {% endif %}
                                                 </span>
-                                                <span class="badge bg-primary">{{ value[priority_amenity] }} nearby</span>
+                                                <span class="chip chip-primary">{{ value[priority_amenity] }} nearby</span>
                                             </div>
                                         {% endif %}
                                     {% endfor %}
@@ -494,7 +493,7 @@
                                                         <i class="fas fa-map-marker-alt me-1"></i> {{ amenity.replace('_', ' ').title() }}
                                                     {% endif %}
                                                 </span>
-                                                <span class="badge bg-primary">{{ count }} nearby</span>
+                                                <span class="chip chip-primary">{{ count }} nearby</span>
                                             </div>
                                         {% endif %}
                                     {% endfor %}
@@ -524,44 +523,44 @@
                                             <div class="d-flex align-items-center">
                                                 {% if travel_time_value %}
                                                     <!-- Car time -->
-                                                    <span class="badge bg-info me-1">
+                                                    <span class="chip chip-info me-1">
                                                         <i class="fas fa-car me-1"></i>{{ travel_time_value }}min
                                                     </span>
                                                     {% set walking_time = (travel_time_value * 4)|int %}
                                                     {% if walking_time <= 15 %}
                                                         <!-- Walking time (only if <= 15 min) -->
-                                                        <span class="badge bg-success me-1">
+                                                        <span class="chip chip-success me-1">
                                                             <i class="fas fa-walking me-1"></i>{{ walking_time }}min
                                                         </span>
                                                     {% endif %}
                                                 {% endif %}
-                                                <span class="badge bg-secondary">{{ "%.1f"|format(distance_km) }}km</span>
+                                                <span class="chip chip-secondary">{{ "%.1f"|format(distance_km) }}km</span>
                                             </div>
                                         {% elif 'travel_time' in key %}
                                             {% set distance_value = land.infrastructure_extended.get(base_key + '_distance') if land.infrastructure_extended else None %}
                                             <div class="d-flex align-items-center">
                                                 <!-- Car time -->
-                                                <span class="badge bg-info me-1">
+                                                <span class="chip chip-info me-1">
                                                     <i class="fas fa-car me-1"></i>{{ value }}min
                                                 </span>
                                                 {% set walking_time = (value * 4)|int %}
                                                 {% if walking_time <= 15 %}
                                                     <!-- Walking time (only if <= 15 min) -->
-                                                    <span class="badge bg-success me-1">
+                                                    <span class="chip chip-success me-1">
                                                         <i class="fas fa-walking me-1"></i>{{ walking_time }}min
                                                     </span>
                                                 {% endif %}
                                                 {% if distance_value %}
-                                                    <span class="badge bg-secondary">{{ "%.1f"|format(distance_value/1000) }}km</span>
+                                                    <span class="chip chip-secondary">{{ "%.1f"|format(distance_value/1000) }}km</span>
                                                 {% endif %}
                                             </div>
                                         {% else %}
                                             {% if 'duration' in key or 'time' in key %}
-                                                <span class="badge bg-info">{{ value }}min</span>
+                                                <span class="chip chip-info">{{ value }}min</span>
                                             {% elif 'distance' in key %}
-                                                <span class="badge bg-secondary">{{ "%.1f"|format(value/1000) }}km</span>
+                                                <span class="chip chip-secondary">{{ "%.1f"|format(value/1000) }}km</span>
                                             {% else %}
-                                                <span class="badge bg-secondary">{{ value }}</span>
+                                                <span class="chip chip-secondary">{{ value }}</span>
                                             {% endif %}
                                         {% endif %}
                                     {% elif value is mapping %}
@@ -604,17 +603,17 @@
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold">Airport Distance</span>
                             <div class="d-flex align-items-center">
-                                <span class="badge bg-info me-1">
+                                <span class="chip chip-info me-1">
                                     <i class="fas fa-car me-1"></i>{{ land.travel_time_airport }}min
                                 </span>
                                 {% if land.distance_airport %}
                                     {% set walking_time = (land.travel_time_airport * 4)|int %}
                                     {% if walking_time <= 15 %}
-                                        <span class="badge bg-success me-1">
+                                        <span class="chip chip-success me-1">
                                             <i class="fas fa-walking me-1"></i>{{ walking_time }}min
                                         </span>
                                     {% endif %}
-                                    <span class="badge bg-secondary">{{ land.distance_airport }}km</span>
+                                    <span class="chip chip-secondary">{{ land.distance_airport }}km</span>
                                 {% endif %}
                             </div>
                         </div>
@@ -623,17 +622,17 @@
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold">Train Station Distance</span>
                             <div class="d-flex align-items-center">
-                                <span class="badge bg-info me-1">
+                                <span class="chip chip-info me-1">
                                     <i class="fas fa-car me-1"></i>{{ land.travel_time_train_station }}min
                                 </span>
                                 {% if land.distance_train_station %}
                                     {% set walking_time = (land.travel_time_train_station * 4)|int %}
                                     {% if walking_time <= 15 %}
-                                        <span class="badge bg-success me-1">
+                                        <span class="chip chip-success me-1">
                                             <i class="fas fa-walking me-1"></i>{{ walking_time }}min
                                         </span>
                                     {% endif %}
-                                    <span class="badge bg-secondary">{{ land.distance_train_station }}km</span>
+                                    <span class="chip chip-secondary">{{ land.distance_train_station }}km</span>
                                 {% endif %}
                             </div>
                         </div>
@@ -642,17 +641,17 @@
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold">Hospital Distance</span>
                             <div class="d-flex align-items-center">
-                                <span class="badge bg-info me-1">
+                                <span class="chip chip-info me-1">
                                     <i class="fas fa-car me-1"></i>{{ land.travel_time_hospital }}min
                                 </span>
                                 {% if land.distance_hospital %}
                                     {% set walking_time = (land.travel_time_hospital * 4)|int %}
                                     {% if walking_time <= 15 %}
-                                        <span class="badge bg-success me-1">
+                                        <span class="chip chip-success me-1">
                                             <i class="fas fa-walking me-1"></i>{{ walking_time }}min
                                         </span>
                                     {% endif %}
-                                    <span class="badge bg-secondary">{{ land.distance_hospital }}km</span>
+                                    <span class="chip chip-secondary">{{ land.distance_hospital }}km</span>
                                 {% endif %}
                             </div>
                         </div>
@@ -661,17 +660,17 @@
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold">Police Station Distance</span>
                             <div class="d-flex align-items-center">
-                                <span class="badge bg-info me-1">
+                                <span class="chip chip-info me-1">
                                     <i class="fas fa-car me-1"></i>{{ land.travel_time_police }}min
                                 </span>
                                 {% if land.distance_police %}
                                     {% set walking_time = (land.travel_time_police * 4)|int %}
                                     {% if walking_time <= 15 %}
-                                        <span class="badge bg-success me-1">
+                                        <span class="chip chip-success me-1">
                                             <i class="fas fa-walking me-1"></i>{{ walking_time }}min
                                         </span>
                                     {% endif %}
-                                    <span class="badge bg-secondary">{{ land.distance_police }}km</span>
+                                    <span class="chip chip-secondary">{{ land.distance_police }}km</span>
                                 {% endif %}
                             </div>
                         </div>
@@ -712,11 +711,11 @@
                                                 <span class="text-muted small">no data</span>
                                             {% else %}
                                                 {% if duration_value %}
-                                                    <span class="badge bg-info me-1">
+                                                    <span class="chip chip-info me-1">
                                                         <i class="fas fa-car me-1"></i>{{ "%.0f"|format(duration_value/60) }}min
                                                     </span>
                                                 {% endif %}
-                                                <span class="badge bg-secondary">
+                                                <span class="chip chip-secondary">
                                                     <i class="fas fa-road me-1"></i>{{ "%.0f"|format(value/1000) }}km
                                                 </span>
                                             {% endif %}
@@ -724,31 +723,31 @@
                                             <!-- Local transport: show car time + walking time + distance -->
                                             {% set transport_type = key.replace('_distance', '') %}
                                             {% if land.transport and land.transport.get(transport_type + '_travel_time') %}
-                                                <span class="badge bg-info me-1">
+                                                <span class="chip chip-info me-1">
                                                     <i class="fas fa-car me-1"></i>{{ land.transport[transport_type + '_travel_time'] }}min
                                                 </span>
                                                 {% set walking_time = (land.transport[transport_type + '_travel_time'] * 4)|int %}
                                                 {% if walking_time <= 15 %}
-                                                    <span class="badge bg-success me-1">
+                                                    <span class="chip chip-success me-1">
                                                         <i class="fas fa-walking me-1"></i>{{ walking_time }}min
                                                     </span>
                                                 {% endif %}
                                             {% endif %}
                                             {% if value < 1000 %}
-                                                <span class="badge bg-secondary">
+                                                <span class="chip chip-secondary">
                                                     <i class="fas fa-road me-1"></i>{{ "%.1f"|format(value/1000) }}km
                                                 </span>
                                             {% else %}
-                                                <span class="badge bg-secondary">
+                                                <span class="chip chip-secondary">
                                                     <i class="fas fa-road me-1"></i>{{ "%.0f"|format(value/1000) }}km
                                                 </span>
                                             {% endif %}
                                         {% endif %}
                                     </div>
                                 {% elif value is number and 'duration' in key %}
-                                    <span class="badge bg-info">{{ "%.0f"|format(value/60) }}min</span>
+                                    <span class="chip chip-info">{{ "%.0f"|format(value/60) }}min</span>
                                 {% elif value is number and key.endswith('_travel_time') %}
-                                    <span class="badge bg-info">
+                                    <span class="chip chip-info">
                                         <i class="fas fa-car me-1"></i>{{ value }}min
                                     </span>
                                 {% else %}
@@ -777,7 +776,7 @@
                         <h6 class="card-title mb-0">
                             <i class="fas fa-leaf me-2"></i>{{ t('environment') }}
                         </h6>
-                        <button class="btn btn-sm btn-outline-primary" onclick="toggleEnvironmentEdit({{ land.id }})" id="env-edit-btn">
+                        <button class="btn-outlined btn-small" onclick="toggleEnvironmentEdit({{ land.id }})" id="env-edit-btn">
                             <i class="fas fa-edit"></i> Edit
                         </button>
                     </div>
@@ -828,27 +827,27 @@
                             </div>
                             <div class="mb-3">
                                 <label for="orientation" class="form-label small">Orientation</label>
-                                <input type="text" class="form-control form-control-sm" id="orientation" name="orientation" 
+                                <input type="text" class="form-input form-input-sm" id="orientation" name="orientation" 
                                        value="{{ land.environment.get('orientation', '') }}">
                             </div>
                             <div class="mb-3">
                                 <label for="buildable_floors" class="form-label small">Buildable Floors</label>
-                                <input type="text" class="form-control form-control-sm" id="buildable_floors" name="buildable_floors" 
+                                <input type="text" class="form-input form-input-sm" id="buildable_floors" name="buildable_floors" 
                                        value="{{ land.environment.get('buildable_floors', '') }}">
                             </div>
                             <div class="mb-3">
                                 <label for="access_type" class="form-label small">Access Type</label>
-                                <input type="text" class="form-control form-control-sm" id="access_type" name="access_type" 
+                                <input type="text" class="form-input form-input-sm" id="access_type" name="access_type" 
                                        value="{{ land.environment.get('access_type', '') }}">
                             </div>
                             <div class="mb-3">
                                 <label for="certified_for" class="form-label small">Certified For</label>
-                                <input type="text" class="form-control form-control-sm" id="certified_for" name="certified_for" 
+                                <input type="text" class="form-input form-input-sm" id="certified_for" name="certified_for" 
                                        value="{{ land.environment.get('certified_for', '') }}">
                             </div>
                             <div class="d-flex gap-2">
-                                <button type="submit" class="btn btn-sm btn-success">Save</button>
-                                <button type="button" class="btn btn-sm btn-secondary" onclick="cancelEnvironmentEdit()">Cancel</button>
+                                <button type="submit" class="btn-filledsm btn-success">Save</button>
+                                <button type="button" class="btn-filledsm btn-secondary" onclick="cancelEnvironmentEdit()">Cancel</button>
                             </div>
                         </form>
                     </div>
@@ -870,7 +869,7 @@
                             <span class="small">{{ key.replace('_', ' ').title() }}</span>
                             {% if value is number %}
                                 <div class="d-flex align-items-center">
-                                    <span class="badge bg-warning me-2">{{ "%.1f"|format(value) }}/5</span>
+                                    <span class="chip chip-warning me-2">{{ "%.1f"|format(value) }}/5</span>
                                     <div class="small">
                                         {% set rounded_rating = (value * 2)|round / 2 %}
                                         {% set full_stars = rounded_rating|int %}
@@ -917,19 +916,19 @@
                                 {% if rental_data.get('expected_monthly_rent') %}
                                     <div class="d-flex justify-content-between mb-1">
                                         <span class="small">Monthly Rent</span>
-                                        <span class="badge bg-success">€{{ rental_data.expected_monthly_rent }}/month</span>
+                                        <span class="chip chip-success">€{{ rental_data.expected_monthly_rent }}/month</span>
                                     </div>
                                 {% endif %}
                                 {% if rental_data.get('rental_yield') %}
                                     <div class="d-flex justify-content-between mb-1">
                                         <span class="small">Rental Yield</span>
-                                        <span class="badge bg-warning">{{ rental_data.rental_yield }}%</span>
+                                        <span class="chip chip-warning">{{ rental_data.rental_yield }}%</span>
                                     </div>
                                 {% endif %}
                                 {% if rental_data.get('cap_rate') %}
                                     <div class="d-flex justify-content-between mb-1">
                                         <span class="small">Cap Rate</span>
-                                        <span class="badge bg-info">{{ rental_data.cap_rate }}%</span>
+                                        <span class="chip chip-info">{{ rental_data.cap_rate }}%</span>
                                     </div>
                                 {% endif %}
                             </div>
@@ -992,13 +991,13 @@
                                 {% if construction.get('total_investment') %}
                                     <div class="d-flex justify-content-between mb-1">
                                         <span class="small">Total Investment</span>
-                                        <span class="badge bg-primary">{{ construction.total_investment }}</span>
+                                        <span class="chip chip-primary">{{ construction.total_investment }}</span>
                                     </div>
                                 {% endif %}
                                 {% if construction.get('value_per_m2') %}
                                     <div class="d-flex justify-content-between mb-1">
                                         <span class="small">Cost per m²</span>
-                                        <span class="badge bg-secondary">€{{ construction.value_per_m2 }}/m²</span>
+                                        <span class="chip chip-secondary">€{{ construction.value_per_m2 }}/m²</span>
                                     </div>
                                 {% endif %}
                             </div>
@@ -1036,7 +1035,7 @@
                                 <!-- Direct Gmail link using message ID (only for Gmail API messages) -->
                                 <a href="https://mail.google.com/mail/u/0/#inbox/{{ land.source_email_id }}" 
                                    target="_blank" 
-                                   class="btn btn-primary btn-sm me-2"
+                                   class="btn-filledprimary btn-sm me-2"
                                    title="Open original email in Gmail">
                                     <i class="fas fa-envelope me-1"></i>Open in Gmail
                                 </a>
@@ -1069,7 +1068,7 @@
                             
                             <a href="https://mail.google.com/mail/u/0/#search/{{ search_query|urlencode }}" 
                                target="_blank" 
-                               class="btn btn-{% if land.source_email_id.startswith('imap_') %}primary{% else %}outline-secondary{% endif %} btn-sm"
+                               class="btn-filled{% if land.source_email_id.startswith('imap_') %}primary{% else %}outline-secondary{% endif %} btn-sm"
                                title="Search for this email in Gmail">
                                 <i class="fas fa-{% if land.source_email_id.startswith('imap_') %}envelope{% else %}search{% endif %} me-1"></i>
                                 {% if land.source_email_id.startswith('imap_') %}Find in Gmail{% else %}Search in Gmail{% endif %}
@@ -1111,7 +1110,7 @@
                 <div class="modal-body">
                     <div class="mb-3">
                         <label for="score" class="form-label">Manual Score (0-100)</label>
-                        <input type="number" class="form-control" id="score" name="score" 
+                        <input type="number" class="form-input" id="score" name="score" 
                                min="0" max="100" step="0.1" 
                                value="{{ '%.1f'|format(land.score_total) if land.score_total else 0 }}" required>
                         <div class="form-text">
@@ -1120,8 +1119,8 @@
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Save Score</button>
+                    <button type="button" class="btn-filledsecondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn-filledprimary">Save Score</button>
                 </div>
             </form>
         </div>
@@ -1267,7 +1266,7 @@ function analyzeWithClaude(landId) {
             button.classList.remove('btn-outline-info');
             button.classList.add('btn-success');
             const buttonText = data.is_enrichment ? 'Analysis Enriched' : 'AI Analysis';
-            button.innerHTML = `<i class="fas fa-brain me-2 text-white"></i>${buttonText} <span class="badge bg-light text-dark ms-1">✓</span>`;
+            button.innerHTML = `<i class="fas fa-brain me-2 text-white"></i>${buttonText} <span class="chip chip-light text-dark ms-1">✓</span>`;
         } else {
             // Display error in the analysis section
             aiContent.innerHTML = `
@@ -1354,10 +1353,10 @@ function renderSimilarProperties(similarProperties) {
                 </div>
                 <div class="d-flex justify-content-between align-items-center">
                     <div class="d-flex gap-2">
-                        <a href="/lands/${prop.id}" class="btn btn-outline-primary btn-sm">
+                        <a href="/lands/${prop.id}" class="btn-filledoutline-primary btn-sm">
                             <i class="fas fa-eye me-1"></i>View Details
                         </a>
-                        ${prop.url ? `<a href="${prop.url}" target="_blank" class="btn btn-outline-secondary btn-sm">
+                        ${prop.url ? `<a href="${prop.url}" target="_blank" class="btn-filledoutline-secondary btn-sm">
                             <i class="fas fa-external-link-alt me-1"></i>Idealista
                         </a>` : ''}
                     </div>
@@ -1430,7 +1429,7 @@ function renderStructuredAIAnalysis(analysis) {
                             <p class="mb-1 mt-2">${analysis.price_analysis.summary || 'No analysis available'}</p>
                             <small class="text-muted">${analysis.price_analysis.recommendation || ''}</small>
                         ` : `
-                            <span class="badge bg-secondary">Analysis Pending</span>
+                            <span class="chip chip-secondary">Analysis Pending</span>
                             <p class="mb-1 mt-2 text-muted">Price analysis will be available after next AI enrichment</p>
                         `}
                     </div>
@@ -1447,7 +1446,7 @@ function renderStructuredAIAnalysis(analysis) {
                             <small class="text-muted">Risk: ${formatUIText(analysis.investment_potential.risk_level)}</small>
                             ${analysis.investment_potential.key_drivers ? renderListItems(analysis.investment_potential.key_drivers, 'Key Drivers:', 'info') : ''}
                         ` : `
-                            <span class="badge bg-secondary">Analysis Pending</span>
+                            <span class="chip chip-secondary">Analysis Pending</span>
                             <p class="mb-1 mt-2 text-muted">Investment analysis will be available after next AI enrichment</p>
                         `}
                     </div>
@@ -1521,7 +1520,7 @@ function renderStructuredAIAnalysis(analysis) {
             <h6><i class="fas fa-chart-line text-warning"></i> Market Price Dynamics</h6>
             <div class="mb-2">
                 <span class="badge ${getPriceTrendClass(analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend)}">${formatUIText(analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend)} Trend</span>
-                <span class="badge bg-info ms-1">${analysis.market_price_dynamics.annual_growth_rate || analysis.market_price_dynamics.annual_appreciation || 'N/A'}% annually</span>
+                <span class="chip chip-info ms-1">${analysis.market_price_dynamics.annual_growth_rate || analysis.market_price_dynamics.annual_appreciation || 'N/A'}% annually</span>
             </div>
             <p class="mb-2">${analysis.market_price_dynamics.trend_analysis || 'No trend analysis available'}</p>
             ${analysis.market_price_dynamics.market_factors ? renderListItems(analysis.market_price_dynamics.market_factors, 'Market Factors:', 'primary') : ''}
