@@ -1,0 +1,685 @@
+# Material Design 3 UI Refactoring Guide - Idealista Land Watch
+
+## 🎨 DESIGN SYSTEM ADOPTION: MATERIAL DESIGN 3
+
+### 🎯 **Core Philosophy**
+- **Data First**: Content hierarchy prioritizes property data over UI chrome
+- **Minimalist Controls**: Subtle, consistent interface elements that don't compete with data
+- **Progressive Disclosure**: Show relevant actions contextually
+- **Consistent Spacing**: 8px base grid system
+
+---
+
+## 🚨 CRITICAL PRIORITY TASKS
+
+### TASK 1: Create Unified CSS Variables System
+**File**: `static/css/design-system.css`
+**Action**: Replace current color/spacing system with Material Design 3 tokens
+
+```css
+/* Material Design 3 Design Tokens */
+:root {
+  /* Color System */
+  --md-sys-color-primary: #1976d2;
+  --md-sys-color-on-primary: #ffffff;
+  --md-sys-color-primary-container: #d3e3fd;
+  --md-sys-color-on-primary-container: #001c38;
+  
+  --md-sys-color-secondary: #565f71;
+  --md-sys-color-on-secondary: #ffffff;
+  --md-sys-color-secondary-container: #dae2f9;
+  --md-sys-color-on-secondary-container: #131c2b;
+  
+  --md-sys-color-surface: #fefbff;
+  --md-sys-color-on-surface: #1a1c1e;
+  --md-sys-color-surface-variant: #dfe2eb;
+  --md-sys-color-on-surface-variant: #43474e;
+  
+  --md-sys-color-outline: #73777f;
+  --md-sys-color-outline-variant: #c3c7cf;
+  
+  /* Dark theme overrides */
+  --md-sys-color-surface-dark: #101214;
+  --md-sys-color-on-surface-dark: #e2e2e6;
+  --md-sys-color-surface-variant-dark: #43474e;
+  --md-sys-color-on-surface-variant-dark: #c3c7cf;
+  
+  /* Typography Scale */
+  --md-sys-typescale-display-large-font: 57px/64px 'Roboto', system-ui, sans-serif;
+  --md-sys-typescale-display-medium-font: 45px/52px 'Roboto', system-ui, sans-serif;
+  --md-sys-typescale-headline-large-font: 32px/40px 'Roboto', system-ui, sans-serif;
+  --md-sys-typescale-headline-medium-font: 28px/36px 'Roboto', system-ui, sans-serif;
+  --md-sys-typescale-headline-small-font: 24px/32px 'Roboto', system-ui, sans-serif;
+  --md-sys-typescale-title-large-font: 22px/28px 'Roboto', system-ui, sans-serif;
+  --md-sys-typescale-title-medium-font: 16px/24px 'Roboto Medium', system-ui, sans-serif;
+  --md-sys-typescale-title-small-font: 14px/20px 'Roboto Medium', system-ui, sans-serif;
+  --md-sys-typescale-body-large-font: 16px/24px 'Roboto', system-ui, sans-serif;
+  --md-sys-typescale-body-medium-font: 14px/20px 'Roboto', system-ui, sans-serif;
+  --md-sys-typescale-body-small-font: 12px/16px 'Roboto', system-ui, sans-serif;
+  --md-sys-typescale-label-large-font: 14px/20px 'Roboto Medium', system-ui, sans-serif;
+  --md-sys-typescale-label-medium-font: 12px/16px 'Roboto Medium', system-ui, sans-serif;
+  --md-sys-typescale-label-small-font: 11px/16px 'Roboto Medium', system-ui, sans-serif;
+  
+  /* Spacing System (8px base) */
+  --md-sys-spacing-0: 0px;
+  --md-sys-spacing-1: 4px;
+  --md-sys-spacing-2: 8px;
+  --md-sys-spacing-3: 12px;
+  --md-sys-spacing-4: 16px;
+  --md-sys-spacing-5: 20px;
+  --md-sys-spacing-6: 24px;
+  --md-sys-spacing-8: 32px;
+  --md-sys-spacing-10: 40px;
+  --md-sys-spacing-12: 48px;
+  --md-sys-spacing-16: 64px;
+  
+  /* Shape System */
+  --md-sys-shape-corner-none: 0px;
+  --md-sys-shape-corner-extra-small: 4px;
+  --md-sys-shape-corner-small: 8px;
+  --md-sys-shape-corner-medium: 12px;
+  --md-sys-shape-corner-large: 16px;
+  --md-sys-shape-corner-extra-large: 28px;
+  
+  /* Elevation System */
+  --md-sys-elevation-level-0: none;
+  --md-sys-elevation-level-1: 0px 1px 2px 0px rgba(0, 0, 0, 0.3), 0px 1px 3px 1px rgba(0, 0, 0, 0.15);
+  --md-sys-elevation-level-2: 0px 1px 2px 0px rgba(0, 0, 0, 0.3), 0px 2px 6px 2px rgba(0, 0, 0, 0.15);
+  --md-sys-elevation-level-3: 0px 1px 3px 0px rgba(0, 0, 0, 0.3), 0px 4px 8px 3px rgba(0, 0, 0, 0.15);
+  --md-sys-elevation-level-4: 0px 2px 3px 0px rgba(0, 0, 0, 0.3), 0px 6px 10px 4px rgba(0, 0, 0, 0.15);
+  --md-sys-elevation-level-5: 0px 4px 4px 0px rgba(0, 0, 0, 0.3), 0px 8px 12px 6px rgba(0, 0, 0, 0.15);
+}
+
+/* Dark theme application */
+[data-bs-theme="dark"] {
+  --md-sys-color-primary: #a8c8ec;
+  --md-sys-color-on-primary: #0f2d52;
+  --md-sys-color-primary-container: #284777;
+  --md-sys-color-on-primary-container: #d3e3fd;
+  
+  --md-sys-color-surface: var(--md-sys-color-surface-dark);
+  --md-sys-color-on-surface: var(--md-sys-color-on-surface-dark);
+  --md-sys-color-surface-variant: var(--md-sys-color-surface-variant-dark);
+  --md-sys-color-on-surface-variant: var(--md-sys-color-on-surface-variant-dark);
+}
+
+/* Typography Classes */
+.display-large { font: var(--md-sys-typescale-display-large-font); }
+.display-medium { font: var(--md-sys-typescale-display-medium-font); }
+.headline-large { font: var(--md-sys-typescale-headline-large-font); }
+.headline-medium { font: var(--md-sys-typescale-headline-medium-font); }
+.headline-small { font: var(--md-sys-typescale-headline-small-font); }
+.title-large { font: var(--md-sys-typescale-title-large-font); }
+.title-medium { font: var(--md-sys-typescale-title-medium-font); }
+.title-small { font: var(--md-sys-typescale-title-small-font); }
+.body-large { font: var(--md-sys-typescale-body-large-font); }
+.body-medium { font: var(--md-sys-typescale-body-medium-font); }
+.body-small { font: var(--md-sys-typescale-body-small-font); }
+.label-large { font: var(--md-sys-typescale-label-large-font); }
+.label-medium { font: var(--md-sys-typescale-label-medium-font); }
+.label-small { font: var(--md-sys-typescale-label-small-font); }
+```
+
+### TASK 2: Standardize Button System
+**Files**: All templates, `static/css/components.css`
+**Action**: Create consistent button hierarchy based on Material Design 3
+
+```css
+/* Material Design 3 Button System */
+.btn-filled {
+  background-color: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  border: none;
+  border-radius: var(--md-sys-shape-corner-large);
+  padding: var(--md-sys-spacing-3) var(--md-sys-spacing-6);
+  font: var(--md-sys-typescale-label-large-font);
+  min-width: 64px;
+  height: 40px;
+  box-shadow: var(--md-sys-elevation-level-1);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.btn-filled:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--md-sys-color-primary) 92%, transparent);
+  box-shadow: var(--md-sys-elevation-level-2);
+}
+
+.btn-filled:active:not(:disabled) {
+  background-color: color-mix(in srgb, var(--md-sys-color-primary) 88%, transparent);
+  box-shadow: var(--md-sys-elevation-level-1);
+}
+
+.btn-filled:disabled {
+  background-color: color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent);
+  color: color-mix(in srgb, var(--md-sys-color-on-surface) 38%, transparent);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.btn-outlined {
+  background-color: transparent;
+  color: var(--md-sys-color-primary);
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-large);
+  padding: var(--md-sys-spacing-3) var(--md-sys-spacing-6);
+  font: var(--md-sys-typescale-label-large-font);
+  min-width: 64px;
+  height: 40px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.btn-outlined:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  border-color: var(--md-sys-color-primary);
+}
+
+.btn-text {
+  background-color: transparent;
+  color: var(--md-sys-color-primary);
+  border: none;
+  border-radius: var(--md-sys-shape-corner-large);
+  padding: var(--md-sys-spacing-3) var(--md-sys-spacing-4);
+  font: var(--md-sys-typescale-label-large-font);
+  min-width: 48px;
+  height: 40px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.btn-text:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+}
+
+/* Icon buttons */
+.btn-icon {
+  background-color: transparent;
+  color: var(--md-sys-color-on-surface-variant);
+  border: none;
+  border-radius: var(--md-sys-shape-corner-large);
+  padding: var(--md-sys-spacing-2);
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.btn-icon:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+}
+
+/* Button sizes */
+.btn-small {
+  height: 32px;
+  padding: var(--md-sys-spacing-2) var(--md-sys-spacing-4);
+  font: var(--md-sys-typescale-label-medium-font);
+}
+
+.btn-large {
+  height: 48px;
+  padding: var(--md-sys-spacing-4) var(--md-sys-spacing-8);
+  font: var(--md-sys-typescale-label-large-font);
+}
+```
+
+### TASK 3: Unified Form Controls
+**Files**: All form templates
+**Action**: Standardize form element appearance
+
+```css
+/* Material Design 3 Form Controls */
+.form-field {
+  position: relative;
+  margin-bottom: var(--md-sys-spacing-4);
+}
+
+.form-input {
+  width: 100%;
+  background-color: var(--md-sys-color-surface-variant);
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-extra-small);
+  padding: var(--md-sys-spacing-4) var(--md-sys-spacing-4);
+  font: var(--md-sys-typescale-body-large-font);
+  color: var(--md-sys-color-on-surface);
+  transition: all 0.2s ease;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: var(--md-sys-color-primary);
+  border-width: 2px;
+  background-color: var(--md-sys-color-surface);
+}
+
+.form-input:hover:not(:focus) {
+  border-color: var(--md-sys-color-on-surface);
+}
+
+.form-label {
+  font: var(--md-sys-typescale-body-small-font);
+  color: var(--md-sys-color-on-surface-variant);
+  margin-bottom: var(--md-sys-spacing-1);
+  display: block;
+}
+
+.form-select {
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--md-sys-spacing-3) center;
+  background-size: 16px 12px;
+  padding-right: var(--md-sys-spacing-10);
+}
+
+/* Form field groups */
+.form-group {
+  display: flex;
+  gap: var(--md-sys-spacing-4);
+  align-items: end;
+}
+
+.form-group .form-field {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+/* Supporting text */
+.form-supporting-text {
+  font: var(--md-sys-typescale-body-small-font);
+  color: var(--md-sys-color-on-surface-variant);
+  margin-top: var(--md-sys-spacing-1);
+}
+
+.form-error-text {
+  font: var(--md-sys-typescale-body-small-font);
+  color: var(--md-sys-color-error);
+  margin-top: var(--md-sys-spacing-1);
+}
+```
+
+### TASK 4: Data-First Table Design
+**Files**: `templates/lands.html`, `static/css/components.css`
+**Action**: Create minimal, data-focused table styling
+
+```css
+/* Material Design 3 Data Tables */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  background-color: var(--md-sys-color-surface);
+  border-radius: var(--md-sys-shape-corner-medium);
+  overflow: hidden;
+  box-shadow: var(--md-sys-elevation-level-1);
+}
+
+.data-table thead {
+  background-color: var(--md-sys-color-surface-variant);
+}
+
+.data-table th {
+  padding: var(--md-sys-spacing-4) var(--md-sys-spacing-4);
+  font: var(--md-sys-typescale-title-small-font);
+  color: var(--md-sys-color-on-surface-variant);
+  text-align: left;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  white-space: nowrap;
+}
+
+.data-table td {
+  padding: var(--md-sys-spacing-4) var(--md-sys-spacing-4);
+  font: var(--md-sys-typescale-body-medium-font);
+  color: var(--md-sys-color-on-surface);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  vertical-align: middle;
+}
+
+.data-table tbody tr:hover {
+  background-color: color-mix(in srgb, var(--md-sys-color-on-surface) 4%, transparent);
+  cursor: pointer;
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Sortable column headers */
+.data-table th.sortable {
+  cursor: pointer;
+  position: relative;
+  user-select: none;
+}
+
+.data-table th.sortable:hover {
+  background-color: color-mix(in srgb, var(--md-sys-color-on-surface-variant) 8%, transparent);
+}
+
+.data-table th.sortable::after {
+  content: '';
+  position: absolute;
+  right: var(--md-sys-spacing-2);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-bottom: 4px solid var(--md-sys-color-on-surface-variant);
+  opacity: 0.5;
+}
+
+.data-table th.sortable.desc::after {
+  border-bottom: none;
+  border-top: 4px solid var(--md-sys-color-on-surface-variant);
+}
+
+/* Data emphasis classes */
+.data-primary {
+  font: var(--md-sys-typescale-title-medium-font);
+  color: var(--md-sys-color-on-surface);
+}
+
+.data-secondary {
+  font: var(--md-sys-typescale-body-small-font);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.data-accent {
+  color: var(--md-sys-color-primary);
+  font-weight: 500;
+}
+
+/* Score badges */
+.score-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--md-sys-spacing-1) var(--md-sys-spacing-2);
+  border-radius: var(--md-sys-shape-corner-extra-large);
+  font: var(--md-sys-typescale-label-small-font);
+  font-weight: 500;
+  min-width: 40px;
+  justify-content: center;
+}
+
+.score-badge-high {
+  background-color: color-mix(in srgb, #4caf50 20%, transparent);
+  color: #2e7d32;
+}
+
+.score-badge-medium {
+  background-color: color-mix(in srgb, #ff9800 20%, transparent);
+  color: #f57c00;
+}
+
+.score-badge-low {
+  background-color: color-mix(in srgb, #f44336 20%, transparent);
+  color: #d32f2f;
+}
+```
+
+### TASK 5: Card Component System
+**Files**: `templates/lands.html` (card view), `static/css/components.css`
+**Action**: Create consistent card layout
+
+```css
+/* Material Design 3 Cards */
+.card-elevated {
+  background-color: var(--md-sys-color-surface);
+  border-radius: var(--md-sys-shape-corner-medium);
+  box-shadow: var(--md-sys-elevation-level-1);
+  padding: var(--md-sys-spacing-6);
+  transition: all 0.2s ease;
+  border: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.card-elevated:hover {
+  box-shadow: var(--md-sys-elevation-level-2);
+  border-color: var(--md-sys-color-outline);
+}
+
+.card-header {
+  margin-bottom: var(--md-sys-spacing-4);
+  padding-bottom: var(--md-sys-spacing-4);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.card-title {
+  font: var(--md-sys-typescale-title-large-font);
+  color: var(--md-sys-color-on-surface);
+  margin-bottom: var(--md-sys-spacing-1);
+  line-height: 1.2;
+}
+
+.card-subtitle {
+  font: var(--md-sys-typescale-body-medium-font);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.card-body {
+  margin-bottom: var(--md-sys-spacing-4);
+}
+
+.card-actions {
+  display: flex;
+  gap: var(--md-sys-spacing-2);
+  justify-content: flex-end;
+  padding-top: var(--md-sys-spacing-4);
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+/* Property card specific styling */
+.property-card {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+}
+
+.property-meta {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--md-sys-spacing-4);
+  align-items: start;
+}
+
+.property-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--md-sys-spacing-4);
+  margin-top: var(--md-sys-spacing-4);
+}
+
+.stat-item {
+  text-align: center;
+}
+
+.stat-value {
+  font: var(--md-sys-typescale-title-medium-font);
+  color: var(--md-sys-color-on-surface);
+  display: block;
+}
+
+.stat-label {
+  font: var(--md-sys-typescale-body-small-font);
+  color: var(--md-sys-color-on-surface-variant);
+  margin-top: var(--md-sys-spacing-1);
+}
+```
+
+### TASK 6: Standardize Icon System
+**Files**: All templates
+**Action**: Replace emoji with consistent Material Icons
+
+```html
+<!-- BEFORE: Inconsistent icons -->
+💼 Investment Score
+🏠 Lifestyle Score
+<i class="fas fa-search me-1"></i>
+
+<!-- AFTER: Consistent Material Icons -->
+<span class="material-icons">business_center</span> Investment Score
+<span class="material-icons">home</span> Lifestyle Score
+<span class="material-icons">search</span>
+```
+
+**Add to base.html head**:
+```html
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+```
+
+**Create icon mapping in CSS**:
+```css
+/* Material Icons standardization */
+.icon {
+  font-family: 'Material Icons';
+  font-size: 18px;
+  line-height: 1;
+  vertical-align: middle;
+  margin-right: var(--md-sys-spacing-2);
+}
+
+.icon-small { font-size: 16px; }
+.icon-large { font-size: 24px; }
+```
+
+### TASK 7: Navigation and Layout Improvements
+**Files**: `templates/base.html`, `static/css/layout.css`
+**Action**: Apply Material Design 3 navigation principles
+
+```css
+/* Material Design 3 Navigation */
+.app-bar {
+  background-color: var(--md-sys-color-surface);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  height: 64px;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--md-sys-spacing-6);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.app-bar-title {
+  font: var(--md-sys-typescale-title-large-font);
+  color: var(--md-sys-color-on-surface);
+  margin-right: auto;
+}
+
+.app-bar-actions {
+  display: flex;
+  gap: var(--md-sys-spacing-2);
+  align-items: center;
+}
+
+/* Page layout */
+.page-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: var(--md-sys-spacing-6);
+}
+
+.page-header {
+  margin-bottom: var(--md-sys-spacing-8);
+}
+
+.page-title {
+  font: var(--md-sys-typescale-headline-medium-font);
+  color: var(--md-sys-color-on-surface);
+  margin-bottom: var(--md-sys-spacing-2);
+}
+
+.page-subtitle {
+  font: var(--md-sys-typescale-body-large-font);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+/* Filter toolbar */
+.filter-toolbar {
+  background-color: var(--md-sys-color-surface-variant);
+  border-radius: var(--md-sys-shape-corner-medium);
+  padding: var(--md-sys-spacing-6);
+  margin-bottom: var(--md-sys-spacing-6);
+}
+
+.toolbar-section {
+  margin-bottom: var(--md-sys-spacing-4);
+}
+
+.toolbar-section:last-child {
+  margin-bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+```
+
+---
+
+## 📋 IMPLEMENTATION TASKS BY PRIORITY
+
+### **WEEK 1: Foundation & Variables**
+1. ✅ Create `static/css/design-system.css` with MD3 tokens
+2. ✅ Update `templates/base.html` to include Google Fonts
+3. ✅ Replace Bootstrap variables with MD3 variables
+4. ✅ Test dark theme compatibility
+
+### **WEEK 2: Components**
+5. ✅ Implement unified button system
+6. ✅ Standardize form controls
+7. ✅ Update table styling for data-first approach
+8. ✅ Replace emoji with Material Icons
+
+### **WEEK 3: Templates**
+9. ✅ Refactor `lands.html` with new components
+10. ✅ Update `land_detail.html` card layout
+11. ✅ Implement consistent spacing throughout
+12. ✅ Test responsive behavior
+
+### **WEEK 4: Polish & Testing**
+13. ✅ Add loading states and micro-interactions
+14. ✅ Implement accessibility improvements
+15. ✅ Cross-browser testing
+16. ✅ Performance optimization
+
+---
+
+## 🎯 SUCCESS CRITERIA
+
+After implementation:
+- **Visual Consistency**: 95%+ - All UI elements follow MD3 principles
+- **Data Prominence**: Primary focus on property data, secondary on controls
+- **Accessibility Score**: 90%+ using WCAG 2.1 AA standards
+- **Performance**: No regression in page load times
+- **User Testing**: Improved task completion rates
+
+## 🔧 REPLIT SPECIFIC CONSIDERATIONS
+
+1. **CSS Loading**: Ensure design-system.css loads before other stylesheets
+2. **Font Loading**: Test Google Fonts loading in Replit environment
+3. **Dark Theme**: Verify dark theme toggle works correctly
+4. **Mobile Testing**: Test responsive behavior in Replit preview
+5. **Icon Fallbacks**: Ensure Material Icons have FontAwesome fallbacks
+
+---
+
+## 📊 BEFORE/AFTER COMPARISON
+
+### **Current State Issues**
+- ❌ 5+ different button styles in single interface
+- ❌ Mixed icon systems (FontAwesome + emoji)  
+- ❌ Inconsistent spacing (me-1, me-2, mb-3, mb-4)
+- ❌ Buttons compete with data for attention
+- ❌ No clear visual hierarchy
+
+### **After Material Design 3**
+- ✅ 3 button types (Filled, Outlined, Text) with clear hierarchy
+- ✅ Consistent Material Icons throughout
+- ✅ 8px grid spacing system
+- ✅ Data-first visual priority
+- ✅ Clear content hierarchy with typography scale
+
+*This transformation will create a professional, consistent interface where data takes center stage while maintaining excellent usability.*

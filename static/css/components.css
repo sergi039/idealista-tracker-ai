@@ -1,0 +1,363 @@
+/* Material Design 3 Button System */
+.btn-filled {
+  background-color: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  border: none;
+  border-radius: var(--md-sys-shape-corner-large);
+  padding: var(--md-sys-spacing-3) var(--md-sys-spacing-6);
+  font: var(--md-sys-typescale-label-large-font);
+  min-width: 64px;
+  height: 40px;
+  box-shadow: var(--md-sys-elevation-level-1);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.btn-filled:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--md-sys-color-primary) 92%, transparent);
+  box-shadow: var(--md-sys-elevation-level-2);
+}
+
+.btn-filled:active:not(:disabled) {
+  background-color: color-mix(in srgb, var(--md-sys-color-primary) 88%, transparent);
+  box-shadow: var(--md-sys-elevation-level-1);
+}
+
+.btn-filled:disabled {
+  background-color: color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent);
+  color: color-mix(in srgb, var(--md-sys-color-on-surface) 38%, transparent);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.btn-outlined {
+  background-color: transparent;
+  color: var(--md-sys-color-primary);
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-large);
+  padding: var(--md-sys-spacing-3) var(--md-sys-spacing-6);
+  font: var(--md-sys-typescale-label-large-font);
+  min-width: 64px;
+  height: 40px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.btn-outlined:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  border-color: var(--md-sys-color-primary);
+}
+
+.btn-text {
+  background-color: transparent;
+  color: var(--md-sys-color-primary);
+  border: none;
+  border-radius: var(--md-sys-shape-corner-large);
+  padding: var(--md-sys-spacing-3) var(--md-sys-spacing-4);
+  font: var(--md-sys-typescale-label-large-font);
+  min-width: 48px;
+  height: 40px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.btn-text:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+}
+
+/* Icon buttons */
+.btn-icon {
+  background-color: transparent;
+  color: var(--md-sys-color-on-surface-variant);
+  border: none;
+  border-radius: var(--md-sys-shape-corner-large);
+  padding: var(--md-sys-spacing-2);
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.btn-icon:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+}
+
+/* Button sizes */
+.btn-small {
+  height: 32px;
+  padding: var(--md-sys-spacing-2) var(--md-sys-spacing-4);
+  font: var(--md-sys-typescale-label-medium-font);
+}
+
+.btn-large {
+  height: 48px;
+  padding: var(--md-sys-spacing-4) var(--md-sys-spacing-8);
+  font: var(--md-sys-typescale-label-large-font);
+}
+
+/* Material Design 3 Form Controls */
+.form-field {
+  position: relative;
+  margin-bottom: var(--md-sys-spacing-4);
+}
+
+.form-input {
+  width: 100%;
+  background-color: var(--md-sys-color-surface-variant);
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-extra-small);
+  padding: var(--md-sys-spacing-4) var(--md-sys-spacing-4);
+  font: var(--md-sys-typescale-body-large-font);
+  color: var(--md-sys-color-on-surface);
+  transition: all 0.2s ease;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: var(--md-sys-color-primary);
+  border-width: 2px;
+  background-color: var(--md-sys-color-surface);
+}
+
+.form-input:hover:not(:focus) {
+  border-color: var(--md-sys-color-on-surface);
+}
+
+.form-label {
+  font: var(--md-sys-typescale-body-small-font);
+  color: var(--md-sys-color-on-surface-variant);
+  margin-bottom: var(--md-sys-spacing-1);
+  display: block;
+}
+
+.form-select {
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--md-sys-spacing-3) center;
+  background-size: 16px 12px;
+  padding-right: var(--md-sys-spacing-10);
+}
+
+/* Form field groups */
+.form-group {
+  display: flex;
+  gap: var(--md-sys-spacing-4);
+  align-items: end;
+}
+
+.form-group .form-field {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+/* Supporting text */
+.form-supporting-text {
+  font: var(--md-sys-typescale-body-small-font);
+  color: var(--md-sys-color-on-surface-variant);
+  margin-top: var(--md-sys-spacing-1);
+}
+
+.form-error-text {
+  font: var(--md-sys-typescale-body-small-font);
+  color: var(--md-sys-color-error);
+  margin-top: var(--md-sys-spacing-1);
+}
+
+/* Material Design 3 Data Tables */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  background-color: var(--md-sys-color-surface);
+  border-radius: var(--md-sys-shape-corner-medium);
+  overflow: hidden;
+  box-shadow: var(--md-sys-elevation-level-1);
+}
+
+.data-table thead {
+  background-color: var(--md-sys-color-surface-variant);
+}
+
+.data-table th {
+  padding: var(--md-sys-spacing-4) var(--md-sys-spacing-4);
+  font: var(--md-sys-typescale-title-small-font);
+  color: var(--md-sys-color-on-surface-variant);
+  text-align: left;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  white-space: nowrap;
+}
+
+.data-table td {
+  padding: var(--md-sys-spacing-4) var(--md-sys-spacing-4);
+  font: var(--md-sys-typescale-body-medium-font);
+  color: var(--md-sys-color-on-surface);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  vertical-align: middle;
+}
+
+.data-table tbody tr:hover {
+  background-color: color-mix(in srgb, var(--md-sys-color-on-surface) 4%, transparent);
+  cursor: pointer;
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Sortable column headers */
+.data-table th.sortable {
+  cursor: pointer;
+  position: relative;
+  user-select: none;
+}
+
+.data-table th.sortable:hover {
+  background-color: color-mix(in srgb, var(--md-sys-color-on-surface-variant) 8%, transparent);
+}
+
+.data-table th.sortable::after {
+  content: '';
+  position: absolute;
+  right: var(--md-sys-spacing-2);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-bottom: 4px solid var(--md-sys-color-on-surface-variant);
+  opacity: 0.5;
+}
+
+.data-table th.sortable.desc::after {
+  border-bottom: none;
+  border-top: 4px solid var(--md-sys-color-on-surface-variant);
+}
+
+/* Data emphasis classes */
+.data-primary {
+  font: var(--md-sys-typescale-title-medium-font);
+  color: var(--md-sys-color-on-surface);
+}
+
+.data-secondary {
+  font: var(--md-sys-typescale-body-small-font);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.data-accent {
+  color: var(--md-sys-color-primary);
+  font-weight: 500;
+}
+
+/* Score badges */
+.score-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--md-sys-spacing-1) var(--md-sys-spacing-2);
+  border-radius: var(--md-sys-shape-corner-extra-large);
+  font: var(--md-sys-typescale-label-small-font);
+  font-weight: 500;
+  min-width: 40px;
+  justify-content: center;
+}
+
+.score-badge-high {
+  background-color: color-mix(in srgb, #4caf50 20%, transparent);
+  color: #2e7d32;
+}
+
+.score-badge-medium {
+  background-color: color-mix(in srgb, #ff9800 20%, transparent);
+  color: #f57c00;
+}
+
+.score-badge-low {
+  background-color: color-mix(in srgb, #f44336 20%, transparent);
+  color: #d32f2f;
+}
+
+/* Material Design 3 Cards */
+.card-elevated {
+  background-color: var(--md-sys-color-surface);
+  border-radius: var(--md-sys-shape-corner-medium);
+  box-shadow: var(--md-sys-elevation-level-1);
+  padding: var(--md-sys-spacing-6);
+  transition: all 0.2s ease;
+  border: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.card-elevated:hover {
+  box-shadow: var(--md-sys-elevation-level-2);
+  border-color: var(--md-sys-color-outline);
+}
+
+.card-header {
+  margin-bottom: var(--md-sys-spacing-4);
+  padding-bottom: var(--md-sys-spacing-4);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.card-title {
+  font: var(--md-sys-typescale-title-large-font);
+  color: var(--md-sys-color-on-surface);
+  margin-bottom: var(--md-sys-spacing-1);
+  line-height: 1.2;
+}
+
+.card-subtitle {
+  font: var(--md-sys-typescale-body-medium-font);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.card-body {
+  margin-bottom: var(--md-sys-spacing-4);
+}
+
+.card-actions {
+  display: flex;
+  gap: var(--md-sys-spacing-2);
+  justify-content: flex-end;
+  padding-top: var(--md-sys-spacing-4);
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+/* Property card specific styling */
+.property-card {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+}
+
+.property-meta {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--md-sys-spacing-4);
+  align-items: start;
+}
+
+.property-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--md-sys-spacing-4);
+  margin-top: var(--md-sys-spacing-4);
+}
+
+.stat-item {
+  text-align: center;
+}
+
+.stat-value {
+  font: var(--md-sys-typescale-title-medium-font);
+  color: var(--md-sys-color-on-surface);
+  display: block;
+}
+
+.stat-label {
+  font: var(--md-sys-typescale-body-small-font);
+  color: var(--md-sys-color-on-surface-variant);
+  margin-top: var(--md-sys-spacing-1);
+}
