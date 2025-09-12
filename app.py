@@ -93,9 +93,10 @@ def create_app():
         from services.scheduler_service import init_scheduler
         
         # Add localization functions to template context
-        from utils.i18n import t, get_current_language
+        from utils.i18n import t, get_current_language, format_field_name
         app.jinja_env.globals['t'] = t
         app.jinja_env.globals['get_current_language'] = get_current_language
+        app.jinja_env.globals['format_field_name'] = format_field_name
         init_scheduler(app)
         
         logger.info("Application initialized successfully")

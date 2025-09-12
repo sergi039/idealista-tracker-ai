@@ -74,7 +74,7 @@
                                     <div class="row mb-4">
                                         <div class="col-md-4">
                                             <label for="investment_weight_{{ criterion }}" class="form-label fw-bold">
-                                                {{ criterion.replace('_', ' ').title() }}
+                                                {{ format_field_name(criterion) }}
                                             </label>
                                             <p class="small text-muted mb-0">{{ criteria_descriptions.get(criterion, 'Custom scoring criterion') }}</p>
                                         </div>
@@ -164,7 +164,7 @@
                                     <div class="row mb-4">
                                         <div class="col-md-4">
                                             <label for="lifestyle_weight_{{ criterion }}" class="form-label fw-bold">
-                                                {{ criterion.replace('_', ' ').title() }}
+                                                {{ format_field_name(criterion) }}
                                             </label>
                                             <p class="small text-muted mb-0">{{ criteria_descriptions.get(criterion, 'Custom scoring criterion') }}</p>
                                         </div>

@@ -115,7 +115,46 @@ TRANSLATIONS = {
         'cancel': 'Cancel',
         'edit': 'Edit',
         'close': 'Close',
-        'back_to_properties': 'Back to Properties'
+        'back': 'Back',
+        'back_to_properties': 'Back to Properties',
+        
+        # Languages and platforms
+        'english': 'English',
+        'spanish': 'Spanish',
+        'idealista': 'Idealista',
+        
+        # Property details specific
+        'property_details': 'Property Details',
+        'ai_investment_analysis': 'AI Investment Analysis',
+        'powered_by_claude_ai': 'Powered by Claude AI',
+        'click_ai_analysis_button': 'Click "AI Analysis" button to generate investment insights',
+        'property_scoring_analysis': 'Property Scoring Analysis',
+        'multi_criteria_decision_making': 'Multi-Criteria Decision Making',
+        'overall_score': 'Overall Score',
+        'combined_analysis': 'Combined Analysis',
+        'roi_focused': 'ROI Focused',
+        'quality_of_life': 'Quality of Life',
+        'view_detailed_breakdown': 'View Detailed Breakdown',
+        'enriching_property_google_api': 'Enriching property with Google API data...',
+        'scores': 'Scores',
+        'investment': 'Investment',
+        'lifestyle': 'Lifestyle',
+        'nearby_amenities': 'Nearby Amenities',
+        
+        # Email and source
+        'source_email': 'Source Email',
+        'open_in_gmail': 'Open in Gmail',
+        'find_in_gmail': 'Find in Gmail',
+        'search_in_gmail': 'Search in Gmail',
+        'subject': 'Subject',
+        'from': 'From',
+        'no_email_source': 'No email source available',
+        
+        # Score editing
+        'edit_score': 'Edit Score',
+        'manual_score_0_100': 'Manual Score (0-100)',
+        'enter_score_description': 'Enter a score between 0 and 100. This will override the automatically calculated score.',
+        'save_score': 'Save Score'
     },
     'es': {
         # Navigation
@@ -228,7 +267,46 @@ TRANSLATIONS = {
         'cancel': 'Cancelar',
         'edit': 'Editar',
         'close': 'Cerrar',
-        'back_to_properties': 'Volver a Propiedades'
+        'back': 'Volver',
+        'back_to_properties': 'Volver a Propiedades',
+        
+        # Languages and platforms
+        'english': 'Inglés',
+        'spanish': 'Español',
+        'idealista': 'Idealista',
+        
+        # Property details specific
+        'property_details': 'Detalles de la Propiedad',
+        'ai_investment_analysis': 'Análisis de Inversión IA',
+        'powered_by_claude_ai': 'Impulsado por Claude AI',
+        'click_ai_analysis_button': 'Haz clic en "Análisis IA" para generar análisis de inversión',
+        'property_scoring_analysis': 'Análisis de Puntuación de Propiedad',
+        'multi_criteria_decision_making': 'Toma de Decisiones Multi-Criterio',
+        'overall_score': 'Puntuación General',
+        'combined_analysis': 'Análisis Combinado',
+        'roi_focused': 'Enfocado en ROI',
+        'quality_of_life': 'Calidad de Vida',
+        'view_detailed_breakdown': 'Ver Desglose Detallado',
+        'enriching_property_google_api': 'Enriqueciendo propiedad con datos de Google API...',
+        'scores': 'Puntuaciones',
+        'investment': 'Inversión',
+        'lifestyle': 'Estilo de Vida',
+        'nearby_amenities': 'Servicios Cercanos',
+        
+        # Email and source
+        'source_email': 'Correo de Origen',
+        'open_in_gmail': 'Abrir en Gmail',
+        'find_in_gmail': 'Encontrar en Gmail',
+        'search_in_gmail': 'Buscar en Gmail',
+        'subject': 'Asunto',
+        'from': 'De',
+        'no_email_source': 'No hay fuente de correo disponible',
+        
+        # Score editing
+        'edit_score': 'Editar Puntuación',
+        'manual_score_0_100': 'Puntuación Manual (0-100)',
+        'enter_score_description': 'Ingrese una puntuación entre 0 y 100. Esto anulará la puntuación calculada automáticamente.',
+        'save_score': 'Guardar Puntuación'
     }
 }
 
@@ -256,3 +334,117 @@ def get_browser_language():
         best_match = request.accept_languages.best_match(['en', 'es'])
         return best_match or 'en'
     return 'en'
+
+# Field name mappings for proper display
+FIELD_MAPPINGS = {
+    # Scoring criteria
+    'investment_yield': 'Investment Yield',
+    'location_quality': 'Location Quality',
+    'transport': 'Transport',
+    'infrastructure_basic': 'Basic Infrastructure',
+    'infrastructure_extended': 'Extended Infrastructure',
+    'environment': 'Environment',
+    'physical_characteristics': 'Physical Characteristics',
+    'services_quality': 'Services Quality',
+    'legal_status': 'Legal Status',
+    'development_potential': 'Development Potential',
+    
+    # Infrastructure and amenities
+    'water_supply': 'Water Supply',
+    'electricity': 'Electricity',
+    'sewage_system': 'Sewage System',
+    'gas_supply': 'Gas Supply',
+    'internet_access': 'Internet Access',
+    'road_access': 'Road Access',
+    'public_transport': 'Public Transport',
+    'parking_available': 'Parking Available',
+    
+    # Amenities
+    'osm_amenities': 'Nearby Amenities',
+    'bank': 'Bank',
+    'hospital': 'Hospital',
+    'pharmacy': 'Pharmacy',
+    'police': 'Police',
+    'school': 'School',
+    'restaurant': 'Restaurant',
+    'shopping': 'Shopping',
+    'fuel': 'Fuel Station',
+    'post_office': 'Post Office',
+    
+    # Environment and views
+    'sea_view': 'Sea View',
+    'mountain_view': 'Mountain View',
+    'city_view': 'City View',
+    'garden_view': 'Garden View',
+    'natural_areas': 'Natural Areas',
+    'noise_level': 'Noise Level',
+    'air_quality': 'Air Quality',
+    
+    # Common fields
+    'fair_price': 'Fair Price',
+    'price_per_m2': 'Price per m²',
+    'land_type': 'Land Type',
+    'legal_status': 'Legal Status',
+    'building_permit': 'Building Permit',
+    'plot_area': 'Plot Area',
+    'built_area': 'Built Area',
+    'construction_year': 'Construction Year',
+    'renovation_needed': 'Renovation Needed',
+    'energy_rating': 'Energy Rating',
+    
+    # Travel times and distances
+    'travel_time_airport': 'Travel Time to Airport',
+    'travel_time_train_station': 'Travel Time to Train Station',
+    'travel_time_hospital': 'Travel Time to Hospital',
+    'distance_airport': 'Distance to Airport',
+    'distance_train_station': 'Distance to Train Station',
+    'distance_hospital': 'Distance to Hospital',
+    'distance_beach': 'Distance to Beach',
+    'beach_distance': 'Beach Distance',
+}
+
+def format_field_name(field_name, lang=None):
+    """
+    Format a field name for display using proper mapping or fallback formatting
+    
+    Args:
+        field_name (str): The internal field name (e.g., 'fair_price', 'investment_yield')
+        lang (str): Language code (optional)
+    
+    Returns:
+        str: Properly formatted display name
+    """
+    if not field_name:
+        return ''
+    
+    # Convert to string in case it's not
+    field_str = str(field_name)
+    
+    # First try the field mappings
+    if field_str in FIELD_MAPPINGS:
+        return FIELD_MAPPINGS[field_str]
+    
+    # Try translation system for known keys
+    translated = t(field_str, lang)
+    if translated != field_str:  # Found a translation
+        return translated
+    
+    # Fallback to formatting: handle special cases
+    formatted = field_str
+    
+    # Remove common prefixes and suffixes
+    if formatted.endswith('_view'):
+        formatted = formatted.replace('_view', '') + ' View'
+    
+    # Replace underscores with spaces and title case
+    formatted = formatted.replace('_', ' ').title()
+    
+    # Fix common title case issues
+    formatted = formatted.replace('Osm ', 'OSM ')
+    formatted = formatted.replace('Api ', 'API ')
+    formatted = formatted.replace('Gps ', 'GPS ')
+    formatted = formatted.replace('Id ', 'ID ')
+    formatted = formatted.replace('Url ', 'URL ')
+    formatted = formatted.replace('M2', 'm²')
+    
+    return formatted

@@ -10,8 +10,8 @@
                 <i class="fas fa-map-marker-alt me-2"></i>
                 {{ land.title[:60] }}{% if land.title|length > 60 %}...{% endif %}
             </h1>
-            <a href="{{ url_for('main.lands', sort=request.args.get('sort'), order=request.args.get('order'), land_type=request.args.get('land_type'), municipality=request.args.get('municipality'), search=request.args.get('search'), per_page=request.args.get('per_page')) }}" class="btn-outlined">
-                <i class="fas fa-arrow-left me-1"></i>Back to Properties
+            <a href="{{ url_for('main.lands', sort=request.args.get('sort'), order=request.args.get('order'), land_type=request.args.get('land_type'), municipality=request.args.get('municipality'), search=request.args.get('search'), per_page=request.args.get('per_page')) }}" class="btn-outlined btn-small">
+                <i class="fas fa-arrow-left me-1"></i>{{ t('back') }}
             </a>
         </div>
     </div>
@@ -26,7 +26,7 @@
                 <div class="d-flex align-items-center gap-2">
                     {% if land.score_total %}
                         <span class="chip chip-{{ 'success' if land.score_total >= 70 else 'warning' if land.score_total >= 50 else 'danger' }}">
-                            Score: {{ "%.1f"|format(land.score_total) }}
+                            {{ t('score') }}: {{ "%.1f"|format(land.score_total) }}
                         </span>
                     {% endif %}
                     <button type="button" class="btn-icon btn-small" data-bs-toggle="modal" data-bs-target="#editScoreModal">
@@ -38,7 +38,7 @@
                 <!-- Basic Info -->
                 <div class="row mb-4">
                     <div class="col-md-3">
-                        <strong>Price:</strong><br>
+                        <strong>{{ t('price') }}:</strong><br>
                         {% if land.price %}
                             <span class="fs-4 text-success">{{ "{:,.0f}".format(land.price) }}€</span>
                         {% else %}
@@ -46,7 +46,7 @@
                         {% endif %}
                     </div>
                     <div class="col-md-3">
-                        <strong>Area:</strong><br>
+                        <strong>{{ t('area') }}:</strong><br>
                         {% if land.area %}
                             <span class="fs-5">{{ "{:,.0f}".format(land.area) }} m²</span>
                         {% else %}
@@ -54,11 +54,11 @@
                         {% endif %}
                     </div>
                     <div class="col-md-3">
-                        <strong>Municipality:</strong><br>
+                        <strong>{{ t('municipality') }}:</strong><br>
                         <span class="fs-6">{{ land.municipality or 'Unknown' }}</span>
                     </div>
                     <div class="col-md-3">
-                        <strong>Type:</strong><br>
+                        <strong>{{ t('type') }}:</strong><br>
                         {% if land.land_type %}
                             <span class="chip chip-{{ 'success' if land.land_type == 'developed' else 'warning' }}">
                                 {{ land.land_type.title() }}
@@ -72,7 +72,7 @@
                 <!-- Location -->
                 {% if land.location_lat and land.location_lon %}
                     <div class="mb-4">
-                        <strong>Location:</strong><br>
+                        <strong>{{ t('location') }}:</strong><br>
                         <i class="fas fa-map-marker-alt me-2"></i>
                         {{ "%.6f"|format(land.location_lat) }}, {{ "%.6f"|format(land.location_lon) }}
                         <a href="https://www.google.com/maps/search/?api=1&query={{ land.location_lat }},{{ land.location_lon }}" 
@@ -88,7 +88,7 @@
                     </div>
                 {% elif land.municipality %}
                     <div class="mb-4">
-                        <strong>Location:</strong><br>
+                        <strong>{{ t('location') }}:</strong><br>
                         <i class="fas fa-map-marker-alt me-2"></i>
                         {{ land.municipality }}
                         <a href="https://www.google.com/maps/search/{{ land.municipality|urlencode }},+Spain" 
@@ -108,18 +108,18 @@
                 {% if land.description %}
                     <div class="mb-4" id="description-section">
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <strong>Property Description:</strong>
+                            <strong>{{ t('property_description') }}:</strong>
                             <div class="d-flex gap-2">
                                 <!-- Language Toggle -->
                                 <div class="btn-group btn-group-sm" role="group" id="description-language-toggle" style="display: none;">
                                     <button type="button" class="btn-outlined active" data-lang="en">
-                                        <i class="fas fa-language me-1"></i>English
+                                        <i class="fas fa-language me-1"></i>{{ t('english') }}
                                     </button>
                                     <button type="button" class="btn-outlined" data-lang="es">
-                                        <i class="fas fa-language me-1"></i>Spanish
+                                        <i class="fas fa-language me-1"></i>{{ t('spanish') }}
                                     </button>
                                     <button type="button" class="btn-outlined" data-lang="original">
-                                        <i class="fas fa-home me-1"></i>Idealista
+                                        <i class="fas fa-home me-1"></i>{{ t('idealista') }}
                                     </button>
                                 </div>
                             </div>
@@ -132,7 +132,7 @@
                             <div id="enhanced-description" style="display: none;">
                                 <div class="text-light" id="enhanced-description-text"></div>
                                 <div class="mt-2" id="description-highlights" style="display: none;">
-                                    <small class="text-muted d-block mb-1">Key Highlights:</small>
+                                    <small class="text-muted d-block mb-1">{{ t('key_highlights') }}:</small>
                                     <div id="highlights-list"></div>
                                 </div>
                                 <div class="mt-2" id="price-info-section" style="display: none;">
@@ -153,7 +153,7 @@
                     {% if land.property_details is string %}
                         <!-- Display as plain text if it's a string -->
                         <div class="mb-4">
-                            <strong>Property Details:</strong>
+                            <strong>{{ t('property_details') }}:</strong>
                             <div class="mt-2 p-3 bg-dark rounded">
                                 <pre class="text-light mb-0" style="white-space: pre-wrap; word-wrap: break-word;">{{ land.property_details }}</pre>
                             </div>
@@ -168,9 +168,9 @@
                     <div class="card bg-info bg-opacity-10 border-info">
                         <div class="card-header bg-info bg-opacity-25 d-flex justify-content-between align-items-center">
                             <h6 class="mb-0">
-                                <i class="fas fa-brain me-2"></i>AI Investment Analysis
+                                <i class="fas fa-brain me-2"></i>{{ t('ai_investment_analysis') }}
                             </h6>
-                            <small class="text-muted">Powered by Claude AI</small>
+                            <small class="text-muted">{{ t('powered_by_claude_ai') }}</small>
                         </div>
                         <div class="card-body" id="ai-analysis-content">
                             {% if land.ai_analysis %}
@@ -182,7 +182,7 @@
                                 <!-- Placeholder for new analysis -->
                                 <div class="text-center text-muted">
                                     <i class="fas fa-robot fa-3x mb-3 opacity-50"></i>
-                                    <p>Click "AI Analysis" button to generate investment insights</p>
+                                    <p>{{ t('click_ai_analysis_button') }}</p>
                                 </div>
                             {% endif %}
                         </div>
@@ -194,7 +194,7 @@
                     {% if land.url %}
                         <a href="{{ land.url }}" target="_blank" class="btn-filledsuccess">
                             <i class="fas fa-home me-2"></i>
-                            View on Idealista
+                            {{ t('view_on_idealista') }}
                         </a>
                     {% endif %}
                     
@@ -202,7 +202,7 @@
                     <button onclick="analyzeWithClaude({{ land.id }})" 
                             class="btn {{ 'btn-success' if land.ai_analysis else 'btn-outline-info' }}">
                         <i class="fas fa-brain me-2 {{ 'text-white' if land.ai_analysis else '' }}"></i>
-                        AI Analysis
+                        {{ t('ai_analysis') }}
                         {% if land.ai_analysis %}
                             <span class="chip chip-light text-dark ms-1">✓</span>
                         {% endif %}
@@ -216,7 +216,7 @@
                             hx-trigger="click"
                             hx-indicator="#enrichment-spinner">
                         <i class="fas fa-sync me-2 {{ 'text-white' if has_enrichment else '' }}"></i>
-                        Enrich with Google APIs
+                        {{ t('enrich_google_api') }}
                         {% if has_enrichment %}
                             <span class="chip chip-light text-dark ms-1">✓</span>
                         {% endif %}
@@ -230,11 +230,11 @@
             <div class="card-header">
                 <h5 class="card-title">
                     <span class="material-icons">analytics</span>
-                    Property Scoring Analysis
+                    {{ t('property_scoring_analysis') }}
                 </h5>
                 <div class="scoring-methodology-badge">
                     <span class="method-label">MCDM</span>
-                    <span class="method-description">Multi-Criteria Decision Making</span>
+                    <span class="method-description">{{ t('multi_criteria_decision_making') }}</span>
                 </div>
             </div>
             
@@ -244,20 +244,20 @@
                     <div class="score-display score-primary">
                         <div class="score-header">
                             <span class="material-icons">trending_up</span>
-                            <span class="score-label">Overall Score</span>
+                            <span class="score-label">{{ t('overall_score') }}</span>
                         </div>
                         <div class="score-value">{{ "%.1f"|format(land.score_total or 0) }}</div>
-                        <div class="score-context">Combined Analysis</div>
+                        <div class="score-context">{{ t('combined_analysis') }}</div>
                     </div>
                     
                     <!-- Investment Score - Secondary -->
                     <div class="score-display score-secondary">
                         <div class="score-header">
                             <span class="material-icons">business_center</span>
-                            <span class="score-label">Investment Score</span>
+                            <span class="score-label">{{ t('investment_score') }}</span>
                         </div>
                         <div class="score-value">{{ "%.1f"|format(land.score_investment or 0) }}</div>
-                        <div class="score-context">ROI Focused</div>
+                        <div class="score-context">{{ t('roi_focused') }}</div>
                         <div class="score-weight">32% weight</div>
                     </div>
                     
@@ -265,10 +265,10 @@
                     <div class="score-display score-secondary">
                         <div class="score-header">
                             <span class="material-icons">home</span>
-                            <span class="score-label">Lifestyle Score</span>
+                            <span class="score-label">{{ t('lifestyle_score') }}</span>
                         </div>
                         <div class="score-value">{{ "%.1f"|format(land.score_lifestyle or 0) }}</div>
-                        <div class="score-context">Quality of Life</div>
+                        <div class="score-context">{{ t('quality_of_life') }}</div>
                         <div class="score-weight">68% weight</div>
                     </div>
                 </div>
@@ -279,7 +279,7 @@
                             onclick="toggleScoreBreakdown()" 
                             id="score-breakdown-btn">
                         <span class="material-icons">expand_more</span>
-                        View Detailed Breakdown
+                        {{ t('view_detailed_breakdown') }}
                     </button>
                 </div>
                 
@@ -290,7 +290,7 @@
                             {% for criterion, score in land.environment.scoring.individual_scores.items() %}
                                 {% if score is not none %}
                                     <div class="criterion-item">
-                                        <span class="criterion-name">{{ criterion.replace('_', ' ').title() }}</span>
+                                        <span class="criterion-name">{{ format_field_name(criterion) }}</span>
                                         <div class="criterion-bar">
                                             <div class="criterion-fill" style="width: {{ score }}%"></div>
                                         </div>
@@ -311,35 +311,35 @@
         <div id="enrichment-spinner" class="htmx-indicator">
             <div class="alert alert-info">
                 <i class="fas fa-spinner fa-spin me-2"></i>
-                Enriching property with Google API data...
+                {{ t('enriching_property_google_api') }}
             </div>
         </div>
         
         <!-- Compact Dual Scoring Analysis -->
         {% if land.score_investment or land.score_lifestyle %}
-            <div class="card mb-3" style="border: 1px solid #495057;">
+            <div class="card mb-3">
                 <div class="card-body p-3">
                     <div class="d-flex justify-content-between align-items-center mb-2">
-                        <h6 class="mb-0 text-light compact-header" title="{{ t('dual_scoring_analysis') }}">
-                            <i class="fas fa-chart-bar me-1"></i>{{ t('dual_scoring_analysis') }}
+                        <h6 class="mb-0">
+                            <i class="fas fa-chart-bar me-1"></i>{{ t('scores') }}
                         </h6>
                     </div>
                     <div class="row g-2">
                         {% if land.score_investment %}
-                            <div class="col-6">
-                                <div class="d-flex justify-content-between align-items-center mb-1">
-                                    <small class="text-warning fw-bold compact-text" title="{{ t('investment_score') }}">
-                                        <i class="fas fa-coins"></i> {{ t('investment_score') }}
+                            <div class="col-12 mb-2">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <small class="text-warning fw-bold">
+                                        <i class="fas fa-coins me-1"></i>{{ t('investment') }}
                                     </small>
                                     <span class="chip chip-warning text-dark">{{ "%.0f"|format(land.score_investment) }}</span>
                                 </div>
                             </div>
                         {% endif %}
                         {% if land.score_lifestyle %}
-                            <div class="col-6">
-                                <div class="d-flex justify-content-between align-items-center mb-1">
-                                    <small class="text-success fw-bold compact-text" title="{{ t('lifestyle_score') }}">
-                                        <i class="fas fa-home"></i> {{ t('lifestyle_score') }}
+                            <div class="col-12 mb-2">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <small class="text-success fw-bold">
+                                        <i class="fas fa-home me-1"></i>{{ t('lifestyle') }}
                                     </small>
                                     <span class="chip chip-success">{{ "%.0f"|format(land.score_lifestyle) }}</span>
                                 </div>
@@ -405,7 +405,7 @@
                 <div class="card-body">
                     {% for key, value in land.infrastructure_basic.items() %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span>{{ key.replace('_', ' ').title() }}</span>
+                            <span>{{ format_field_name(key) }}</span>
                             {% if value is sameas true %}
                                 <i class="fas fa-check-circle text-success"></i>
                             {% elif value is sameas false %}
@@ -431,7 +431,7 @@
                     {% for key, value in land.infrastructure_extended.items() %}
                         {% if key == 'osm_amenities' and value is mapping %}
                             <div class="mb-3">
-                                <span class="small fw-bold">Nearby Amenities:</span>
+                                <span class="small fw-bold">{{ t('nearby_amenities') }}:</span>
                                 <div class="mt-2">
                                     <!-- Priority Amenities (Top of list) -->
                                     {% for priority_amenity in ['hospital', 'pharmacy', 'police', 'bank'] %}
@@ -474,7 +474,7 @@
                                                     {% elif amenity == 'supermarket' %}
                                                         <i class="fas fa-shopping-cart me-1"></i> Supermarkets
                                                     {% else %}
-                                                        <i class="fas fa-map-marker-alt me-1"></i> {{ amenity.replace('_', ' ').title() }}
+                                                        <i class="fas fa-map-marker-alt me-1"></i> {{ format_field_name(amenity) }}
                                                     {% endif %}
                                                 </span>
                                                 <span class="chip chip-primary">{{ count }} nearby</span>
@@ -495,7 +495,7 @@
                                 key.endswith('_distance') and value == 0
                             ) %}
                                 <div class="d-flex justify-content-between align-items-center mb-2">
-                                    <span class="small">{{ key.replace('_', ' ').title() }}</span>
+                                    <span class="small">{{ format_field_name(key) }}</span>
                                     {% if value is sameas true %}
                                         <i class="fas fa-check-circle text-success"></i>
                                     {% elif value is sameas false %}
@@ -680,7 +680,7 @@
                                 (key == 'airport_available' and land.travel_time_airport)
                             ) %}
                             <div class="d-flex justify-content-between align-items-center mb-2">
-                                <span class="small">{{ key.replace('_', ' ').title() }}</span>
+                                <span class="small">{{ format_field_name(key) }}</span>
                                 {% if value is sameas true %}
                                     <i class="fas fa-check-circle text-success"></i>
                                 {% elif value is sameas false %}
@@ -768,7 +768,7 @@
                         {% for key, value in environment_items %}
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 {% if key in ['sea_view', 'forest_view', 'mountain_view'] %}
-                                    <span class="small">{{ key.replace('_view', '').replace('_', ' ').title() }} View</span>
+                                    <span class="small">{{ format_field_name(key) }}</span>
                                     {% if value is sameas true %}
                                         <i class="fas fa-check-circle text-success"></i>
                                     {% elif value is sameas false %}
@@ -777,7 +777,7 @@
                                         <span class="text-muted small">N/A</span>
                                     {% endif %}
                                 {% else %}
-                                    <span class="small">{{ key.replace('_', ' ').title() }}</span>
+                                    <span class="small">{{ format_field_name(key) }}</span>
                                     {% if value is sameas true %}
                                         <i class="fas fa-check-circle text-success"></i>
                                     {% elif value is sameas false %}
@@ -850,7 +850,7 @@
                 <div class="card-body">
                     {% for key, value in land.services_quality.items() %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span class="small">{{ key.replace('_', ' ').title() }}</span>
+                            <span class="small">{{ format_field_name(key) }}</span>
                             {% if value is number %}
                                 <div class="d-flex align-items-center">
                                     <span class="chip chip-warning me-2">{{ "%.1f"|format(value) }}/5</span>
@@ -995,24 +995,24 @@
         <div class="card">
             <div class="card-header">
                 <h6 class="card-title mb-0">
-                    <i class="fas fa-info-circle me-2"></i>Information
+                    <i class="fas fa-info-circle me-2"></i>{{ t('information') }}
                 </h6>
             </div>
             <div class="card-body">
                 <div class="small">
                     <div class="mb-2">
-                        <strong>Legal Status:</strong> {{ land.legal_status or 'Unknown' }}
+                        <strong>{{ t('legal_status') }}:</strong> {{ land.legal_status or t('unknown') }}
                     </div>
                     <div class="mb-2">
-                        <strong>Added:</strong> {% if land.created_at %}{{ land.created_at.strftime('%B %d, %Y at %H:%M') }}{% else %}Unknown{% endif %}
+                        <strong>{{ t('added') }}:</strong> {% if land.created_at %}{{ land.created_at.strftime('%B %d, %Y at %H:%M') }}{% else %}{{ t('unknown') }}{% endif %}
                     </div>
                     {% if land.email_date %}
                         <div class="mb-2">
-                            <strong>Email Received:</strong> {{ land.email_date.strftime('%B %d, %Y at %H:%M') }}
+                            <strong>{{ t('email_received') }}:</strong> {{ land.email_date.strftime('%B %d, %Y at %H:%M') }}
                         </div>
                     {% endif %}
                     <div class="mb-2">
-                        <strong>Source Email:</strong> 
+                        <strong>{{ t('source_email') }}:</strong> 
                         {% if land.source_email_id %}
                             <!-- Check if it's IMAP (not a real Gmail ID) or Gmail API message -->
                             {% if not land.source_email_id.startswith('imap_') %}
@@ -1021,7 +1021,7 @@
                                    target="_blank" 
                                    class="btn-filledprimary btn-sm me-2"
                                    title="Open original email in Gmail">
-                                    <i class="fas fa-envelope me-1"></i>Open in Gmail
+                                    <i class="fas fa-envelope me-1"></i>{{ t('open_in_gmail') }}
                                 </a>
                             {% endif %}
                             
@@ -1055,23 +1055,23 @@
                                class="btn-filled{% if land.source_email_id.startswith('imap_') %}primary{% else %}outline-secondary{% endif %} btn-sm"
                                title="Search for this email in Gmail">
                                 <i class="fas fa-{% if land.source_email_id.startswith('imap_') %}envelope{% else %}search{% endif %} me-1"></i>
-                                {% if land.source_email_id.startswith('imap_') %}Find in Gmail{% else %}Search in Gmail{% endif %}
+                                {% if land.source_email_id.startswith('imap_') %}{{ t('find_in_gmail') }}{% else %}{{ t('search_in_gmail') }}{% endif %}
                             </a>
                             
                             <!-- Show email metadata if available -->
                             {% if land.email_subject %}
                                 <div class="small text-muted mt-1">
-                                    <strong>Subject:</strong> {{ land.email_subject[:60] }}{% if land.email_subject|length > 60 %}...{% endif %}
+                                    <strong>{{ t('subject') }}:</strong> {{ land.email_subject[:60] }}{% if land.email_subject|length > 60 %}...{% endif %}
                                 </div>
                             {% endif %}
                             {% if land.email_sender %}
                                 <div class="small text-muted">
-                                    <strong>From:</strong> {{ land.email_sender }}
+                                    <strong>{{ t('from') }}:</strong> {{ land.email_sender }}
                                 </div>
                             {% endif %}
                         {% else %}
                             <span class="text-warning">
-                                <i class="fas fa-exclamation-triangle me-1"></i>No email source available
+                                <i class="fas fa-exclamation-triangle me-1"></i>{{ t('no_email_source') }}
                             </span>
                         {% endif %}
                     </div>
@@ -1088,23 +1088,23 @@
             <form method="POST" action="{{ url_for('main.update_score', land_id=land.id) }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="modal-header">
-                    <h5 class="modal-title" id="editScoreModalLabel">Edit Score</h5>
+                    <h5 class="modal-title" id="editScoreModalLabel">{{ t('edit_score') }}</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
                     <div class="mb-3">
-                        <label for="score" class="form-label">Manual Score (0-100)</label>
+                        <label for="score" class="form-label">{{ t('manual_score_0_100') }}</label>
                         <input type="number" class="form-input" id="score" name="score" 
                                min="0" max="100" step="0.1" 
                                value="{{ '%.1f'|format(land.score_total) if land.score_total else 0 }}" required>
                         <div class="form-text">
-                            Enter a score between 0 and 100. This will override the automatically calculated score.
+                            {{ t('enter_score_description') }}
                         </div>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn-filledsecondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn-filledprimary">Save Score</button>
+                    <button type="submit" class="btn-filledprimary">{{ t('save_score') }}</button>
                 </div>
             </form>
         </div>
