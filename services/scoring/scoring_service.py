@@ -80,6 +80,12 @@ class ScoringService:
             from config import Config
             mix = getattr(Config, 'COMBINED_MIX', {'investment': 0.32, 'lifestyle': 0.68})
             
+            # Handle None values
+            if investment_score is None:
+                investment_score = 0.0
+            if lifestyle_score is None:
+                lifestyle_score = 0.0
+            
             combined = (investment_score * mix['investment'] + 
                        lifestyle_score * mix['lifestyle'])
             

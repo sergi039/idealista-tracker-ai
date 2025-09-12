@@ -68,6 +68,7 @@ class WeightManager:
                 return False
             
             # Update database
+            from models import ScoringCriteria
             for criteria_name, weight in normalized_weights.items():
                 criterion = ScoringCriteria.query.filter_by(
                     criteria_name=criteria_name,
@@ -77,12 +78,12 @@ class WeightManager:
                 if criterion:
                     criterion.weight = Decimal(str(weight))
                 else:
-                    criterion = ScoringCriteria(
-                        criteria_name=criteria_name,
-                        profile=profile,
-                        weight=Decimal(str(weight)),
-                        active=True
-                    )
+                    # Create new ScoringCriteria instance properly
+                    criterion = ScoringCriteria()
+                    criterion.criteria_name = criteria_name
+                    criterion.profile = profile
+                    criterion.weight = Decimal(str(weight))
+                    criterion.active = True
                     db.session.add(criterion)
             
             db.session.commit()
