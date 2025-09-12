@@ -101,7 +101,8 @@
 /* Material Design 3 Form Controls */
 .form-field {
   position: relative;
-  margin-bottom: var(--md-sys-spacing-4);
+  margin-bottom: 0;
+  min-width: 0;
 }
 
 .form-input {

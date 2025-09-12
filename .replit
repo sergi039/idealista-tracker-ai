@@ -33,5 +33,9 @@ waitForPort = 5000
 localPort = 5000
 externalPort = 80
 
+[[ports]]
+localPort = 40449
+externalPort = 3000
+
 [agent]
 integrations = ["python_anthropic:1.0.0", "python_database:1.0.0", "styling_replit:1.0.0", "web_scraper:1.0.0"]

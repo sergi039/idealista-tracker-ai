@@ -39,16 +39,16 @@
                     <!-- Hidden inputs to preserve state -->
                     <input type="hidden" name="mode" value="{{ current_filters.mode or 'combined' }}">
                     <input type="hidden" name="view_type" value="{{ current_filters.view_type or 'cards' }}">
-                    <div class="form-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--md-sys-spacing-4); margin-bottom: var(--md-sys-spacing-6); align-items: end;">
+                    <div class="form-grid" style="display: flex; gap: var(--md-sys-spacing-3); margin-bottom: var(--md-sys-spacing-6); align-items: center; flex-wrap: nowrap;">
                         <!-- Search -->
-                        <div class="form-field">
+                        <div class="form-field" style="flex: 1; min-width: 150px;">
                             <input type="text" class="form-input body-large" id="search" name="search" 
                                    value="{{ current_filters.search or '' }}" 
                                    placeholder="{{ t('search_properties') }}">
                         </div>
                         
                         <!-- Land Type -->
-                        <div class="form-field">
+                        <div class="form-field" style="flex: 0.8; min-width: 120px;">
                             <select class="md-select body-large" id="land_type" name="land_type">
                                 <option value="">{{ t('land_type_all') }}</option>
                                 <option value="developed" {{ 'selected' if current_filters.land_type == 'developed' }}>
@@ -61,7 +61,7 @@
                         </div>
                         
                         <!-- Municipality -->
-                        <div class="form-field">
+                        <div class="form-field" style="flex: 0.8; min-width: 140px;">
                             <select class="md-select body-large" id="municipality" name="municipality">
                                 <option value="">{{ t('all_municipalities') }}</option>
                                 {% for municipality in municipalities %}
@@ -74,7 +74,7 @@
                         </div>
                         
                         <!-- Sea View Filter -->
-                        <div class="form-field" style="display: flex; align-items: center; height: 40px;">
+                        <div class="form-field" style="display: flex; align-items: center; height: 40px; flex: 0 0 auto;">
                             <input class="form-input" type="checkbox" id="sea_view" name="sea_view" 
                                    {{ 'checked' if current_filters.sea_view }}
                                    style="width: 18px; height: 18px; margin-right: var(--md-sys-spacing-2); accent-color: var(--md-sys-color-primary);">
@@ -84,7 +84,7 @@
                         </div>
                         
                         <!-- Sort -->
-                        <div class="form-field">
+                        <div class="form-field" style="flex: 1; min-width: 150px;">
                             <div style="display: flex; gap: var(--md-sys-spacing-2);">
                                 <select class="md-select body-large" id="sort" name="sort" style="flex: 1;">
                                     <option value="" {{ 'selected' if not current_filters.sort_by else '' }}>{{ t('sort_by') }}</option>

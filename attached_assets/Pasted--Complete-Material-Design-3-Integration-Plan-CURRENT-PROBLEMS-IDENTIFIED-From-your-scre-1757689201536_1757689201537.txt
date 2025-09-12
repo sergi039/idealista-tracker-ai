@@ -1,0 +1,1119 @@
+# Complete Material Design 3 Integration Plan
+
+## 🚨 **CURRENT PROBLEMS IDENTIFIED**
+
+From your screenshots, I see these critical issues:
+1. **Mixed design systems** - Bootstrap + custom CSS + partial Material Design
+2. **Inconsistent spacing** - Different margins/paddings everywhere  
+3. **Font chaos** - Multiple font sizes and weights without hierarchy
+4. **Color inconsistency** - Different blues, grays, and accent colors
+5. **Icon mixing** - FontAwesome + Material Icons + custom icons
+6. **Card design mess** - Different border radius, shadows, layouts
+7. **Button style chaos** - Multiple button styles on same page
+
+## 🎯 **SOLUTION: COMPLETE MATERIAL DESIGN 3 INTEGRATION**
+
+---
+
+## **PHASE 1: REMOVE ALL EXISTING CSS & START FRESH**
+
+### **TASK 1: Clean Slate - Remove Current CSS System**
+**Files to modify**: `templates/base.html`, remove existing CSS
+
+**Replace current head section:**
+```html
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Idealista Land Watch & Rank{% endblock %}</title>
+    
+    <!-- REMOVE ALL BOOTSTRAP AND CUSTOM CSS -->
+    <!-- Material Design 3 CSS Framework -->
+    <link href="https://unpkg.com/@material/web@1.0.1/all.css" rel="stylesheet">
+    
+    <!-- Google Fonts - Roboto (MD3 Standard) -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&display=swap" rel="stylesheet">
+    
+    <!-- Material Symbols (Latest Icon Set) -->
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
+    
+    <!-- Material Design 3 Dynamic Colors -->
+    <link href="https://unpkg.com/@material/material-color-utilities@0.2.7/dist/css/material-dynamic-colors.css" rel="stylesheet">
+    
+    <!-- HTMX (keep) -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    
+    <!-- Custom MD3 Theme CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/md3-theme.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/md3-components.css') }}">
+    
+    <script>
+        function setLanguage(langCode) {
+            fetch('/api/set-language', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ language: langCode })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) location.reload();
+            })
+            .catch(error => console.error('Error setting language:', error));
+        }
+    </script>
+</head>
+```
+
+### **TASK 2: Create Material Design 3 Theme System**
+**Create**: `static/css/md3-theme.css`
+
+```css
+/* Material Design 3 Theme System */
+:root {
+  /* Primary Colors */
+  --md-sys-color-primary: #1976d2;
+  --md-sys-color-on-primary: #ffffff;
+  --md-sys-color-primary-container: #d3e3fd;
+  --md-sys-color-on-primary-container: #001c38;
+  
+  /* Secondary Colors */
+  --md-sys-color-secondary: #565f71;
+  --md-sys-color-on-secondary: #ffffff;
+  --md-sys-color-secondary-container: #dae2f9;
+  --md-sys-color-on-secondary-container: #131c2b;
+  
+  /* Tertiary Colors */
+  --md-sys-color-tertiary: #705575;
+  --md-sys-color-on-tertiary: #ffffff;
+  --md-sys-color-tertiary-container: #fad8fd;
+  --md-sys-color-on-tertiary-container: #28132e;
+  
+  /* Error Colors */
+  --md-sys-color-error: #ba1a1a;
+  --md-sys-color-on-error: #ffffff;
+  --md-sys-color-error-container: #ffdad6;
+  --md-sys-color-on-error-container: #410002;
+  
+  /* Surface Colors */
+  --md-sys-color-surface: #fefbff;
+  --md-sys-color-on-surface: #1a1c1e;
+  --md-sys-color-surface-variant: #dfe2eb;
+  --md-sys-color-on-surface-variant: #43474e;
+  --md-sys-color-surface-container: #f0f4f9;
+  --md-sys-color-surface-container-high: #e6eaf2;
+  --md-sys-color-surface-container-highest: #e1e4ed;
+  
+  /* Outline Colors */
+  --md-sys-color-outline: #73777f;
+  --md-sys-color-outline-variant: #c3c7cf;
+  
+  /* Background */
+  --md-sys-color-background: #fefbff;
+  --md-sys-color-on-background: #1a1c1e;
+  
+  /* Dark Theme Colors */
+  --md-sys-color-primary-dark: #a8c8ec;
+  --md-sys-color-on-primary-dark: #0f2d52;
+  --md-sys-color-primary-container-dark: #284777;
+  --md-sys-color-on-primary-container-dark: #d3e3fd;
+  
+  --md-sys-color-surface-dark: #111318;
+  --md-sys-color-on-surface-dark: #e2e2e6;
+  --md-sys-color-surface-variant-dark: #43474e;
+  --md-sys-color-on-surface-variant-dark: #c3c7cf;
+  --md-sys-color-surface-container-dark: #1d2024;
+  --md-sys-color-surface-container-high-dark: #272a2f;
+  --md-sys-color-surface-container-highest-dark: #32353a;
+  
+  --md-sys-color-background-dark: #111318;
+  --md-sys-color-on-background-dark: #e2e2e6;
+  
+  /* Typography Scale */
+  --md-sys-typescale-display-large: 400 57px/64px 'Roboto', system-ui;
+  --md-sys-typescale-display-medium: 400 45px/52px 'Roboto', system-ui;
+  --md-sys-typescale-display-small: 400 36px/44px 'Roboto', system-ui;
+  
+  --md-sys-typescale-headline-large: 400 32px/40px 'Roboto', system-ui;
+  --md-sys-typescale-headline-medium: 400 28px/36px 'Roboto', system-ui;
+  --md-sys-typescale-headline-small: 400 24px/32px 'Roboto', system-ui;
+  
+  --md-sys-typescale-title-large: 400 22px/28px 'Roboto', system-ui;
+  --md-sys-typescale-title-medium: 500 16px/24px 'Roboto', system-ui;
+  --md-sys-typescale-title-small: 500 14px/20px 'Roboto', system-ui;
+  
+  --md-sys-typescale-body-large: 400 16px/24px 'Roboto', system-ui;
+  --md-sys-typescale-body-medium: 400 14px/20px 'Roboto', system-ui;
+  --md-sys-typescale-body-small: 400 12px/16px 'Roboto', system-ui;
+  
+  --md-sys-typescale-label-large: 500 14px/20px 'Roboto', system-ui;
+  --md-sys-typescale-label-medium: 500 12px/16px 'Roboto', system-ui;
+  --md-sys-typescale-label-small: 500 11px/16px 'Roboto', system-ui;
+  
+  /* Spacing System (8dp Grid) */
+  --md-sys-spacing-0: 0px;
+  --md-sys-spacing-1: 4px;
+  --md-sys-spacing-2: 8px;
+  --md-sys-spacing-3: 12px;
+  --md-sys-spacing-4: 16px;
+  --md-sys-spacing-5: 20px;
+  --md-sys-spacing-6: 24px;
+  --md-sys-spacing-8: 32px;
+  --md-sys-spacing-10: 40px;
+  --md-sys-spacing-12: 48px;
+  --md-sys-spacing-16: 64px;
+  --md-sys-spacing-20: 80px;
+  --md-sys-spacing-24: 96px;
+  
+  /* Shape System */
+  --md-sys-shape-corner-none: 0px;
+  --md-sys-shape-corner-extra-small: 4px;
+  --md-sys-shape-corner-small: 8px;
+  --md-sys-shape-corner-medium: 12px;
+  --md-sys-shape-corner-large: 16px;
+  --md-sys-shape-corner-extra-large: 28px;
+  --md-sys-shape-corner-full: 1000px;
+  
+  /* Elevation System */
+  --md-sys-elevation-0: none;
+  --md-sys-elevation-1: 0px 1px 2px 0px rgba(0, 0, 0, 0.3), 0px 1px 3px 1px rgba(0, 0, 0, 0.15);
+  --md-sys-elevation-2: 0px 1px 2px 0px rgba(0, 0, 0, 0.3), 0px 2px 6px 2px rgba(0, 0, 0, 0.15);
+  --md-sys-elevation-3: 0px 4px 8px 3px rgba(0, 0, 0, 0.15), 0px 1px 3px 0px rgba(0, 0, 0, 0.3);
+  --md-sys-elevation-4: 0px 6px 10px 4px rgba(0, 0, 0, 0.15), 0px 2px 3px 0px rgba(0, 0, 0, 0.3);
+  --md-sys-elevation-5: 0px 8px 12px 6px rgba(0, 0, 0, 0.15), 0px 4px 4px 0px rgba(0, 0, 0, 0.3);
+}
+
+/* Dark Theme Application */
+[data-theme="dark"] {
+  --md-sys-color-primary: var(--md-sys-color-primary-dark);
+  --md-sys-color-on-primary: var(--md-sys-color-on-primary-dark);
+  --md-sys-color-primary-container: var(--md-sys-color-primary-container-dark);
+  --md-sys-color-on-primary-container: var(--md-sys-color-on-primary-container-dark);
+  
+  --md-sys-color-surface: var(--md-sys-color-surface-dark);
+  --md-sys-color-on-surface: var(--md-sys-color-on-surface-dark);
+  --md-sys-color-surface-variant: var(--md-sys-color-surface-variant-dark);
+  --md-sys-color-on-surface-variant: var(--md-sys-color-on-surface-variant-dark);
+  --md-sys-color-surface-container: var(--md-sys-color-surface-container-dark);
+  --md-sys-color-surface-container-high: var(--md-sys-color-surface-container-high-dark);
+  --md-sys-color-surface-container-highest: var(--md-sys-color-surface-container-highest-dark);
+  
+  --md-sys-color-background: var(--md-sys-color-background-dark);
+  --md-sys-color-on-background: var(--md-sys-color-on-background-dark);
+}
+
+/* Base Reset */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font: var(--md-sys-typescale-body-medium);
+  color: var(--md-sys-color-on-background);
+  background-color: var(--md-sys-color-background);
+  line-height: 1.5;
+}
+
+body {
+  font-family: 'Roboto', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+```
+
+### **TASK 3: Create MD3 Component System**
+**Create**: `static/css/md3-components.css`
+
+```css
+/* Material Design 3 Components */
+
+/* Typography Classes */
+.display-large { font: var(--md-sys-typescale-display-large); }
+.display-medium { font: var(--md-sys-typescale-display-medium); }
+.display-small { font: var(--md-sys-typescale-display-small); }
+
+.headline-large { font: var(--md-sys-typescale-headline-large); }
+.headline-medium { font: var(--md-sys-typescale-headline-medium); }
+.headline-small { font: var(--md-sys-typescale-headline-small); }
+
+.title-large { 
+  font: var(--md-sys-typescale-title-large); 
+  color: var(--md-sys-color-on-surface);
+}
+.title-medium { 
+  font: var(--md-sys-typescale-title-medium); 
+  color: var(--md-sys-color-on-surface);
+}
+.title-small { 
+  font: var(--md-sys-typescale-title-small); 
+  color: var(--md-sys-color-on-surface);
+}
+
+.body-large { 
+  font: var(--md-sys-typescale-body-large); 
+  color: var(--md-sys-color-on-surface);
+}
+.body-medium { 
+  font: var(--md-sys-typescale-body-medium); 
+  color: var(--md-sys-color-on-surface);
+}
+.body-small { 
+  font: var(--md-sys-typescale-body-small); 
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.label-large { font: var(--md-sys-typescale-label-large); }
+.label-medium { font: var(--md-sys-typescale-label-medium); }
+.label-small { font: var(--md-sys-typescale-label-small); }
+
+/* Button System */
+.md3-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--md-sys-spacing-2);
+  padding: var(--md-sys-spacing-2) var(--md-sys-spacing-6);
+  border-radius: var(--md-sys-shape-corner-full);
+  font: var(--md-sys-typescale-label-large);
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 200ms ease;
+  border: none;
+  min-height: 40px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Filled Button (Primary Action) */
+.md3-button--filled {
+  background-color: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  box-shadow: var(--md-sys-elevation-0);
+}
+
+.md3-button--filled:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--md-sys-color-primary) 92%, black);
+  box-shadow: var(--md-sys-elevation-1);
+}
+
+.md3-button--filled:active {
+  background-color: color-mix(in srgb, var(--md-sys-color-primary) 88%, black);
+  box-shadow: var(--md-sys-elevation-0);
+}
+
+/* Outlined Button (Secondary Action) */
+.md3-button--outlined {
+  background-color: transparent;
+  color: var(--md-sys-color-primary);
+  border: 1px solid var(--md-sys-color-outline);
+}
+
+.md3-button--outlined:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  border-color: var(--md-sys-color-primary);
+}
+
+/* Text Button (Tertiary Action) */
+.md3-button--text {
+  background-color: transparent;
+  color: var(--md-sys-color-primary);
+  padding: var(--md-sys-spacing-2) var(--md-sys-spacing-3);
+}
+
+.md3-button--text:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+}
+
+/* Icon Button */
+.md3-button--icon {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  background-color: transparent;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.md3-button--icon:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+}
+
+/* Button States */
+.md3-button:disabled {
+  background-color: color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent) !important;
+  color: color-mix(in srgb, var(--md-sys-color-on-surface) 38%, transparent) !important;
+  cursor: not-allowed;
+  box-shadow: none !important;
+  border-color: color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent) !important;
+}
+
+/* Card System */
+.md3-card {
+  background-color: var(--md-sys-color-surface-container);
+  border-radius: var(--md-sys-shape-corner-medium);
+  box-shadow: var(--md-sys-elevation-1);
+  overflow: hidden;
+  transition: box-shadow 200ms ease;
+}
+
+.md3-card:hover {
+  box-shadow: var(--md-sys-elevation-2);
+}
+
+.md3-card--elevated {
+  background-color: var(--md-sys-color-surface-container-high);
+  box-shadow: var(--md-sys-elevation-3);
+}
+
+.md3-card--outlined {
+  border: 1px solid var(--md-sys-color-outline-variant);
+  box-shadow: none;
+}
+
+/* Card Content */
+.md3-card__header {
+  padding: var(--md-sys-spacing-6);
+  background-color: var(--md-sys-color-surface-container-highest);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.md3-card__content {
+  padding: var(--md-sys-spacing-6);
+}
+
+.md3-card__actions {
+  padding: var(--md-sys-spacing-4) var(--md-sys-spacing-6);
+  display: flex;
+  gap: var(--md-sys-spacing-2);
+  justify-content: flex-end;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+/* Form Controls */
+.md3-text-field {
+  position: relative;
+  width: 100%;
+  margin-bottom: var(--md-sys-spacing-4);
+}
+
+.md3-text-field__input {
+  width: 100%;
+  padding: var(--md-sys-spacing-4);
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-extra-small);
+  background-color: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface);
+  font: var(--md-sys-typescale-body-large);
+  transition: border-color 200ms ease;
+}
+
+.md3-text-field__input:focus {
+  outline: none;
+  border-color: var(--md-sys-color-primary);
+  border-width: 2px;
+}
+
+.md3-text-field__label {
+  font: var(--md-sys-typescale-body-small);
+  color: var(--md-sys-color-on-surface-variant);
+  margin-bottom: var(--md-sys-spacing-1);
+  display: block;
+}
+
+/* Select Dropdown */
+.md3-select {
+  position: relative;
+  width: 100%;
+}
+
+.md3-select__button {
+  width: 100%;
+  padding: var(--md-sys-spacing-4);
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-extra-small);
+  background-color: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface);
+  font: var(--md-sys-typescale-body-large);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: border-color 200ms ease;
+}
+
+.md3-select__button:hover {
+  border-color: var(--md-sys-color-on-surface);
+}
+
+/* Navigation */
+.md3-top-app-bar {
+  background-color: var(--md-sys-color-surface-container);
+  color: var(--md-sys-color-on-surface);
+  height: 64px;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--md-sys-spacing-6);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.md3-top-app-bar__title {
+  font: var(--md-sys-typescale-title-large);
+  margin-right: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--md-sys-spacing-3);
+}
+
+.md3-top-app-bar__actions {
+  display: flex;
+  gap: var(--md-sys-spacing-2);
+  align-items: center;
+}
+
+/* Layout System */
+.md3-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 var(--md-sys-spacing-6);
+}
+
+.md3-page-header {
+  padding: var(--md-sys-spacing-8) 0 var(--md-sys-spacing-6) 0;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  margin-bottom: var(--md-sys-spacing-8);
+}
+
+.md3-page-title {
+  font: var(--md-sys-typescale-headline-medium);
+  color: var(--md-sys-color-on-surface);
+  margin-bottom: var(--md-sys-spacing-2);
+  display: flex;
+  align-items: center;
+  gap: var(--md-sys-spacing-3);
+}
+
+/* Grid System */
+.md3-grid {
+  display: grid;
+  gap: var(--md-sys-spacing-4);
+}
+
+.md3-grid--2-col { grid-template-columns: repeat(2, 1fr); }
+.md3-grid--3-col { grid-template-columns: repeat(3, 1fr); }
+.md3-grid--4-col { grid-template-columns: repeat(4, 1fr); }
+
+@media (max-width: 768px) {
+  .md3-grid--2-col,
+  .md3-grid--3-col,
+  .md3-grid--4-col {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Material Symbols */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  font-size: 24px;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.material-symbols-filled {
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* Utility Classes */
+.md3-surface {
+  background-color: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+}
+
+.md3-primary-container {
+  background-color: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+}
+
+.md3-secondary-container {
+  background-color: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+/* Spacing Utilities */
+.md3-p-2 { padding: var(--md-sys-spacing-2); }
+.md3-p-4 { padding: var(--md-sys-spacing-4); }
+.md3-p-6 { padding: var(--md-sys-spacing-6); }
+.md3-p-8 { padding: var(--md-sys-spacing-8); }
+
+.md3-m-2 { margin: var(--md-sys-spacing-2); }
+.md3-m-4 { margin: var(--md-sys-spacing-4); }
+.md3-m-6 { margin: var(--md-sys-spacing-6); }
+.md3-m-8 { margin: var(--md-sys-spacing-8); }
+
+.md3-mb-2 { margin-bottom: var(--md-sys-spacing-2); }
+.md3-mb-4 { margin-bottom: var(--md-sys-spacing-4); }
+.md3-mb-6 { margin-bottom: var(--md-sys-spacing-6); }
+.md3-mb-8 { margin-bottom: var(--md-sys-spacing-8); }
+```
+
+---
+
+## **PHASE 2: REBUILD TEMPLATES WITH MATERIAL DESIGN 3**
+
+### **TASK 4: Update Base Template**
+**File**: `templates/base.html`
+
+```html
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <!-- Head content from TASK 1 -->
+</head>
+<body>
+    <!-- Material Design 3 Top App Bar -->
+    <header class="md3-top-app-bar">
+        <div class="md3-top-app-bar__title">
+            <span class="material-symbols-outlined">real_estate_agent</span>
+            <span>Idealista Land Watch</span>
+        </div>
+        
+        <nav class="md3-top-app-bar__actions">
+            <a href="{{ url_for('main.lands') }}" class="md3-button md3-button--text">
+                <span class="material-symbols-outlined">dashboard</span>
+                <span>{{ t('properties') }}</span>
+            </a>
+            <a href="{{ url_for('main.criteria') }}" class="md3-button md3-button--text">
+                <span class="material-symbols-outlined">tune</span>
+                <span>{{ t('scoring_criteria') }}</span>
+            </a>
+            
+            <!-- Language Switcher -->
+            <button type="button" class="md3-button md3-button--icon" onclick="setLanguage('{{ 'es' if get_current_language() == 'en' else 'en' }}')">
+                <span class="material-symbols-outlined">language</span>
+            </button>
+            
+            <!-- Manual Sync -->
+            <button type="button" class="md3-button md3-button--outlined" hx-post="/api/ingest" hx-indicator="#sync-spinner">
+                <span class="material-symbols-outlined">sync</span>
+                <span>{{ t('manual_sync') }}</span>
+            </button>
+            
+            <div id="sync-spinner" class="htmx-indicator">
+                <span class="material-symbols-outlined">sync</span>
+            </div>
+        </nav>
+    </header>
+
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <div class="md3-container md3-mb-6" style="padding-top: var(--md-sys-spacing-6);">
+                {% for category, message in messages %}
+                    <div class="md3-card md3-card--outlined md3-mb-4" role="alert">
+                        <div class="md3-card__content">
+                            <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-3);">
+                                <span class="material-symbols-outlined" style="color: {{ 'var(--md-sys-color-error)' if category == 'error' else 'var(--md-sys-color-primary)' }};">
+                                    {{ 'error' if category == 'error' else 'check_circle' }}
+                                </span>
+                                <span class="body-medium">{{ message }}</span>
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% endwith %}
+
+    <!-- Main Content -->
+    <main class="md3-container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="md3-surface md3-p-8" style="margin-top: var(--md-sys-spacing-20); border-top: 1px solid var(--md-sys-color-outline-variant);">
+        <div class="md3-container">
+            <div class="md3-grid md3-grid--2-col">
+                <div>
+                    <h6 class="title-small md3-mb-2">Idealista Land Watch & Rank</h6>
+                    <p class="body-small">Automated Spanish real estate analysis with multi-criteria scoring</p>
+                </div>
+                <div style="text-align: right;">
+                    <p class="label-small">Built with Material Design 3</p>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Scripts -->
+    <script src="{{ url_for('static', filename='js/md3-components.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    
+    {% block scripts %}{% endblock %}
+</body>
+</html>
+```
+
+### **TASK 5: Rebuild Property List Page**
+**File**: `templates/lands.html`
+
+```html
+{% extends "base.html" %}
+
+{% block title %}Properties - Idealista Land Watch{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="md3-page-header">
+    <div class="md3-page-title">
+        <span class="material-symbols-outlined">apartment</span>
+        <span>{{ t('properties') }}</span>
+        {% if pagination %}
+            <span class="md3-primary-container" style="padding: var(--md-sys-spacing-1) var(--md-sys-spacing-3); border-radius: var(--md-sys-shape-corner-full); font: var(--md-sys-typescale-label-medium);">
+                {{ pagination.total }}
+            </span>
+        {% endif %}
+    </div>
+    <div style="display: flex; gap: var(--md-sys-spacing-3); margin-top: var(--md-sys-spacing-4);">
+        <button type="button" class="md3-button md3-button--filled" onclick="exportProperties()">
+            <span class="material-symbols-outlined">download</span>
+            <span>{{ t('export_csv') }}</span>
+        </button>
+    </div>
+</div>
+
+<!-- Filters Card -->
+<div class="md3-card md3-card--elevated md3-mb-8">
+    <div class="md3-card__header">
+        <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-3);">
+            <span class="material-symbols-outlined">filter_list</span>
+            <h6 class="title-medium">{{ t('filters_search') }}</h6>
+        </div>
+        <button type="button" class="md3-button md3-button--text" onclick="clearAllFilters()">
+            <span class="material-symbols-outlined">clear_all</span>
+            <span>Clear All</span>
+        </button>
+    </div>
+    
+    <div class="md3-card__content">
+        <form method="GET" id="filter-form">
+            <input type="hidden" name="view_type" value="{{ current_filters.view_type or 'cards' }}">
+            
+            <!-- Filter Grid -->
+            <div class="md3-grid md3-grid--4-col md3-mb-6">
+                <!-- Search -->
+                <div class="md3-text-field">
+                    <label for="search" class="md3-text-field__label">
+                        <span class="material-symbols-outlined" style="font-size: 16px; vertical-align: middle; margin-right: 4px;">search</span>
+                        Search Properties
+                    </label>
+                    <input type="text" 
+                           class="md3-text-field__input" 
+                           id="search" 
+                           name="search" 
+                           value="{{ current_filters.search or '' }}" 
+                           placeholder="Search by title, location...">
+                </div>
+                
+                <!-- Property Type -->
+                <div class="md3-text-field">
+                    <label class="md3-text-field__label">
+                        <span class="material-symbols-outlined" style="font-size: 16px; vertical-align: middle; margin-right: 4px;">category</span>
+                        Property Type
+                    </label>
+                    <select class="md3-text-field__input" id="land_type" name="land_type">
+                        <option value="">All Types</option>
+                        <option value="developed" {{ 'selected' if current_filters.land_type == 'developed' }}>
+                            Developed Land
+                        </option>
+                        <option value="buildable" {{ 'selected' if current_filters.land_type == 'buildable' }}>
+                            Buildable Land
+                        </option>
+                    </select>
+                </div>
+                
+                <!-- Location -->
+                <div class="md3-text-field">
+                    <label class="md3-text-field__label">
+                        <span class="material-symbols-outlined" style="font-size: 16px; vertical-align: middle; margin-right: 4px;">location_on</span>
+                        Location
+                    </label>
+                    <select class="md3-text-field__input" id="municipality" name="municipality">
+                        <option value="">All Locations</option>
+                        {% for municipality in municipalities %}
+                            <option value="{{ municipality }}" 
+                                    {{ 'selected' if current_filters.municipality == municipality }}>
+                                {{ municipality }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                
+                <!-- Sort By -->
+                <div class="md3-text-field">
+                    <label class="md3-text-field__label">
+                        <span class="material-symbols-outlined" style="font-size: 16px; vertical-align: middle; margin-right: 4px;">sort</span>
+                        Sort By
+                    </label>
+                    <div style="display: flex; gap: var(--md-sys-spacing-2);">
+                        <select class="md3-text-field__input" id="sort" name="sort" style="flex: 1;">
+                            <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
+                                Overall Score
+                            </option>
+                            <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
+                                Investment Score
+                            </option>
+                            <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
+                                Lifestyle Score
+                            </option>
+                            <option value="price" {{ 'selected' if current_filters.sort_by == 'price' }}>
+                                Price
+                            </option>
+                            <option value="area" {{ 'selected' if current_filters.sort_by == 'area' }}>
+                                Area
+                            </option>
+                        </select>
+                        
+                        <!-- Sort Direction Toggle -->
+                        <div style="display: flex; background-color: var(--md-sys-color-surface-container-highest); border: 1px solid var(--md-sys-color-outline); border-radius: var(--md-sys-shape-corner-extra-small); overflow: hidden;">
+                            <button type="button" 
+                                    class="sort-direction-btn {{ 'active' if current_filters.order == 'desc' else '' }}"
+                                    data-direction="desc"
+                                    style="padding: var(--md-sys-spacing-2); border: none; background: transparent; cursor: pointer;">
+                                <span class="material-symbols-outlined">arrow_downward</span>
+                            </button>
+                            <button type="button" 
+                                    class="sort-direction-btn {{ 'active' if current_filters.order == 'asc' else '' }}"
+                                    data-direction="asc"
+                                    style="padding: var(--md-sys-spacing-2); border: none; background: transparent; cursor: pointer;">
+                                <span class="material-symbols-outlined">arrow_upward</span>
+                            </button>
+                        </div>
+                    </div>
+                    <input type="hidden" name="order" id="order" value="{{ current_filters.order or 'desc' }}">
+                </div>
+            </div>
+            
+            <!-- Special Filters -->
+            <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-6); margin-bottom: var(--md-sys-spacing-6);">
+                <!-- Sea View Toggle -->
+                <label style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); cursor: pointer;">
+                    <input type="checkbox" 
+                           id="sea_view" 
+                           name="sea_view" 
+                           {{ 'checked' if current_filters.sea_view }}
+                           style="display: none;">
+                    <span class="checkbox-indicator" style="width: 20px; height: 20px; border: 2px solid var(--md-sys-color-outline); border-radius: 4px; display: flex; align-items: center; justify-content: center;">
+                        {% if current_filters.sea_view %}
+                            <span class="material-symbols-outlined" style="font-size: 16px; color: var(--md-sys-color-primary);">check</span>
+                        {% endif %}
+                    </span>
+                    <span class="material-symbols-outlined">waves</span>
+                    <span class="body-medium">Sea View Only</span>
+                </label>
+            </div>
+        </form>
+    </div>
+    
+    <div class="md3-card__actions">
+        <button type="button" class="md3-button md3-button--text" onclick="clearAllFilters()">
+            <span class="material-symbols-outlined">refresh</span>
+            <span>Reset</span>
+        </button>
+        <button type="submit" form="filter-form" class="md3-button md3-button--filled">
+            <span class="material-symbols-outlined">search</span>
+            <span>Apply Filters</span>
+        </button>
+    </div>
+</div>
+
+<!-- Properties Grid -->
+{% if lands %}
+    <div class="md3-grid md3-grid--3-col">
+        {% for land in lands %}
+            <div class="md3-card md3-card--elevated" style="cursor: pointer;" onclick="window.location.href='{{ url_for('main.land_detail', land_id=land.id) }}'">
+                <div class="md3-card__header">
+                    <div>
+                        <h6 class="title-medium" style="margin-bottom: var(--md-sys-spacing-1);">
+                            {{ land.title[:60] }}{% if land.title|length > 60 %}...{% endif %}
+                        </h6>
+                        <p class="body-small">{{ land.municipality }}</p>
+                    </div>
+                    <div style="text-align: right;">
+                        <div class="display-small" style="color: var(--md-sys-color-primary); font-weight: 600;">
+                            {{ "%.1f"|format(land.score_total or 0) }}
+                        </div>
+                        <p class="label-small">Overall Score</p>
+                    </div>
+                </div>
+                
+                <div class="md3-card__content">
+                    <!-- Price and Area -->
+                    <div class="md3-grid md3-grid--2-col md3-mb-4">
+                        <div>
+                            <p class="label-small">Price</p>
+                            <p class="title-small">€{{ "{:,}".format(land.price|int) if land.price else 'N/A' }}</p>
+                        </div>
+                        <div>
+                            <p class="label-small">Area</p>
+                            <p class="title-small">{{ land.area }} m²</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Score Breakdown -->
+                    <div class="md3-grid md3-grid--2-col">
+                        <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-2);">
+                            <span class="material-symbols-outlined" style="color: #FF9800;">business_center</span>
+                            <div>
+                                <p class="label-small">Investment</p>
+                                <p class="body-medium">{{ "%.1f"|format(land.score_investment or 0) }}</p>
+                            </div>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-2);">
+                            <span class="material-symbols-outlined" style="color: #4CAF50;">home</span>
+                            <div>
+                                <p class="label-small">Lifestyle</p>
+                                <p class="body-medium">{{ "%.1f"|format(land.score_lifestyle or 0) }}</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="md3-card__actions">
+                    <button type="button" class="md3-button md3-button--text" onclick="event.stopPropagation(); viewDetails({{ land.id }})">
+                        <span class="material-symbols-outlined">visibility</span>
+                        <span>View Details</span>
+                    </button>
+                    <button type="button" class="md3-button md3-button--text" onclick="event.stopPropagation(); window.open('{{ land.url }}', '_blank')">
+                        <span class="material-symbols-outlined">open_in_new</span>
+                        <span>Idealista</span>
+                    </button>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+{% else %}
+    <div class="md3-card md3-card--outlined">
+        <div class="md3-card__content" style="text-align: center; padding: var(--md-sys-spacing-20);">
+            <span class="material-symbols-outlined" style="font-size: 48px; color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-4);">search_off</span>
+            <h6 class="title-medium md3-mb-2">No properties found</h6>
+            <p class="body-medium">Try adjusting your filters or search terms.</p>
+        </div>
+    </div>
+{% endif %}
+{% endblock %}
+```
+
+### **TASK 6: Create Modern JavaScript**
+**Create**: `static/js/md3-components.js`
+
+```javascript
+// Material Design 3 Components JavaScript
+class MD3Components {
+    static init() {
+        this.setupSortDirection();
+        this.setupCheckboxes();
+        this.setupFormSubmission();
+        this.setupRippleEffects();
+    }
+    
+    static setupSortDirection() {
+        const sortButtons = document.querySelectorAll('.sort-direction-btn');
+        const orderInput = document.getElementById('order');
+        const form = document.getElementById('filter-form');
+        
+        sortButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                
+                // Remove active from all
+                sortButtons.forEach(b => {
+                    b.classList.remove('active');
+                    b.style.backgroundColor = 'transparent';
+                    b.style.color = 'var(--md-sys-color-on-surface-variant)';
+                });
+                
+                // Add active to clicked
+                btn.classList.add('active');
+                btn.style.backgroundColor = 'var(--md-sys-color-primary)';
+                btn.style.color = 'var(--md-sys-color-on-primary)';
+                
+                // Update hidden input
+                if (orderInput) {
+                    orderInput.value = btn.getAttribute('data-direction');
+                }
+                
+                // Submit form
+                if (form) {
+                    setTimeout(() => form.submit(), 100);
+                }
+            });
+        });
+    }
+    
+    static setupCheckboxes() {
+        const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+        
+        checkboxes.forEach(checkbox => {
+            checkbox.addEventListener('change', () => {
+                const indicator = checkbox.nextElementSibling;
+                
+                if (checkbox.checked) {
+                    indicator.style.backgroundColor = 'var(--md-sys-color-primary)';
+                    indicator.style.borderColor = 'var(--md-sys-color-primary)';
+                    indicator.innerHTML = '<span class="material-symbols-outlined" style="font-size: 16px; color: var(--md-sys-color-on-primary);">check</span>';
+                } else {
+                    indicator.style.backgroundColor = 'transparent';
+                    indicator.style.borderColor = 'var(--md-sys-color-outline)';
+                    indicator.innerHTML = '';
+                }
+            });
+        });
+    }
+    
+    static setupFormSubmission() {
+        const form = document.getElementById('filter-form');
+        if (!form) return;
+        
+        let submitTimeout;
+        const inputs = form.querySelectorAll('input, select');
+        
+        inputs.forEach(input => {
+            if (input.type === 'text' || input.name === 'search') {
+                input.addEventListener('input', () => {
+                    clearTimeout(submitTimeout);
+                    submitTimeout = setTimeout(() => {
+                        form.submit();
+                    }, 800);
+                });
+            } else if (input.type !== 'hidden' && input.type !== 'checkbox') {
+                input.addEventListener('change', () => {
+                    clearTimeout(submitTimeout);
+                    submitTimeout = setTimeout(() => {
+                        form.submit();
+                    }, 300);
+                });
+            }
+        });
+    }
+    
+    static setupRippleEffects() {
+        const buttons = document.querySelectorAll('.md3-button, .md3-card[onclick]');
+        
+        buttons.forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                const ripple = document.createElement('span');
+                const rect = this.getBoundingClientRect();
+                const size = Math.max(rect.width, rect.height);
+                const x = e.clientX - rect.left - size / 2;
+                const y = e.clientY - rect.top - size / 2;
+                
+                ripple.style.width = ripple.style.height = size + 'px';
+                ripple.style.left = x + 'px';
+                ripple.style.top = y + 'px';
+                ripple.classList.add('ripple');
+                
+                this.appendChild(ripple);
+                
+                setTimeout(() => {
+                    ripple.remove();
+                }, 600);
+            });
+        });
+    }
+}
+
+// Ripple effect CSS
+const rippleCSS = `
+.ripple {
+    position: absolute;
+    border-radius: 50%;
+    background-color: rgba(255, 255, 255, 0.4);
+    transform: scale(0);
+    animation: ripple 600ms linear;
+    pointer-events: none;
+}
+
+@keyframes ripple {
+    to {
+        transform: scale(4);
+        opacity: 0;
+    }
+}
+`;
+
+// Add ripple CSS
+const style = document.createElement('style');
+style.textContent = rippleCSS;
+document.head.appendChild(style);
+
+// Initialize when DOM loaded
+document.addEventListener('DOMContentLoaded', () => {
+    MD3Components.init();
+});
+
+// Global functions
+function clearAllFilters() {
+    window.location.href = window.location.pathname;
+}
+
+function exportProperties() {
+    const currentUrl = new URL(window.location);
+    currentUrl.pathname = '/api/export/csv';
+    window.location.href = currentUrl.toString();
+}
+
+function viewDetails(landId) {
+    window.location.href = `/lands/${landId}`;
+}
+```
+
+---
+
+## **IMPLEMENTATION ROADMAP**
+
+### **Week 1: Foundation (CRITICAL)**
+1. ✅ **Remove all Bootstrap CSS** from base.html
+2. ✅ **Create MD3 theme system** (md3-theme.css)
+3. ✅ **Create MD3 components** (md3-components.css)
+4. ✅ **Update base template** with MD3 navigation
+
+### **Week 2: Property List Page**
+5. ✅ **Rebuild lands.html** with MD3 cards
+6. ✅ **Implement MD3 filters** with unified styling
+7. ✅ **Add MD3 JavaScript** for interactions
+8. ✅ **Test responsive behavior**
+
+### **Week 3: Property Detail Page**
+9. ✅ **Rebuild land_detail.html** with MD3 system
+10. ✅ **Fix scoring display** with proper MD3 styling
+11. ✅ **Unify all card components**
+12. ✅ **Test all interactions**
+
+### **Week 4: Polish & Testing**
+13. ✅ **Cross-browser testing**
+14. ✅ **Mobile responsiveness**
+15. ✅ **Accessibility improvements**
+16. ✅ **Performance optimization**
+
+---
+
+## 🎯 **EXPECTED RESULTS**
+
+After complete MD3 integration:
+- ✅ **100% consistent design** across all pages
+- ✅ **Professional Material Design 3** appearance
+- ✅ **Unified spacing system** (8dp grid)
+- ✅ **Consistent typography** with proper hierarchy
+- ✅ **Single color scheme** with proper dark theme
+- ✅ **Unified interaction patterns** (ripples, hover states)
+- ✅ **Better accessibility** (ARIA labels, focus management)
+- ✅ **Mobile-first responsive design**
+
+This complete overhaul will eliminate all current design chaos and create a professional, unified experience that follows Google's Material Design 3 standards perfectly.
