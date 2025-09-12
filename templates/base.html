@@ -44,7 +44,7 @@
     <header class="md3-top-app-bar">
         <div class="md3-top-app-bar__title">
             <a href="{{ url_for('main.index') }}" style="text-decoration: none; color: inherit; display: flex; align-items: center; gap: var(--md-sys-spacing-3);">
-                <span class="material-symbols-outlined">map</span>
+                <span class="material-symbols-outlined">real_estate_agent</span>
                 {{ t('app_title') }}
             </a>
         </div>
@@ -63,23 +63,24 @@
             <button class="md3-button md3-button--outlined" 
                     hx-post="{{ url_for('api.manual_ingestion') }}"
                     hx-trigger="click"
-                    hx-indicator="#ingestion-spinner">
+                    hx-indicator="#ingestion-spinner"
+                    hx-swap="none">
                 <span class="material-symbols-outlined">sync</span>
                 {{ t('manual_sync') }}
             </button>
             
             <div class="md3-dropdown">
-                <button class="md3-button md3-button--outlined" 
+                <button class="md3-button md3-button--icon" 
                         type="button" 
-                        onclick="toggleDropdown('languageDropdown')">
+                        onclick="toggleDropdown('languageDropdown')"
+                        title="{{ 'EN' if get_current_language() == 'en' else 'ES' }}">
                     <span class="material-symbols-outlined">language</span>
-                    <span>{{ 'EN' if get_current_language() == 'en' else 'ES' }}</span>
                 </button>
                 <div id="languageDropdown" class="md3-dropdown-menu">
-                    <a href="#" onclick="setLanguage('en')" class="md3-dropdown-item">
+                    <a href="#" onclick="event.preventDefault(); setLanguage('en')" class="md3-dropdown-item">
                         🇬🇧 English
                     </a>
-                    <a href="#" onclick="setLanguage('es')" class="md3-dropdown-item">
+                    <a href="#" onclick="event.preventDefault(); setLanguage('es')" class="md3-dropdown-item">
                         🇪🇸 Español
                     </a>
                 </div>
@@ -89,10 +90,10 @@
 
     <!-- Loading indicators -->
     <div id="ingestion-spinner" class="htmx-indicator">
-        <div class="container mt-3">
-            <div class="alert alert-info">
+        <div class="md3-container md3-p-6">
+            <div class="md3-card--outlined md3-primary-container md3-p-4">
                 <span class="material-symbols-outlined md3-spinner">progress_activity</span>
-                {{ t('running_gmail_ingestion') }}
+                <span class="body-medium">{{ t('running_gmail_ingestion') }}</span>
             </div>
         </div>
     </div>
@@ -101,13 +102,18 @@
     <!-- Flash messages -->
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
-            <div class="container mt-3">
+            <div class="md3-container md3-p-6">
                 {% for category, message in messages %}
-                    <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show">
-                        {{ message }}
-                        <button type="button" class="md3-button md3-button--icon" onclick="this.parentElement.remove()">
-                            <span class="material-symbols-outlined">close</span>
-                        </button>
+                    <div class="md3-card--outlined md3-p-4 md3-mb-4 {{ 'md3-error-container' if category == 'error' else 'md3-primary-container' }}">
+                        <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-3);">
+                            <span class="material-symbols-outlined">
+                                {{ 'error' if category == 'error' else 'check_circle' }}
+                            </span>
+                            <span class="body-medium" style="flex-grow: 1;">{{ message }}</span>
+                            <button type="button" class="md3-button md3-button--icon" onclick="this.parentElement.parentElement.remove()">
+                                <span class="material-symbols-outlined">close</span>
+                            </button>
+                        </div>
                     </div>
                 {% endfor %}
             </div>
@@ -115,24 +121,27 @@
     {% endwith %}
 
     <!-- Main content -->
-    <main class="container my-4">
+    <main class="md3-container md3-p-8">
         {% block content %}{% endblock %}
     </main>
 
     <!-- Footer -->
-    <footer class="bg-dark text-light py-4 mt-5">
-        <div class="container">
-            <div class="row">
-                <div class="col-md-6">
-                    <h6>Idealista Land Watch & Rank</h6>
-                    <p class="small text-muted">
+    <footer class="md3-surface-container md3-p-8" style="margin-top: var(--md-sys-spacing-20); border-top: 1px solid var(--md-sys-color-outline-variant);">
+        <div class="md3-container">
+            <div class="md3-grid md3-grid--2-col" style="align-items: center;">
+                <div>
+                    <h6 class="title-medium md3-mb-2">
+                        <span class="material-symbols-outlined" style="vertical-align: middle; margin-right: var(--md-sys-spacing-2);">real_estate_agent</span>
+                        Idealista Land Watch & Rank
+                    </h6>
+                    <p class="body-small">
                         Automated Spanish real estate analysis with multi-criteria scoring
                     </p>
                 </div>
-                <div class="col-md-6 text-md-end">
-                    <small class="text-muted">
+                <div style="text-align: right;">
+                    <p class="label-medium">
                         Automated real estate analysis platform
-                    </small>
+                    </p>
                 </div>
             </div>
         </div>

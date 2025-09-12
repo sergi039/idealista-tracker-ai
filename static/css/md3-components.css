@@ -369,6 +369,11 @@
   color: var(--md-sys-color-on-secondary-container);
 }
 
+.md3-error-container {
+  background-color: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+
 /* Spacing Utilities */
 .md3-p-2 { padding: var(--md-sys-spacing-2); }
 .md3-p-4 { padding: var(--md-sys-spacing-4); }
