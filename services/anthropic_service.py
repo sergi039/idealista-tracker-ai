@@ -406,7 +406,7 @@ Provide ONLY the missing or enhanced data in this EXACT JSON format (keep all te
 Provide analysis in this EXACT JSON format (keep all text in English):
 {{
     "price_analysis": {{
-        "verdict": "Fair Price|Overpriced|Underpriced",
+        "verdict": "Good Value|Overpriced|Underpriced",
         "summary": "Brief market comparison and price per m² analysis",
         "price_per_m2": estimated_market_price_per_m2,
         "recommendation": "Short recommendation about pricing"

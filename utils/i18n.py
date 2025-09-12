@@ -380,8 +380,7 @@ FIELD_MAPPINGS = {
     'noise_level': 'Noise Level',
     'air_quality': 'Air Quality',
     
-    # Common fields
-    'fair_price': 'Fair Price',
+    # Common fields  
     'price_per_m2': 'Price per m²',
     'land_type': 'Land Type',
     'legal_status': 'Legal Status',
@@ -408,7 +407,7 @@ def format_field_name(field_name, lang=None):
     Format a field name for display using proper mapping or fallback formatting
     
     Args:
-        field_name (str): The internal field name (e.g., 'fair_price', 'investment_yield')
+        field_name (str): The internal field name (e.g., 'price_per_m2', 'investment_yield')
         lang (str): Language code (optional)
     
     Returns:
