@@ -225,100 +225,84 @@
             </div>
         </div>
 
-        <!-- Dual Scoring System - Hidden since we show compact version in sidebar -->
-        {% if False %}
-            <div class="card mb-4">
-                <div class="card-header">
-                    <h5 class="card-title mb-0">
-                        <i class="fas fa-chart-bar me-2"></i>Dual Scoring Analysis
-                    </h5>
+        <!-- Unified Dual Scoring Display -->
+        <div class="scoring-overview-card">
+            <div class="card-header">
+                <h5 class="card-title">
+                    <span class="material-icons">analytics</span>
+                    Property Scoring Analysis
+                </h5>
+                <div class="scoring-methodology-badge">
+                    <span class="method-label">MCDM</span>
+                    <span class="method-description">Multi-Criteria Decision Making</span>
                 </div>
-                <div class="card-body">
-                    <!-- Investment vs Lifestyle Scores -->
-                    {% if land.score_investment or land.score_lifestyle %}
-                        <div class="row mb-4">
-                            {% if land.score_investment %}
-                                <div class="col-md-6 mb-3">
-                                    <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <span class="fw-bold text-warning">
-                                            <i class="fas fa-chart-line me-1"></i>Investment Score
-                                        </span>
-                                        <span class="chip chip-warning text-dark fs-6">{{ "%.1f"|format(land.score_investment) }}</span>
-                                    </div>
-                                    <div class="progress mb-1" style="height: 8px;">
-                                        <div class="progress-bar bg-warning" 
-                                             style="width: {{ land.score_investment }}%;">
-                                        </div>
-                                    </div>
-                                    <small class="text-muted">Rental yield, ROI, value appreciation</small>
-                                </div>
-                            {% endif %}
-                            {% if land.score_lifestyle %}
-                                <div class="col-md-6 mb-3">
-                                    <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <span class="fw-bold text-success">
-                                            <i class="fas fa-home me-1"></i>Lifestyle Score
-                                        </span>
-                                        <span class="chip chip-success fs-6">{{ "%.1f"|format(land.score_lifestyle) }}</span>
-                                    </div>
-                                    <div class="progress mb-1" style="height: 8px;">
-                                        <div class="progress-bar bg-success" 
-                                             style="width: {{ land.score_lifestyle }}%;">
-                                        </div>
-                                    </div>
-                                    <small class="text-muted">Environment, amenities, quality of life</small>
-                                </div>
-                            {% endif %}
+            </div>
+            
+            <div class="card-body">
+                <div class="scoring-grid">
+                    <!-- Overall Score - Primary -->
+                    <div class="score-display score-primary">
+                        <div class="score-header">
+                            <span class="material-icons">trending_up</span>
+                            <span class="score-label">Overall Score</span>
                         </div>
-                        <hr>
-                    {% endif %}
-
-                    <!-- Detailed Criteria Breakdown -->
-                    {% if score_breakdown %}
-                        {% if score_breakdown.get('score_breakdown') %}
-                            <h6 class="mb-3">Criteria Breakdown</h6>
-                            <div class="row">
-                                {% for criteria, score in score_breakdown.get('score_breakdown', {}).items() %}
-                                    {% if score is not none %}
-                                        <div class="col-md-6 mb-3">
-                                            <div class="d-flex justify-content-between align-items-center mb-1">
-                                                <span class="small">{{ criteria.replace('_', ' ').title() }}</span>
-                                                <span class="chip chip-secondary">{{ "%.1f"|format(score) }}</span>
-                                            </div>
-                                            <div class="progress" style="height: 6px;">
-                                                <div class="progress-bar" 
-                                                     style="width: {{ score }}%; background-color: {{ 'var(--bs-success)' if score >= 70 else 'var(--bs-warning)' if score >= 50 else 'var(--bs-danger)' }};">
-                                                </div>
-                                            </div>
+                        <div class="score-value">{{ "%.1f"|format(land.score_total or 0) }}</div>
+                        <div class="score-context">Combined Analysis</div>
+                    </div>
+                    
+                    <!-- Investment Score - Secondary -->
+                    <div class="score-display score-secondary">
+                        <div class="score-header">
+                            <span class="material-icons">business_center</span>
+                            <span class="score-label">Investment Score</span>
+                        </div>
+                        <div class="score-value">{{ "%.1f"|format(land.score_investment or 0) }}</div>
+                        <div class="score-context">ROI Focused</div>
+                        <div class="score-weight">32% weight</div>
+                    </div>
+                    
+                    <!-- Lifestyle Score - Secondary -->
+                    <div class="score-display score-secondary">
+                        <div class="score-header">
+                            <span class="material-icons">home</span>
+                            <span class="score-label">Lifestyle Score</span>
+                        </div>
+                        <div class="score-value">{{ "%.1f"|format(land.score_lifestyle or 0) }}</div>
+                        <div class="score-context">Quality of Life</div>
+                        <div class="score-weight">68% weight</div>
+                    </div>
+                </div>
+                
+                <!-- Score Breakdown Toggle -->
+                <div class="score-breakdown-toggle">
+                    <button type="button" class="btn-text btn-small" 
+                            onclick="toggleScoreBreakdown()" 
+                            id="score-breakdown-btn">
+                        <span class="material-icons">expand_more</span>
+                        View Detailed Breakdown
+                    </button>
+                </div>
+                
+                <!-- Hidden Detailed Breakdown -->
+                <div class="score-breakdown-details" id="score-breakdown-details" style="display: none;">
+                    {% if land.environment and land.environment.get('scoring') %}
+                        <div class="breakdown-grid">
+                            {% for criterion, score in land.environment.scoring.individual_scores.items() %}
+                                {% if score is not none %}
+                                    <div class="criterion-item">
+                                        <span class="criterion-name">{{ criterion.replace('_', ' ').title() }}</span>
+                                        <div class="criterion-bar">
+                                            <div class="criterion-fill" style="width: {{ score }}%"></div>
                                         </div>
-                                    {% endif %}
-                                {% endfor %}
-                            </div>
-                        {% endif %}
-                        
-                        <!-- Combined Mix Information -->
-                        {% if score_breakdown.get('combined_mix') %}
-                            <hr>
-                            <div class="mt-3">
-                                <h6 class="mb-2">Score Composition</h6>
-                                <div class="d-flex align-items-center">
-                                    <span class="small me-2">Investment {{ (score_breakdown.combined_mix.investment * 100)|round }}%</span>
-                                    <div class="progress flex-grow-1 me-2" style="height: 20px;">
-                                        <div class="progress-bar bg-warning" 
-                                             style="width: {{ (score_breakdown.combined_mix.investment * 100)|round }}%;">
-                                        </div>
-                                        <div class="progress-bar bg-success" 
-                                             style="width: {{ (score_breakdown.combined_mix.lifestyle * 100)|round }}%;">
-                                        </div>
+                                        <span class="criterion-score">{{ "%.1f"|format(score) }}</span>
                                     </div>
-                                    <span class="small">Lifestyle {{ (score_breakdown.combined_mix.lifestyle * 100)|round }}%</span>
-                                </div>
-                            </div>
-                        {% endif %}
+                                {% endif %}
+                            {% endfor %}
+                        </div>
                     {% endif %}
                 </div>
             </div>
-        {% endif %}
+        </div>
     </div>
 
     <!-- Sidebar -->

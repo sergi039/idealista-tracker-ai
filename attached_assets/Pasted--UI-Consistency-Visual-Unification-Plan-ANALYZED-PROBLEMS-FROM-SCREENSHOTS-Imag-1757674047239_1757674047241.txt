@@ -1,0 +1,978 @@
+# UI Consistency & Visual Unification Plan
+
+## 🚨 **ANALYZED PROBLEMS FROM SCREENSHOTS**
+
+### **Image 1 (Property Detail Page) Issues:**
+1. **❌ Investment Score not visible** - Only shows "57" without label
+2. **❌ Three overlapping investment blocks** - AI Investment Analysis + Investment Analysis + Rental Market
+3. **❌ Inconsistent card sizes** - Travel Times, Transport, Environment cards all different heights
+4. **❌ Mixed styling patterns** - Some cards have icons, others don't
+5. **❌ Information architecture mess** - No clear hierarchy
+
+### **Image 2 (Properties List Page) Issues:**
+1. **❌ Filter styling inconsistent** with detail page
+2. **❌ Table design differs** from card layouts  
+3. **❌ Button styles vary** between pages
+4. **❌ Color scheme inconsistent** across components
+
+---
+
+## 🎯 **UNIFIED DESIGN SYSTEM IMPLEMENTATION**
+
+### **TASK 1: Fix Property Detail Page - Scoring Section**
+**File**: `templates/land_detail.html`
+**Problem**: Investment score invisible, confusing dual scoring display
+**Action**: Create unified scoring display component
+
+**Replace current scoring section with:**
+```html
+<!-- Unified Dual Scoring Display -->
+<div class="scoring-overview-card">
+    <div class="card-header">
+        <h5 class="card-title">
+            <span class="material-icons">analytics</span>
+            Property Scoring Analysis
+        </h5>
+        <div class="scoring-methodology-badge">
+            <span class="method-label">MCDM</span>
+            <span class="method-description">Multi-Criteria Decision Making</span>
+        </div>
+    </div>
+    
+    <div class="card-body">
+        <div class="scoring-grid">
+            <!-- Overall Score - Primary -->
+            <div class="score-display score-primary">
+                <div class="score-header">
+                    <span class="material-icons">trending_up</span>
+                    <span class="score-label">Overall Score</span>
+                </div>
+                <div class="score-value">{{ "%.1f"|format(land.score_total or 0) }}</div>
+                <div class="score-context">Combined Analysis</div>
+            </div>
+            
+            <!-- Investment Score - Secondary -->
+            <div class="score-display score-secondary">
+                <div class="score-header">
+                    <span class="material-icons">business_center</span>
+                    <span class="score-label">Investment Score</span>
+                </div>
+                <div class="score-value">{{ "%.1f"|format(land.score_investment or 0) }}</div>
+                <div class="score-context">ROI Focused</div>
+                <div class="score-weight">32% weight</div>
+            </div>
+            
+            <!-- Lifestyle Score - Secondary -->
+            <div class="score-display score-secondary">
+                <div class="score-header">
+                    <span class="material-icons">home</span>
+                    <span class="score-label">Lifestyle Score</span>
+                </div>
+                <div class="score-value">{{ "%.1f"|format(land.score_lifestyle or 0) }}</div>
+                <div class="score-context">Quality of Life</div>
+                <div class="score-weight">68% weight</div>
+            </div>
+        </div>
+        
+        <!-- Score Breakdown Toggle -->
+        <div class="score-breakdown-toggle">
+            <button type="button" class="btn-text btn-small" 
+                    onclick="toggleScoreBreakdown()" 
+                    id="score-breakdown-btn">
+                <span class="material-icons">expand_more</span>
+                View Detailed Breakdown
+            </button>
+        </div>
+        
+        <!-- Hidden Detailed Breakdown -->
+        <div class="score-breakdown-details" id="score-breakdown-details" style="display: none;">
+            {% if land.environment and land.environment.get('scoring') %}
+                <div class="breakdown-grid">
+                    {% for criterion, score in land.environment.scoring.individual_scores.items() %}
+                        {% if score is not none %}
+                            <div class="criterion-item">
+                                <span class="criterion-name">{{ criterion.replace('_', ' ').title() }}</span>
+                                <div class="criterion-bar">
+                                    <div class="criterion-fill" style="width: {{ score }}%"></div>
+                                </div>
+                                <span class="criterion-score">{{ "%.1f"|format(score) }}</span>
+                            </div>
+                        {% endif %}
+                    {% endfor %}
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+```
+
+**CSS for Unified Scoring**:
+```css
+/* Unified Scoring Component */
+.scoring-overview-card {
+    background-color: var(--md-sys-color-surface);
+    border-radius: var(--md-sys-shape-corner-medium);
+    box-shadow: var(--md-sys-elevation-level-1);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    margin-bottom: var(--md-sys-spacing-6);
+}
+
+.scoring-methodology-badge {
+    display: flex;
+    align-items: center;
+    gap: var(--md-sys-spacing-1);
+    padding: var(--md-sys-spacing-1) var(--md-sys-spacing-2);
+    background-color: var(--md-sys-color-primary-container);
+    border-radius: var(--md-sys-shape-corner-extra-large);
+}
+
+.method-label {
+    font: var(--md-sys-typescale-label-small-font);
+    font-weight: 600;
+    color: var(--md-sys-color-on-primary-container);
+}
+
+.method-description {
+    font: var(--md-sys-typescale-body-small-font);
+    color: var(--md-sys-color-on-primary-container);
+    opacity: 0.8;
+}
+
+.scoring-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: var(--md-sys-spacing-4);
+    margin-bottom: var(--md-sys-spacing-4);
+}
+
+.score-display {
+    padding: var(--md-sys-spacing-4);
+    border-radius: var(--md-sys-shape-corner-medium);
+    text-align: center;
+    border: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.score-primary {
+    background-color: var(--md-sys-color-primary-container);
+    border-color: var(--md-sys-color-primary);
+}
+
+.score-secondary {
+    background-color: var(--md-sys-color-secondary-container);
+    border-color: var(--md-sys-color-secondary);
+}
+
+.score-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--md-sys-spacing-1);
+    margin-bottom: var(--md-sys-spacing-2);
+}
+
+.score-label {
+    font: var(--md-sys-typescale-title-small-font);
+    color: var(--md-sys-color-on-surface);
+}
+
+.score-value {
+    font: var(--md-sys-typescale-display-medium-font);
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface);
+    margin-bottom: var(--md-sys-spacing-1);
+}
+
+.score-context {
+    font: var(--md-sys-typescale-body-small-font);
+    color: var(--md-sys-color-on-surface-variant);
+    margin-bottom: var(--md-sys-spacing-1);
+}
+
+.score-weight {
+    font: var(--md-sys-typescale-label-small-font);
+    color: var(--md-sys-color-primary);
+    font-weight: 500;
+}
+
+/* Responsive scoring */
+@media (max-width: 768px) {
+    .scoring-grid {
+        grid-template-columns: 1fr;
+    }
+}
+```
+
+### **TASK 2: Consolidate Investment Analysis Sections**
+**File**: `templates/land_detail.html`
+**Problem**: Three separate investment blocks creating confusion
+**Action**: Merge into single comprehensive investment section
+
+**Replace multiple investment sections with:**
+```html
+<!-- Consolidated Investment Analysis -->
+<div class="investment-analysis-unified">
+    <div class="card-header">
+        <h5 class="card-title">
+            <span class="material-icons">business_center</span>
+            Investment Analysis
+        </h5>
+        <div class="analysis-powered-by">
+            <span class="material-icons">psychology</span>
+            <span>Powered by Claude AI</span>
+        </div>
+    </div>
+    
+    <div class="card-body">
+        <!-- Investment Metrics Grid -->
+        <div class="investment-metrics-grid">
+            <!-- Financial Metrics -->
+            <div class="metric-section">
+                <h6 class="section-title">Financial Metrics</h6>
+                <div class="metrics-list">
+                    {% if land.environment and land.environment.get('rental_analysis') %}
+                        <div class="metric-item">
+                            <span class="metric-label">Rental Yield</span>
+                            <span class="metric-value highlight">{{ land.environment.rental_analysis.rental_yield }}%</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Cap Rate</span>
+                            <span class="metric-value">{{ land.environment.rental_analysis.cap_rate }}%</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Monthly Rent</span>
+                            <span class="metric-value">€{{ land.environment.rental_analysis.monthly_rent }}</span>
+                        </div>
+                    {% else %}
+                        <div class="metric-placeholder">
+                            <span class="material-icons">calculate</span>
+                            <span>Financial analysis will be available after enrichment</span>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <!-- Market Position -->
+            <div class="metric-section">
+                <h6 class="section-title">Market Position</h6>
+                {% if land.ai_analysis and land.ai_analysis.get('price_analysis') %}
+                    <div class="market-verdict">
+                        <div class="verdict-badge verdict-{{ land.ai_analysis.price_analysis.verdict|lower }}">
+                            {{ land.ai_analysis.price_analysis.verdict|title }}
+                        </div>
+                        <p class="verdict-explanation">{{ land.ai_analysis.price_analysis.summary }}</p>
+                    </div>
+                {% else %}
+                    <div class="metric-placeholder">
+                        <span class="material-icons">trending_up</span>
+                        <span>Market analysis available after AI enrichment</span>
+                    </div>
+                {% endif %}
+            </div>
+            
+            <!-- Investment Potential -->
+            <div class="metric-section">
+                <h6 class="section-title">Investment Potential</h6>
+                {% if land.ai_analysis and land.ai_analysis.get('investment_potential') %}
+                    <div class="potential-rating">
+                        <div class="rating-display">
+                            <span class="rating-value">{{ land.ai_analysis.investment_potential.rating }}</span>
+                            <span class="rating-label">{{ land.ai_analysis.investment_potential.risk_level }}</span>
+                        </div>
+                        <p class="potential-summary">{{ land.ai_analysis.investment_potential.summary }}</p>
+                    </div>
+                {% else %}
+                    <div class="metric-placeholder">
+                        <span class="material-icons">psychology</span>
+                        <span>Investment potential analysis coming soon</span>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- Quick Actions -->
+        <div class="investment-actions">
+            <button type="button" class="btn-outlined btn-small" onclick="generateInvestmentReport()">
+                <span class="material-icons">description</span>
+                Generate Investment Report
+            </button>
+            <button type="button" class="btn-text btn-small" onclick="showComparables()">
+                <span class="material-icons">compare</span>
+                Find Similar Properties
+            </button>
+        </div>
+    </div>
+</div>
+```
+
+### **TASK 3: Standardize All Card Components**
+**Files**: `templates/land_detail.html`, `static/css/components.css`
+**Problem**: Cards have different sizes, styles, and layouts
+**Action**: Create unified card system
+
+**Standard Card Template**:
+```html
+<!-- Template for all property detail cards -->
+<div class="property-info-card" data-card-type="{{ card_type }}">
+    <div class="card-header">
+        <div class="card-title-group">
+            <span class="material-icons card-icon">{{ icon_name }}</span>
+            <h6 class="card-title">{{ title }}</h6>
+        </div>
+        {% if has_actions %}
+            <div class="card-actions">
+                <button type="button" class="btn-icon btn-small" onclick="{{ action_function }}">
+                    <span class="material-icons">{{ action_icon }}</span>
+                </button>
+            </div>
+        {% endif %}
+    </div>
+    
+    <div class="card-content">
+        {{ content }}
+    </div>
+    
+    {% if has_footer %}
+        <div class="card-footer">
+            {{ footer_content }}
+        </div>
+    {% endif %}
+</div>
+```
+
+**Unified Card CSS**:
+```css
+/* Unified Card System */
+.property-info-card {
+    background-color: var(--md-sys-color-surface);
+    border-radius: var(--md-sys-shape-corner-medium);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    box-shadow: var(--md-sys-elevation-level-1);
+    margin-bottom: var(--md-sys-spacing-4);
+    overflow: hidden;
+}
+
+.property-info-card .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--md-sys-spacing-4) var(--md-sys-spacing-6);
+    background-color: var(--md-sys-color-surface-variant);
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.card-title-group {
+    display: flex;
+    align-items: center;
+    gap: var(--md-sys-spacing-2);
+}
+
+.card-icon {
+    font-size: 20px;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.card-title {
+    font: var(--md-sys-typescale-title-medium-font);
+    color: var(--md-sys-color-on-surface);
+    margin: 0;
+}
+
+.property-info-card .card-content {
+    padding: var(--md-sys-spacing-6);
+    min-height: 120px; /* Ensure consistent minimum height */
+}
+
+.property-info-card .card-footer {
+    padding: var(--md-sys-spacing-4) var(--md-sys-spacing-6);
+    background-color: var(--md-sys-color-surface-variant);
+    border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+/* Card Type Variations */
+.property-info-card[data-card-type="primary"] {
+    border-color: var(--md-sys-color-primary);
+}
+
+.property-info-card[data-card-type="primary"] .card-header {
+    background-color: var(--md-sys-color-primary-container);
+}
+
+.property-info-card[data-card-type="warning"] {
+    border-color: #ff9800;
+}
+
+.property-info-card[data-card-type="success"] {
+    border-color: #4caf50;
+}
+
+/* Content Layout Helpers */
+.card-content-grid {
+    display: grid;
+    gap: var(--md-sys-spacing-4);
+}
+
+.card-content-grid.two-column {
+    grid-template-columns: 1fr 1fr;
+}
+
+.card-content-grid.three-column {
+    grid-template-columns: 1fr 1fr 1fr;
+}
+
+@media (max-width: 768px) {
+    .card-content-grid.two-column,
+    .card-content-grid.three-column {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Info Item Standard Layout */
+.info-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--md-sys-spacing-2) 0;
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.info-item:last-child {
+    border-bottom: none;
+}
+
+.info-label {
+    font: var(--md-sys-typescale-body-medium-font);
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.info-value {
+    font: var(--md-sys-typescale-body-medium-font);
+    color: var(--md-sys-color-on-surface);
+    font-weight: 500;
+}
+
+.info-value.highlight {
+    color: var(--md-sys-color-primary);
+    font-weight: 600;
+}
+```
+
+### **TASK 4: Update Travel Times Card**
+**File**: `templates/land_detail.html`
+**Action**: Apply unified card styling
+
+```html
+<div class="property-info-card" data-card-type="primary">
+    <div class="card-header">
+        <div class="card-title-group">
+            <span class="material-icons card-icon">directions</span>
+            <h6 class="card-title">Travel Times & Distances</h6>
+        </div>
+    </div>
+    
+    <div class="card-content">
+        <div class="card-content-grid two-column">
+            <div class="travel-destination">
+                <div class="info-item">
+                    <span class="info-label">
+                        <span class="material-icons">flight</span>
+                        Nearest Airport
+                    </span>
+                    <span class="info-value">38min 35km</span>
+                </div>
+            </div>
+            
+            <div class="travel-destination">
+                <div class="info-item">
+                    <span class="info-label">
+                        <span class="material-icons">train</span>
+                        Train Station
+                    </span>
+                    <span class="info-value">15min 11km</span>
+                </div>
+            </div>
+            
+            <div class="travel-destination">
+                <div class="info-item">
+                    <span class="info-label">
+                        <span class="material-icons">local_hospital</span>
+                        Hospital
+                    </span>
+                    <span class="info-value">12min 9km</span>
+                </div>
+            </div>
+            
+            <div class="travel-destination">
+                <div class="info-item">
+                    <span class="info-label">
+                        <span class="material-icons">waves</span>
+                        Beach Access
+                    </span>
+                    <span class="info-value highlight">43min</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+```
+
+### **TASK 5: Standardize Environment Card**
+**File**: `templates/land_detail.html`
+
+```html
+<div class="property-info-card" data-card-type="success">
+    <div class="card-header">
+        <div class="card-title-group">
+            <span class="material-icons card-icon">landscape</span>
+            <h6 class="card-title">Environment & Views</h6>
+        </div>
+        <div class="card-actions">
+            <button type="button" class="btn-icon btn-small" onclick="editEnvironment()">
+                <span class="material-icons">edit</span>
+            </button>
+        </div>
+    </div>
+    
+    <div class="card-content">
+        <div class="environment-features">
+            <div class="feature-item {{ 'active' if land.environment and land.environment.get('sea_view') else 'inactive' }}">
+                <span class="material-icons">waves</span>
+                <span class="feature-label">Sea View</span>
+                <span class="feature-status">
+                    {% if land.environment and land.environment.get('sea_view') %}
+                        <span class="material-icons status-icon">check_circle</span>
+                    {% else %}
+                        <span class="material-icons status-icon">cancel</span>
+                    {% endif %}
+                </span>
+            </div>
+            
+            <div class="feature-item {{ 'active' if land.environment and land.environment.get('forest_view') else 'inactive' }}">
+                <span class="material-icons">forest</span>
+                <span class="feature-label">Forest View</span>
+                <span class="feature-status">
+                    {% if land.environment and land.environment.get('forest_view') %}
+                        <span class="material-icons status-icon">check_circle</span>
+                    {% else %}
+                        <span class="material-icons status-icon">cancel</span>
+                    {% endif %}
+                </span>
+            </div>
+            
+            <div class="feature-item {{ 'active' if land.environment and land.environment.get('mountain_view') else 'inactive' }}">
+                <span class="material-icons">terrain</span>
+                <span class="feature-label">Mountain View</span>
+                <span class="feature-status">
+                    {% if land.environment and land.environment.get('mountain_view') %}
+                        <span class="material-icons status-icon">check_circle</span>
+                    {% else %}
+                        <span class="material-icons status-icon">cancel</span>
+                    {% endif %}
+                </span>
+            </div>
+        </div>
+    </div>
+</div>
+```
+
+### **TASK 6: Unify List Page Filters**
+**File**: `templates/lands.html`
+**Action**: Apply same styling as detail page
+
+```html
+<!-- Updated filter section to match detail page styling -->
+<div class="property-info-card" data-card-type="primary">
+    <div class="card-header">
+        <div class="card-title-group">
+            <span class="material-icons card-icon">tune</span>
+            <h6 class="card-title">Filters & Search</h6>
+        </div>
+        <div class="card-actions">
+            <button type="button" class="btn-text btn-small" onclick="clearAllFilters()">
+                <span class="material-icons">clear_all</span>
+                Clear All
+            </button>
+        </div>
+    </div>
+    
+    <div class="card-content">
+        <form method="GET" id="filter-form">
+            <input type="hidden" name="view_type" value="{{ current_filters.view_type or 'cards' }}">
+            
+            <div class="filter-grid">
+                <!-- Search -->
+                <div class="filter-field">
+                    <label for="search" class="filter-label">
+                        <span class="material-icons">search</span>
+                        Search Properties
+                    </label>
+                    <input type="text" 
+                           class="form-input" 
+                           id="search" 
+                           name="search" 
+                           value="{{ current_filters.search or '' }}" 
+                           placeholder="Search by title, location...">
+                </div>
+                
+                <!-- Land Type -->
+                <div class="filter-field">
+                    <label for="land_type" class="filter-label">
+                        <span class="material-icons">category</span>
+                        Property Type
+                    </label>
+                    <select class="form-select" id="land_type" name="land_type">
+                        <option value="">All Types</option>
+                        <option value="developed" {{ 'selected' if current_filters.land_type == 'developed' }}>
+                            Developed Land
+                        </option>
+                        <option value="buildable" {{ 'selected' if current_filters.land_type == 'buildable' }}>
+                            Buildable Land
+                        </option>
+                    </select>
+                </div>
+                
+                <!-- Municipality -->
+                <div class="filter-field">
+                    <label for="municipality" class="filter-label">
+                        <span class="material-icons">location_on</span>
+                        Location
+                    </label>
+                    <select class="form-select" id="municipality" name="municipality">
+                        <option value="">All Locations</option>
+                        {% for municipality in municipalities %}
+                            <option value="{{ municipality }}" 
+                                    {{ 'selected' if current_filters.municipality == municipality }}>
+                                {{ municipality }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                
+                <!-- Sort -->
+                <div class="filter-field">
+                    <label class="filter-label">
+                        <span class="material-icons">sort</span>
+                        Sort By
+                    </label>
+                    <div class="sort-controls">
+                        <select class="form-select" id="sort" name="sort">
+                            <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
+                                Overall Score
+                            </option>
+                            <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
+                                Investment Score
+                            </option>
+                            <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
+                                Lifestyle Score
+                            </option>
+                            <option value="price" {{ 'selected' if current_filters.sort_by == 'price' }}>
+                                Price
+                            </option>
+                            <option value="area" {{ 'selected' if current_filters.sort_by == 'area' }}>
+                                Area
+                            </option>
+                        </select>
+                        
+                        <div class="sort-direction">
+                            <button type="button" 
+                                    class="sort-direction-btn {{ 'active' if current_filters.order == 'desc' else '' }}"
+                                    data-direction="desc">
+                                <span class="material-icons">arrow_downward</span>
+                            </button>
+                            <button type="button" 
+                                    class="sort-direction-btn {{ 'active' if current_filters.order == 'asc' else '' }}"
+                                    data-direction="asc">
+                                <span class="material-icons">arrow_upward</span>
+                            </button>
+                        </div>
+                    </div>
+                    <input type="hidden" name="order" id="order" value="{{ current_filters.order or 'desc' }}">
+                </div>
+                
+                <!-- Sea View Toggle -->
+                <div class="filter-field">
+                    <label class="filter-checkbox-label">
+                        <input type="checkbox" 
+                               id="sea_view" 
+                               name="sea_view" 
+                               class="filter-checkbox"
+                               {{ 'checked' if current_filters.sea_view }}>
+                        <span class="checkbox-indicator">
+                            <span class="material-icons">waves</span>
+                        </span>
+                        <span class="checkbox-text">Sea View Only</span>
+                    </label>
+                </div>
+            </div>
+            
+            <!-- Filter Actions -->
+            <div class="filter-actions">
+                <button type="submit" class="btn-filled">
+                    <span class="material-icons">search</span>
+                    Apply Filters
+                </button>
+                <button type="button" class="btn-outlined" onclick="exportCSV()">
+                    <span class="material-icons">download</span>
+                    Export CSV
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+```
+
+### **TASK 7: CSS for Filter Grid Layout**
+
+```css
+/* Unified Filter System */
+.filter-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1.5fr 1fr;
+    gap: var(--md-sys-spacing-4);
+    margin-bottom: var(--md-sys-spacing-6);
+}
+
+.filter-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--md-sys-spacing-2);
+}
+
+.filter-label {
+    display: flex;
+    align-items: center;
+    gap: var(--md-sys-spacing-1);
+    font: var(--md-sys-typescale-body-small-font);
+    color: var(--md-sys-color-on-surface-variant);
+    font-weight: 500;
+}
+
+.filter-label .material-icons {
+    font-size: 16px;
+}
+
+.sort-controls {
+    display: flex;
+    gap: var(--md-sys-spacing-1);
+    align-items: stretch;
+}
+
+.sort-controls .form-select {
+    flex: 1;
+}
+
+.sort-direction {
+    display: flex;
+    background-color: var(--md-sys-color-surface-variant);
+    border-radius: var(--md-sys-shape-corner-small);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    overflow: hidden;
+}
+
+.sort-direction-btn {
+    background: transparent;
+    border: none;
+    padding: var(--md-sys-spacing-2);
+    cursor: pointer;
+    color: var(--md-sys-color-on-surface-variant);
+    transition: all 0.2s ease;
+}
+
+.sort-direction-btn:hover {
+    background-color: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+}
+
+.sort-direction-btn.active {
+    background-color: var(--md-sys-color-primary);
+    color: var(--md-sys-color-on-primary);
+}
+
+/* Filter Checkbox Styling */
+.filter-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: var(--md-sys-spacing-2);
+    cursor: pointer;
+    padding: var(--md-sys-spacing-2);
+    border-radius: var(--md-sys-shape-corner-medium);
+    transition: background-color 0.2s ease;
+}
+
+.filter-checkbox-label:hover {
+    background-color: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+}
+
+.filter-checkbox {
+    display: none;
+}
+
+.checkbox-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: 2px solid var(--md-sys-color-outline);
+    border-radius: var(--md-sys-shape-corner-small);
+    transition: all 0.2s ease;
+}
+
+.filter-checkbox:checked + .checkbox-indicator {
+    background-color: var(--md-sys-color-primary);
+    border-color: var(--md-sys-color-primary);
+    color: var(--md-sys-color-on-primary);
+}
+
+.checkbox-text {
+    font: var(--md-sys-typescale-body-medium-font);
+    color: var(--md-sys-color-on-surface);
+}
+
+.filter-actions {
+    display: flex;
+    gap: var(--md-sys-spacing-3);
+    justify-content: flex-end;
+    padding-top: var(--md-sys-spacing-4);
+    border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+/* Responsive Filter Grid */
+@media (max-width: 1200px) {
+    .filter-grid {
+        grid-template-columns: 1fr 1fr 1fr;
+    }
+}
+
+@media (max-width: 768px) {
+    .filter-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .filter-actions {
+        flex-direction: column;
+    }
+}
+```
+
+### **TASK 8: Update JavaScript for Unified Components**
+
+```javascript
+// Add to main.js
+setupUnifiedComponents: function() {
+    // Score breakdown toggle
+    const scoreBreakdownBtn = document.getElementById('score-breakdown-btn');
+    if (scoreBreakdownBtn) {
+        scoreBreakdownBtn.addEventListener('click', this.toggleScoreBreakdown);
+    }
+    
+    // Sort direction buttons
+    const sortDirectionBtns = document.querySelectorAll('.sort-direction-btn');
+    sortDirectionBtns.forEach(btn => {
+        btn.addEventListener('click', this.handleSortDirection);
+    });
+    
+    // Initialize unified card heights
+    this.equalizeCardHeights();
+},
+
+toggleScoreBreakdown: function() {
+    const details = document.getElementById('score-breakdown-details');
+    const btn = document.getElementById('score-breakdown-btn');
+    const icon = btn.querySelector('.material-icons');
+    
+    if (details.style.display === 'none') {
+        details.style.display = 'block';
+        icon.textContent = 'expand_less';
+        btn.querySelector('span:last-child').textContent = 'Hide Detailed Breakdown';
+    } else {
+        details.style.display = 'none';
+        icon.textContent = 'expand_more';
+        btn.querySelector('span:last-child').textContent = 'View Detailed Breakdown';
+    }
+},
+
+handleSortDirection: function() {
+    const direction = this.getAttribute('data-direction');
+    const orderInput = document.getElementById('order');
+    
+    // Update UI
+    document.querySelectorAll('.sort-direction-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    this.classList.add('active');
+    
+    // Update form
+    orderInput.value = direction;
+    
+    // Submit form
+    document.getElementById('filter-form').submit();
+},
+
+equalizeCardHeights: function() {
+    // Make cards in same row equal height
+    const cardRows = document.querySelectorAll('.card-content-grid');
+    
+    cardRows.forEach(row => {
+        const cards = row.querySelectorAll('.property-info-card');
+        let maxHeight = 0;
+        
+        // Reset heights
+        cards.forEach(card => {
+            card.style.height = 'auto';
+        });
+        
+        // Find max height
+        cards.forEach(card => {
+            const height = card.offsetHeight;
+            if (height > maxHeight) {
+                maxHeight = height;
+            }
+        });
+        
+        // Apply max height to all
+        cards.forEach(card => {
+            card.style.height = maxHeight + 'px';
+        });
+    });
+}
+```
+
+---
+
+## 📋 **IMPLEMENTATION CHECKLIST**
+
+### **Week 1: Core Component Fixes**
+- [ ] ✅ Fix invisible Investment Score display
+- [ ] ✅ Consolidate three investment sections into one
+- [ ] ✅ Implement unified scoring display component
+- [ ] ✅ Test scoring section on all property types
+
+### **Week 2: Card System Standardization**
+- [ ] ✅ Create unified card CSS system
+- [ ] ✅ Update all detail page cards to use standard template
+- [ ] ✅ Ensure consistent card heights and spacing
+- [ ] ✅ Test responsive behavior
+
+### **Week 3: List Page Consistency**
+- [ ] ✅ Update filter styling to match detail pages
+- [ ] ✅ Implement unified sort direction controls
+- [ ] ✅ Add proper Material Icons throughout
+- [ ] ✅ Test form submission and state preservation
+
+### **Week 4: Final Polish**
+- [ ] ✅ Cross-browser testing
+- [ ] ✅ Mobile responsiveness verification
+- [ ] ✅ Accessibility improvements (ARIA labels)
+- [ ] ✅ Performance optimization
+
+---
+
+## 🎯 **EXPECTED RESULTS**
+
+After implementation:
+- **Visual Consistency**: 100% - All pages will use identical component styling
+- **Information Architecture**: Clear hierarchy with consolidated investment data
+- **User Experience**: No more confusion about multiple investment sections
+- **Responsive Design**: Perfect mobile experience across all components
+- **Maintainability**: Single source of truth for all UI components
+
+This comprehensive refactoring will transform the inconsistent UI into a professional, unified system where every component follows the same design principles and styling patterns.

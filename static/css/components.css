@@ -361,3 +361,160 @@
   color: var(--md-sys-color-on-surface-variant);
   margin-top: var(--md-sys-spacing-1);
 }
+
+/* Unified Scoring Component */
+.scoring-overview-card {
+    background-color: var(--md-sys-color-surface);
+    border-radius: var(--md-sys-shape-corner-medium);
+    box-shadow: var(--md-sys-elevation-level-1);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    margin-bottom: var(--md-sys-spacing-6);
+}
+
+.scoring-methodology-badge {
+    display: flex;
+    align-items: center;
+    gap: var(--md-sys-spacing-1);
+    padding: var(--md-sys-spacing-1) var(--md-sys-spacing-2);
+    background-color: var(--md-sys-color-primary-container);
+    border-radius: var(--md-sys-shape-corner-extra-large);
+}
+
+.method-label {
+    font: var(--md-sys-typescale-label-small-font);
+    font-weight: 600;
+    color: var(--md-sys-color-on-primary-container);
+}
+
+.method-description {
+    font: var(--md-sys-typescale-body-small-font);
+    color: var(--md-sys-color-on-primary-container);
+    opacity: 0.8;
+}
+
+.scoring-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: var(--md-sys-spacing-4);
+    margin-bottom: var(--md-sys-spacing-4);
+}
+
+.score-display {
+    padding: var(--md-sys-spacing-4);
+    border-radius: var(--md-sys-shape-corner-medium);
+    text-align: center;
+    border: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.score-primary {
+    background-color: var(--md-sys-color-primary-container);
+    border-color: var(--md-sys-color-primary);
+}
+
+.score-secondary {
+    background-color: var(--md-sys-color-secondary-container);
+    border-color: var(--md-sys-color-secondary);
+}
+
+.score-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--md-sys-spacing-1);
+    margin-bottom: var(--md-sys-spacing-2);
+}
+
+.score-label {
+    font: var(--md-sys-typescale-title-small-font);
+    color: var(--md-sys-color-on-surface);
+}
+
+.score-value {
+    font: var(--md-sys-typescale-display-medium-font);
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface);
+    margin-bottom: var(--md-sys-spacing-1);
+}
+
+.score-context {
+    font: var(--md-sys-typescale-body-small-font);
+    color: var(--md-sys-color-on-surface-variant);
+    margin-bottom: var(--md-sys-spacing-1);
+}
+
+.score-weight {
+    font: var(--md-sys-typescale-label-small-font);
+    color: var(--md-sys-color-primary);
+    font-weight: 500;
+}
+
+.score-breakdown-toggle {
+    text-align: center;
+    margin-bottom: var(--md-sys-spacing-2);
+}
+
+.breakdown-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: var(--md-sys-spacing-3);
+    margin-top: var(--md-sys-spacing-4);
+}
+
+.criterion-item {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: var(--md-sys-spacing-2);
+    align-items: center;
+    padding: var(--md-sys-spacing-2);
+    border-radius: var(--md-sys-shape-corner-small);
+    background-color: var(--md-sys-color-surface-variant);
+}
+
+.criterion-name {
+    font: var(--md-sys-typescale-body-small-font);
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.criterion-bar {
+    width: 60px;
+    height: 6px;
+    background-color: var(--md-sys-color-outline-variant);
+    border-radius: var(--md-sys-shape-corner-extra-large);
+    overflow: hidden;
+}
+
+.criterion-fill {
+    height: 100%;
+    background-color: var(--md-sys-color-primary);
+    transition: width 0.3s ease;
+}
+
+.criterion-score {
+    font: var(--md-sys-typescale-label-medium-font);
+    font-weight: 600;
+    color: var(--md-sys-color-primary);
+}
+
+/* Material Icons Integration */
+.material-icons {
+    font-family: 'Material Icons';
+    font-weight: normal;
+    font-style: normal;
+    font-size: 24px;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    display: inline-block;
+    white-space: nowrap;
+    word-wrap: normal;
+    direction: ltr;
+    -webkit-font-feature-settings: 'liga';
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Responsive adjustments for scoring */
+@media (max-width: 768px) {
+    .scoring-grid {
+        grid-template-columns: 1fr;
+    }
+}
