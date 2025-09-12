@@ -42,18 +42,16 @@
                     <div class="form-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--md-sys-spacing-4); margin-bottom: var(--md-sys-spacing-6);">
                         <!-- Search -->
                         <div class="form-field">
-                            <label for="search" class="form-label label-large" style="color: var(--md-sys-color-on-surface-variant);">{{ t('search') }}</label>
                             <input type="text" class="form-input body-large" id="search" name="search" 
                                    value="{{ current_filters.search or '' }}" 
                                    placeholder="{{ t('search_properties') }}"
-                                   style="height: 48px; font: var(--md-sys-typescale-body-large-font);">
+                                   style="height: 40px; font: var(--md-sys-typescale-body-medium-font);">
                         </div>
                         
                         <!-- Land Type -->
                         <div class="form-field">
-                            <label for="land_type" class="form-label label-large" style="color: var(--md-sys-color-on-surface-variant);">{{ t('land_type') }}</label>
                             <select class="form-select form-input body-large" id="land_type" name="land_type"
-                                    style="height: 48px; font: var(--md-sys-typescale-body-large-font);">
+                                    style="height: 40px; font: var(--md-sys-typescale-body-medium-font);">
                                 <option value="">{{ t('land_type_all') }}</option>
                                 <option value="developed" {{ 'selected' if current_filters.land_type == 'developed' }}>
                                     {{ t('developed') }}
@@ -66,9 +64,8 @@
                         
                         <!-- Municipality -->
                         <div class="form-field">
-                            <label for="municipality" class="form-label label-large" style="color: var(--md-sys-color-on-surface-variant);">{{ t('municipality') }}</label>
                             <select class="form-select form-input body-large" id="municipality" name="municipality"
-                                    style="height: 48px; font: var(--md-sys-typescale-body-large-font);">
+                                    style="height: 40px; font: var(--md-sys-typescale-body-medium-font);">
                                 <option value="">{{ t('all_municipalities') }}</option>
                                 {% for municipality in municipalities %}
                                     <option value="{{ municipality }}" 
@@ -80,21 +77,21 @@
                         </div>
                         
                         <!-- Sea View Filter -->
-                        <div class="form-field" style="display: flex; align-items: center; height: 48px; margin-top: var(--md-sys-spacing-6);">
+                        <div class="form-field" style="display: flex; align-items: center; height: 40px;">
                             <input class="form-input" type="checkbox" id="sea_view" name="sea_view" 
                                    {{ 'checked' if current_filters.sea_view }}
-                                   style="width: 20px; height: 20px; margin-right: var(--md-sys-spacing-3); accent-color: var(--md-sys-color-primary);">
-                            <label class="form-check-label label-large" for="sea_view" style="color: var(--md-sys-color-on-surface); cursor: pointer;">
+                                   style="width: 18px; height: 18px; margin-right: var(--md-sys-spacing-2); accent-color: var(--md-sys-color-primary);">
+                            <label class="form-check-label label-medium" for="sea_view" style="color: var(--md-sys-color-on-surface); cursor: pointer;">
                                 <i class="fas fa-water" style="margin-right: var(--md-sys-spacing-1); color: var(--md-sys-color-primary);"></i>{{ t('sea_view_only') }}
                             </label>
                         </div>
                         
                         <!-- Sort -->
                         <div class="form-field" style="grid-column: span 2;">
-                            <label for="sort" class="form-label label-large" style="color: var(--md-sys-color-on-surface-variant);">{{ t('sort_by') }}</label>
                             <div style="display: flex; gap: var(--md-sys-spacing-2);">
                                 <select class="form-select form-input body-large" id="sort" name="sort"
-                                        style="height: 48px; font: var(--md-sys-typescale-body-large-font); flex: 1;">
+                                        style="height: 40px; font: var(--md-sys-typescale-body-medium-font); flex: 1;">
+                                    <option value="" disabled selected>{{ t('sort_by') }}</option>
                                     <!-- Mode-based score options -->
                                     {% if current_filters.mode == 'investment' %}
                                         <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
@@ -142,7 +139,7 @@
                                     </option>
                                 </select>
                                 <select class="form-input body-large" name="order" 
-                                        style="height: 48px; width: 60px; font: var(--md-sys-typescale-body-large-font); text-align: center;">
+                                        style="height: 40px; width: 50px; font: var(--md-sys-typescale-body-medium-font); text-align: center;">
                                     <option value="desc" {{ 'selected' if current_filters.order == 'desc' }}>↓</option>
                                     <option value="asc" {{ 'selected' if current_filters.order == 'asc' }}>↑</option>
                                 </select>
