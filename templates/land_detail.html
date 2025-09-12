@@ -25,7 +25,7 @@
                 <h2 class="card-title mb-0">{{ land.title }}</h2>
                 <div class="d-flex align-items-center gap-2">
                     {% if land.score_total %}
-                        <span class="score-badge score-{{ 'high' if land.score_total >= 70 else 'medium' if land.score_total >= 50 else 'low' }}">
+                        <span class="chip chip-{{ 'success' if land.score_total >= 70 else 'warning' if land.score_total >= 50 else 'danger' }}">
                             Score: {{ "%.1f"|format(land.score_total) }}
                         </span>
                     {% endif %}

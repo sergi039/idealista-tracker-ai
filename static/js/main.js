@@ -979,3 +979,25 @@ if ('serviceWorker' in navigator) {
         // Service worker would be implemented later for offline capabilities
     });
 }
+
+// Toggle Score Breakdown Details
+function toggleScoreBreakdown() {
+    const details = document.getElementById('score-breakdown-details');
+    const button = document.getElementById('score-breakdown-btn');
+    const icon = button ? button.querySelector('.material-icons') : null;
+    const textSpan = button ? button.querySelector('span:not(.material-icons)') : null;
+    
+    if (details && button && icon) {
+        const isHidden = details.style.display === 'none' || !details.style.display;
+        
+        if (isHidden) {
+            details.style.display = 'block';
+            icon.textContent = 'expand_less';
+            if (textSpan) textSpan.textContent = 'Hide Detailed Breakdown';
+        } else {
+            details.style.display = 'none';
+            icon.textContent = 'expand_more';
+            if (textSpan) textSpan.textContent = 'View Detailed Breakdown';
+        }
+    }
+}
