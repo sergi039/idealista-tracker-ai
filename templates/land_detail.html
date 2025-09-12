@@ -201,11 +201,8 @@
                     <!-- AI Analysis Button - highlighted if analysis exists -->
                     <button onclick="analyzeWithClaude({{ land.id }})" 
                             class="btn {{ 'btn-success' if land.ai_analysis else 'btn-outline-info' }}">
-                        <i class="fas fa-brain me-md3-2 {{ 'text-white' if land.ai_analysis else '' }}"></i>
+                        <i class="fas fa-brain me-md3-2"></i>
                         {{ t('ai_analysis') }}
-                        {% if land.ai_analysis %}
-                            <span class="chip chip-light text-dark ms-md3-1">✓</span>
-                        {% endif %}
                     </button>
                     
                     
@@ -217,9 +214,6 @@
                             hx-indicator="#enrichment-spinner">
                         <i class="fas fa-sync me-md3-2 {{ 'text-white' if has_enrichment else '' }}"></i>
                         {{ t('enrich_google_api') }}
-                        {% if has_enrichment %}
-                            <span class="chip chip-light text-dark ms-md3-1">✓</span>
-                        {% endif %}
                     </button>
                 </div>
             </div>
@@ -273,15 +267,6 @@
                     </div>
                 </div>
                 
-                <!-- Score Breakdown Toggle -->
-                <div class="score-breakdown-toggle">
-                    <button type="button" class="btn-text btn-small" 
-                            onclick="toggleScoreBreakdown()" 
-                            id="score-breakdown-btn">
-                        <i class="fas fa-chevron-down me-md3-2"></i>
-                        {{ t('view_detailed_breakdown') }}
-                    </button>
-                </div>
                 
                 <!-- Hidden Detailed Breakdown -->
                 <div class="score-breakdown-details" id="score-breakdown-details" style="display: none;">
@@ -1139,7 +1124,7 @@ function analyzeWithClaude(landId) {
             button.classList.remove('btn-outline-info');
             button.classList.add('btn-success');
             const buttonText = data.is_enrichment ? 'Analysis Enriched' : 'AI Analysis';
-            button.innerHTML = `<i class="fas fa-brain me-md3-2 text-white"></i>${buttonText} <span class="chip chip-light text-dark ms-md3-1">✓</span>`;
+            button.innerHTML = `<i class="fas fa-brain me-md3-2"></i>${buttonText}`;
         } else {
             // Display error in the analysis section
             aiContent.innerHTML = `
