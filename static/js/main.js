@@ -5,11 +5,28 @@
 // Global app object
 window.IdealistaApp = {
     init: function() {
+        this.setupGlobalErrorHandling();
         this.setupEventListeners();
         this.setupHTMX();
         this.setupTooltips();
-        this.updateLastSync();
+        this.updateLastSync().catch(error => {
+            console.warn('Initial sync update failed:', error);
+        });
         this.setupTableInteractions();
+    },
+
+    setupGlobalErrorHandling: function() {
+        // Handle unhandled Promise rejections
+        window.addEventListener('unhandledrejection', function(event) {
+            console.warn('Unhandled promise rejection:', event.reason);
+            // Prevent the default console error
+            event.preventDefault();
+        });
+
+        // Handle general JavaScript errors
+        window.addEventListener('error', function(event) {
+            console.warn('JavaScript error:', event.error || event.message);
+        });
     },
 
     setupEventListeners: function() {
@@ -500,45 +517,48 @@ window.IdealistaApp = {
         return true;
     },
 
-    updateLastSync: function() {
+    updateLastSync: async function() {
         // Fetch and update last sync time
-        fetch('/api/stats')
-            .then(response => response.json())
-            .then(data => {
-                if (data.success && data.stats.last_sync) {
-                    const lastSyncElement = document.getElementById('last-sync');
-                    if (lastSyncElement) {
-                        const sync = data.stats.last_sync;
-                        
-                        // Handle null or invalid completed_at
-                        if (sync.completed_at) {
-                            const date = new Date(sync.completed_at);
-                            // Check if date is valid
-                            if (!isNaN(date.getTime()) && date.getFullYear() > 1970) {
-                                const dateStr = date.toLocaleDateString();
-                                const timeStr = date.toLocaleTimeString();
-                                lastSyncElement.textContent = `${dateStr} at ${timeStr} (+${sync.new_properties} new)`;
-                            } else {
-                                lastSyncElement.textContent = `Sync completed (+${sync.new_properties} new) - time unavailable`;
-                            }
+        try {
+            const response = await fetch('/api/stats');
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            const data = await response.json();
+            if (data.success && data.stats.last_sync) {
+                const lastSyncElement = document.getElementById('last-sync');
+                if (lastSyncElement) {
+                    const sync = data.stats.last_sync;
+                    
+                    // Handle null or invalid completed_at
+                    if (sync.completed_at) {
+                        const date = new Date(sync.completed_at);
+                        // Check if date is valid
+                        if (!isNaN(date.getTime()) && date.getFullYear() > 1970) {
+                            const dateStr = date.toLocaleDateString();
+                            const timeStr = date.toLocaleTimeString();
+                            lastSyncElement.textContent = `${dateStr} at ${timeStr} (+${sync.new_properties} new)`;
                         } else {
                             lastSyncElement.textContent = `Sync completed (+${sync.new_properties} new) - time unavailable`;
                         }
-                    }
-                } else {
-                    const lastSyncElement = document.getElementById('last-sync');
-                    if (lastSyncElement) {
-                        lastSyncElement.textContent = 'No sync data';
+                    } else {
+                        lastSyncElement.textContent = `Sync completed (+${sync.new_properties} new) - time unavailable`;
                     }
                 }
-            })
-            .catch(error => {
-                console.warn('Failed to update last sync time:', error);
+            } else {
                 const lastSyncElement = document.getElementById('last-sync');
                 if (lastSyncElement) {
-                    lastSyncElement.textContent = 'Error loading';
+                    lastSyncElement.textContent = 'No sync data';
                 }
-            });
+            }
+        } catch (error) {
+            console.warn('Failed to update last sync time:', error);
+            const lastSyncElement = document.getElementById('last-sync');
+            if (lastSyncElement) {
+                lastSyncElement.textContent = 'Error loading';
+            }
+        }
     },
 
     showNotification: function(message, type = 'info') {
