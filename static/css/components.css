@@ -161,6 +161,9 @@
   background-position: right var(--md-sys-spacing-3) center;
   background-size: 16px 12px;
   padding-right: var(--md-sys-spacing-10);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .md-select:focus {
