@@ -45,13 +45,13 @@
                             <input type="text" class="form-input body-large" id="search" name="search" 
                                    value="{{ current_filters.search or '' }}" 
                                    placeholder="{{ t('search_properties') }}"
-                                   style="height: 40px; font: var(--md-sys-typescale-body-medium-font);">
+                                   style="height: 40px;">
                         </div>
                         
                         <!-- Land Type -->
                         <div class="form-field">
                             <select class="form-select form-input body-large" id="land_type" name="land_type"
-                                    style="height: 40px; font: var(--md-sys-typescale-body-medium-font);">
+                                    style="height: 40px;">
                                 <option value="">{{ t('land_type_all') }}</option>
                                 <option value="developed" {{ 'selected' if current_filters.land_type == 'developed' }}>
                                     {{ t('developed') }}
@@ -65,7 +65,7 @@
                         <!-- Municipality -->
                         <div class="form-field">
                             <select class="form-select form-input body-large" id="municipality" name="municipality"
-                                    style="height: 40px; font: var(--md-sys-typescale-body-medium-font);">
+                                    style="height: 40px;">
                                 <option value="">{{ t('all_municipalities') }}</option>
                                 {% for municipality in municipalities %}
                                     <option value="{{ municipality }}" 
@@ -90,8 +90,8 @@
                         <div class="form-field" style="grid-column: span 2;">
                             <div style="display: flex; gap: var(--md-sys-spacing-2);">
                                 <select class="form-select form-input body-large" id="sort" name="sort"
-                                        style="height: 40px; font: var(--md-sys-typescale-body-medium-font); flex: 1;">
-                                    <option value="" disabled selected>{{ t('sort_by') }}</option>
+                                        style="height: 40px; flex: 1;">
+                                    <option value="" {{ 'selected' if not current_filters.sort_by else '' }}>{{ t('sort_by') }}</option>
                                     <!-- Mode-based score options -->
                                     {% if current_filters.mode == 'investment' %}
                                         <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
@@ -139,7 +139,7 @@
                                     </option>
                                 </select>
                                 <select class="form-input body-large" name="order" 
-                                        style="height: 40px; width: 50px; font: var(--md-sys-typescale-body-medium-font); text-align: center;">
+                                        style="height: 40px; width: 50px; text-align: center;">
                                     <option value="desc" {{ 'selected' if current_filters.order == 'desc' }}>↓</option>
                                     <option value="asc" {{ 'selected' if current_filters.order == 'asc' }}>↑</option>
                                 </select>
