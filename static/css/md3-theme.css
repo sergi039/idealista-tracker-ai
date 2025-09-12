@@ -1,0 +1,152 @@
+/* Material Design 3 Theme System */
+:root {
+  /* Primary Colors */
+  --md-sys-color-primary: #1976d2;
+  --md-sys-color-on-primary: #ffffff;
+  --md-sys-color-primary-container: #d3e3fd;
+  --md-sys-color-on-primary-container: #001c38;
+  
+  /* Secondary Colors */
+  --md-sys-color-secondary: #565f71;
+  --md-sys-color-on-secondary: #ffffff;
+  --md-sys-color-secondary-container: #dae2f9;
+  --md-sys-color-on-secondary-container: #131c2b;
+  
+  /* Tertiary Colors */
+  --md-sys-color-tertiary: #705575;
+  --md-sys-color-on-tertiary: #ffffff;
+  --md-sys-color-tertiary-container: #fad8fd;
+  --md-sys-color-on-tertiary-container: #28132e;
+  
+  /* Error Colors */
+  --md-sys-color-error: #ba1a1a;
+  --md-sys-color-on-error: #ffffff;
+  --md-sys-color-error-container: #ffdad6;
+  --md-sys-color-on-error-container: #410002;
+  
+  /* Surface Colors */
+  --md-sys-color-surface: #fefbff;
+  --md-sys-color-on-surface: #1a1c1e;
+  --md-sys-color-surface-variant: #dfe2eb;
+  --md-sys-color-on-surface-variant: #43474e;
+  --md-sys-color-surface-container: #f0f4f9;
+  --md-sys-color-surface-container-high: #e6eaf2;
+  --md-sys-color-surface-container-highest: #e1e4ed;
+  
+  /* Outline Colors */
+  --md-sys-color-outline: #73777f;
+  --md-sys-color-outline-variant: #c3c7cf;
+  
+  /* Background */
+  --md-sys-color-background: #fefbff;
+  --md-sys-color-on-background: #1a1c1e;
+  
+  /* Dark Theme Colors */
+  --md-sys-color-primary-dark: #a8c8ec;
+  --md-sys-color-on-primary-dark: #0f2d52;
+  --md-sys-color-primary-container-dark: #284777;
+  --md-sys-color-on-primary-container-dark: #d3e3fd;
+  
+  --md-sys-color-surface-dark: #111318;
+  --md-sys-color-on-surface-dark: #e2e2e6;
+  --md-sys-color-surface-variant-dark: #43474e;
+  --md-sys-color-on-surface-variant-dark: #c3c7cf;
+  --md-sys-color-surface-container-dark: #1d2024;
+  --md-sys-color-surface-container-high-dark: #272a2f;
+  --md-sys-color-surface-container-highest-dark: #32353a;
+  
+  --md-sys-color-background-dark: #111318;
+  --md-sys-color-on-background-dark: #e2e2e6;
+  
+  /* Typography Scale */
+  --md-sys-typescale-display-large: 400 57px/64px 'Roboto', system-ui;
+  --md-sys-typescale-display-medium: 400 45px/52px 'Roboto', system-ui;
+  --md-sys-typescale-display-small: 400 36px/44px 'Roboto', system-ui;
+  
+  --md-sys-typescale-headline-large: 400 32px/40px 'Roboto', system-ui;
+  --md-sys-typescale-headline-medium: 400 28px/36px 'Roboto', system-ui;
+  --md-sys-typescale-headline-small: 400 24px/32px 'Roboto', system-ui;
+  
+  --md-sys-typescale-title-large: 400 22px/28px 'Roboto', system-ui;
+  --md-sys-typescale-title-medium: 500 16px/24px 'Roboto', system-ui;
+  --md-sys-typescale-title-small: 500 14px/20px 'Roboto', system-ui;
+  
+  --md-sys-typescale-body-large: 400 16px/24px 'Roboto', system-ui;
+  --md-sys-typescale-body-medium: 400 14px/20px 'Roboto', system-ui;
+  --md-sys-typescale-body-small: 400 12px/16px 'Roboto', system-ui;
+  
+  --md-sys-typescale-label-large: 500 14px/20px 'Roboto', system-ui;
+  --md-sys-typescale-label-medium: 500 12px/16px 'Roboto', system-ui;
+  --md-sys-typescale-label-small: 500 11px/16px 'Roboto', system-ui;
+  
+  /* Spacing System (8dp Grid) */
+  --md-sys-spacing-0: 0px;
+  --md-sys-spacing-1: 4px;
+  --md-sys-spacing-2: 8px;
+  --md-sys-spacing-3: 12px;
+  --md-sys-spacing-4: 16px;
+  --md-sys-spacing-5: 20px;
+  --md-sys-spacing-6: 24px;
+  --md-sys-spacing-8: 32px;
+  --md-sys-spacing-10: 40px;
+  --md-sys-spacing-12: 48px;
+  --md-sys-spacing-16: 64px;
+  --md-sys-spacing-20: 80px;
+  --md-sys-spacing-24: 96px;
+  
+  /* Shape System */
+  --md-sys-shape-corner-none: 0px;
+  --md-sys-shape-corner-extra-small: 4px;
+  --md-sys-shape-corner-small: 8px;
+  --md-sys-shape-corner-medium: 12px;
+  --md-sys-shape-corner-large: 16px;
+  --md-sys-shape-corner-extra-large: 28px;
+  --md-sys-shape-corner-full: 1000px;
+  
+  /* Elevation System */
+  --md-sys-elevation-0: none;
+  --md-sys-elevation-1: 0px 1px 2px 0px rgba(0, 0, 0, 0.3), 0px 1px 3px 1px rgba(0, 0, 0, 0.15);
+  --md-sys-elevation-2: 0px 1px 2px 0px rgba(0, 0, 0, 0.3), 0px 2px 6px 2px rgba(0, 0, 0, 0.15);
+  --md-sys-elevation-3: 0px 4px 8px 3px rgba(0, 0, 0, 0.15), 0px 1px 3px 0px rgba(0, 0, 0, 0.3);
+  --md-sys-elevation-4: 0px 6px 10px 4px rgba(0, 0, 0, 0.15), 0px 2px 3px 0px rgba(0, 0, 0, 0.3);
+  --md-sys-elevation-5: 0px 8px 12px 6px rgba(0, 0, 0, 0.15), 0px 4px 4px 0px rgba(0, 0, 0, 0.3);
+}
+
+/* Dark Theme Application */
+[data-theme="dark"] {
+  --md-sys-color-primary: var(--md-sys-color-primary-dark);
+  --md-sys-color-on-primary: var(--md-sys-color-on-primary-dark);
+  --md-sys-color-primary-container: var(--md-sys-color-primary-container-dark);
+  --md-sys-color-on-primary-container: var(--md-sys-color-on-primary-container-dark);
+  
+  --md-sys-color-surface: var(--md-sys-color-surface-dark);
+  --md-sys-color-on-surface: var(--md-sys-color-on-surface-dark);
+  --md-sys-color-surface-variant: var(--md-sys-color-surface-variant-dark);
+  --md-sys-color-on-surface-variant: var(--md-sys-color-on-surface-variant-dark);
+  --md-sys-color-surface-container: var(--md-sys-color-surface-container-dark);
+  --md-sys-color-surface-container-high: var(--md-sys-color-surface-container-high-dark);
+  --md-sys-color-surface-container-highest: var(--md-sys-color-surface-container-highest-dark);
+  
+  --md-sys-color-background: var(--md-sys-color-background-dark);
+  --md-sys-color-on-background: var(--md-sys-color-on-background-dark);
+}
+
+/* Base Reset */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font: var(--md-sys-typescale-body-medium);
+  color: var(--md-sys-color-on-background);
+  background-color: var(--md-sys-color-background);
+  line-height: 1.5;
+}
+
+body {
+  font-family: 'Roboto', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}

@@ -37,5 +37,9 @@ externalPort = 80
 localPort = 40449
 externalPort = 3000
 
+[[ports]]
+localPort = 42813
+externalPort = 3001
+
 [agent]
 integrations = ["python_anthropic:1.0.0", "python_database:1.0.0", "styling_replit:1.0.0", "web_scraper:1.0.0"]
