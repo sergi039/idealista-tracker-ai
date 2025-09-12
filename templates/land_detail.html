@@ -882,111 +882,19 @@
             </div>
         {% endif %}
 
-        <!-- Investment Analysis -->
+        <!-- Investment Analysis Summary -->
         {% if land.ai_analysis %}
             <div class="card mb-4">
-                <div class="card-header">
-                    <h6 class="card-title mb-0">
-                        <i class="fas fa-chart-line me-2"></i>Investment Analysis
-                    </h6>
-                </div>
-                <div class="card-body">
-                    <!-- Rental Market Data -->
-                    {% if land.ai_analysis.get('rental_market_analysis') %}
-                        {% set rental_data = land.ai_analysis.rental_market_analysis %}
-                        {% if rental_data.get('expected_monthly_rent') or rental_data.get('rental_yield') %}
-                            <div class="mb-3">
-                                <h6 class="small fw-bold mb-2">Rental Market</h6>
-                                {% if rental_data.get('expected_monthly_rent') %}
-                                    <div class="d-flex justify-content-between mb-1">
-                                        <span class="small">Monthly Rent</span>
-                                        <span class="chip chip-success">€{{ rental_data.expected_monthly_rent }}/month</span>
-                                    </div>
-                                {% endif %}
-                                {% if rental_data.get('rental_yield') %}
-                                    <div class="d-flex justify-content-between mb-1">
-                                        <span class="small">Rental Yield</span>
-                                        <span class="chip chip-warning">{{ rental_data.rental_yield }}%</span>
-                                    </div>
-                                {% endif %}
-                                {% if rental_data.get('cap_rate') %}
-                                    <div class="d-flex justify-content-between mb-1">
-                                        <span class="small">Cap Rate</span>
-                                        <span class="chip chip-info">{{ rental_data.cap_rate }}%</span>
-                                    </div>
-                                {% endif %}
-                            </div>
-                        {% endif %}
-                    {% endif %}
-
-                    <!-- Investment Potential -->
-                    {% if land.ai_analysis.get('investment_potential') %}
-                        {% set investment = land.ai_analysis.investment_potential %}
-                        <div class="mb-3">
-                            <h6 class="small fw-bold mb-2">Investment Rating</h6>
-                            {% if investment.get('rating') %}
-                                <div class="d-flex justify-content-between mb-1">
-                                    <span class="small">Rating</span>
-                                    <span class="badge {{ 'bg-success' if investment.rating == 'HIGH' else 'bg-warning' if investment.rating == 'MEDIUM' else 'bg-secondary' }}">
-                                        {{ investment.rating|replace('HIGH', 'High')|replace('MEDIUM', 'Medium')|replace('LOW', 'Low') }}
-                                    </span>
-                                </div>
-                            {% endif %}
-                            {% if investment.get('risk_level') %}
-                                <div class="d-flex justify-content-between mb-1">
-                                    <span class="small">Risk Level</span>
-                                    <span class="badge {{ 'bg-danger' if investment.risk_level == 'HIGH' else 'bg-warning' if investment.risk_level == 'MEDIUM' else 'bg-success' }}">
-                                        {{ investment.risk_level|replace('HIGH', 'High')|replace('MEDIUM', 'Medium')|replace('LOW', 'Low') }}
-                                    </span>
-                                </div>
-                            {% endif %}
-                            {% if investment.get('forecast') %}
-                                <div class="mb-1">
-                                    <small class="text-muted">{{ investment.forecast }}</small>
-                                </div>
-                            {% endif %}
-                        </div>
-                    {% endif %}
-
-                    <!-- Market Position -->
-                    {% if land.ai_analysis.get('comparable_analysis') %}
-                        {% set comparable = land.ai_analysis.comparable_analysis %}
-                        <div class="mb-3">
-                            <h6 class="small fw-bold mb-2">Market Position</h6>
-                            {% if comparable.get('market_position') %}
-                                <div class="mb-1">
-                                    <small class="text-info">{{ comparable.market_position }}</small>
-                                </div>
-                            {% endif %}
-                            {% if comparable.get('price_comparison') %}
-                                <div class="mb-1">
-                                    <small class="text-muted">{{ comparable.price_comparison }}</small>
-                                </div>
-                            {% endif %}
-                        </div>
-                    {% endif %}
-
-                    <!-- Construction Value -->
-                    {% if land.ai_analysis.get('construction_value_estimation') %}
-                        {% set construction = land.ai_analysis.construction_value_estimation %}
-                        {% if construction.get('total_investment') or construction.get('value_per_m2') %}
-                            <div class="mb-3">
-                                <h6 class="small fw-bold mb-2">Development Cost</h6>
-                                {% if construction.get('total_investment') %}
-                                    <div class="d-flex justify-content-between mb-1">
-                                        <span class="small">Total Investment</span>
-                                        <span class="chip chip-primary">{{ construction.total_investment }}</span>
-                                    </div>
-                                {% endif %}
-                                {% if construction.get('value_per_m2') %}
-                                    <div class="d-flex justify-content-between mb-1">
-                                        <span class="small">Cost per m²</span>
-                                        <span class="chip chip-secondary">€{{ construction.value_per_m2 }}/m²</span>
-                                    </div>
-                                {% endif %}
-                            </div>
-                        {% endif %}
-                    {% endif %}
+                <div class="card-body p-3">
+                    <div class="text-center">
+                        <i class="fas fa-chart-line fa-2x text-info mb-2"></i>
+                        <h6 class="mb-2">{{ t('investment_analysis_available') }}</h6>
+                        <p class="small text-muted mb-3">{{ t('detailed_rental_construction_analysis') }}</p>
+                        <button onclick="document.getElementById('ai-analysis-section').scrollIntoView({behavior: 'smooth'})" 
+                                class="btn-outlined btn-small">
+                            <i class="fas fa-arrow-down me-1"></i>{{ t('view_detailed_analysis') }}
+                        </button>
+                    </div>
                 </div>
             </div>
         {% endif %}
