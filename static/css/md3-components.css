@@ -431,6 +431,59 @@
   display: block;
 }
 
+/* Mobile Optimization for Tabs */
+@media (max-width: 768px) {
+  .md3-tabs {
+    flex-wrap: wrap;
+    gap: var(--md-sys-spacing-1);
+    margin-bottom: var(--md-sys-spacing-4);
+    overflow-x: auto;
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE */
+  }
+  
+  .md3-tabs::-webkit-scrollbar {
+    display: none; /* Chrome, Safari */
+  }
+  
+  .md3-tab {
+    flex: 1;
+    min-width: fit-content;
+    padding: var(--md-sys-spacing-3) var(--md-sys-spacing-4);
+    min-height: 44px; /* Larger touch target for mobile */
+    font-size: 14px;
+    white-space: nowrap;
+    border-radius: var(--md-sys-shape-corner-extra-small) var(--md-sys-shape-corner-extra-small) 0 0;
+  }
+  
+  .md3-tab .material-symbols-outlined {
+    font-size: 20px; /* Slightly smaller icons on mobile */
+  }
+  
+  /* Ensure active tab is always visible */
+  .md3-tab--active {
+    background-color: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  }
+}
+
+@media (max-width: 480px) {
+  .md3-tabs {
+    margin: 0 calc(-1 * var(--md-sys-spacing-6)) var(--md-sys-spacing-4);
+    padding: 0 var(--md-sys-spacing-6);
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  }
+  
+  .md3-tab {
+    padding: var(--md-sys-spacing-3) var(--md-sys-spacing-2);
+    font-size: 13px;
+    gap: var(--md-sys-spacing-1);
+  }
+  
+  .md3-tab .material-symbols-outlined {
+    font-size: 18px;
+  }
+}
+
 /* Progress Bars */
 .md3-progress {
   width: 100%;

@@ -44,11 +44,15 @@ window.IdealistaApp = {
         // Criteria form enhancements
         this.setupCriteriaForm();
         
-        // Setup tabs with delay to ensure DOM is fully ready
-        setTimeout(() => {
-            console.log('[INIT] Setting up tabs after DOM ready...');
-            this.setupCriteriaTabs();
-        }, 100);
+        // Setup tabs with delay to ensure DOM is fully ready (only for non-criteria pages)
+        if (!window.location.pathname.includes('/criteria')) {
+            setTimeout(() => {
+                console.log('[INIT] Setting up tabs after DOM ready...');
+                this.setupCriteriaTabs();
+            }, 100);
+        } else {
+            console.log('[INIT] Skipping global tab setup for criteria page - using inline script');
+        }
         
         // Description enhancement functionality
         this.setupDescriptionEnhancement();

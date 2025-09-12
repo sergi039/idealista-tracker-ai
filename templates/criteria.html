@@ -601,124 +601,60 @@ document.addEventListener('DOMContentLoaded', function() {
     updateCombinedMix();
     
     console.log('Criteria form functionality initialized successfully');
-        const weightInputs = document.querySelectorAll(`input[name^="weight_"]`);
-        let total = 0;
-        
-        weightInputs.forEach(input => {
-            if (input.id.includes(profile)) {
-                total += parseFloat(input.value) || 0;
-            }
-        });
 
-        const weightBar = document.getElementById(`${profile}-weight-bar`);
-        const weightText = document.getElementById(`${profile}-weight-text`);
+    // ============ TAB SWITCHING FUNCTIONALITY ============
+    
+    // Simple tab switching function
+    window.switchCriteriaTab = function(targetId) {
+        console.log('[CRITERIA-TABS] Switching to tab:', targetId);
         
-        if (weightBar && weightText) {
-            const percentage = Math.round(total * 100);
-            weightBar.style.width = percentage + '%';
-            weightText.textContent = percentage + '%';
+        // Hide all content
+        document.querySelectorAll('.md3-tab-content').forEach(content => {
+            content.classList.remove('md3-tab-content--active');
+        });
+        
+        // Deactivate all tabs
+        document.querySelectorAll('.md3-tab').forEach(btn => {
+            btn.classList.remove('md3-tab--active');
+            btn.setAttribute('aria-selected', 'false');
+        });
+        
+        // Show target content
+        const targetContent = document.getElementById(targetId);
+        if (targetContent) {
+            targetContent.classList.add('md3-tab-content--active');
+            console.log('[CRITERIA-TABS] Showing content:', targetId);
         }
-    }
-
-    // Slider sync functionality
-    document.querySelectorAll('.weight-slider').forEach(slider => {
-        slider.addEventListener('input', function() {
-            const criterion = this.dataset.criteria;
-            const profile = this.dataset.profile;
-            const weightInput = document.getElementById(`${profile}_weight_${criterion}`);
-            const progressBar = document.getElementById(`${profile}_progress_${criterion}`);
-            const percentSpan = document.getElementById(`${profile}_percent_${criterion}`);
-            
-            const value = parseFloat(this.value) / 100;
-            weightInput.value = value.toFixed(2);
-            progressBar.style.width = this.value + '%';
-            percentSpan.textContent = parseFloat(this.value).toFixed(1) + '%';
-            
-            updateTotalWeight(profile);
-        });
-    });
-
-    // Weight input sync functionality
-    document.querySelectorAll('.weight-input').forEach(input => {
-        input.addEventListener('input', function() {
-            const criterion = this.id.split('_')[1] + '_' + this.id.split('_')[2];
-            const profile = this.id.split('_')[0];
-            const slider = document.getElementById(`${profile}_slider_${criterion}`);
-            const progressBar = document.getElementById(`${profile}_progress_${criterion}`);
-            const percentSpan = document.getElementById(`${profile}_percent_${criterion}`);
-            
-            const value = Math.max(0, Math.min(1, parseFloat(this.value)));
-            this.value = value.toFixed(2);
-            slider.value = Math.round(value * 100);
-            progressBar.style.width = Math.round(value * 100) + '%';
-            percentSpan.textContent = (value * 100).toFixed(1) + '%';
-            
-            updateTotalWeight(profile);
-        });
-    });
-
-    // Weight adjustment buttons
-    document.querySelectorAll('.weight-adjust').forEach(button => {
-        button.addEventListener('click', function() {
-            const criterion = this.dataset.criteria;
-            const profile = this.dataset.profile;
-            const delta = parseFloat(this.dataset.delta);
-            updateWeight(criterion, profile, delta);
-        });
-    });
-
-    // Combined mix sliders
-    const investmentMixSlider = document.getElementById('investment-mix-slider');
-    const lifestyleMixSlider = document.getElementById('lifestyle-mix-slider');
-    const investmentMixInput = document.getElementById('investment-mix-input');
-    const lifestyleMixInput = document.getElementById('lifestyle-mix-input');
-    const investmentMixPercent = document.getElementById('investment-mix-percent');
-    const lifestyleMixPercent = document.getElementById('lifestyle-mix-percent');
-
-    if (investmentMixSlider) {
-        investmentMixSlider.addEventListener('input', function() {
-            const investmentValue = parseFloat(this.value) / 100;
-            const lifestyleValue = 1 - investmentValue;
-            
-            investmentMixInput.value = investmentValue.toFixed(2);
-            lifestyleMixInput.value = lifestyleValue.toFixed(2);
-            investmentMixPercent.textContent = Math.round(investmentValue * 100) + '%';
-            lifestyleMixPercent.textContent = Math.round(lifestyleValue * 100) + '%';
-            lifestyleMixSlider.value = Math.round(lifestyleValue * 100);
-            
-            updateCombinedPreview();
-        });
-    }
-
-    if (lifestyleMixSlider) {
-        lifestyleMixSlider.addEventListener('input', function() {
-            const lifestyleValue = parseFloat(this.value) / 100;
-            const investmentValue = 1 - lifestyleValue;
-            
-            lifestyleMixInput.value = lifestyleValue.toFixed(2);
-            investmentMixInput.value = investmentValue.toFixed(2);
-            lifestyleMixPercent.textContent = Math.round(lifestyleValue * 100) + '%';
-            investmentMixPercent.textContent = Math.round(investmentValue * 100) + '%';
-            investmentMixSlider.value = Math.round(investmentValue * 100);
-            
-            updateCombinedPreview();
-        });
-    }
-
-    function updateCombinedPreview() {
-        const investmentBar = document.getElementById('combined-investment-bar');
-        const lifestyleBar = document.getElementById('combined-lifestyle-bar');
         
-        if (investmentBar && lifestyleBar) {
-            const investmentPercent = Math.round(parseFloat(investmentMixInput.value) * 100);
-            const lifestylePercent = Math.round(parseFloat(lifestyleMixInput.value) * 100);
-            
-            investmentBar.style.width = investmentPercent + '%';
-            lifestyleBar.style.width = lifestylePercent + '%';
-            investmentBar.querySelector('.md3-progress-label').textContent = `Investment: ${investmentPercent}%`;
-            lifestyleBar.querySelector('.md3-progress-label').textContent = `Lifestyle: ${lifestylePercent}%`;
+        // Activate clicked tab
+        const targetTab = document.querySelector(`[data-target="${targetId}"]`);
+        if (targetTab) {
+            targetTab.classList.add('md3-tab--active');
+            targetTab.setAttribute('aria-selected', 'true');
+            console.log('[CRITERIA-TABS] Activating tab for:', targetId);
         }
-    }
+    };
+    
+    // Attach click listeners to tabs
+    document.querySelectorAll('.md3-tab').forEach(button => {
+        const targetId = button.getAttribute('data-target');
+        if (targetId) {
+            button.addEventListener('click', function(e) {
+                e.preventDefault();
+                window.switchCriteriaTab(targetId);
+            });
+            
+            // Keyboard navigation
+            button.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    window.switchCriteriaTab(targetId);
+                }
+            });
+        }
+    });
+    
+    console.log('[CRITERIA-TABS] Tab functionality initialized');
 
     // Initialize total weights on page load
     updateTotalWeight('investment');
