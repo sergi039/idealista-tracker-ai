@@ -1,6 +1,6 @@
 import logging
 import os
-from flask import Blueprint, jsonify, request, send_from_directory
+from flask import Blueprint, jsonify, request, send_from_directory, current_app
 from models import Land, ScoringCriteria, SyncHistory
 from app import db
 from utils.auth import admin_required, rate_limit
@@ -8,6 +8,8 @@ from utils.auth import admin_required, rate_limit
 logger = logging.getLogger(__name__)
 
 api_bp = Blueprint('api', __name__)
+
+# API routes are exempted from CSRF in app.py during blueprint registration
 
 @api_bp.route('/healthz')
 def health_check():

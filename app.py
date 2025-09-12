@@ -25,6 +25,11 @@ def create_app():
     
     app.secret_key = os.environ.get("SESSION_SECRET")
     app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+    
+    # Initialize CSRF protection
+    from flask_wtf.csrf import CSRFProtect
+    csrf = CSRFProtect()
+    csrf.init_app(app)
 
     # Configure the database
     app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
@@ -50,8 +55,35 @@ def create_app():
         app.register_blueprint(api_bp, url_prefix='/api')
         app.register_blueprint(language_bp, url_prefix='/api')
         
+        # Exempt API blueprints from CSRF protection
+        csrf.exempt(api_bp)
+        csrf.exempt(language_bp)
+        
         # Create all tables
         db.create_all()
+        
+        # Register error handlers
+        from flask import render_template
+        from flask_wtf.csrf import CSRFError
+        
+        @app.errorhandler(404)
+        def not_found_error(error):
+            return render_template('errors/404.html'), 404
+
+        @app.errorhandler(500)
+        def internal_error(error):
+            db.session.rollback()
+            logger.error(f'Server Error: {error}')
+            return render_template('errors/500.html'), 500
+
+        @app.errorhandler(403)
+        def forbidden_error(error):
+            return render_template('errors/403.html'), 403
+            
+        @app.errorhandler(CSRFError)
+        def csrf_error(error):
+            logger.warning(f'CSRF Error: {error.description}')
+            return render_template('errors/csrf.html'), 400
         
         # Initialize caching
         from utils.cache import init_cache

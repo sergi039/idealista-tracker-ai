@@ -67,6 +67,7 @@
                     </div>
                     <div class="card-body">
                         <form method="POST" action="{{ url_for('main.update_criteria_profile', profile='investment') }}" id="investment-form">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <!-- Investment Profile Criteria -->
                             {% for criterion, weight in investment_weights.items() %}
                                 {% if weight > 0 %}
@@ -156,6 +157,7 @@
                     </div>
                     <div class="card-body">
                         <form method="POST" action="{{ url_for('main.update_criteria_profile', profile='lifestyle') }}" id="lifestyle-form">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <!-- Lifestyle Profile Criteria -->
                             {% for criterion, weight in lifestyle_weights.items() %}
                                 {% if weight > 0 %}
@@ -245,6 +247,7 @@
                     </div>
                     <div class="card-body">
                         <form method="POST" action="{{ url_for('main.update_combined_mix') }}" id="combined-form">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <div class="row mb-4">
                                 <div class="col-md-6">
                                     <label class="form-label fw-bold">
