@@ -86,6 +86,9 @@ class SecurityValidator:
         # Check optional secrets
         optional_availability = cls.check_optional_secrets()
         
+        # Security audit for exposed secrets
+        cls._audit_for_exposed_secrets()
+        
         results = {
             'required_valid': is_valid,
             'missing_required': missing_required,
@@ -99,3 +102,52 @@ class SecurityValidator:
                    f"Optional available: {results['optional_available_count']}/{results['total_optional']}")
         
         return results
+    
+    @classmethod
+    def _audit_for_exposed_secrets(cls) -> None:
+        """
+        Audit for potential secret exposure risks
+        """
+        import glob
+        import re
+        
+        # Pattern to detect API key exposure risks
+        dangerous_patterns = [
+            r'print.*[gG]oogle.*[kK]ey',
+            r'print.*API.*key',
+            r'print.*[sS]ecret',
+            r'console\.log.*[kK]ey',
+            r'logger.*[kK]ey.*=',
+            r'AIza[0-9A-Za-z-_]{35}',  # Google API key pattern
+        ]
+        
+        # Files to scan for potential exposure
+        scan_patterns = [
+            '*.py',
+            '*.js', 
+            '*.html',
+            'test_*.py',
+            '*test*.py'
+        ]
+        
+        warnings = []
+        
+        for pattern in scan_patterns:
+            for filepath in glob.glob(pattern, recursive=True):
+                try:
+                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                        
+                    for line_num, line in enumerate(content.split('\n'), 1):
+                        for dangerous_pattern in dangerous_patterns:
+                            if re.search(dangerous_pattern, line, re.IGNORECASE):
+                                warnings.append(f"SECURITY WARNING: Potential secret exposure in {filepath}:{line_num}")
+                                logger.warning(f"Potential secret exposure in {filepath}:{line_num}: {line.strip()}")
+                
+                except Exception:
+                    continue
+        
+        if warnings:
+            logger.warning(f"Found {len(warnings)} potential security risks")
+        else:
+            logger.info("Security audit: No obvious secret exposure patterns found")
