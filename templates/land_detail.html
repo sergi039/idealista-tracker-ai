@@ -575,46 +575,6 @@
     </div>
 </div>
 
-<!-- Edit Score Modal (keeping existing modal structure) -->
-<div class="modal fade" id="editScoreModal" tabindex="-1" aria-labelledby="editScoreModalLabel" aria-hidden="true">
-    <div class="modal-dialog">
-        <div class="modal-content bg-dark text-white">
-            <div class="modal-header">
-                <h5 class="modal-title" id="editScoreModalLabel">{{ t('edit_scoring_weights') }}</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <form id="scoring-weights-form" action="{{ url_for('main.update_scoring_weights') }}" method="POST">
-                    <div class="row">
-                        <div class="col-md-6">
-                            <h6><i class="fas fa-coins me-md3-2"></i>{{ t('investment_weights') }}</h6>
-                            <div class="mb-md3-3">
-                                <label class="form-label">{{ t('price_score_weight') }}</label>
-                                <input type="range" class="form-range" name="price_weight" min="0" max="100" value="{{ scoring_config.price_weight or 25 }}" id="priceWeight">
-                                <small class="text-on-surface-variant">{{ t('current') }}: <span id="priceWeightValue">{{ scoring_config.price_weight or 25 }}</span>%</small>
-                            </div>
-                            <div class="mb-md3-3">
-                                <label class="form-label">{{ t('location_score_weight') }}</label>
-                                <input type="range" class="form-range" name="location_weight" min="0" max="100" value="{{ scoring_config.location_weight or 25 }}" id="locationWeight">
-                                <small class="text-on-surface-variant">{{ t('current') }}: <span id="locationWeightValue">{{ scoring_config.location_weight or 25 }}</span>%</small>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <h6><i class="fas fa-home me-md3-2"></i>{{ t('lifestyle_weights') }}</h6>
-                            <div class="mb-md3-3">
-                                <label class="form-label">{{ t('infrastructure_score_weight') }}</label>
-                                <input type="range" class="form-range" name="infrastructure_weight" min="0" max="100" value="{{ scoring_config.infrastructure_weight or 25 }}" id="infrastructureWeight">
-                                <small class="text-on-surface-variant">{{ t('current') }}: <span id="infrastructureWeightValue">{{ scoring_config.infrastructure_weight or 25 }}</span>%</small>
-                            </div>
-                            <div class="mb-md3-3">
-                                <label class="form-label">{{ t('accessibility_score_weight') }}</label>
-                                <input type="range" class="form-range" name="accessibility_weight" min="0" max="100" value="{{ scoring_config.accessibility_weight or 25 }}" id="accessibilityWeight">
-                                <small class="text-on-surface-variant">{{ t('current') }}: <span id="accessibilityWeightValue">{{ scoring_config.accessibility_weight or 25 }}</span>%</small>
-                            </div>
-                        </div>
-                    </div>
-                </form>
-            </div>
 
 <!-- MD3 Edit Score Modal -->
 <div id="editScoreModal" class="md3-modal" style="display: none;">

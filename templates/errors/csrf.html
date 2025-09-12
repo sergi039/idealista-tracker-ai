@@ -3,27 +3,27 @@
 {% block title %}Session Expired - Idealista Land Watch{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-md-6 mx-auto text-center">
-        <div class="card">
-            <div class="card-body py-5">
-                <div class="mb-4">
-                    <i class="fas fa-clock text-warning" style="font-size: 4rem;"></i>
-                </div>
-                
-                <h1 class="h2 mb-3">Session Expired</h1>
-                <p class="text-muted mb-4">
-                    Your session has expired or the form data is invalid. Please refresh the page and try again.
-                </p>
-                
-                <div class="d-grid gap-2 d-md-flex justify-content-md-center">
-                    <button onclick="window.location.reload()" class="btn btn-primary me-md-2">
-                        <i class="fas fa-sync-alt me-2"></i>Refresh Page
-                    </button>
-                    <a href="{{ url_for('main.lands') }}" class="btn btn-outline-primary">
-                        <i class="fas fa-map me-2"></i>Browse Properties
-                    </a>
-                </div>
+<div class="md3-container" style="max-width: 600px; margin: var(--md-sys-spacing-20) auto; text-align: center;">
+    <div class="md3-card md3-card--elevated">
+        <div class="md3-card__content" style="padding: var(--md-sys-spacing-20);">
+            <div style="margin-bottom: var(--md-sys-spacing-16);">
+                <span class="material-symbols-outlined" style="font-size: 4rem; color: var(--md-sys-color-error);">schedule</span>
+            </div>
+            
+            <h1 class="headline-medium" style="margin-bottom: var(--md-sys-spacing-6);">Session Expired</h1>
+            <p class="body-large" style="color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--md-sys-spacing-16);">
+                Your session has expired or the form data is invalid. Please refresh the page and try again.
+            </p>
+            
+            <div style="display: flex; gap: var(--md-sys-spacing-4); justify-content: center; flex-wrap: wrap;">
+                <button onclick="window.location.reload()" class="md3-button md3-button--filled">
+                    <span class="material-symbols-outlined">refresh</span>
+                    Refresh Page
+                </button>
+                <a href="{{ url_for('main.lands') }}" class="md3-button md3-button--outlined">
+                    <span class="material-symbols-outlined">map</span>
+                    Browse Properties
+                </a>
             </div>
         </div>
     </div>

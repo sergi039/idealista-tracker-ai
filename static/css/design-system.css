@@ -72,7 +72,9 @@
 }
 
 /* Dark theme application */
-[data-bs-theme="dark"] {
+[data-theme="dark"],
+:root[data-theme="dark"],
+html[data-theme="dark"] {
   --md-sys-color-primary: #a8c8ec;
   --md-sys-color-on-primary: #0f2d52;
   --md-sys-color-primary-container: #284777;

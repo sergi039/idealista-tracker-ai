@@ -149,10 +149,14 @@ window.IdealistaApp = {
     },
 
     setupTooltips: function() {
-        // Initialize Bootstrap tooltips
-        const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-        const tooltipList = tooltipTriggerList.map(function(tooltipTriggerEl) {
-            return new bootstrap.Tooltip(tooltipTriggerEl);
+        // Initialize native HTML tooltips (title attribute)
+        const tooltipElements = document.querySelectorAll('[data-tooltip], [title]');
+        tooltipElements.forEach(element => {
+            // Ensure tooltip content is available via title attribute
+            const tooltipText = element.getAttribute('data-tooltip') || element.getAttribute('title');
+            if (tooltipText && !element.getAttribute('title')) {
+                element.setAttribute('title', tooltipText);
+            }
         });
     },
 
