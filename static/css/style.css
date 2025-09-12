@@ -257,8 +257,10 @@ footer {
         left: 6px;
         width: 35%;
         text-align: left;
-        font-weight: bold;
-        color: var(--bs-primary);
+        font: var(--md-sys-typescale-title-small-font) !important;
+        font-weight: 600 !important;
+        text-transform: none !important;
+        color: var(--md-sys-color-on-surface-variant) !important;
     }
     
     .btn-group {
@@ -290,8 +292,9 @@ footer {
 
 /* High contrast mode support */
 @media (prefers-contrast: high) {
-    .table th,
-    .table td {
+    /* Removed conflicting .table th rule - use .data-table only */
+    .data-table th,
+    .data-table td {
         border-color: var(--bs-body-color) !important;
     }
     

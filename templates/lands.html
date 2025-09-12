@@ -236,7 +236,7 @@
                                         <th class="sortable {{ 'desc' if current_filters.sort_by == 'score_total' and current_filters.order == 'desc' else '' }}">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_total', order='desc' if current_filters.sort_by == 'score_total' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
                                                class="text-decoration-none">
-                                                Score
+                                                {{ t('score') }}
                                             </a>
                                         </th>
                                         {% elif current_filters.mode == 'investment' %}
@@ -244,7 +244,7 @@
                                         <th class="sortable {{ 'desc' if current_filters.sort_by == 'score_investment' and current_filters.order == 'desc' else '' }}" style="white-space: nowrap;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_investment', order='desc' if current_filters.sort_by == 'score_investment' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
                                                class="text-decoration-none">
-                                                Investment
+                                                {{ t('investment') }}
                                             </a>
                                         </th>
                                         {% elif current_filters.mode == 'lifestyle' %}
@@ -252,7 +252,7 @@
                                         <th class="sortable {{ 'desc' if current_filters.sort_by == 'score_lifestyle' and current_filters.order == 'desc' else '' }}" style="white-space: nowrap;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_lifestyle', order='desc' if current_filters.sort_by == 'score_lifestyle' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
                                                class="text-decoration-none">
-                                                Lifestyle
+                                                {{ t('lifestyle') }}
                                             </a>
                                         </th>
                                         {% endif %}
@@ -292,7 +292,7 @@
                                         <tr class="land-row" data-land-id="{{ land.id }}">
                                             <!-- Combined Mode: Show total score -->
                                             {% if current_filters.mode == 'combined' or not current_filters.mode %}
-                                            <td>
+                                            <td data-label="{{ t('score') }}">
                                                 {% if land.score_total is not none %}
                                                     <span class="score-badge {{ 'score-badge-high' if land.score_total >= 70 else 'score-badge-medium' if land.score_total >= 50 else 'score-badge-low' }}">
                                                         {{ "%.1f"|format(land.score_total) }}
@@ -303,7 +303,7 @@
                                             </td>
                                             {% elif current_filters.mode == 'investment' %}
                                             <!-- Investment Mode: Show only investment score -->
-                                            <td style="background-color: rgba(25, 135, 84, 0.2);">
+                                            <td data-label="{{ t('investment') }}" style="background-color: rgba(25, 135, 84, 0.2);">
                                                 {% if land.score_investment is not none %}
                                                     <span class="score-badge {{ 'score-badge-high' if land.score_investment >= 70 else 'score-badge-medium' if land.score_investment >= 50 else 'score-badge-low' }}">
                                                         {{ "%.1f"|format(land.score_investment) }}
@@ -314,7 +314,7 @@
                                             </td>
                                             {% elif current_filters.mode == 'lifestyle' %}
                                             <!-- Lifestyle Mode: Show only lifestyle score -->
-                                            <td style="background-color: rgba(255, 193, 7, 0.2);">
+                                            <td data-label="{{ t('lifestyle') }}" style="background-color: rgba(255, 193, 7, 0.2);">
                                                 {% if land.score_lifestyle is not none %}
                                                     <span class="score-badge {{ 'score-badge-high' if land.score_lifestyle >= 70 else 'score-badge-medium' if land.score_lifestyle >= 50 else 'score-badge-low' }}">
                                                         {{ "%.1f"|format(land.score_lifestyle) }}
@@ -324,16 +324,16 @@
                                                 {% endif %}
                                             </td>
                                             {% endif %}
-                                            <td>
+                                            <td data-label="{{ t('title') }}">
                                                 <div class="fw-bold">
                                                     <a href="{{ url_for('main.land_detail', land_id=land.id) }}" 
-                                                       class="text-decoration-none table-title" 
+                                                       class="text-decoration-none" 
                                                        title="{{ land.title }}">
                                                         {{ land.title }}
                                                     </a>
                                                 </div>
                                             </td>
-                                            <td style="min-width: 120px !important; white-space: nowrap !important;">
+                                            <td data-label="{{ t('price') }}" style="min-width: 120px !important; white-space: nowrap !important;">
                                                 {% if land.price %}
                                                     <div>
                                                         <strong>{{ "{:,.0f}".format(land.price) }}€</strong>
@@ -363,14 +363,14 @@
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td style="min-width: 100px !important; white-space: nowrap !important;">
+                                            <td data-label="{{ t('area') }}" style="min-width: 100px !important; white-space: nowrap !important;">
                                                 {% if land.area %}
                                                     {{ "{:,.0f}".format(land.area) }} m²
                                                 {% else %}
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td>
+                                            <td data-label="{{ t('coords') }}">
                                                 {% if land.location_lat and land.location_lon %}
                                                     <a href="https://www.google.com/maps/search/?api=1&query={{ land.location_lat }},{{ land.location_lon }}" 
                                                        target="_blank" class="text-decoration-none" 
@@ -393,7 +393,7 @@
                                                     </span>
                                                 {% endif %}
                                             </td>
-                                            <td style="min-width: 110px !important; white-space: nowrap !important;">
+                                            <td data-label="{{ t('beach') }}" style="min-width: 110px !important; white-space: nowrap !important;">
                                                 {% if land.travel_time_nearest_beach %}
                                                     <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/{{ land.nearest_beach_name if land.nearest_beach_name else 'Playa' }},+Asturias,+Spain" 
                                                        target="_blank" class="text-decoration-none text-info d-flex align-items-center" 
@@ -408,7 +408,7 @@
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td style="min-width: 140px !important; white-space: nowrap !important;">
+                                            <td data-label="{{ t('travel') }}" style="min-width: 140px !important; white-space: nowrap !important;">
                                                 {% if land.travel_time_oviedo or land.travel_time_gijon %}
                                                     <div class="d-flex flex-wrap align-items-center gap-1 small">
                                                         {% if land.travel_time_oviedo %}
@@ -432,7 +432,7 @@
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td>
+                                            <td data-label="{{ t('type') }}">
                                                 {% if land.land_type %}
                                                     <span class="badge {{ 'bg-success' if land.land_type == 'developed' else 'bg-warning' }}">
                                                         {{ land.land_type.title() }}
@@ -441,14 +441,14 @@
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td style="min-width: 120px !important; white-space: nowrap !important;">
+                                            <td data-label="{{ t('added') }}" style="min-width: 120px !important; white-space: nowrap !important;">
                                                 {% if land.created_at %}
                                                     <small style="white-space: nowrap !important; display: inline-block;">{{ land.created_at.strftime('%d %b %y') }}</small>
                                                 {% else %}
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td>
+                                            <td data-label="{{ t('actions') }}">
                                                 <div class="d-flex gap-1">
                                                     {% if land.url %}
                                                         <a href="{{ land.url }}" target="_blank" 
