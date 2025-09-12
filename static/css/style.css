@@ -7,7 +7,6 @@
     text-overflow: ellipsis;
     max-width: 100%;
     display: inline-block;
-    cursor: help;
 }
 
 .compact-text {
@@ -33,7 +32,6 @@
     white-space: nowrap;
     text-overflow: ellipsis;
     display: inline-block;
-    cursor: help;
 }
 
 /* HTMX indicators */
