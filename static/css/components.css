@@ -183,12 +183,9 @@
 
 .data-table th {
   padding: var(--md-sys-spacing-4) var(--md-sys-spacing-4);
-  font: var(--md-sys-typescale-title-small-font) !important;
-  font-weight: 600 !important;
-  color: var(--md-sys-color-on-surface-variant) !important;
+  font: var(--md-sys-typescale-title-small-font);
+  color: var(--md-sys-color-on-surface-variant);
   text-align: left;
-  text-transform: none !important;
-  letter-spacing: normal !important;
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
   white-space: nowrap;
 }
