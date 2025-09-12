@@ -13,7 +13,7 @@ class LandFilterSchema(Schema):
     sea_view = fields.Bool(allow_none=True)
     sort = fields.Str(allow_none=True, validate=validate.OneOf([
         'score_total', 'score_investment', 'score_lifestyle', 
-        'price', 'area', 'created_at', 'municipality'
+        'price', 'area', 'created_at', 'municipality', 'travel_time_nearest_beach'
     ]))
     order = fields.Str(allow_none=True, validate=validate.OneOf(['asc', 'desc']))
     page = fields.Int(missing=1, validate=validate.Range(min=1))
