@@ -53,6 +53,9 @@ window.IdealistaApp = {
         // Description enhancement functionality
         this.setupDescriptionEnhancement();
         
+        // View switching functionality
+        this.setupViewSwitching();
+        
         console.log('[INIT] Event listeners setup completed');
     },
 
@@ -1090,7 +1093,190 @@ function saveEnvironment(event, landId) {
         console.error('Error updating environment:', error);
         alert('Failed to update environment data');
     });
-}
+    },
+
+    // View Switching Functionality
+    setupViewSwitching: function() {
+        console.log('[INIT] Setting up view switching...');
+        
+        // Initialize view on page load
+        this.initializeViewOnLoad();
+        
+        // Handle browser back/forward buttons
+        window.addEventListener('popstate', (event) => {
+            if (event.state && event.state.viewType) {
+                const viewType = event.state.viewType;
+                this.switchView(viewType);
+            }
+        });
+        
+        console.log('[INIT] View switching setup completed');
+    },
+    
+    switchView: function(viewType) {
+        const listView = document.getElementById('list-view');
+        const cardsView = document.getElementById('cards-view');
+        const listBtn = document.getElementById('view-list-btn');
+        const cardsBtn = document.getElementById('view-cards-btn');
+        
+        if (!listView || !cardsView || !listBtn || !cardsBtn) {
+            console.warn('View switching elements not found');
+            return;
+        }
+        
+        // Save user preference to localStorage
+        localStorage.setItem('preferredViewType', viewType);
+        
+        // Add transition classes
+        listView.style.transition = 'opacity 0.3s ease-in-out';
+        cardsView.style.transition = 'opacity 0.3s ease-in-out';
+        
+        if (viewType === 'list') {
+            // Fade out current view
+            cardsView.style.opacity = '0';
+            setTimeout(() => {
+                cardsView.style.display = 'none';
+                listView.style.display = 'block';
+                listView.style.opacity = '0';
+                // Fade in new view
+                setTimeout(() => {
+                    listView.style.opacity = '1';
+                }, 10);
+            }, 300);
+            
+            // Update button states - use MD3 classes
+            listBtn.classList.add('md3-button--filled');
+            cardsBtn.classList.remove('md3-button--filled');
+        } else {
+            // Fade out current view
+            listView.style.opacity = '0';
+            setTimeout(() => {
+                listView.style.display = 'none';
+                cardsView.style.display = 'block';
+                cardsView.style.opacity = '0';
+                // Fade in new view
+                setTimeout(() => {
+                    cardsView.style.opacity = '1';
+                }, 10);
+            }, 300);
+            
+            // Update button states - use MD3 classes
+            cardsBtn.classList.add('md3-button--filled');
+            listBtn.classList.remove('md3-button--filled');
+        }
+        
+        // Update URL without page reload
+        this.updateViewTypeInUrl(viewType);
+    },
+    
+    updateViewTypeInUrl: function(viewType) {
+        const url = new URL(window.location);
+        url.searchParams.set('view_type', viewType);
+        
+        // Update URL without reload
+        window.history.pushState({ viewType: viewType }, '', url.toString());
+    },
+    
+    initializeViewOnLoad: function() {
+        const listView = document.getElementById('list-view');
+        const cardsView = document.getElementById('cards-view');
+        const listBtn = document.getElementById('view-list-btn');
+        const cardsBtn = document.getElementById('view-cards-btn');
+        
+        if (!listView || !cardsView || !listBtn || !cardsBtn) {
+            console.warn('View elements not found during initialization');
+            return;
+        }
+        
+        // Load user preference from localStorage
+        const savedViewType = localStorage.getItem('preferredViewType');
+        const url = new URL(window.location);
+        const currentServerView = url.searchParams.get('view_type') || 'cards';
+        
+        if (savedViewType && (savedViewType === 'list' || savedViewType === 'cards')) {
+            // Apply saved preference if different from server-side default
+            if (savedViewType !== currentServerView) {
+                // Switch instantly without animation on page load
+                if (savedViewType === 'list') {
+                    cardsView.style.display = 'none';
+                    listView.style.display = 'block';
+                    listView.style.opacity = '1';
+                    listBtn.classList.add('md3-button--filled');
+                    cardsBtn.classList.remove('md3-button--filled');
+                    
+                    // Update URL without reload
+                    url.searchParams.set('view_type', 'list');
+                    window.history.replaceState({ viewType: 'list' }, '', url.toString());
+                } else {
+                    listView.style.display = 'none';
+                    cardsView.style.display = 'block';
+                    cardsView.style.opacity = '1';
+                    cardsBtn.classList.add('md3-button--filled');
+                    listBtn.classList.remove('md3-button--filled');
+                    
+                    // Update URL without reload
+                    url.searchParams.set('view_type', 'cards');
+                    window.history.replaceState({ viewType: 'cards' }, '', url.toString());
+                }
+            } else {
+                // Set opacity for the current view
+                if (listView.style.display !== 'none') {
+                    listView.style.opacity = '1';
+                    listBtn.classList.add('md3-button--filled');
+                    cardsBtn.classList.remove('md3-button--filled');
+                }
+                if (cardsView.style.display !== 'none') {
+                    cardsView.style.opacity = '1';
+                    cardsBtn.classList.add('md3-button--filled');
+                    listBtn.classList.remove('md3-button--filled');
+                }
+            }
+        } else {
+            // Set opacity for the current view (no saved preference)
+            if (listView.style.display !== 'none') {
+                listView.style.opacity = '1';
+                listBtn.classList.add('md3-button--filled');
+                cardsBtn.classList.remove('md3-button--filled');
+            }
+            if (cardsView.style.display !== 'none') {
+                cardsView.style.opacity = '1';
+                cardsBtn.classList.add('md3-button--filled');
+                listBtn.classList.remove('md3-button--filled');
+            }
+        }
+    }
+};
+
+// Make switchView globally accessible for template onclick handlers
+window.switchView = function(viewType) {
+    if (window.IdealistaApp && window.IdealistaApp.switchView) {
+        window.IdealistaApp.switchView(viewType);
+    } else {
+        console.error('IdealistaApp not ready for view switching');
+    }
+};
+
+// Mode switching functionality (moved from template)
+window.switchMode = function(mode) {
+    const url = new URL(window.location);
+    url.searchParams.set('mode', mode);
+    
+    // Auto-sync sort with mode selection for better UX
+    const currentSort = url.searchParams.get('sort');
+    if (mode === 'investment' && currentSort !== 'score_investment') {
+        url.searchParams.set('sort', 'score_investment');
+    } else if (mode === 'lifestyle' && currentSort !== 'score_lifestyle') {
+        url.searchParams.set('sort', 'score_lifestyle');
+    } else if (mode === 'combined' && currentSort !== 'score_total') {
+        url.searchParams.set('sort', 'score_total');
+    }
+    
+    // Reset to first page when changing mode
+    url.searchParams.delete('page');
+    
+    // Update the URL and reload to apply mode change
+    window.location.href = url.toString();
+};
 
 // Initialize app when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
