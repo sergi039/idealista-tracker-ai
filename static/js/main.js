@@ -798,25 +798,48 @@ window.IdealistaApp = {
     setupDescriptionEnhancement: function() {
         console.log('[DESC] Setting up description enhancement...');
         
-        // Check if we're on the property detail page
-        const descriptionSection = document.getElementById('description-section');
-        if (!descriptionSection) {
-            console.log('[DESC] No description section found, skipping');
+        // Use a retry mechanism to handle timing issues
+        const trySetup = () => {
+            const descriptionSection = document.getElementById('description-section');
+            if (!descriptionSection) {
+                console.log('[DESC] Description section not ready yet, retrying...');
+                return false;
+            }
+
+            console.log('[DESC] Description section found, initializing UI...');
+            // Initialize description enhancement UI
+            this.initializeDescriptionUI();
+            
+            // Setup language toggle
+            const langToggle = document.getElementById('description-language-toggle');
+            if (langToggle) {
+                console.log('[DESC] Language toggle found, adding event listener');
+                langToggle.addEventListener('click', this.handleLanguageToggle.bind(this));
+            } else {
+                console.log('[DESC] Language toggle not found');
+            }
+            return true;
+        };
+
+        // Try immediate setup
+        if (trySetup()) {
             return;
         }
 
-        console.log('[DESC] Description section found, initializing UI...');
-        // Initialize description enhancement UI
-        this.initializeDescriptionUI();
-        
-        // Setup language toggle
-        const langToggle = document.getElementById('description-language-toggle');
-        if (langToggle) {
-            console.log('[DESC] Language toggle found, adding event listener');
-            langToggle.addEventListener('click', this.handleLanguageToggle.bind(this));
-        } else {
-            console.log('[DESC] Language toggle not found');
-        }
+        // If not found, retry with delays
+        let attempts = 0;
+        const maxAttempts = 10;
+        const retryInterval = setInterval(() => {
+            attempts++;
+            console.log(`[DESC] Retry attempt ${attempts}/${maxAttempts}`);
+            
+            if (trySetup() || attempts >= maxAttempts) {
+                clearInterval(retryInterval);
+                if (attempts >= maxAttempts) {
+                    console.log('[DESC] Max attempts reached, description enhancement setup failed');
+                }
+            }
+        }, 100);
     },
 
     initializeDescriptionUI: function() {
@@ -880,7 +903,6 @@ window.IdealistaApp = {
             // Keep original description visible
         });
     },
-
 
     displayEnhancedDescription: function(data) {
         // Store description variants for language switching
@@ -1097,27 +1119,10 @@ function saveEnvironment(event, landId) {
         console.error('Error updating environment:', error);
         alert('Failed to update environment data');
     });
-    },
+}
 
-    // View Switching Functionality
-    setupViewSwitching: function() {
-        console.log('[INIT] Setting up view switching...');
-        
-        // Initialize view on page load
-        this.initializeViewOnLoad();
-        
-        // Handle browser back/forward buttons
-        window.addEventListener('popstate', (event) => {
-            if (event.state && event.state.viewType) {
-                const viewType = event.state.viewType;
-                this.switchView(viewType);
-            }
-        });
-        
-        console.log('[INIT] View switching setup completed');
-    },
-    
-    switchView: function(viewType) {
+// View switching functionality - extend IdealistaApp
+IdealistaApp.switchView = function(viewType) {
         const listView = document.getElementById('list-view');
         const cardsView = document.getElementById('cards-view');
         const listBtn = document.getElementById('view-list-btn');
@@ -1170,18 +1175,20 @@ function saveEnvironment(event, landId) {
         }
         
         // Update URL without page reload
-        this.updateViewTypeInUrl(viewType);
-    },
-    
-    updateViewTypeInUrl: function(viewType) {
+        IdealistaApp.updateViewTypeInUrl(viewType);
+};
+
+// Update view type in URL - extend IdealistaApp
+IdealistaApp.updateViewTypeInUrl = function(viewType) {
         const url = new URL(window.location);
         url.searchParams.set('view_type', viewType);
         
         // Update URL without reload
         window.history.pushState({ viewType: viewType }, '', url.toString());
-    },
-    
-    initializeViewOnLoad: function() {
+};
+
+// Initialize view on load - extend IdealistaApp
+IdealistaApp.initializeViewOnLoad = function() {
         const listView = document.getElementById('list-view');
         const cardsView = document.getElementById('cards-view');
         const listBtn = document.getElementById('view-list-btn');
@@ -1248,7 +1255,24 @@ function saveEnvironment(event, landId) {
                 listBtn.classList.remove('md3-button--filled');
             }
         }
-    }
+};
+
+// Setup view switching - extend IdealistaApp
+IdealistaApp.setupViewSwitching = function() {
+    console.log('[INIT] Setting up view switching...');
+    
+    // Initialize view on page load
+    this.initializeViewOnLoad();
+    
+    // Handle browser back/forward buttons
+    window.addEventListener('popstate', (event) => {
+        if (event.state && event.state.viewType) {
+            const viewType = event.state.viewType;
+            this.switchView(viewType);
+        }
+    });
+    
+    console.log('[INIT] View switching setup completed');
 };
 
 // Make switchView globally accessible for template onclick handlers

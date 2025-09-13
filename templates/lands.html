@@ -20,6 +20,15 @@
             {{ t('last_sync') }}: <span id="last-sync" class="label-medium">{{ t('loading') }}...</span>
         </div>
         <div class="md3-page-actions">
+            <button class="md3-button md3-button--outlined" 
+                    hx-post="{{ url_for('api.manual_ingestion') }}"
+                    hx-trigger="click"
+                    hx-indicator="#sync-indicator"
+                    title="{{ t('manual_sync_tooltip') or 'Manually trigger email ingestion to fetch new properties' }}">
+                <span class="material-symbols-outlined">sync</span>
+                {{ t('manual_sync') or 'Manual Sync' }}
+            </button>
+            <div id="sync-indicator" style="display: none;" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
             <a href="{{ url_for('main.export_csv', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}" class="md3-button md3-button--filled">
                 <span class="material-symbols-outlined">download</span>
                 {{ t('export_csv') }}

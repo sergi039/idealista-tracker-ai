@@ -258,6 +258,8 @@ def enhance_description(land_id):
             return jsonify({
                 "success": True,
                 "enhanced_description": result.get('enhanced_description'),
+                "enhanced_en": result.get('enhanced_en'),
+                "enhanced_es": result.get('enhanced_es'),
                 "original_description": result.get('original_description'),
                 "processing_status": result.get('processing_status'),
                 "key_highlights": result.get('key_highlights', []),

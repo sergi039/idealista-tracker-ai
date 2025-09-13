@@ -138,6 +138,9 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
                     else:
                         response_text = str(content_block)
                 
+                # Debug logging to see what Claude actually returns
+                logger.info(f"Claude raw response: {response_text[:500]}...")
+                
                 # Parse JSON response - handle potential markdown wrapping and extra content
                 response_text = response_text.strip()
                 
@@ -164,9 +167,12 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
                                         response_text = response_text[start:i+1]
                                         break
                 
+                logger.info(f"Extracted JSON for parsing: {response_text[:300]}...")
                 enhanced_data = json.loads(response_text)
                 enhanced_data['original_description'] = raw_description
                 enhanced_data['processing_status'] = 'success'
+                
+                logger.info(f"Parsed enhanced_data keys: {list(enhanced_data.keys())}")
                 
                 # Handle bilingual format - ensure both languages are available
                 if 'enhanced_description_en' in enhanced_data and 'enhanced_description_es' in enhanced_data:
@@ -174,11 +180,23 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
                     enhanced_data['enhanced'] = enhanced_data['enhanced_description_en']  # Default to English
                     enhanced_data['enhanced_en'] = enhanced_data['enhanced_description_en']
                     enhanced_data['enhanced_es'] = enhanced_data['enhanced_description_es']
+                    # Also set enhanced_description for backwards compatibility
+                    enhanced_data['enhanced_description'] = enhanced_data['enhanced_description_en']
+                    logger.info("Using bilingual format with en/es descriptions")
                 elif 'enhanced_description' in enhanced_data:
                     # Legacy single language format - keep for compatibility
                     enhanced_data['enhanced'] = enhanced_data['enhanced_description']
                     enhanced_data['enhanced_en'] = enhanced_data['enhanced_description']
                     enhanced_data['enhanced_es'] = enhanced_data['enhanced_description']  # SAME content for both languages
+                    logger.info("Using legacy single language format")
+                else:
+                    # Fallback: create from fallback description
+                    logger.warning("No enhanced description fields found in Claude response")
+                    fallback_desc = self._create_fallback_description(raw_description, extracted_data)
+                    enhanced_data['enhanced_description'] = fallback_desc
+                    enhanced_data['enhanced'] = fallback_desc
+                    enhanced_data['enhanced_en'] = fallback_desc
+                    enhanced_data['enhanced_es'] = fallback_desc
                 
                 return enhanced_data
                 

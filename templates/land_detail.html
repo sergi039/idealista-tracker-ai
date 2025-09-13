@@ -308,8 +308,8 @@
                                     {{ t('nearest_airport') }}
                                 </div>
                                 <div style="display: flex; gap: var(--md-sys-spacing-1);">
-                                    {% if land.travel_time_airport %}<span class="md3-chip md3-chip--info">{{ land.travel_time_airport }}min</span>{% endif %}
-                                    {% if land.distance_airport %}<span class="md3-chip md3-chip--secondary">{{ land.distance_airport }}km</span>{% endif %}
+                                    {% if land.travel_time_airport %}<span class="md3-chip md3-chip--info transport-duration" data-raw-seconds="{{ land.travel_time_airport }}">{{ land.travel_time_airport }}min</span>{% endif %}
+                                    {% if land.distance_airport %}<span class="md3-chip md3-chip--secondary transport-distance" data-raw-meters="{{ land.distance_airport }}">{{ land.distance_airport }}km</span>{% endif %}
                                 </div>
                             </div>
                         {% endif %}
@@ -321,8 +321,8 @@
                                     {{ t('train_station') }}
                                 </div>
                                 <div style="display: flex; gap: var(--md-sys-spacing-1);">
-                                    {% if land.travel_time_train_station %}<span class="md3-chip md3-chip--info">{{ land.travel_time_train_station }}min</span>{% endif %}
-                                    {% if land.distance_train_station %}<span class="md3-chip md3-chip--secondary">{{ land.distance_train_station }}km</span>{% endif %}
+                                    {% if land.travel_time_train_station %}<span class="md3-chip md3-chip--info transport-duration" data-raw-seconds="{{ land.travel_time_train_station }}">{{ land.travel_time_train_station }}min</span>{% endif %}
+                                    {% if land.distance_train_station %}<span class="md3-chip md3-chip--secondary transport-distance" data-raw-meters="{{ land.distance_train_station }}">{{ land.distance_train_station }}km</span>{% endif %}
                                 </div>
                             </div>
                         {% endif %}
@@ -334,8 +334,8 @@
                                     {{ t('hospital') }}
                                 </div>
                                 <div style="display: flex; gap: var(--md-sys-spacing-1);">
-                                    {% if land.travel_time_hospital %}<span class="md3-chip md3-chip--info">{{ land.travel_time_hospital }}min</span>{% endif %}
-                                    {% if land.distance_hospital %}<span class="md3-chip md3-chip--secondary">{{ land.distance_hospital }}km</span>{% endif %}
+                                    {% if land.travel_time_hospital %}<span class="md3-chip md3-chip--info transport-duration" data-raw-seconds="{{ land.travel_time_hospital }}">{{ land.travel_time_hospital }}min</span>{% endif %}
+                                    {% if land.distance_hospital %}<span class="md3-chip md3-chip--secondary transport-distance" data-raw-meters="{{ land.distance_hospital }}">{{ land.distance_hospital }}km</span>{% endif %}
                                 </div>
                             </div>
                         {% endif %}
@@ -1449,4 +1449,90 @@ function getPaybackPeriodClass(years) {
     }
 }
 </style>
+
+<script>
+// Format transport data on page load
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('Starting transport data formatting...');
+    
+    // Format distance values
+    const distanceElements = document.querySelectorAll('.transport-distance[data-raw-meters]');
+    console.log('Found', distanceElements.length, 'distance elements to format');
+    
+    distanceElements.forEach(function(element) {
+        const rawValue = parseFloat(element.getAttribute('data-raw-meters'));
+        console.log('Processing distance value:', rawValue);
+        
+        if (!isNaN(rawValue)) {
+            let formattedDistance;
+            
+            // Check if value is very large (likely in meters) or reasonable (likely in km)
+            if (rawValue > 1000) {
+                // Assume this is meters, use the formatDistance function
+                if (typeof window.IdealistaApp !== 'undefined' && window.IdealistaApp.formatDistance) {
+                    formattedDistance = window.IdealistaApp.formatDistance(rawValue);
+                } else {
+                    // Fallback formatting
+                    formattedDistance = (rawValue / 1000).toFixed(1) + ' km';
+                }
+            } else {
+                // Assume this is already in km, format appropriately
+                if (rawValue < 1) {
+                    formattedDistance = Math.round(rawValue * 1000) + ' m';
+                } else {
+                    formattedDistance = rawValue.toFixed(1) + ' km';
+                }
+            }
+            
+            console.log('Formatted distance:', rawValue, '->', formattedDistance);
+            element.textContent = formattedDistance;
+        }
+    });
+    
+    // Format duration values
+    const durationElements = document.querySelectorAll('.transport-duration[data-raw-seconds]');
+    console.log('Found', durationElements.length, 'duration elements to format');
+    
+    durationElements.forEach(function(element) {
+        const rawValue = parseFloat(element.getAttribute('data-raw-seconds'));
+        console.log('Processing duration value:', rawValue);
+        
+        if (!isNaN(rawValue)) {
+            let formattedDuration;
+            
+            // Check if value is very large (likely in seconds) or reasonable (likely in minutes)
+            if (rawValue > 300) {
+                // Assume this is seconds, use the formatDuration function
+                if (typeof window.IdealistaApp !== 'undefined' && window.IdealistaApp.formatDuration) {
+                    formattedDuration = window.IdealistaApp.formatDuration(rawValue);
+                } else {
+                    // Fallback formatting
+                    const minutes = Math.round(rawValue / 60);
+                    if (minutes < 60) {
+                        formattedDuration = minutes + ' min';
+                    } else {
+                        const hours = Math.floor(minutes / 60);
+                        const remainingMinutes = minutes % 60;
+                        formattedDuration = hours + 'h' + (remainingMinutes > 0 ? ' ' + remainingMinutes + 'm' : '');
+                    }
+                }
+            } else {
+                // Assume this is already in minutes, format appropriately
+                if (rawValue >= 60) {
+                    const hours = Math.floor(rawValue / 60);
+                    const remainingMinutes = Math.round(rawValue % 60);
+                    formattedDuration = hours + 'h' + (remainingMinutes > 0 ? ' ' + remainingMinutes + 'm' : '');
+                } else {
+                    formattedDuration = Math.round(rawValue) + ' min';
+                }
+            }
+            
+            console.log('Formatted duration:', rawValue, '->', formattedDuration);
+            element.textContent = formattedDuration;
+        }
+    });
+    
+    console.log('Transport data formatting completed');
+});
+</script>
 {% endblock %}
