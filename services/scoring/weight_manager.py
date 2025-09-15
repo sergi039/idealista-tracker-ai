@@ -12,10 +12,20 @@ class WeightManager:
     def load_profile_weights(self, profile: str) -> Dict[str, float]:
         """Load weights for a specific profile from database, fallback to Config"""
         try:
+            # Add timeout to prevent hanging
+            import signal
+            def timeout_handler(signum, frame):
+                raise TimeoutError("Database query timeout")
+            
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(5)  # 5 second timeout
+            
             criteria = ScoringCriteria.query.filter_by(
                 active=True,
                 profile=profile
             ).all()
+            
+            signal.alarm(0)  # Cancel timeout
             
             if criteria:
                 db_weights = {c.criteria_name: float(c.weight) for c in criteria}
