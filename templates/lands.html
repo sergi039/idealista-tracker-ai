@@ -6,7 +6,7 @@
 <!-- MD3 Container -->
 <div class="md3-container">
     <!-- MD3 Page Header -->
-    <header class="md3-page-header">
+    <header class="md3-page-header md3-page-header--compact">
         <div class="md3-page-title">
             <span class="material-symbols-outlined">apartment</span>
             {{ t('properties') }}
@@ -16,23 +16,8 @@
                 <span class="md3-badge md3-secondary-container">{{ lands|length }}</span>
             {% endif %}
         </div>
-        <div class="body-small" style="color: var(--md-sys-color-on-surface-variant); margin-top: var(--md-sys-spacing-2);">
+        <div class="body-small" style="color: var(--md-sys-color-on-surface-variant); margin-top: var(--md-sys-spacing-1);">
             {{ t('last_sync') }}: <span id="last-sync" class="label-medium">{{ t('loading') }}...</span>
-        </div>
-        <div class="md3-page-actions">
-            <button class="md3-button md3-button--outlined" 
-                    hx-post="{{ url_for('api.manual_ingestion') }}"
-                    hx-trigger="click"
-                    hx-indicator="#sync-indicator"
-                    title="{{ t('manual_sync_tooltip') or 'Manually trigger email ingestion to fetch new properties' }}">
-                <span class="material-symbols-outlined">sync</span>
-                {{ t('manual_sync') or 'Manual Sync' }}
-            </button>
-            <div id="sync-indicator" style="display: none;" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
-            <a href="{{ url_for('main.export_csv', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}" class="md3-button md3-button--filled">
-                <span class="material-symbols-outlined">download</span>
-                {{ t('export_csv') }}
-            </a>
         </div>
     </header>
 
@@ -235,9 +220,9 @@
             <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-4);">
                 <!-- MD3 Analysis Mode Toggle -->
                 <div style="display: flex; border: 1px solid var(--md-sys-color-outline-variant); border-radius: var(--md-sys-shape-corner-large); overflow: hidden;" role="group" aria-label="Analysis mode">
-                    <button type="button" 
+                    <button type="button"
                             class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.active_mode == 'combined' else '' }}"
-                            onclick="switchMode('combined')" 
+                            onclick="switchMode('combined')"
                             id="mode-combined-btn"
                             title="Combined Analysis - Shows overall property rating"
                             style="border-radius: 0; border: none; width: 48px; height: 48px;">
@@ -257,15 +242,9 @@
                             id="mode-lifestyle-btn"
                             title="Lifestyle Analysis - Focus on quality of life factors"
                             style="border-radius: 0; border: none; border-left: 1px solid var(--md-sys-color-outline-variant); width: 48px; height: 48px;">
-                        <span class="material-symbols-outlined">home</span>
+                            <span class="material-symbols-outlined">home</span>
                     </button>
                 </div>
-                
-                <a href="{{ url_for('main.export_csv', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}" 
-                   class="md3-button md3-button--filled" title="Download filtered data as CSV file">
-                    <span class="material-symbols-outlined">download</span>
-                    Export CSV
-                </a>
             </div>
         </div>
             
