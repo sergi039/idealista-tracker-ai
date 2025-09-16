@@ -1129,6 +1129,15 @@ function saveEnvironment(event, landId) {
     });
 }
 
+// Keep hidden view_type input in sync with current selection
+IdealistaApp.updateViewTypeInput = function(viewType) {
+        const viewInput = document.querySelector('#filter-form input[name="view_type"]');
+
+        if (viewInput) {
+            viewInput.value = viewType;
+        }
+};
+
 // View switching functionality - extend IdealistaApp
 IdealistaApp.switchView = function(viewType) {
         const listView = document.getElementById('list-view');
@@ -1181,9 +1190,10 @@ IdealistaApp.switchView = function(viewType) {
             cardsBtn.classList.add('md3-button--filled');
             listBtn.classList.remove('md3-button--filled');
         }
-        
+
         // Update URL without page reload
         IdealistaApp.updateViewTypeInUrl(viewType);
+        this.updateViewTypeInput(viewType);
 };
 
 // Update view type in URL - extend IdealistaApp
@@ -1263,6 +1273,9 @@ IdealistaApp.initializeViewOnLoad = function() {
                 listBtn.classList.remove('md3-button--filled');
             }
         }
+
+        const activeView = listView.style.display !== 'none' ? 'list' : 'cards';
+        this.updateViewTypeInput(activeView);
 };
 
 // Setup view switching - extend IdealistaApp

@@ -21,6 +21,7 @@
     <!-- Custom MD3 Theme CSS -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/md3-theme.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/md3-components.css') }}">
+    {% block styles %}{% endblock %}
     
     <script>
         function setLanguage(langCode) {
@@ -37,7 +38,7 @@
         }
     </script>
 </head>
-<body>
+<body{% block body_attrs %}{% endblock %}>
     <!-- MD3 Navigation -->
     <header class="md3-top-app-bar">
         <div class="md3-top-app-bar__title">
