@@ -3,318 +3,312 @@
 {% block title %}Properties - Idealista Land Watch{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1>
-                <i class="fas fa-map-marked-alt me-2"></i>
-                {{ t('properties') }}
-                {% if pagination %}
-                    <span class="badge bg-secondary">{{ pagination.total }}</span>
-                {% else %}
-                    <span class="badge bg-secondary">{{ lands|length }}</span>
-                {% endif %}
-                <small class="text-muted ms-3 fw-normal" style="font-size: 0.75rem;">
-                    {{ t('last_sync') }}: <span id="last-sync">{{ t('loading') }}...</span>
-                </small>
-            </h1>
-            
-            <div>
-                <a href="{{ url_for('main.export_csv', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}" class="btn btn-success">
-                    <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
-                </a>
-            </div>
+<!-- MD3 Container -->
+<div class="md3-container">
+    <!-- MD3 Page Header -->
+    <header class="md3-page-header md3-page-header--compact">
+        <div class="md3-page-title">
+            <span class="material-symbols-outlined">apartment</span>
+            {{ t('properties') }}
+            {% if pagination %}
+                <span class="md3-badge md3-secondary-container">{{ pagination.total }}</span>
+            {% else %}
+                <span class="md3-badge md3-secondary-container">{{ lands|length }}</span>
+            {% endif %}
         </div>
+        <div class="body-small" style="color: var(--md-sys-color-on-surface-variant); margin-top: var(--md-sys-spacing-1);">
+            {{ t('last_sync') }}: <span id="last-sync" class="label-medium">{{ t('loading') }}...</span>
+        </div>
+    </header>
 
 
-        <!-- Filters -->
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5 class="card-title mb-0">
-                    <i class="fas fa-filter me-2"></i>{{ t('filters_search') }}
-                </h5>
-            </div>
-            <div class="card-body">
-                <form method="GET" id="filter-form">
-                    <!-- Hidden inputs to preserve state -->
-                    <input type="hidden" name="mode" value="{{ current_filters.mode or 'combined' }}">
-                    <input type="hidden" name="view_type" value="{{ current_filters.view_type or 'cards' }}">
-                    <div class="row">
-                        <!-- Search -->
-                        <div class="col-md-3 mb-3">
-                            <label for="search" class="form-label">{{ t('search') }}</label>
-                            <input type="text" class="form-control" id="search" name="search" 
-                                   value="{{ current_filters.search or '' }}" 
-                                   placeholder="{{ t('search_properties') }}">
-                        </div>
-                        
-                        <!-- Land Type -->
-                        <div class="col-md-2 mb-3">
-                            <label for="land_type" class="form-label">{{ t('land_type') }}</label>
-                            <select class="form-select" id="land_type" name="land_type">
-                                <option value="">{{ t('land_type_all') }}</option>
-                                <option value="developed" {{ 'selected' if current_filters.land_type == 'developed' }}>
-                                    {{ t('developed') }}
+    <!-- MD3 Filters Card -->
+    <div class="md3-card md3-card--elevated" style="margin-bottom: var(--md-sys-spacing-8);">
+        <div class="md3-card__header">
+            <h2 class="title-medium" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin: 0;">
+                <span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">tune</span>
+                {{ t('filters_search') }}
+            </h2>
+        </div>
+        <div class="md3-card__content">
+            <form method="GET" id="filter-form">
+                <!-- Hidden inputs to preserve state -->
+                <input type="hidden" name="mode" value="{{ current_filters.mode or 'combined' }}">
+                <input type="hidden" name="view_type" value="{{ current_filters.view_type or 'cards' }}">
+                
+                <!-- Filter Fields Grid -->
+                <div class="md3-grid md3-filters-grid" style="gap: var(--md-sys-spacing-4); align-items: end; margin-bottom: var(--md-sys-spacing-6);">
+                    <!-- Search Field -->
+                    <div class="md3-text-field">
+                        <label class="md3-text-field__label" for="search">
+                            <span class="material-symbols-outlined" style="font-size: 18px; vertical-align: middle; margin-right: var(--md-sys-spacing-1);">search</span>
+                            {{ t('search_properties') }}
+                        </label>
+                        <input type="text" class="md3-text-field__input body-large" id="search" name="search" 
+                               value="{{ current_filters.search or '' }}">
+                    </div>
+                    
+                    <!-- Land Type Field -->
+                    <div class="md3-text-field">
+                        <label class="md3-text-field__label" for="land_type">
+                            <span class="material-symbols-outlined" style="font-size: 18px; vertical-align: middle; margin-right: var(--md-sys-spacing-1);">category</span>
+                            {{ t('land_type') }}
+                        </label>
+                        <select class="md3-text-field__input body-large" id="land_type" name="land_type">
+                            <option value="">{{ t('land_type_all') }}</option>
+                            <option value="developed" {{ 'selected' if current_filters.land_type == 'developed' }}>
+                                {{ t('developed') }}
+                            </option>
+                            <option value="buildable" {{ 'selected' if current_filters.land_type == 'buildable' }}>
+                                {{ t('buildable') }}
+                            </option>
+                        </select>
+                    </div>
+                    
+                    <!-- Municipality Field -->
+                    <div class="md3-text-field">
+                        <label class="md3-text-field__label" for="municipality">
+                            <span class="material-symbols-outlined" style="font-size: 18px; vertical-align: middle; margin-right: var(--md-sys-spacing-1);">location_on</span>
+                            {{ t('location') }}
+                        </label>
+                        <select class="md3-text-field__input body-large" id="municipality" name="municipality">
+                            <option value="">{{ t('all_municipalities') }}</option>
+                            {% for municipality in municipalities %}
+                                <option value="{{ municipality }}" 
+                                        {{ 'selected' if current_filters.municipality == municipality }}>
+                                    {{ municipality }}
                                 </option>
-                                <option value="buildable" {{ 'selected' if current_filters.land_type == 'buildable' }}>
-                                    {{ t('buildable') }}
+                            {% endfor %}
+                        </select>
+                    </div>
+                    
+                    <!-- Sea View Checkbox -->
+                    <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); white-space: nowrap;">
+                        <input type="checkbox" id="sea_view" name="sea_view" 
+                               {{ 'checked' if current_filters.sea_view }}
+                               style="accent-color: var(--md-sys-color-primary);">
+                        <label class="label-medium" for="sea_view" style="color: var(--md-sys-color-on-surface); cursor: pointer; display: flex; align-items: center; gap: var(--md-sys-spacing-1);">
+                            <span class="material-symbols-outlined" style="font-size: 18px; color: var(--md-sys-color-primary);">waves</span>
+                            {{ t('sea_view_only') }}
+                        </label>
+                    </div>
+                    
+                    <!-- Sort Controls -->
+                    <div style="display: flex; gap: var(--md-sys-spacing-2); align-items: end;">
+                        <div class="md3-text-field" style="flex: 1;">
+                            <label class="md3-text-field__label" for="sort">
+                                <span class="material-symbols-outlined" style="font-size: 18px; vertical-align: middle; margin-right: var(--md-sys-spacing-1);">sort</span>
+                                {{ t('sort_by') }}
+                            </label>
+                            <select class="md3-text-field__input body-large" id="sort" name="sort">
+                                <option value="" {{ 'selected' if not current_filters.sort_by else '' }}>{{ t('sort_by') }}</option>
+                                <!-- Mode-based score options -->
+                                {% if current_filters.mode == 'investment' %}
+                                    <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
+                                        Investment Score
+                                    </option>
+                                    <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
+                                        Lifestyle Score
+                                    </option>
+                                    <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
+                                        Combined Score
+                                    </option>
+                                {% elif current_filters.mode == 'lifestyle' %}
+                                    <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
+                                        Lifestyle Score
+                                    </option>
+                                    <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
+                                        Investment Score
+                                    </option>
+                                    <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
+                                        Combined Score
+                                    </option>
+                                {% else %}
+                                    <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
+                                        Combined Score
+                                    </option>
+                                    <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
+                                        Investment Score
+                                    </option>
+                                    <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
+                                        Lifestyle Score
+                                    </option>
+                                {% endif %}
+                                <!-- Other sort options -->
+                                <option value="price" {{ 'selected' if current_filters.sort_by == 'price' }}>
+                                    {{ t('price') }}
+                                </option>
+                                <option value="area" {{ 'selected' if current_filters.sort_by == 'area' }}>
+                                    {{ t('area') }}
+                                </option>
+                                <option value="travel_time_nearest_beach" {{ 'selected' if current_filters.sort_by == 'travel_time_nearest_beach' }}>
+                                    {{ t('beach_distance') }}
+                                </option>
+                                <option value="created_at" {{ 'selected' if current_filters.sort_by == 'created_at' }}>
+                                    {{ t('date_added') }}
                                 </option>
                             </select>
                         </div>
-                        
-                        <!-- Municipality -->
-                        <div class="col-md-2 mb-3">
-                            <label for="municipality" class="form-label">{{ t('municipality') }}</label>
-                            <select class="form-select" id="municipality" name="municipality">
-                                <option value="">{{ t('all_municipalities') }}</option>
-                                {% for municipality in municipalities %}
-                                    <option value="{{ municipality }}" 
-                                            {{ 'selected' if current_filters.municipality == municipality }}>
-                                        {{ municipality }}
-                                    </option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        
-                        <!-- Sea View Filter -->
-                        <div class="col-md-2 mb-3">
-                            <label class="form-label">&nbsp;</label>
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="sea_view" name="sea_view" 
-                                       {{ 'checked' if current_filters.sea_view }}>
-                                <label class="form-check-label" for="sea_view">
-                                    <i class="fas fa-water me-1"></i>{{ t('sea_view_only') }}
-                                </label>
-                            </div>
-                        </div>
-                        
-                        <!-- Sort -->
-                        <div class="col-md-3 mb-3">
-                            <label for="sort" class="form-label">{{ t('sort_by') }}</label>
-                            <div class="input-group">
-                                <select class="form-select" id="sort" name="sort">
-                                    <!-- Mode-based score options -->
-                                    {% if current_filters.mode == 'investment' %}
-                                        <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
-                                            💼 Investment Score
-                                        </option>
-                                        <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
-                                            🏡 Lifestyle Score
-                                        </option>
-                                        <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
-                                            Combined Score
-                                        </option>
-                                    {% elif current_filters.mode == 'lifestyle' %}
-                                        <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
-                                            🏡 Lifestyle Score
-                                        </option>
-                                        <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
-                                            💼 Investment Score
-                                        </option>
-                                        <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
-                                            Combined Score
-                                        </option>
-                                    {% else %}
-                                        <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
-                                            Combined Score
-                                        </option>
-                                        <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
-                                            💼 Investment Score
-                                        </option>
-                                        <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
-                                            🏡 Lifestyle Score
-                                        </option>
-                                    {% endif %}
-                                    <!-- Other sort options -->
-                                    <option value="price" {{ 'selected' if current_filters.sort_by == 'price' }}>
-                                        {{ t('price') }}
-                                    </option>
-                                    <option value="area" {{ 'selected' if current_filters.sort_by == 'area' }}>
-                                        {{ t('area') }}
-                                    </option>
-                                    <option value="travel_time_nearest_beach" {{ 'selected' if current_filters.sort_by == 'travel_time_nearest_beach' }}>
-                                        {{ t('beach_distance') }}
-                                    </option>
-                                    <option value="created_at" {{ 'selected' if current_filters.sort_by == 'created_at' }}>
-                                        {{ t('date_added') }}
-                                    </option>
-                                </select>
-                                <select class="form-select" name="order" style="max-width: 100px;">
-                                    <option value="desc" {{ 'selected' if current_filters.order == 'desc' }}>↓</option>
-                                    <option value="asc" {{ 'selected' if current_filters.order == 'asc' }}>↑</option>
-                                </select>
-                            </div>
-                        </div>
-                        
-                        <!-- Action Buttons and View Toggle -->
-                        <div class="col-md-4 mb-3 d-flex align-items-end">
-                            <button type="submit" class="btn btn-primary me-2">
-                                <i class="fas fa-search me-1"></i>{{ t('apply') }}
+                        <!-- Sort Direction Buttons -->
+                        <div style="display: flex; flex-direction: column; gap: var(--md-sys-spacing-1);">
+                            <button type="submit" class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.order == 'desc' else '' }}" 
+                                    onclick="document.querySelector('input[name=order]').value='desc'" 
+                                    title="{{ t('sort_descending') }}">
+                                <span class="material-symbols-outlined">arrow_downward</span>
                             </button>
-                            <a href="{{ url_for('main.lands') }}" class="btn btn-outline-secondary me-3">
-                                <i class="fas fa-times me-1"></i>{{ t('clear') }}
-                            </a>
-                            
-                            <!-- View Toggle -->
-                            <div class="btn-group" role="group" aria-label="View type">
-                                <button type="button" 
-                                        class="btn btn-outline-secondary {{ 'active' if current_filters.view_type == 'list' else '' }}" 
-                                        id="view-list-btn" 
-                                        onclick="switchView('list')" 
-                                        title="Table view - Compact data in rows">
-                                    <i class="fas fa-list"></i>
-                                </button>
-                                
-                                <button type="button" 
-                                        class="btn btn-outline-secondary {{ 'active' if current_filters.view_type == 'cards' or not current_filters.view_type else '' }}" 
-                                        id="view-cards-btn" 
-                                        onclick="switchView('cards')" 
-                                        title="Card view - Visual property cards">
-                                    <i class="fas fa-th-large"></i>
-                                </button>
-                            </div>
+                            <button type="submit" class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.order == 'asc' else '' }}" 
+                                    onclick="document.querySelector('input[name=order]').value='asc'" 
+                                    title="{{ t('sort_ascending') }}">
+                                <span class="material-symbols-outlined">arrow_upward</span>
+                            </button>
                         </div>
+                        <input type="hidden" name="order" value="{{ current_filters.order or 'desc' }}">
                     </div>
-                </form>
+                </div>
+                        
+                    </div>
+                
+                <!-- MD3 Action Buttons and View Toggle -->
+                <div class="md3-card__actions" style="justify-content: space-between;">
+                    <div style="display: flex; gap: var(--md-sys-spacing-3);">
+                        <button type="submit" class="md3-button md3-button--filled">
+                            <span class="material-symbols-outlined">search</span>
+                            {{ t('apply') }}
+                        </button>
+                        <a href="{{ url_for('main.lands') }}" class="md3-button md3-button--outlined">
+                            <span class="material-symbols-outlined">clear</span>
+                            {{ t('clear') }}
+                        </a>
+                    </div>
+                    
+                    <!-- MD3 View Toggle -->
+                    <div style="display: flex; border: 1px solid var(--md-sys-color-outline-variant); border-radius: var(--md-sys-shape-corner-large); overflow: hidden;" role="group" aria-label="View type">
+                        <button type="button" 
+                                class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.view_type == 'list' else '' }}" 
+                                id="view-list-btn" 
+                                onclick="switchView('list')" 
+                                title="Table view - Compact data in rows"
+                                style="border-radius: 0; border: none; width: 48px; height: 48px;">
+                            <span class="material-symbols-outlined">view_list</span>
+                        </button>
+                        
+                        <button type="button" 
+                                class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.view_type == 'cards' or not current_filters.view_type else '' }}" 
+                                id="view-cards-btn" 
+                                onclick="switchView('cards')" 
+                                title="Card view - Visual property cards"
+                                style="border-radius: 0; border: none; border-left: 1px solid var(--md-sys-color-outline-variant); width: 48px; height: 48px;">
+                            <span class="material-symbols-outlined">view_module</span>
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MD3 Properties Display -->
+    {% if lands %}
+        <!-- Results Summary and Mode Controls -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--md-sys-spacing-6);">
+            <div>
+                <h3 class="title-large" style="margin: 0;">{{ pagination.total }} {{ t('properties_found') }}</h3>
+                {% if filters_applied %}
+                    <p class="body-small" style="color: var(--md-sys-color-on-surface-variant); margin: 0;">(filtered)</p>
+                {% endif %}
+            </div>
+            
+            <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-4);">
+                <!-- MD3 Analysis Mode Toggle -->
+                <div style="display: flex; border: 1px solid var(--md-sys-color-outline-variant); border-radius: var(--md-sys-shape-corner-large); overflow: hidden;" role="group" aria-label="Analysis mode">
+                    <button type="button"
+                            class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.active_mode == 'combined' else '' }}"
+                            onclick="switchMode('combined')"
+                            id="mode-combined-btn"
+                            title="Combined Analysis - Shows overall property rating"
+                            style="border-radius: 0; border: none; width: 48px; height: 48px;">
+                        <span class="material-symbols-outlined">balance</span>
+                    </button>
+                    <button type="button" 
+                            class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.active_mode == 'investment' else '' }}"
+                            onclick="switchMode('investment')" 
+                            id="mode-investment-btn"
+                            title="Investment Analysis - Focus on rental yield and ROI"
+                            style="border-radius: 0; border: none; border-left: 1px solid var(--md-sys-color-outline-variant); width: 48px; height: 48px;">
+                        <span class="material-symbols-outlined">business_center</span>
+                    </button>
+                    <button type="button" 
+                            class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.active_mode == 'lifestyle' else '' }}"
+                            onclick="switchMode('lifestyle')" 
+                            id="mode-lifestyle-btn"
+                            title="Lifestyle Analysis - Focus on quality of life factors"
+                            style="border-radius: 0; border: none; border-left: 1px solid var(--md-sys-color-outline-variant); width: 48px; height: 48px;">
+                            <span class="material-symbols-outlined">home</span>
+                    </button>
+                </div>
             </div>
         </div>
-
-        <!-- Properties Display -->
-        {% if lands %}
-            <div class="mb-3 d-flex justify-content-between align-items-center">
-                <div>
-                    <strong>{{ pagination.total }} {{ t('properties_found') }}</strong>
-                    {% if filters_applied %}
-                        <span class="text-muted">(filtered)</span>
-                    {% endif %}
-                </div>
-                <div class="d-flex align-items-center gap-3">
-                    <!-- Compact Mode Toggle Buttons -->
-                    <div class="btn-group btn-group-sm" role="group" aria-label="Analysis mode">
-                        <button type="button" 
-                                class="btn {{ 'btn-secondary' if current_filters.active_mode == 'combined' else 'btn-outline-secondary' }}"
-                                onclick="switchMode('combined')" 
-                                id="mode-combined-btn"
-                                title="Combined Analysis - Shows overall property rating">
-                            <i class="fas fa-balance-scale"></i>
-                        </button>
-                        <button type="button" 
-                                class="btn {{ 'btn-success' if current_filters.active_mode == 'investment' else 'btn-outline-secondary' }}"
-                                onclick="switchMode('investment')" 
-                                id="mode-investment-btn"
-                                title="Investment Analysis - Focus on rental yield and ROI">
-                            <i class="fas fa-chart-line"></i>
-                        </button>
-                        <button type="button" 
-                                class="btn {{ 'btn-warning' if current_filters.active_mode == 'lifestyle' else 'btn-outline-secondary' }}"
-                                onclick="switchMode('lifestyle')" 
-                                id="mode-lifestyle-btn"
-                                title="Lifestyle Analysis - Focus on quality of life factors">
-                            <i class="fas fa-home"></i>
-                        </button>
-                    </div>
-                    <a href="{{ url_for('main.export_csv', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}" class="btn btn-success btn-sm" title="Download filtered data as CSV file">
-                        <i class="fas fa-download me-1"></i>Export CSV
-                    </a>
-                </div>
-            </div>
             
             <!-- List View (Table) -->
             <div id="list-view" class="view-container" style="{{ 'display: block;' if current_filters.view_type == 'list' else 'display: none;' }}">
                 <div class="card">
                     <div class="card-body p-0">
                         <div class="table-responsive">
-                            <table class="table table-hover mb-0">
-                                <thead class="table-dark">
+                            <table class="data-table">
+                                <thead>
                                     <tr>
                                         <!-- Combined Mode: Show total score -->
                                         {% if current_filters.mode == 'combined' or not current_filters.mode %}
-                                        <th>
+                                        <th class="sortable {{ 'desc' if current_filters.sort_by == 'score_total' and current_filters.order == 'desc' else '' }}">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_total', order='desc' if current_filters.sort_by == 'score_total' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
-                                               class="text-white text-decoration-none d-flex align-items-center">
-                                                Score
-                                                {% if current_filters.sort_by == 'score_total' %}
-                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
-                                                {% else %}
-                                                    <i class="fas fa-sort ms-1 opacity-50"></i>
-                                                {% endif %}
+                                               class="text-decoration-none">
+                                                {{ t('score') }}
                                             </a>
                                         </th>
                                         {% elif current_filters.mode == 'investment' %}
                                         <!-- Investment Mode: Show only investment column -->
-                                        <th style="background-color: #198754; white-space: nowrap;">
+                                        <th class="sortable {{ 'desc' if current_filters.sort_by == 'score_investment' and current_filters.order == 'desc' else '' }}" style="white-space: nowrap;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_investment', order='desc' if current_filters.sort_by == 'score_investment' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
-                                               class="text-white text-decoration-none d-flex align-items-center">
-                                                Investment
-                                                {% if current_filters.sort_by == 'score_investment' %}
-                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
-                                                {% else %}
-                                                    <i class="fas fa-sort ms-1 opacity-50"></i>
-                                                {% endif %}
+                                               class="text-decoration-none">
+                                                {{ t('investment') }}
                                             </a>
                                         </th>
                                         {% elif current_filters.mode == 'lifestyle' %}
                                         <!-- Lifestyle Mode: Show only lifestyle column -->
-                                        <th style="background-color: #ffc107; white-space: nowrap;">
+                                        <th class="sortable {{ 'desc' if current_filters.sort_by == 'score_lifestyle' and current_filters.order == 'desc' else '' }}" style="white-space: nowrap;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_lifestyle', order='desc' if current_filters.sort_by == 'score_lifestyle' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
-                                               class="text-white text-decoration-none d-flex align-items-center">
-                                                Lifestyle
-                                                {% if current_filters.sort_by == 'score_lifestyle' %}
-                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
-                                                {% else %}
-                                                    <i class="fas fa-sort ms-1 opacity-50"></i>
-                                                {% endif %}
+                                               class="text-decoration-none">
+                                                {{ t('lifestyle') }}
                                             </a>
                                         </th>
                                         {% endif %}
                                         <th>{{ t('title') }}</th>
-                                        <th style="min-width: 120px !important; white-space: nowrap !important;">
+                                        <th class="sortable {{ 'desc' if current_filters.sort_by == 'price' and current_filters.order == 'desc' else '' }}" style="min-width: 120px; white-space: nowrap;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='price', order='desc' if current_filters.sort_by == 'price' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
-                                               class="text-white text-decoration-none d-flex align-items-center">
+                                               class="text-decoration-none">
                                                 {{ t('price') }}
-                                                {% if current_filters.sort_by == 'price' %}
-                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
-                                                {% else %}
-                                                    <i class="fas fa-sort ms-1 opacity-50"></i>
-                                                {% endif %}
                                             </a>
                                         </th>
-                                        <th style="min-width: 100px !important; white-space: nowrap !important;">
+                                        <th class="sortable {{ 'desc' if current_filters.sort_by == 'area' and current_filters.order == 'desc' else '' }}" style="min-width: 100px; white-space: nowrap;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='area', order='desc' if current_filters.sort_by == 'area' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
-                                               class="text-white text-decoration-none d-flex align-items-center">
+                                               class="text-decoration-none">
                                                 {{ t('area') }}
-                                                {% if current_filters.sort_by == 'area' %}
-                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
-                                                {% else %}
-                                                    <i class="fas fa-sort ms-1 opacity-50"></i>
-                                                {% endif %}
                                             </a>
                                         </th>
                                         <th style="white-space: nowrap;">{{ t('coords') }}</th>
-                                        <th style="min-width: 110px !important; white-space: nowrap !important;">
+                                        <th class="sortable {{ 'desc' if current_filters.sort_by == 'travel_time_nearest_beach' and current_filters.order == 'desc' else '' }}" style="min-width: 110px; white-space: nowrap;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='travel_time_nearest_beach', order='asc' if current_filters.sort_by == 'travel_time_nearest_beach' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
-                                               class="text-white text-decoration-none d-flex align-items-center">
+                                               class="text-decoration-none">
                                                 {{ t('beach') }}
-                                                {% if current_filters.sort_by == 'travel_time_nearest_beach' %}
-                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
-                                                {% else %}
-                                                    <i class="fas fa-sort ms-1 opacity-50"></i>
-                                                {% endif %}
                                             </a>
                                         </th>
                                         <th style="white-space: nowrap;">{{ t('travel') }}</th>
                                         <th>{{ t('type') }}</th>
-                                        <th style="min-width: 120px !important; white-space: nowrap !important;">
-                            <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='created_at', order='desc' if current_filters.sort_by == 'created_at' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
-                               class="text-white text-decoration-none d-flex align-items-center">
-                                {{ t('added') }}
-                                {% if current_filters.sort_by == 'created_at' %}
-                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
-                                {% else %}
-                                    <i class="fas fa-sort ms-1 opacity-50"></i>
-                                {% endif %}
-                            </a>
-                        </th>
+                                        <th class="sortable {{ 'desc' if current_filters.sort_by == 'created_at' and current_filters.order == 'desc' else '' }}" style="min-width: 120px; white-space: nowrap;">
+                                            <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='created_at', order='desc' if current_filters.sort_by == 'created_at' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
+                                               class="text-decoration-none">
+                                                {{ t('added') }}
+                                            </a>
+                                        </th>
                                         <th style="white-space: nowrap;">{{ t('actions') }}</th>
                                     </tr>
                                 </thead>
@@ -323,10 +317,9 @@
                                         <tr class="land-row" data-land-id="{{ land.id }}">
                                             <!-- Combined Mode: Show total score -->
                                             {% if current_filters.mode == 'combined' or not current_filters.mode %}
-                                            <td>
+                                            <td data-label="{{ t('score') }}">
                                                 {% if land.score_total is not none %}
-                                                    <span class="badge score-badge" 
-                                                          style="background-color: {{ 'var(--bs-success)' if land.score_total >= 70 else 'var(--bs-warning)' if land.score_total >= 50 else 'var(--bs-danger)' }}">
+                                                    <span class="score-badge {{ 'score-badge-high' if land.score_total >= 70 else 'score-badge-medium' if land.score_total >= 50 else 'score-badge-low' }}">
                                                         {{ "%.1f"|format(land.score_total) }}
                                                     </span>
                                                 {% else %}
@@ -335,10 +328,9 @@
                                             </td>
                                             {% elif current_filters.mode == 'investment' %}
                                             <!-- Investment Mode: Show only investment score -->
-                                            <td style="background-color: rgba(25, 135, 84, 0.2);">
+                                            <td data-label="{{ t('investment') }}" style="background-color: rgba(25, 135, 84, 0.2);">
                                                 {% if land.score_investment is not none %}
-                                                    <span class="badge" 
-                                                          style="background-color: {{ 'var(--bs-success)' if land.score_investment >= 70 else 'var(--bs-warning)' if land.score_investment >= 50 else 'var(--bs-danger)' }}; font-weight: bold; font-size: 0.9em;">
+                                                    <span class="score-badge {{ 'score-badge-high' if land.score_investment >= 70 else 'score-badge-medium' if land.score_investment >= 50 else 'score-badge-low' }}">
                                                         {{ "%.1f"|format(land.score_investment) }}
                                                     </span>
                                                 {% else %}
@@ -347,10 +339,9 @@
                                             </td>
                                             {% elif current_filters.mode == 'lifestyle' %}
                                             <!-- Lifestyle Mode: Show only lifestyle score -->
-                                            <td style="background-color: rgba(255, 193, 7, 0.2);">
+                                            <td data-label="{{ t('lifestyle') }}" style="background-color: rgba(255, 193, 7, 0.2);">
                                                 {% if land.score_lifestyle is not none %}
-                                                    <span class="badge" 
-                                                          style="background-color: {{ 'var(--bs-success)' if land.score_lifestyle >= 70 else 'var(--bs-warning)' if land.score_lifestyle >= 50 else 'var(--bs-danger)' }}; font-weight: bold; font-size: 0.9em;">
+                                                    <span class="score-badge {{ 'score-badge-high' if land.score_lifestyle >= 70 else 'score-badge-medium' if land.score_lifestyle >= 50 else 'score-badge-low' }}">
                                                         {{ "%.1f"|format(land.score_lifestyle) }}
                                                     </span>
                                                 {% else %}
@@ -358,16 +349,16 @@
                                                 {% endif %}
                                             </td>
                                             {% endif %}
-                                            <td>
+                                            <td data-label="{{ t('title') }}">
                                                 <div class="fw-bold">
                                                     <a href="{{ url_for('main.land_detail', land_id=land.id) }}" 
-                                                       class="text-decoration-none table-title" 
+                                                       class="text-decoration-none" 
                                                        title="{{ land.title }}">
                                                         {{ land.title }}
                                                     </a>
                                                 </div>
                                             </td>
-                                            <td style="min-width: 120px !important; white-space: nowrap !important;">
+                                            <td data-label="{{ t('price') }}" style="min-width: 120px !important; white-space: nowrap !important;">
                                                 {% if land.price %}
                                                     <div>
                                                         <strong>{{ "{:,.0f}".format(land.price) }}€</strong>
@@ -397,14 +388,14 @@
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td style="min-width: 100px !important; white-space: nowrap !important;">
+                                            <td data-label="{{ t('area') }}" style="min-width: 100px !important; white-space: nowrap !important;">
                                                 {% if land.area %}
                                                     {{ "{:,.0f}".format(land.area) }} m²
                                                 {% else %}
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td>
+                                            <td data-label="{{ t('coords') }}">
                                                 {% if land.location_lat and land.location_lon %}
                                                     <a href="https://www.google.com/maps/search/?api=1&query={{ land.location_lat }},{{ land.location_lon }}" 
                                                        target="_blank" class="text-decoration-none" 
@@ -427,7 +418,7 @@
                                                     </span>
                                                 {% endif %}
                                             </td>
-                                            <td style="min-width: 110px !important; white-space: nowrap !important;">
+                                            <td data-label="{{ t('beach') }}" style="min-width: 110px !important; white-space: nowrap !important;">
                                                 {% if land.travel_time_nearest_beach %}
                                                     <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/{{ land.nearest_beach_name if land.nearest_beach_name else 'Playa' }},+Asturias,+Spain" 
                                                        target="_blank" class="text-decoration-none text-info d-flex align-items-center" 
@@ -442,7 +433,7 @@
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td style="min-width: 140px !important; white-space: nowrap !important;">
+                                            <td data-label="{{ t('travel') }}" style="min-width: 140px !important; white-space: nowrap !important;">
                                                 {% if land.travel_time_oviedo or land.travel_time_gijon %}
                                                     <div class="d-flex flex-wrap align-items-center gap-1 small">
                                                         {% if land.travel_time_oviedo %}
@@ -466,7 +457,7 @@
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td>
+                                            <td data-label="{{ t('type') }}">
                                                 {% if land.land_type %}
                                                     <span class="badge {{ 'bg-success' if land.land_type == 'developed' else 'bg-warning' }}">
                                                         {{ land.land_type.title() }}
@@ -475,14 +466,14 @@
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td style="min-width: 120px !important; white-space: nowrap !important;">
+                                            <td data-label="{{ t('added') }}" style="min-width: 120px !important; white-space: nowrap !important;">
                                                 {% if land.created_at %}
                                                     <small style="white-space: nowrap !important; display: inline-block;">{{ land.created_at.strftime('%d %b %y') }}</small>
                                                 {% else %}
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td>
+                                            <td data-label="{{ t('actions') }}">
                                                 <div class="d-flex gap-1">
                                                     {% if land.url %}
                                                         <a href="{{ land.url }}" target="_blank" 
@@ -501,178 +492,163 @@
                 </div>
             </div>
             
-            <!-- Properties Grid (Cards View) -->
-            <div id="cards-view" class="view-container" style="{{ 'display: block;' if current_filters.view_type == 'cards' or not current_filters.view_type else 'display: none;' }}">
-                <div class="row" id="properties-grid">
-                {% for land in lands %}
-                    <div class="col-lg-6 col-xl-4 mb-4">
-                        <div class="card h-100 property-card" data-land-id="{{ land.id }}" style="overflow: hidden;">
-                            <!-- Card Header with Score and AI Indicator -->
-                            <div class="card-header bg-dark text-white" style="padding: 0.5rem 1rem;">
-                                <div class="d-flex justify-content-between align-items-center">
-                                    <div class="d-flex align-items-center" style="min-width: 0; flex: 1;">
-                                        <!-- Combined Mode: Show total score -->
-                                        {% if current_filters.mode == 'combined' or not current_filters.mode %}
-                                            {% if land.score_total is not none %}
-                                                <span class="badge score-badge me-2" 
-                                                      style="background-color: {{ 'var(--bs-success)' if land.score_total >= 70 else 'var(--bs-warning)' if land.score_total >= 50 else 'var(--bs-danger)' }}; flex-shrink: 0;">
-                                                    {{ "%.1f"|format(land.score_total) }}
-                                                </span>
-                                            {% endif %}
-                                        {% else %}
-                                        <!-- Dual Score Mode: Show investment and lifestyle scores -->
-                                            <div class="d-flex gap-1 me-2" style="flex-shrink: 0;">
-                                                {% if land.score_investment is not none %}
-                                                    <span class="badge {{ 'd-none d-md-inline' if current_filters.mode == 'lifestyle' else '' }}" 
-                                                          style="background-color: {{ 'var(--bs-success)' if land.score_investment >= 70 else 'var(--bs-warning)' if land.score_investment >= 50 else 'var(--bs-danger)' }}; 
-                                                                 {{ 'border: 2px solid #198754; font-weight: bold;' if current_filters.mode == 'investment' else 'opacity: 0.8;' }}">
-                                                        {{ "%.1f"|format(land.score_investment) }}
-                                                    </span>
-                                                {% endif %}
-                                                {% if land.score_lifestyle is not none %}
-                                                    <span class="badge {{ 'd-none d-md-inline' if current_filters.mode == 'investment' else '' }}" 
-                                                          style="background-color: {{ 'var(--bs-success)' if land.score_lifestyle >= 70 else 'var(--bs-warning)' if land.score_lifestyle >= 50 else 'var(--bs-danger)' }}; 
-                                                                 {{ 'border: 2px solid #ffc107; font-weight: bold;' if current_filters.mode == 'lifestyle' else 'opacity: 0.8;' }}">
-                                                        {{ "%.1f"|format(land.score_lifestyle) }}
-                                                    </span>
-                                                {% endif %}
+        <!-- MD3 Properties Grid (Cards View) -->
+        <div id="cards-view" class="view-container" style="{{ 'display: block;' if current_filters.view_type == 'cards' or not current_filters.view_type else 'display: none;' }}">
+            <div class="md3-grid md3-grid--3-col" id="properties-grid" style="gap: var(--md-sys-spacing-6);">
+            {% for land in lands %}
+                <div class="md3-card md3-card--elevated property-card" data-land-id="{{ land.id }}" style="cursor: pointer; transition: all 200ms ease;" onclick="window.location.href='{{ url_for('main.land_detail', land_id=land.id) }}'">
+                    <!-- MD3 Card Header -->
+                    <div class="md3-card__header" style="background-color: var(--md-sys-color-surface-container-high);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                            <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); flex: 1; min-width: 0;">
+                                <!-- Score Display -->
+                                {% if current_filters.mode == 'combined' or not current_filters.mode %}
+                                    {% if land.score_total is not none %}
+                                        <div class="md3-badge {{ 'md3-primary-container' if land.score_total >= 70 else 'md3-secondary-container' if land.score_total >= 50 else 'md3-error-container' }}" style="font-weight: 500;">
+                                            {{ "%.1f"|format(land.score_total) }}
+                                        </div>
+                                    {% endif %}
+                                {% else %}
+                                    <!-- Dual Score Display -->
+                                    <div style="display: flex; gap: var(--md-sys-spacing-1);">
+                                        {% if land.score_investment is not none %}
+                                            <div class="md3-badge" style="background-color: var(--md-sys-color-{{ 'primary' if land.score_investment >= 70 else 'secondary' if land.score_investment >= 50 else 'error' }}-container); color: var(--md-sys-color-on-{{ 'primary' if land.score_investment >= 70 else 'secondary' if land.score_investment >= 50 else 'error' }}-container); display: flex; align-items: center; gap: var(--md-sys-spacing-1); {{ 'border: 2px solid var(--md-sys-color-primary); font-weight: bold;' if current_filters.mode == 'investment' else '' }}">
+                                                <span class="material-symbols-outlined" style="font-size: 16px;">business_center</span>
+                                                {{ "%.1f"|format(land.score_investment) }}
                                             </div>
                                         {% endif %}
-                                        <span class="badge {{ 'bg-success' if land.land_type == 'developed' else 'bg-warning' }}" style="flex-shrink: 0;">
-                                            {{ land.land_type.title() if land.land_type else 'Unknown' }}
-                                        </span>
+                                        {% if land.score_lifestyle is not none %}
+                                            <div class="md3-badge" style="background-color: var(--md-sys-color-{{ 'primary' if land.score_lifestyle >= 70 else 'secondary' if land.score_lifestyle >= 50 else 'error' }}-container); color: var(--md-sys-color-on-{{ 'primary' if land.score_lifestyle >= 70 else 'secondary' if land.score_lifestyle >= 50 else 'error' }}-container); display: flex; align-items: center; gap: var(--md-sys-spacing-1); {{ 'border: 2px solid var(--md-sys-color-primary); font-weight: bold;' if current_filters.mode == 'lifestyle' else '' }}">
+                                                <span class="material-symbols-outlined" style="font-size: 16px;">home</span>
+                                                {{ "%.1f"|format(land.score_lifestyle) }}
+                                            </div>
+                                        {% endif %}
                                     </div>
-                                    <div class="ms-2" style="flex-shrink: 0;">
-                                        <small>{{ land.created_at.strftime('%d %b %y') if land.created_at else '-' }}</small>
-                                    </div>
+                                {% endif %}
+                                <!-- Property Type Badge -->
+                                <div class="md3-badge" style="background-color: var(--md-sys-color-{{ 'primary' if land.land_type == 'developed' else 'secondary' }}-container); color: var(--md-sys-color-on-{{ 'primary' if land.land_type == 'developed' else 'secondary' }}-container);">
+                                    {{ land.land_type.title() if land.land_type else 'Unknown' }}
                                 </div>
                             </div>
-                            
-                            <!-- Card Body -->
-                            <div class="card-body">
-                                <h6 class="card-title">
-                                    <a href="{{ url_for('main.land_detail', land_id=land.id) }}" 
-                                       class="text-decoration-none table-title" 
-                                       title="{{ land.title }}" 
-                                       style="max-width: 300px;">
-                                        {{ land.title }}
-                                    </a>
-                                </h6>
-                                
-                                <!-- Price and Area -->
-                                <div class="row mb-3">
-                                    <div class="col-6">
-                                        {% if land.price %}
-                                            <div>
-                                                <strong class="text-success">€{{ "{:,.0f}".format(land.price) }}</strong>
-                                                {% if land.previous_price and land.price_change_amount %}
-                                                    {% if land.price_change_amount < 0 %}
-                                                        <div class="price-change-card mt-1">
-                                                            <small class="text-success d-flex align-items-center">
-                                                                <i class="fas fa-arrow-down me-1"></i>
-                                                                <span class="fw-bold">-{{ "{:,.0f}".format(-land.price_change_amount) }}€</span>
-                                                            </small>
-                                                            <small class="text-muted">was €{{ "{:,.0f}".format(land.previous_price) }}</small>
-                                                        </div>
-                                                    {% elif land.price_change_amount > 0 %}
-                                                        <div class="price-change-card mt-1">
-                                                            <small class="text-danger d-flex align-items-center">
-                                                                <i class="fas fa-arrow-up me-1"></i>
-                                                                <span class="fw-bold">+{{ "{:,.0f}".format(land.price_change_amount) }}€</span>
-                                                            </small>
-                                                            <small class="text-muted">was €{{ "{:,.0f}".format(land.previous_price) }}</small>
-                                                        </div>
-                                                    {% endif %}
-                                                {% endif %}
+                            <div class="label-small" style="color: var(--md-sys-color-on-surface-variant); white-space: nowrap;">
+                                {{ land.created_at.strftime('%d %b %y') if land.created_at else '-' }}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- MD3 Card Content -->
+                    <div class="md3-card__content">
+                        <!-- Property Title -->
+                        <h3 class="title-medium" style="margin: 0 0 var(--md-sys-spacing-4) 0; color: var(--md-sys-color-on-surface); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ land.title }}">
+                            {{ land.title }}
+                        </h3>
+                        
+                        <!-- Price and Area Grid -->
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--md-sys-spacing-4); margin-bottom: var(--md-sys-spacing-4);">
+                            <div>
+                                {% if land.price %}
+                                    <div class="title-small" style="color: var(--md-sys-color-primary); font-weight: 500; margin-bottom: var(--md-sys-spacing-1);">
+                                        €{{ "{:,.0f}".format(land.price) }}
+                                    </div>
+                                    {% if land.previous_price and land.price_change_amount %}
+                                        {% if land.price_change_amount < 0 %}
+                                            <div class="body-small" style="color: var(--md-sys-color-primary); display: flex; align-items: center; gap: var(--md-sys-spacing-1);">
+                                                <span class="material-symbols-outlined" style="font-size: 16px;">trending_down</span>
+                                                <span style="font-weight: 500;">-{{ "{:,.0f}".format(-land.price_change_amount) }}€</span>
                                             </div>
-                                        {% else %}
-                                            <span class="text-muted">Price N/A</span>
+                                            <div class="body-small" style="color: var(--md-sys-color-on-surface-variant);">was €{{ "{:,.0f}".format(land.previous_price) }}</div>
+                                        {% elif land.price_change_amount > 0 %}
+                                            <div class="body-small" style="color: var(--md-sys-color-error); display: flex; align-items: center; gap: var(--md-sys-spacing-1);">
+                                                <span class="material-symbols-outlined" style="font-size: 16px;">trending_up</span>
+                                                <span style="font-weight: 500;">+{{ "{:,.0f}".format(land.price_change_amount) }}€</span>
+                                            </div>
+                                            <div class="body-small" style="color: var(--md-sys-color-on-surface-variant);">was €{{ "{:,.0f}".format(land.previous_price) }}</div>
                                         {% endif %}
-                                    </div>
-                                    <div class="col-6">
-                                        <span class="text-muted">
-                                            {% if land.area %}
-                                                {{ "{:,.0f}".format(land.area) }} m²
-                                            {% else %}
-                                                Area N/A
-                                            {% endif %}
-                                        </span>
-                                    </div>
-                                </div>
-                                
-                                <!-- Location -->
-                                <div class="mb-3">
-                                    {% if land.location_lat and land.location_lon %}
-                                        <a href="https://www.google.com/maps/search/?api=1&query={{ land.location_lat }},{{ land.location_lon }}" 
-                                           target="_blank" class="text-decoration-none d-flex align-items-center">
-                                            {% if land.location_accuracy == 'precise' %}
-                                                <i class="fas fa-map-marker-alt me-2 text-success"></i>
-                                            {% else %}
-                                                <i class="fas fa-map-marker-alt me-2 text-warning"></i>
-                                            {% endif %}
-                                            <small>{{ land.municipality or 'Unknown location' }}</small>
-                                        </a>
+                                    {% endif %}
+                                {% else %}
+                                    <div class="body-medium" style="color: var(--md-sys-color-on-surface-variant);">Price N/A</div>
+                                {% endif %}
+                            </div>
+                            <div>
+                                <div class="body-medium" style="color: var(--md-sys-color-on-surface-variant);">
+                                    {% if land.area %}
+                                        {{ "{:,.0f}".format(land.area) }} m²
                                     {% else %}
-                                        <div class="text-muted">
-                                            <i class="fas fa-map-marker-slash me-2"></i>
-                                            <small>{{ land.municipality or 'Location unknown' }}</small>
-                                        </div>
-                                    {% endif %}
-                                </div>
-                                
-                                <!-- Travel Times -->
-                                <div class="row mb-3">
-                                    {% if land.travel_time_nearest_beach %}
-                                        <div class="col-12 mb-2">
-                                            <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/{{ land.nearest_beach_name if land.nearest_beach_name else 'Playa' }},+Asturias,+Spain" 
-                                               target="_blank" class="text-decoration-none d-flex align-items-center">
-                                                <i class="fas fa-umbrella-beach me-2 text-info"></i>
-                                                <span class="fw-bold">{{ land.travel_time_nearest_beach }}min</span>
-                                                <small class="text-muted ms-2">to beach</small>
-                                            </a>
-                                        </div>
-                                    {% endif %}
-                                    
-                                    <div class="col-12">
-                                        <div class="d-flex flex-wrap gap-3">
-                                            {% if land.travel_time_oviedo %}
-                                                <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Oviedo,+Asturias,+Spain" 
-                                                   target="_blank" class="text-decoration-none">
-                                                    <i class="fas fa-car me-1 text-primary"></i>
-                                                    <span class="fw-bold">{{ land.travel_time_oviedo }}min</span>
-                                                    <small class="text-muted">OV</small>
-                                                </a>
-                                            {% endif %}
-                                            {% if land.travel_time_gijon %}
-                                                <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Gijón,+Asturias,+Spain" 
-                                                   target="_blank" class="text-decoration-none">
-                                                    <i class="fas fa-car me-1 text-primary"></i>
-                                                    <span class="fw-bold">{{ land.travel_time_gijon }}min</span>
-                                                    <small class="text-muted">GJ</small>
-                                                </a>
-                                            {% endif %}
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <!-- Card Footer with Actions -->
-                            <div class="card-footer d-flex justify-content-between align-items-center">
-                                <div>
-                                    {% if land.url %}
-                                        <a href="{{ land.url }}" target="_blank" 
-                                           class="btn btn-success btn-sm" title="View on Idealista">
-                                            <i class="fas fa-home me-1"></i>
-                                            Idealista
-                                        </a>
+                                        Area N/A
                                     {% endif %}
                                 </div>
                             </div>
                         </div>
+                        
+                        <!-- Location -->
+                        <div style="margin-bottom: var(--md-sys-spacing-4);">
+                            {% if land.location_lat and land.location_lon %}
+                                <a href="https://www.google.com/maps/search/?api=1&query={{ land.location_lat }},{{ land.location_lon }}" 
+                                   target="_blank" class="body-small" style="color: var(--md-sys-color-primary); text-decoration: none; display: flex; align-items: center; gap: var(--md-sys-spacing-2);">
+                                    {% if land.location_accuracy == 'precise' %}
+                                        <span class="material-symbols-outlined" style="font-size: 18px; color: var(--md-sys-color-primary);">location_on</span>
+                                    {% else %}
+                                        <span class="material-symbols-outlined" style="font-size: 18px; color: var(--md-sys-color-secondary);">location_on</span>
+                                    {% endif %}
+                                    {{ land.municipality or 'Unknown location' }}
+                                </a>
+                            {% else %}
+                                <div class="body-small" style="color: var(--md-sys-color-on-surface-variant); display: flex; align-items: center; gap: var(--md-sys-spacing-2);">
+                                    <span class="material-symbols-outlined" style="font-size: 18px;">location_off</span>
+                                    {{ land.municipality or 'Location unknown' }}
+                                </div>
+                            {% endif %}
+                        </div>
+                        
+                        <!-- Travel Times -->
+                        <div>
+                            {% if land.travel_time_nearest_beach %}
+                                <div style="margin-bottom: var(--md-sys-spacing-3);">
+                                    <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/{{ land.nearest_beach_name if land.nearest_beach_name else 'Playa' }},+Asturias,+Spain" 
+                                       target="_blank" class="body-small" style="color: var(--md-sys-color-primary); text-decoration: none; display: flex; align-items: center; gap: var(--md-sys-spacing-2);">
+                                        <span class="material-symbols-outlined" style="font-size: 18px;">beach_access</span>
+                                        <span style="font-weight: 500;">{{ land.travel_time_nearest_beach }}min</span>
+                                        <span style="color: var(--md-sys-color-on-surface-variant);">to beach</span>
+                                    </a>
+                                </div>
+                            {% endif %}
+                            
+                            <div style="display: flex; flex-wrap: wrap; gap: var(--md-sys-spacing-4);">
+                                {% if land.travel_time_oviedo %}
+                                    <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Oviedo,+Asturias,+Spain" 
+                                       target="_blank" class="body-small" style="color: var(--md-sys-color-primary); text-decoration: none; display: flex; align-items: center; gap: var(--md-sys-spacing-1);">
+                                        <span class="material-symbols-outlined" style="font-size: 16px;">directions_car</span>
+                                        <span style="font-weight: 500;">{{ land.travel_time_oviedo }}min</span>
+                                        <span style="color: var(--md-sys-color-on-surface-variant);">OV</span>
+                                    </a>
+                                {% endif %}
+                                {% if land.travel_time_gijon %}
+                                    <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Gijón,+Asturias,+Spain" 
+                                       target="_blank" class="body-small" style="color: var(--md-sys-color-primary); text-decoration: none; display: flex; align-items: center; gap: var(--md-sys-spacing-1);">
+                                        <span class="material-symbols-outlined" style="font-size: 16px;">directions_car</span>
+                                        <span style="font-weight: 500;">{{ land.travel_time_gijon }}min</span>
+                                        <span style="color: var(--md-sys-color-on-surface-variant);">GJ</span>
+                                    </a>
+                                {% endif %}
+                            </div>
+                        </div>
                     </div>
-                {% endfor %}
+                    
+                    <!-- MD3 Card Actions -->
+                    <div class="md3-card__actions">
+                        {% if land.url %}
+                            <a href="{{ land.url }}" target="_blank" 
+                               class="md3-button md3-button--text" title="View on Idealista" 
+                               onclick="event.stopPropagation();">
+                                <span class="material-symbols-outlined">open_in_new</span>
+                                Idealista
+                            </a>
+                        {% endif %}
+                    </div>
                 </div>
+            {% endfor %}
             </div>
+        </div>
                 
                 <!-- Pagination -->
                 {% if pagination and pagination.total > 0 %}
@@ -752,7 +728,7 @@
                 <i class="fas fa-search fa-3x text-muted mb-3"></i>
                 <h4>No properties found</h4>
                 <p class="text-muted">Try adjusting your filters or run a manual sync to fetch new data.</p>
-                <button class="btn btn-primary" 
+                <button class="btn-filled" 
                         hx-post="{{ url_for('api.manual_ingestion') }}"
                         hx-trigger="click"
                         hx-indicator="#ingestion-spinner">
@@ -890,9 +866,9 @@ function renderSimilarProperties(similarProperties) {
 
 function getPriceVerdictClass(verdict) {
     switch(verdict) {
-        case 'FAIR_PRICE': return 'bg-success';
-        case 'UNDERPRICED': return 'bg-primary';
-        case 'OVERPRICED': return 'bg-danger';
+        case 'Fair Price': return 'bg-success';
+        case 'Underpriced': return 'bg-primary';
+        case 'Overpriced': return 'bg-danger';
         default: return 'bg-secondary';
     }
 }
@@ -904,6 +880,24 @@ function getInvestmentRatingClass(rating) {
         case 'LOW': return 'bg-danger';
         default: return 'bg-secondary';
     }
+}
+
+function formatUIText(value) {
+    if (!value) return 'Unknown';
+    // Convert values for better UI display
+    const formatMap = {
+        'HIGH': 'High',
+        'MEDIUM': 'Medium', 
+        'LOW': 'Low',
+        'RISING': 'Rising',
+        'STABLE': 'Stable',
+        'DECLINING': 'Declining',
+        'EXCELLENT': 'Excellent',
+        'GOOD': 'Good',
+        'MODERATE': 'Moderate',
+        'BELOW AVERAGE': 'Below Average'
+    };
+    return formatMap[value] || value;
 }
 
 
@@ -1042,154 +1036,6 @@ function viewAIAnalysis(landId) {
 }
 
 
-
-// View Switching without page reload
-function switchView(viewType) {
-    const listView = document.getElementById('list-view');
-    const cardsView = document.getElementById('cards-view');
-    const listBtn = document.getElementById('view-list-btn');
-    const cardsBtn = document.getElementById('view-cards-btn');
-    
-    // Save user preference to localStorage
-    localStorage.setItem('preferredViewType', viewType);
-    
-    // Add transition classes
-    listView.style.transition = 'opacity 0.3s ease-in-out';
-    cardsView.style.transition = 'opacity 0.3s ease-in-out';
-    
-    if (viewType === 'list') {
-        // Fade out current view
-        cardsView.style.opacity = '0';
-        setTimeout(() => {
-            cardsView.style.display = 'none';
-            listView.style.display = 'block';
-            listView.style.opacity = '0';
-            // Fade in new view
-            setTimeout(() => {
-                listView.style.opacity = '1';
-            }, 10);
-        }, 300);
-        
-        // Update button states
-        listBtn.classList.add('active');
-        cardsBtn.classList.remove('active');
-    } else {
-        // Fade out current view
-        listView.style.opacity = '0';
-        setTimeout(() => {
-            listView.style.display = 'none';
-            cardsView.style.display = 'block';
-            cardsView.style.opacity = '0';
-            // Fade in new view
-            setTimeout(() => {
-                cardsView.style.opacity = '1';
-            }, 10);
-        }, 300);
-        
-        // Update button states
-        cardsBtn.classList.add('active');
-        listBtn.classList.remove('active');
-    }
-    
-    // Update URL without page reload
-    updateViewTypeInUrl(viewType);
-}
-
-function updateViewTypeInUrl(viewType) {
-    const url = new URL(window.location);
-    url.searchParams.set('view_type', viewType);
-    
-    // Update URL without reload
-    window.history.pushState({ viewType: viewType }, '', url.toString());
-}
-
-// Handle browser back/forward buttons
-window.addEventListener('popstate', function(event) {
-    if (event.state && event.state.viewType) {
-        const viewType = event.state.viewType;
-        switchView(viewType);
-    }
-});
-
-// Initialize view on page load
-document.addEventListener('DOMContentLoaded', function() {
-    const listView = document.getElementById('list-view');
-    const cardsView = document.getElementById('cards-view');
-    const listBtn = document.getElementById('view-list-btn');
-    const cardsBtn = document.getElementById('view-cards-btn');
-    
-    // Load user preference from localStorage
-    const savedViewType = localStorage.getItem('preferredViewType');
-    const currentServerView = '{{ current_filters.view_type or "cards" }}';
-    
-    if (savedViewType && (savedViewType === 'list' || savedViewType === 'cards')) {
-        // Apply saved preference if different from server-side default
-        if (savedViewType !== currentServerView) {
-            // Switch instantly without animation on page load
-            if (savedViewType === 'list') {
-                cardsView.style.display = 'none';
-                listView.style.display = 'block';
-                listView.style.opacity = '1';
-                listBtn.classList.add('active');
-                cardsBtn.classList.remove('active');
-                
-                // Update URL without reload
-                const url = new URL(window.location);
-                url.searchParams.set('view_type', 'list');
-                window.history.replaceState({ viewType: 'list' }, '', url.toString());
-            } else {
-                listView.style.display = 'none';
-                cardsView.style.display = 'block';
-                cardsView.style.opacity = '1';
-                cardsBtn.classList.add('active');
-                listBtn.classList.remove('active');
-                
-                // Update URL without reload
-                const url = new URL(window.location);
-                url.searchParams.set('view_type', 'cards');
-                window.history.replaceState({ viewType: 'cards' }, '', url.toString());
-            }
-        } else {
-            // Set opacity for the current view
-            if (listView.style.display !== 'none') {
-                listView.style.opacity = '1';
-            }
-            if (cardsView.style.display !== 'none') {
-                cardsView.style.opacity = '1';
-            }
-        }
-    } else {
-        // Set opacity for the current view (no saved preference)
-        if (listView.style.display !== 'none') {
-            listView.style.opacity = '1';
-        }
-        if (cardsView.style.display !== 'none') {
-            cardsView.style.opacity = '1';
-        }
-    }
-});
-
-// Mode switching functionality
-function switchMode(mode) {
-    const url = new URL(window.location);
-    url.searchParams.set('mode', mode);
-    
-    // Auto-sync sort with mode selection for better UX
-    const currentSort = url.searchParams.get('sort');
-    if (mode === 'investment' && currentSort !== 'score_investment') {
-        url.searchParams.set('sort', 'score_investment');
-    } else if (mode === 'lifestyle' && currentSort !== 'score_lifestyle') {
-        url.searchParams.set('sort', 'score_lifestyle');
-    } else if (mode === 'combined' && currentSort !== 'score_total') {
-        url.searchParams.set('sort', 'score_total');
-    }
-    
-    // Reset to first page when changing mode
-    url.searchParams.delete('page');
-    
-    // Update the URL and reload to apply mode change
-    window.location.href = url.toString();
-}
 </script>
 
 <style>

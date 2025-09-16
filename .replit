@@ -2,7 +2,7 @@ modules = ["python-3.11", "postgresql-16"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["openssl", "postgresql", "zip"]
+packages = ["libyaml", "openssl", "postgresql", "zip"]
 
 [deployment]
 deploymentTarget = "autoscale"
@@ -32,6 +32,22 @@ waitForPort = 5000
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[[ports]]
+localPort = 38971
+externalPort = 3002
+
+[[ports]]
+localPort = 39913
+externalPort = 3001
+
+[[ports]]
+localPort = 40449
+externalPort = 3000
+
+[[ports]]
+localPort = 45059
+externalPort = 3003
 
 [agent]
 integrations = ["python_anthropic:1.0.0", "python_database:1.0.0", "styling_replit:1.0.0", "web_scraper:1.0.0"]

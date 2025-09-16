@@ -1,0 +1,563 @@
+# Idealista Land Watch - Comprehensive Refactoring Tasks
+
+## 🎯 OVERVIEW
+This document contains prioritized tasks to improve security, performance, architecture, and code quality of the Idealista Land Watch Flask application. Each task includes specific implementation instructions and code examples.
+
+---
+
+## 🚨 CRITICAL PRIORITY (Fix Immediately)
+
+### TASK 1: Remove Hardcoded Security Fallbacks
+**File**: `app.py`
+**Issue**: Old version in static/all_code.txt contains `"dev-secret-key"` fallback
+**Action**: Verify current `app.py` only uses `os.environ.get("SESSION_SECRET")` without fallback
+
+```python
+# VERIFY this is current implementation (CORRECT):
+app.secret_key = os.environ.get("SESSION_SECRET")
+
+# NOT this (REMOVE if found):
+app.secret_key = os.environ.get("SESSION_SECRET", "dev-secret-key")
+```
+
+### TASK 2: Add CSRF Protection
+**Files**: `app.py`, `requirements.txt`, all templates with forms
+**Action**: Implement Flask-WTF CSRF protection
+
+```python
+# Add to requirements.txt:
+Flask-WTF==1.1.1
+
+# Add to app.py in create_app():
+from flask_wtf.csrf import CSRFProtect
+
+def create_app():
+    app = Flask(__name__)
+    csrf = CSRFProtect(app)
+    # ... rest of function
+```
+
+**Templates**: Add `{{ csrf_token() }}` to all forms
+
+### TASK 3: Add Comprehensive Error Handlers
+**File**: `app.py`
+**Action**: Add centralized error handling
+
+```python
+# Add to create_app() after blueprint registration:
+@app.errorhandler(404)
+def not_found_error(error):
+    return render_template('errors/404.html'), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    db.session.rollback()
+    logger.error(f'Server Error: {error}')
+    return render_template('errors/500.html'), 500
+
+@app.errorhandler(403)
+def forbidden_error(error):
+    return render_template('errors/403.html'), 403
+
+# Create templates/errors/ directory with 404.html, 500.html, 403.html
+```
+
+### TASK 4: Improve Land Model with Enum and Indexes
+**File**: `models.py`
+**Action**: Replace string constraints with Enum and add database indexes
+
+```python
+from enum import Enum
+from sqlalchemy import Index
+
+class LandTypeEnum(str, Enum):
+    DEVELOPED = 'developed'
+    BUILDABLE = 'buildable'
+
+class Land(db.Model):
+    __tablename__ = 'lands'
+    
+    # Replace this line:
+    # land_type = db.Column(db.String(20), CheckConstraint("land_type IN ('developed', 'buildable')"))
+    # With this:
+    land_type = db.Column(db.Enum(LandTypeEnum), nullable=True, index=True)
+    
+    # Add indexes to existing columns:
+    score_total = db.Column(db.Numeric(5, 2), index=True)
+    municipality = db.Column(db.String(255), index=True) 
+    price = db.Column(db.Numeric(10, 2), index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    
+    # Add at end of class:
+    __table_args__ = (
+        Index('ix_location_coords', 'location_lat', 'location_lon'),
+        Index('ix_price_area', 'price', 'area'),
+        Index('ix_score_location', 'score_total', 'municipality'),
+    )
+```
+
+---
+
+## ⚡ HIGH PRIORITY (Complete This Week)
+
+### TASK 5: Implement Service Layer Pattern
+**Action**: Create services directory and refactor business logic
+
+**Create**: `services/land_service.py`
+```python
+from typing import Optional, Dict, Any
+from decimal import Decimal
+from sqlalchemy.orm import defer
+from models import Land
+from app import db
+
+class LandService:
+    @staticmethod
+    def get_filtered_lands(filters: Dict[str, Any], page: int, per_page: int, detail_view: bool = False):
+        """Get lands with filters applied and optional deferred loading"""
+        base_query = Land.query
+        
+        # Conditional defer for performance
+        if not detail_view:
+            base_query = base_query.options(
+                defer(Land.infrastructure_basic),
+                defer(Land.infrastructure_extended),
+                defer(Land.transport),
+                defer(Land.environment),
+                defer(Land.neighborhood),
+                defer(Land.ai_analysis),
+                defer(Land.enhanced_description),
+                defer(Land.property_details),
+                defer(Land.description)
+            )
+        
+        # Apply filters
+        if filters.get('municipality'):
+            base_query = base_query.filter(Land.municipality.ilike(f"%{filters['municipality']}%"))
+        
+        if filters.get('land_type'):
+            base_query = base_query.filter(Land.land_type == filters['land_type'])
+        
+        if filters.get('min_price'):
+            base_query = base_query.filter(Land.price >= Decimal(str(filters['min_price'])))
+            
+        if filters.get('max_price'):
+            base_query = base_query.filter(Land.price <= Decimal(str(filters['max_price'])))
+            
+        return base_query.paginate(page=page, per_page=per_page, error_out=False)
+    
+    @staticmethod
+    def get_land_by_id(land_id: int) -> Optional[Land]:
+        """Get single land with all data loaded"""
+        return Land.query.filter_by(id=land_id).first()
+```
+
+### TASK 6: Add Input Validation Layer
+**Create**: `utils/validators.py`
+```python
+from marshmallow import Schema, fields, validate, ValidationError
+from typing import Dict, Any
+
+class LandFilterSchema(Schema):
+    municipality = fields.Str(allow_none=True, validate=validate.Length(max=100))
+    land_type = fields.Str(allow_none=True, validate=validate.OneOf(['developed', 'buildable']))
+    min_price = fields.Decimal(allow_none=True, validate=validate.Range(min=0))
+    max_price = fields.Decimal(allow_none=True, validate=validate.Range(min=0))
+    page = fields.Int(missing=1, validate=validate.Range(min=1))
+    per_page = fields.Int(missing=25, validate=validate.Range(min=10, max=100))
+
+class LandUpdateSchema(Schema):
+    title = fields.Str(validate=validate.Length(max=500))
+    price = fields.Decimal(validate=validate.Range(min=0))
+    area = fields.Decimal(validate=validate.Range(min=0))
+
+def validate_filters(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate and clean filter data"""
+    schema = LandFilterSchema()
+    try:
+        return schema.load(data)
+    except ValidationError as err:
+        raise ValueError(f"Invalid filters: {err.messages}")
+```
+
+**Add to requirements.txt**: `marshmallow==3.20.1`
+
+### TASK 7: Refactor Routes to Use Services
+**File**: `routes/main_routes.py`
+**Action**: Update lands route to use LandService
+
+```python
+# Replace the existing lands() function with:
+from services.land_service import LandService
+from utils.validators import validate_filters
+
+@main_bp.route('/lands')
+def lands():
+    """Main lands listing page with filtering and sorting"""
+    try:
+        # Get and validate query parameters
+        raw_filters = {
+            'municipality': request.args.get('municipality', ''),
+            'land_type': request.args.get('land_type', ''),
+            'min_price': request.args.get('min_price', ''),
+            'max_price': request.args.get('max_price', ''),
+            'page': request.args.get('page', 1, type=int),
+            'per_page': request.args.get('per_page', 25, type=int)
+        }
+        
+        # Clean empty strings
+        filters = {k: v for k, v in raw_filters.items() if v}
+        
+        # Validate filters
+        validated_filters = validate_filters(filters)
+        
+        # Get paginated results
+        pagination = LandService.get_filtered_lands(
+            filters=validated_filters,
+            page=validated_filters['page'],
+            per_page=validated_filters['per_page'],
+            detail_view=False
+        )
+        
+        return render_template('lands.html', 
+                             lands=pagination.items,
+                             pagination=pagination,
+                             filters=validated_filters)
+                             
+    except ValueError as e:
+        flash(f"Invalid filters: {str(e)}", 'error')
+        return redirect(url_for('main.lands'))
+    except Exception as e:
+        logger.error(f"Error in lands route: {str(e)}")
+        flash("An error occurred while loading properties.", 'error')
+        return redirect(url_for('main.index'))
+```
+
+### TASK 8: Enhance Session Security
+**File**: `app.py`
+**Action**: Add session security configuration
+
+```python
+# Add to create_app() after app.secret_key:
+from datetime import timedelta
+
+app.config.update(
+    SESSION_COOKIE_SECURE=not app.debug,  # HTTPS only in production
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=2)
+)
+```
+
+---
+
+## 🔧 MEDIUM PRIORITY (Complete Next Week)
+
+### TASK 9: Implement Advanced Rate Limiting
+**Action**: Add Flask-Limiter with detailed configuration
+
+```python
+# Add to requirements.txt:
+Flask-Limiter==3.5.0
+
+# Create utils/rate_limiter.py:
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+def get_limiter_key():
+    """Custom key function for rate limiting"""
+    return get_remote_address()
+
+def init_rate_limiter(app):
+    """Initialize rate limiter with app"""
+    limiter = Limiter(
+        app=app,
+        key_func=get_limiter_key,
+        default_limits=["1000 per day", "100 per hour"],
+        storage_uri="memory://"  # Use Redis in production: "redis://localhost:6379"
+    )
+    return limiter
+
+# Add to app.py:
+from utils.rate_limiter import init_rate_limiter
+
+def create_app():
+    # ... existing code ...
+    limiter = init_rate_limiter(app)
+    # ... rest of function
+```
+
+**Apply to API routes**:
+```python
+# In routes/api_routes.py:
+@limiter.limit("10 per minute")
+@api_bp.route('/ingest', methods=['POST'])
+def manual_ingest():
+    # existing code
+
+@limiter.limit("5 per minute")  
+@api_bp.route('/lands/<int:land_id>/enrich', methods=['POST'])
+def enrich_land(land_id):
+    # existing code
+```
+
+### TASK 10: Add Structured Logging
+**Create**: `utils/logging_config.py`
+```python
+import logging
+import os
+from logging.handlers import RotatingFileHandler
+from datetime import datetime
+
+def setup_logging(app):
+    """Configure structured logging for the application"""
+    if not app.debug and not app.testing:
+        # Create logs directory if it doesn't exist
+        if not os.path.exists('logs'):
+            os.mkdir('logs')
+        
+        # File handler with rotation
+        file_handler = RotatingFileHandler('logs/app.log', maxBytes=10240000, backupCount=10)
+        file_handler.setFormatter(logging.Formatter(
+            '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d] [%(funcName)s]'
+        ))
+        file_handler.setLevel(logging.INFO)
+        app.logger.addHandler(file_handler)
+        
+        app.logger.setLevel(logging.INFO)
+        app.logger.info('Application startup completed')
+
+class StructuredLogger:
+    """Structured logger for consistent log formatting"""
+    
+    @staticmethod
+    def log_api_call(endpoint: str, method: str, user_ip: str, duration: float = None):
+        """Log API call with structured data"""
+        data = {
+            'endpoint': endpoint,
+            'method': method, 
+            'user_ip': user_ip,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        if duration:
+            data['duration_ms'] = round(duration * 1000, 2)
+        
+        logging.info(f"API_CALL: {data}")
+    
+    @staticmethod
+    def log_error(error: Exception, context: str = ""):
+        """Log error with context"""
+        logging.error(f"ERROR: {context} - {str(error)}", exc_info=True)
+```
+
+**Add to app.py**:
+```python
+from utils.logging_config import setup_logging
+
+def create_app():
+    # ... existing code ...
+    setup_logging(app)
+    # ... rest of function
+```
+
+### TASK 11: Add Health Check Endpoint
+**Create**: `routes/health_routes.py`
+```python
+import time
+from datetime import datetime
+from flask import Blueprint, jsonify
+from sqlalchemy import text
+from app import db
+from utils.cache import cache
+
+health_bp = Blueprint('health', __name__)
+
+@health_bp.route('/health')
+def health_check():
+    """Comprehensive health check endpoint"""
+    start_time = time.time()
+    checks = {}
+    overall_status = 'healthy'
+    
+    # Database check
+    try:
+        db.session.execute(text('SELECT 1'))
+        checks['database'] = {'status': 'ok', 'latency_ms': round((time.time() - start_time) * 1000, 2)}
+    except Exception as e:
+        checks['database'] = {'status': 'error', 'error': str(e)}
+        overall_status = 'unhealthy'
+    
+    # Cache check
+    cache_start = time.time()
+    try:
+        test_key = f'health_check_{int(time.time())}'
+        cache.set(test_key, 'test', timeout=5)
+        cache.get(test_key)
+        cache.delete(test_key)
+        checks['cache'] = {'status': 'ok', 'latency_ms': round((time.time() - cache_start) * 1000, 2)}
+    except Exception as e:
+        checks['cache'] = {'status': 'error', 'error': str(e)}
+        # Cache failure doesn't make app unhealthy
+    
+    response_data = {
+        'status': overall_status,
+        'timestamp': datetime.utcnow().isoformat(),
+        'checks': checks,
+        'total_duration_ms': round((time.time() - start_time) * 1000, 2)
+    }
+    
+    status_code = 200 if overall_status == 'healthy' else 503
+    return jsonify(response_data), status_code
+
+@health_bp.route('/health/ready')
+def readiness_check():
+    """Kubernetes readiness probe endpoint"""
+    try:
+        db.session.execute(text('SELECT 1'))
+        return jsonify({'status': 'ready'}), 200
+    except Exception:
+        return jsonify({'status': 'not ready'}), 503
+```
+
+**Add to app.py blueprint registration**:
+```python
+from routes.health_routes import health_bp
+app.register_blueprint(health_bp)
+```
+
+---
+
+## 🔮 LOW PRIORITY (Future Improvements)
+
+### TASK 12: Add Input Sanitization
+**Create**: `utils/sanitization.py`
+```python
+import bleach
+from markupsafe import Markup
+
+def sanitize_html_input(input_text: str) -> str:
+    """Sanitize HTML input to prevent XSS"""
+    if not input_text:
+        return ""
+    
+    # Allow basic formatting tags
+    allowed_tags = ['b', 'i', 'u', 'em', 'strong', 'p', 'br']
+    allowed_attributes = {}
+    
+    return bleach.clean(input_text, tags=allowed_tags, attributes=allowed_attributes, strip=True)
+
+def sanitize_text_input(input_text: str) -> str:
+    """Sanitize plain text input"""
+    if not input_text:
+        return ""
+    
+    # Remove all HTML tags
+    return bleach.clean(input_text, tags=[], strip=True)
+```
+
+### TASK 13: Add Database Migrations
+**Action**: Implement Flask-Migrate
+
+```python
+# Add to requirements.txt:
+Flask-Migrate==4.0.5
+
+# Add to app.py:
+from flask_migrate import Migrate
+
+def create_app():
+    # ... existing code ...
+    migrate = Migrate(app, db)
+    # ... rest of function
+```
+
+**Initialize migrations**:
+```bash
+flask db init
+flask db migrate -m "Initial migration"
+flask db upgrade
+```
+
+### TASK 14: Add API Versioning Structure
+**Create**: Directory structure for API versioning
+```
+routes/
+├── api/
+│   ├── __init__.py
+│   ├── v1/
+│   │   ├── __init__.py
+│   │   ├── lands.py
+│   │   ├── enrichment.py
+│   │   └── scoring.py
+│   └── v2/  # Future version
+│       └── __init__.py
+```
+
+---
+
+## 📋 TESTING REQUIREMENTS
+
+### TASK 15: Enhance Test Coverage
+**Action**: Add comprehensive tests for new features
+
+**Create tests for**:
+- `tests/test_land_service.py`
+- `tests/test_validators.py`
+- `tests/test_security.py`
+- `tests/test_rate_limiting.py`
+
+**Update**: `requirements-dev.txt`
+```txt
+pytest==7.4.2
+pytest-cov==4.1.0
+pytest-flask==1.2.0
+factory-boy==3.3.0
+```
+
+---
+
+## 🚀 IMPLEMENTATION ORDER
+
+### Week 1: Critical Security & Performance
+1. ✅ TASK 1: Remove hardcoded fallbacks
+2. ✅ TASK 2: Add CSRF protection
+3. ✅ TASK 3: Add error handlers
+4. ✅ TASK 4: Improve models with enums and indexes
+
+### Week 2: Architecture & Services
+5. ✅ TASK 5: Implement service layer
+6. ✅ TASK 6: Add input validation
+7. ✅ TASK 7: Refactor routes
+8. ✅ TASK 8: Enhance session security
+
+### Week 3: Monitoring & Reliability
+9. ✅ TASK 9: Advanced rate limiting
+10. ✅ TASK 10: Structured logging
+11. ✅ TASK 11: Health checks
+
+### Future: Enhancements
+12. 🔮 TASK 12-14: Input sanitization, migrations, API versioning
+13. 🔮 TASK 15: Enhanced testing
+
+---
+
+## 📊 SUCCESS METRICS
+
+After completing all tasks:
+- **Security Score**: 95%+ (eliminate critical vulnerabilities)
+- **Performance**: 40-60% improvement in query response times
+- **Code Quality**: Maintainability index > 85
+- **Error Rate**: < 1% in production
+- **Test Coverage**: > 80%
+
+## 🔧 REPLIT SPECIFIC NOTES
+
+1. **Environment Variables**: Ensure all secrets are in Replit Secrets tab
+2. **Database**: Use Replit's PostgreSQL addon
+3. **Static Files**: Verify static file serving works correctly
+4. **Logs**: Check if log directory creation works in Replit environment
+5. **Dependencies**: Test all new packages install correctly in Replit
+
+---
+
+*This document should be used as a step-by-step guide for the Replit Agent. Each task is self-contained and can be implemented independently.*

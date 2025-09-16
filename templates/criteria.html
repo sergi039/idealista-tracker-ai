@@ -3,88 +3,89 @@
 {% block title %}Scoring Criteria - Idealista Land Watch{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-lg-10 mx-auto">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1>
-                <i class="fas fa-sliders-h me-2"></i>
+<div class="md3-container">
+    <!-- Page Header -->
+    <div class="md3-page-header">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h1 class="md3-page-title">
+                <span class="material-symbols-outlined">tune</span>
                 Dual Scoring System Configuration
             </h1>
-            <a href="{{ url_for('main.lands') }}" class="btn btn-outline-secondary">
-                <i class="fas fa-arrow-left me-1"></i>Back to Properties
+            <a href="{{ url_for('main.lands') }}" class="md3-button md3-button--outlined">
+                <span class="material-symbols-outlined">arrow_back</span>
+                Back to Properties
             </a>
         </div>
+    </div>
 
-        <!-- Profile Navigation Tabs -->
-        <ul class="nav nav-tabs mb-4" id="profileTabs" role="tablist">
-            <li class="nav-item" role="presentation">
-                <button class="nav-link active" 
-                        id="investment-tab" 
-                        data-bs-toggle="tab" 
-                        data-bs-target="#investment" 
-                        type="button" 
-                        role="tab" 
-                        aria-controls="investment" 
-                        aria-selected="true">
-                    <i class="fas fa-chart-line me-2 text-warning"></i>Investment
-                </button>
-            </li>
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" 
-                        id="lifestyle-tab" 
-                        data-bs-toggle="tab" 
-                        data-bs-target="#lifestyle" 
-                        type="button" 
-                        role="tab" 
-                        aria-controls="lifestyle" 
-                        aria-selected="false">
-                    <i class="fas fa-home me-2 text-success"></i>Lifestyle
-                </button>
-            </li>
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" 
-                        id="combined-tab" 
-                        data-bs-toggle="tab" 
-                        data-bs-target="#combined" 
-                        type="button" 
-                        role="tab" 
-                        aria-controls="combined" 
-                        aria-selected="false">
-                    <i class="fas fa-balance-scale me-2"></i>Combined
-                </button>
-            </li>
-        </ul>
+    <!-- Profile Navigation Tabs -->
+    <div class="md3-tabs" id="profileTabs" role="tablist">
+        <button class="md3-tab md3-tab--active" 
+                id="investment-tab" 
+                data-target="investment" 
+                type="button" 
+                role="tab" 
+                aria-controls="investment" 
+                aria-selected="true">
+            <span class="material-symbols-outlined" style="color: #f57c00;">trending_up</span>
+            Investment
+        </button>
+        <button class="md3-tab" 
+                id="lifestyle-tab" 
+                data-target="lifestyle" 
+                type="button" 
+                role="tab" 
+                aria-controls="lifestyle" 
+                aria-selected="false">
+            <span class="material-symbols-outlined" style="color: #2e7d32;">home</span>
+            Lifestyle
+        </button>
+        <button class="md3-tab" 
+                id="combined-tab" 
+                data-target="combined" 
+                type="button" 
+                role="tab" 
+                aria-controls="combined" 
+                aria-selected="false">
+            <span class="material-symbols-outlined">balance</span>
+            Combined
+        </button>
+    </div>
 
-        <!-- Tab Content -->
-        <div class="tab-content" id="profileTabsContent">
-            <!-- Investment Profile Tab -->
-            <div class="tab-pane fade show active" id="investment" role="tabpanel" aria-labelledby="investment-tab">
-                <div class="card border-warning">
-                    <div class="card-header bg-warning bg-opacity-10">
-                        <h5 class="card-title mb-0 text-warning">
-                            <i class="fas fa-chart-line me-2"></i>Investment Profile
-                        </h5>
-                    </div>
-                    <div class="card-body">
-                        <form method="POST" action="{{ url_for('main.update_criteria_profile', profile='investment') }}" id="investment-form">
-                            <!-- Investment Profile Criteria -->
-                            {% for criterion, weight in investment_weights.items() %}
-                                {% if weight > 0 %}
-                                    <div class="row mb-4">
-                                        <div class="col-md-4">
-                                            <label for="investment_weight_{{ criterion }}" class="form-label fw-bold">
-                                                {{ criterion.replace('_', ' ').title() }}
-                                            </label>
-                                            <p class="small text-muted mb-0">{{ criteria_descriptions.get(criterion, 'Custom scoring criterion') }}</p>
-                                        </div>
-                                        <div class="col-md-4">
-                                            <div class="d-flex align-items-center">
-                                                <button type="button" class="btn btn-sm btn-outline-secondary me-2 weight-adjust" 
-                                                        data-criteria="{{ criterion }}" data-profile="investment" data-delta="-0.05">
-                                                    <i class="fas fa-minus"></i>
-                                                </button>
+    <!-- Tab Content -->
+    <div id="profileTabsContent">
+        <!-- Investment Profile Tab -->
+        <div class="md3-tab-content md3-tab-content--active" id="investment" role="tabpanel" aria-labelledby="investment-tab">
+            <div class="md3-card md3-card--elevated">
+                <div class="md3-card__header">
+                    <h2 class="title-large" style="color: #f57c00;">
+                        <span class="material-symbols-outlined">trending_up</span>
+                        Investment Profile
+                    </h2>
+                </div>
+                <div class="md3-card__content">
+                    <form method="POST" action="{{ url_for('main.update_criteria_profile', profile='investment') }}" id="investment-form">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        
+                        <!-- Investment Profile Criteria -->
+                        {% for criterion, weight in investment_weights.items() %}
+                            {% if weight > 0 %}
+                                <div class="md3-form-row">
+                                    <div class="md3-form-group">
+                                        <label class="title-medium">
+                                            {{ format_field_name(criterion) }}
+                                        </label>
+                                        <p class="md3-form-helper">{{ criteria_descriptions.get(criterion, 'Custom scoring criterion') }}</p>
+                                    </div>
+                                    <div class="md3-form-group">
+                                        <div class="md3-form-controls">
+                                            <button type="button" class="md3-button md3-button--icon weight-adjust" 
+                                                    data-criteria="{{ criterion }}" data-profile="investment" data-delta="-0.05">
+                                                <span class="material-symbols-outlined">remove</span>
+                                            </button>
+                                            <div class="md3-slider" style="flex-grow: 1;">
                                                 <input type="range" 
-                                                       class="form-range flex-grow-1 me-2 weight-slider" 
+                                                       class="md3-slider__input weight-slider" 
                                                        id="investment_slider_{{ criterion }}"
                                                        data-criteria="{{ criterion }}"
                                                        data-profile="investment"
@@ -92,88 +93,92 @@
                                                        min="0" 
                                                        max="100" 
                                                        step="1">
+                                            </div>
+                                            <div class="md3-text-field md3-number-field">
                                                 <input type="number" 
-                                                       class="form-control weight-input" 
+                                                       class="md3-text-field__input weight-input" 
                                                        id="investment_weight_{{ criterion }}"
                                                        name="weight_{{ criterion }}"
                                                        value="{{ weight|round(2) }}"
                                                        min="0" 
                                                        max="1" 
                                                        step="0.01"
-                                                       style="width: 80px;"
                                                        required>
-                                                <button type="button" class="btn btn-sm btn-outline-secondary ms-2 weight-adjust" 
-                                                        data-criteria="{{ criterion }}" data-profile="investment" data-delta="0.05">
-                                                    <i class="fas fa-plus"></i>
-                                                </button>
                                             </div>
+                                            <button type="button" class="md3-button md3-button--icon weight-adjust" 
+                                                    data-criteria="{{ criterion }}" data-profile="investment" data-delta="0.05">
+                                                <span class="material-symbols-outlined">add</span>
+                                            </button>
                                         </div>
-                                        <div class="col-md-4">
-                                            <div class="mt-2">
-                                                <div class="progress">
-                                                    <div class="progress-bar bg-warning" 
-                                                         id="investment_progress_{{ criterion }}"
-                                                         style="width: {{ (weight * 100)|round }}%"
-                                                         data-weight="{{ weight }}">
-                                                    </div>
-                                                </div>
-                                                <small class="text-muted">
-                                                    <span id="investment_percent_{{ criterion }}" class="fw-bold">{{ (weight * 100)|round(1) }}%</span>
-                                                </small>
+                                    </div>
+                                    <div class="md3-form-group">
+                                        <div class="md3-progress md3-progress--with-label">
+                                            <div class="md3-progress-bar md3-progress-bar--warning" 
+                                                 id="investment_progress_{{ criterion }}"
+                                                 style="width: {{ (weight * 100)|round }}%"
+                                                 data-weight="{{ weight }}">
+                                                <span class="md3-progress-label" id="investment_percent_{{ criterion }}">
+                                                    {{ (weight * 100)|round(1) }}%
+                                                </span>
                                             </div>
                                         </div>
                                     </div>
-                                {% endif %}
-                            {% endfor %}
-                            
-                            <hr class="my-4">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <button type="submit" class="btn btn-warning">
-                                    <i class="fas fa-save me-2"></i>
-                                    Update Investment Weights & Rescore
-                                </button>
-                                <div class="text-end">
-                                    <div class="progress mb-1" style="height: 25px; border: 2px solid #b8860b;">
-                                        <div id="investment-weight-bar" class="progress-bar bg-warning" role="progressbar" style="width: 100%">
-                                            <span id="investment-weight-text" class="fw-bold text-dark">100%</span>
-                                        </div>
-                                    </div>
-                                    <small class="text-muted">Investment Profile Total</small>
                                 </div>
+                            {% endif %}
+                        {% endfor %}
+                        
+                        <hr class="md3-divider">
+                        <div class="md3-card__actions">
+                            <button type="submit" class="md3-button md3-button--filled">
+                                <span class="material-symbols-outlined">save</span>
+                                Update Investment Weights & Rescore
+                            </button>
+                            <div class="md3-info-container">
+                                <div class="md3-progress md3-progress--with-label" style="width: 200px; border: 2px solid #f57c00;">
+                                    <div id="investment-weight-bar" class="md3-progress-bar md3-progress-bar--warning" style="width: 100%">
+                                        <span id="investment-weight-text" class="md3-progress-label" style="color: black;">100%</span>
+                                    </div>
+                                </div>
+                                <small class="body-small">Investment Profile Total</small>
                             </div>
-                        </form>
-                    </div>
+                        </div>
+                    </form>
                 </div>
             </div>
+        </div>
 
-            <!-- Lifestyle Profile Tab -->
-            <div class="tab-pane fade" id="lifestyle" role="tabpanel" aria-labelledby="lifestyle-tab">
-                <div class="card border-success">
-                    <div class="card-header bg-success bg-opacity-10">
-                        <h5 class="card-title mb-0 text-success">
-                            <i class="fas fa-home me-2"></i>Lifestyle Profile
-                        </h5>
-                    </div>
-                    <div class="card-body">
-                        <form method="POST" action="{{ url_for('main.update_criteria_profile', profile='lifestyle') }}" id="lifestyle-form">
-                            <!-- Lifestyle Profile Criteria -->
-                            {% for criterion, weight in lifestyle_weights.items() %}
-                                {% if weight > 0 %}
-                                    <div class="row mb-4">
-                                        <div class="col-md-4">
-                                            <label for="lifestyle_weight_{{ criterion }}" class="form-label fw-bold">
-                                                {{ criterion.replace('_', ' ').title() }}
-                                            </label>
-                                            <p class="small text-muted mb-0">{{ criteria_descriptions.get(criterion, 'Custom scoring criterion') }}</p>
-                                        </div>
-                                        <div class="col-md-4">
-                                            <div class="d-flex align-items-center">
-                                                <button type="button" class="btn btn-sm btn-outline-secondary me-2 weight-adjust" 
-                                                        data-criteria="{{ criterion }}" data-profile="lifestyle" data-delta="-0.05">
-                                                    <i class="fas fa-minus"></i>
-                                                </button>
+        <!-- Lifestyle Profile Tab -->
+        <div class="md3-tab-content" id="lifestyle" role="tabpanel" aria-labelledby="lifestyle-tab">
+            <div class="md3-card md3-card--elevated">
+                <div class="md3-card__header">
+                    <h2 class="title-large" style="color: #2e7d32;">
+                        <span class="material-symbols-outlined">home</span>
+                        Lifestyle Profile
+                    </h2>
+                </div>
+                <div class="md3-card__content">
+                    <form method="POST" action="{{ url_for('main.update_criteria_profile', profile='lifestyle') }}" id="lifestyle-form">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        
+                        <!-- Lifestyle Profile Criteria -->
+                        {% for criterion, weight in lifestyle_weights.items() %}
+                            {% if weight > 0 %}
+                                <div class="md3-form-row">
+                                    <div class="md3-form-group">
+                                        <label class="title-medium">
+                                            {{ format_field_name(criterion) }}
+                                        </label>
+                                        <p class="md3-form-helper">{{ criteria_descriptions.get(criterion, 'Custom scoring criterion') }}</p>
+                                    </div>
+                                    <div class="md3-form-group">
+                                        <div class="md3-form-controls">
+                                            <button type="button" class="md3-button md3-button--icon weight-adjust" 
+                                                    data-criteria="{{ criterion }}" data-profile="lifestyle" data-delta="-0.05">
+                                                <span class="material-symbols-outlined">remove</span>
+                                            </button>
+                                            <div class="md3-slider" style="flex-grow: 1;">
                                                 <input type="range" 
-                                                       class="form-range flex-grow-1 me-2 weight-slider" 
+                                                       class="md3-slider__input weight-slider" 
                                                        id="lifestyle_slider_{{ criterion }}"
                                                        data-criteria="{{ criterion }}"
                                                        data-profile="lifestyle"
@@ -181,159 +186,164 @@
                                                        min="0" 
                                                        max="100" 
                                                        step="1">
+                                            </div>
+                                            <div class="md3-text-field md3-number-field">
                                                 <input type="number" 
-                                                       class="form-control weight-input" 
+                                                       class="md3-text-field__input weight-input" 
                                                        id="lifestyle_weight_{{ criterion }}"
                                                        name="weight_{{ criterion }}"
                                                        value="{{ weight|round(2) }}"
                                                        min="0" 
                                                        max="1" 
                                                        step="0.01"
-                                                       style="width: 80px;"
                                                        required>
-                                                <button type="button" class="btn btn-sm btn-outline-secondary ms-2 weight-adjust" 
-                                                        data-criteria="{{ criterion }}" data-profile="lifestyle" data-delta="0.05">
-                                                    <i class="fas fa-plus"></i>
-                                                </button>
                                             </div>
+                                            <button type="button" class="md3-button md3-button--icon weight-adjust" 
+                                                    data-criteria="{{ criterion }}" data-profile="lifestyle" data-delta="0.05">
+                                                <span class="material-symbols-outlined">add</span>
+                                            </button>
                                         </div>
-                                        <div class="col-md-4">
-                                            <div class="mt-2">
-                                                <div class="progress">
-                                                    <div class="progress-bar bg-success" 
-                                                         id="lifestyle_progress_{{ criterion }}"
-                                                         style="width: {{ (weight * 100)|round }}%"
-                                                         data-weight="{{ weight }}">
-                                                    </div>
-                                                </div>
-                                                <small class="text-muted">
-                                                    <span id="lifestyle_percent_{{ criterion }}" class="fw-bold">{{ (weight * 100)|round(1) }}%</span>
-                                                </small>
+                                    </div>
+                                    <div class="md3-form-group">
+                                        <div class="md3-progress md3-progress--with-label">
+                                            <div class="md3-progress-bar md3-progress-bar--success" 
+                                                 id="lifestyle_progress_{{ criterion }}"
+                                                 style="width: {{ (weight * 100)|round }}%"
+                                                 data-weight="{{ weight }}">
+                                                <span class="md3-progress-label" id="lifestyle_percent_{{ criterion }}">
+                                                    {{ (weight * 100)|round(1) }}%
+                                                </span>
                                             </div>
                                         </div>
                                     </div>
-                                {% endif %}
-                            {% endfor %}
-                            
-                            <hr class="my-4">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <button type="submit" class="btn btn-success">
-                                    <i class="fas fa-save me-2"></i>
-                                    Update Lifestyle Weights & Rescore
-                                </button>
-                                <div class="text-end">
-                                    <div class="progress mb-1" style="height: 25px; border: 2px solid #198754;">
-                                        <div id="lifestyle-weight-bar" class="progress-bar bg-success" role="progressbar" style="width: 100%">
-                                            <span id="lifestyle-weight-text" class="fw-bold text-white">100%</span>
-                                        </div>
-                                    </div>
-                                    <small class="text-muted">Lifestyle Profile Total</small>
                                 </div>
+                            {% endif %}
+                        {% endfor %}
+                        
+                        <hr class="md3-divider">
+                        <div class="md3-card__actions">
+                            <button type="submit" class="md3-button md3-button--filled">
+                                <span class="material-symbols-outlined">save</span>
+                                Update Lifestyle Weights & Rescore
+                            </button>
+                            <div class="md3-info-container">
+                                <div class="md3-progress md3-progress--with-label" style="width: 200px; border: 2px solid #2e7d32;">
+                                    <div id="lifestyle-weight-bar" class="md3-progress-bar md3-progress-bar--success" style="width: 100%">
+                                        <span id="lifestyle-weight-text" class="md3-progress-label">100%</span>
+                                    </div>
+                                </div>
+                                <small class="body-small">Lifestyle Profile Total</small>
                             </div>
-                        </form>
-                    </div>
+                        </div>
+                    </form>
                 </div>
             </div>
+        </div>
 
-            <!-- Combined Mix Tab -->
-            <div class="tab-pane fade" id="combined" role="tabpanel" aria-labelledby="combined-tab">
-                <div class="card">
-                    <div class="card-header">
-                        <h5 class="card-title mb-0">
-                            <i class="fas fa-balance-scale me-2"></i>Combined Mix
-                        </h5>
-                    </div>
-                    <div class="card-body">
-                        <form method="POST" action="{{ url_for('main.update_combined_mix') }}" id="combined-form">
-                            <div class="row mb-4">
-                                <div class="col-md-6">
-                                    <label class="form-label fw-bold">
-                                        <i class="fas fa-chart-line me-2 text-warning"></i>
-                                        Investment
-                                    </label>
-                                    <div class="d-flex align-items-center">
+        <!-- Combined Mix Tab -->
+        <div class="md3-tab-content" id="combined" role="tabpanel" aria-labelledby="combined-tab">
+            <div class="md3-card md3-card--elevated">
+                <div class="md3-card__header">
+                    <h2 class="title-large">
+                        <span class="material-symbols-outlined">balance</span>
+                        Combined Mix
+                    </h2>
+                </div>
+                <div class="md3-card__content">
+                    <form method="POST" action="{{ url_for('main.update_combined_mix') }}" id="combined-form">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="md3-grid md3-grid--2-col">
+                            <div class="md3-form-group">
+                                <label class="title-medium">
+                                    <span class="material-symbols-outlined" style="color: #f57c00;">trending_up</span>
+                                    Investment
+                                </label>
+                                <div class="md3-form-controls">
+                                    <div class="md3-slider" style="flex-grow: 1;">
                                         <input type="range" 
-                                               class="form-range me-3" 
+                                               class="md3-slider__input" 
                                                id="investment-mix-slider"
                                                min="0" 
                                                max="100" 
                                                value="{{ (combined_mix.investment * 100)|round }}"
                                                step="1">
+                                    </div>
+                                    <div class="md3-text-field md3-number-field">
                                         <input type="number" 
-                                               class="form-control" 
+                                               class="md3-text-field__input" 
                                                id="investment-mix-input"
                                                name="investment_weight"
                                                value="{{ combined_mix.investment|round(2) }}"
                                                min="0" 
                                                max="1" 
                                                step="0.01"
-                                               style="width: 80px;"
                                                required>
-                                        <span class="ms-2 fw-bold" id="investment-mix-percent">{{ (combined_mix.investment * 100)|round }}%</span>
                                     </div>
-                                    <small class="text-muted">How much the Investment score contributes to the overall score</small>
+                                    <span class="title-medium" id="investment-mix-percent">{{ (combined_mix.investment * 100)|round }}%</span>
                                 </div>
-                                <div class="col-md-6">
-                                    <label class="form-label fw-bold">
-                                        <i class="fas fa-home me-2 text-success"></i>
-                                        Lifestyle
-                                    </label>
-                                    <div class="d-flex align-items-center">
+                                <small class="md3-form-helper">How much the Investment score contributes to the overall score</small>
+                            </div>
+                            <div class="md3-form-group">
+                                <label class="title-medium">
+                                    <span class="material-symbols-outlined" style="color: #2e7d32;">home</span>
+                                    Lifestyle
+                                </label>
+                                <div class="md3-form-controls">
+                                    <div class="md3-slider" style="flex-grow: 1;">
                                         <input type="range" 
-                                               class="form-range me-3" 
+                                               class="md3-slider__input" 
                                                id="lifestyle-mix-slider"
                                                min="0" 
                                                max="100" 
                                                value="{{ (combined_mix.lifestyle * 100)|round }}"
                                                step="1">
+                                    </div>
+                                    <div class="md3-text-field md3-number-field">
                                         <input type="number" 
-                                               class="form-control" 
+                                               class="md3-text-field__input" 
                                                id="lifestyle-mix-input"
                                                name="lifestyle_weight"
                                                value="{{ combined_mix.lifestyle|round(2) }}"
                                                min="0" 
                                                max="1" 
                                                step="0.01"
-                                               style="width: 80px;"
                                                required>
-                                        <span class="ms-2 fw-bold" id="lifestyle-mix-percent">{{ (combined_mix.lifestyle * 100)|round }}%</span>
                                     </div>
-                                    <small class="text-muted">How much the Lifestyle score contributes to the overall score</small>
+                                    <span class="title-medium" id="lifestyle-mix-percent">{{ (combined_mix.lifestyle * 100)|round }}%</span>
                                 </div>
+                                <small class="md3-form-helper">How much the Lifestyle score contributes to the overall score</small>
                             </div>
+                        </div>
 
-                            <!-- Visual representation -->
-                            <div class="mb-4">
-                                <h6>Score Composition Preview:</h6>
-                                <div class="progress mb-2" style="height: 30px;">
-                                    <div class="progress-bar" 
-                                         id="combined-investment-bar"
-                                         style="width: 32%; background-color: #b8860b;">
-                                        <span class="fw-bold text-white">Investment: 32%</span>
-                                    </div>
-                                    <div class="progress-bar" 
-                                         id="combined-lifestyle-bar"
-                                         style="width: 68%; background-color: #198754;">
-                                        <span class="fw-bold text-white">Lifestyle: 68%</span>
-                                    </div>
+                        <!-- Visual representation -->
+                        <div class="md3-mb-4">
+                            <h3 class="title-medium md3-mb-4">Score Composition Preview:</h3>
+                            <div class="md3-progress md3-progress--with-label" style="height: 40px;">
+                                <div class="md3-progress-bar md3-progress-bar--warning" 
+                                     id="combined-investment-bar"
+                                     style="width: 32%; display: flex; align-items: center; justify-content: center;">
+                                    <span class="md3-progress-label" style="color: white;">Investment: 32%</span>
                                 </div>
-                                <small class="text-muted">Final Score = (Investment Score × 32%) + (Lifestyle Score × 68%)</small>
+                                <div class="md3-progress-bar md3-progress-bar--success" 
+                                     id="combined-lifestyle-bar"
+                                     style="width: 68%; display: flex; align-items: center; justify-content: center;">
+                                    <span class="md3-progress-label" style="color: white;">Lifestyle: 68%</span>
+                                </div>
                             </div>
+                            <small class="md3-form-helper">Final Score = (Investment Score × 32%) + (Lifestyle Score × 68%)</small>
+                        </div>
 
-                            <hr class="my-4">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <button type="submit" class="btn btn-primary">
-                                    <i class="fas fa-save me-2"></i>
-                                    Update Combined Mix & Rescore All Properties
-                                </button>
-                                <div class="text-end">
-                                    <div class="alert alert-info mb-0 p-2">
-                                        <small><strong>Current:</strong> 32% Investment + 68% Lifestyle = 100%</small>
-                                    </div>
-                                </div>
+                        <hr class="md3-divider">
+                        <div class="md3-card__actions">
+                            <button type="submit" class="md3-button md3-button--filled">
+                                <span class="material-symbols-outlined">save</span>
+                                Update Combined Mix & Rescore All Properties
+                            </button>
+                            <div class="md3-info-container">
+                                <strong class="body-medium">Current:</strong> 32% Investment + 68% Lifestyle = 100%
                             </div>
-                        </form>
-                    </div>
+                        </div>
+                    </form>
                 </div>
             </div>
         </div>
@@ -342,320 +352,313 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // Configuration from backend (will be populated by template)
-    const investmentProfile = {
-        'investment_yield': 0.35,
-        'location_quality': 0.20,
-        'legal_status': 0.10,
-        'transport': 0.10,
-        'infrastructure_basic': 0.10,
-        'development_potential': 0.08,
-        'physical_characteristics': 0.05,
-        'infrastructure_extended': 0.02,
-        'services_quality': 0.00,
-        'environment': 0.00
-    };
 
-    const lifestyleProfile = {
-        'environment': 0.22,
-        'services_quality': 0.18,
-        'location_quality': 0.20,
-        'transport': 0.12,
-        'infrastructure_extended': 0.10,
-        'infrastructure_basic': 0.08,
-        'physical_characteristics': 0.05,
-        'legal_status': 0.03,
-        'development_potential': 0.02,
-        'investment_yield': 0.00
-    };
+    // ============ WEIGHT CONTROL FUNCTIONALITY ============
+    
+    // Update individual weight and sync all related controls
+    function updateWeight(criterion, profile, newWeight, source = 'manual') {
+        const weightInput = document.getElementById(`${profile}_weight_${criterion}`);
+        const slider = document.getElementById(`${profile}_slider_${criterion}`);
+        const progressBar = document.getElementById(`${profile}_progress_${criterion}`);
+        const percentSpan = document.getElementById(`${profile}_percent_${criterion}`);
 
-    const criteriaDescriptions = {
-        'investment_yield': 'Rental yield, cap rate, investment metrics and return potential',
-        'location_quality': 'Proximity to urban centers, municipality prestige, neighborhood quality',
-        'transport': 'Public transport access, highways, airports, train stations',
-        'infrastructure_basic': 'Water, electricity, sewerage, internet connectivity',
-        'infrastructure_extended': 'Gas, telecommunications, public services infrastructure',
-        'environment': 'Environmental quality, views, natural features, orientation',
-        'physical_characteristics': 'Land size, shape, topography, price per square meter',
-        'services_quality': 'Schools, hospitals, shopping, restaurants quality ratings',
-        'legal_status': 'Zoning status, building permissions, land classification',
-        'development_potential': 'Future development possibilities, urbanization plans'
-    };
+        // Ensure weight is within bounds
+        newWeight = Math.max(0, Math.min(1, newWeight));
+        
+        // Update all related controls
+        if (weightInput) weightInput.value = newWeight.toFixed(2);
+        if (slider) slider.value = Math.round(newWeight * 100);
+        if (progressBar) {
+            progressBar.style.width = Math.round(newWeight * 100) + '%';
+            progressBar.setAttribute('data-weight', newWeight);
+        }
+        if (percentSpan) percentSpan.textContent = (newWeight * 100).toFixed(1) + '%';
 
-    // Generate criteria HTML for each profile
-    function generateCriteriaHTML(profile, profileName) {
-        let html = '';
-        Object.entries(profile).forEach(([criterion, weight]) => {
-            if (weight > 0) { // Only show criteria with non-zero weights
-                const description = criteriaDescriptions[criterion] || 'Custom scoring criterion';
-                html += `
-                    <div class="row mb-4">
-                        <div class="col-md-4">
-                            <label for="${profileName}_weight_${criterion}" class="form-label fw-bold">
-                                ${criterion.replace(/_/g, ' ').split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
-                            </label>
-                            <p class="small text-muted mb-0">${description}</p>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="d-flex align-items-center">
-                                <button type="button" class="btn btn-sm btn-outline-secondary me-2 weight-adjust" 
-                                        data-criteria="${criterion}" data-profile="${profileName}" data-delta="-0.05">
-                                    <i class="fas fa-minus"></i>
-                                </button>
-                                <input type="range" 
-                                       class="form-range flex-grow-1 me-2 weight-slider" 
-                                       id="${profileName}_slider_${criterion}"
-                                       data-criteria="${criterion}"
-                                       data-profile="${profileName}"
-                                       value="${weight * 100}"
-                                       min="0" 
-                                       max="100" 
-                                       step="1">
-                                <input type="number" 
-                                       class="form-control weight-input" 
-                                       id="${profileName}_weight_${criterion}"
-                                       name="weight_${criterion}"
-                                       value="${weight.toFixed(2)}"
-                                       min="0" 
-                                       max="1" 
-                                       step="0.01"
-                                       style="width: 80px;"
-                                       required>
-                                <button type="button" class="btn btn-sm btn-outline-secondary ms-2 weight-adjust" 
-                                        data-criteria="${criterion}" data-profile="${profileName}" data-delta="0.05">
-                                    <i class="fas fa-plus"></i>
-                                </button>
-                            </div>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="mt-2">
-                                <div class="progress">
-                                    <div class="progress-bar ${profileName === 'investment' ? 'bg-warning' : 'bg-success'}" 
-                                         id="${profileName}_progress_${criterion}"
-                                         style="width: ${weight * 100}%"
-                                         data-weight="${weight}">
-                                    </div>
-                                </div>
-                                <small class="text-muted">
-                                    <span id="${profileName}_percent_${criterion}" class="fw-bold">${(weight * 100).toFixed(1)}%</span>
-                                </small>
-                            </div>
-                        </div>
-                    </div>
-                `;
-            }
-        });
-        return html;
+        // Update total weight for the profile
+        updateTotalWeight(profile);
+        
+        // Validate form
+        validateForm(profile);
     }
 
-    // Populate criteria for each profile
-    document.getElementById('investment-criteria').innerHTML = generateCriteriaHTML(investmentProfile, 'investment');
-    document.getElementById('lifestyle-criteria').innerHTML = generateCriteriaHTML(lifestyleProfile, 'lifestyle');
+    // Calculate and update total weight for a profile
+    function updateTotalWeight(profile) {
+        const weightInputs = document.querySelectorAll(`#${profile}-form .weight-input`);
+        let totalWeight = 0;
+        
+        weightInputs.forEach(input => {
+            totalWeight += parseFloat(input.value) || 0;
+        });
 
-    // Combined mix sliders synchronization
+        // Update total weight display
+        const totalWeightBar = document.getElementById(`${profile}-weight-bar`);
+        const totalWeightText = document.getElementById(`${profile}-weight-text`);
+        
+        if (totalWeightBar && totalWeightText) {
+            const percentage = Math.round(totalWeight * 100);
+            totalWeightBar.style.width = Math.min(100, percentage) + '%';
+            totalWeightText.textContent = percentage + '%';
+            
+            // Color coding based on how close to 100%
+            totalWeightBar.className = `md3-progress-bar ${profile === 'investment' ? 'md3-progress-bar--warning' : 'md3-progress-bar--success'}`;
+            if (Math.abs(totalWeight - 1.0) > 0.01) {
+                totalWeightText.style.color = '#d32f2f'; // Error color
+            } else {
+                totalWeightText.style.color = 'black';
+            }
+        }
+        
+        return totalWeight;
+    }
+
+    // Form validation
+    function validateForm(profile) {
+        const form = document.getElementById(`${profile}-form`);
+        const submitButton = form ? form.querySelector('button[type="submit"]') : null;
+        
+        if (!submitButton) return;
+        
+        const totalWeight = updateTotalWeight(profile);
+        const isValid = Math.abs(totalWeight - 1.0) <= 0.01;
+        
+        submitButton.disabled = !isValid;
+        if (isValid) {
+            submitButton.classList.remove('md3-button--disabled');
+        } else {
+            submitButton.classList.add('md3-button--disabled');
+        }
+    }
+
+    // ============ EVENT LISTENERS FOR WEIGHT CONTROLS ============
+    
+    // Weight adjustment buttons (+/-)
+    document.querySelectorAll('.weight-adjust').forEach(button => {
+        button.addEventListener('click', function() {
+            const criterion = this.getAttribute('data-criteria');
+            const profile = this.getAttribute('data-profile');
+            const delta = parseFloat(this.getAttribute('data-delta'));
+            
+            const weightInput = document.getElementById(`${profile}_weight_${criterion}`);
+            if (weightInput) {
+                const currentWeight = parseFloat(weightInput.value) || 0;
+                updateWeight(criterion, profile, currentWeight + delta, 'button');
+            }
+        });
+    });
+
+    // Slider inputs
+    document.querySelectorAll('.weight-slider').forEach(slider => {
+        slider.addEventListener('input', function() {
+            const criterion = this.getAttribute('data-criteria');
+            const profile = this.getAttribute('data-profile');
+            const newWeight = parseFloat(this.value) / 100;
+            
+            updateWeight(criterion, profile, newWeight, 'slider');
+        });
+    });
+
+    // Number inputs
+    document.querySelectorAll('.weight-input').forEach(input => {
+        input.addEventListener('input', function() {
+            const criterion = this.id.replace(`${this.closest('form').id.replace('-form', '')}_weight_`, '');
+            const profile = this.closest('form').id.replace('-form', '');
+            const newWeight = parseFloat(this.value) || 0;
+            
+            updateWeight(criterion, profile, newWeight, 'input');
+        });
+
+        // Prevent invalid input
+        input.addEventListener('keydown', function(e) {
+            // Allow navigation keys, backspace, delete, tab, escape, enter
+            if ([46, 8, 9, 27, 13].indexOf(e.keyCode) !== -1 ||
+                // Allow Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+X
+                (e.keyCode === 65 && e.ctrlKey === true) ||
+                (e.keyCode === 67 && e.ctrlKey === true) ||
+                (e.keyCode === 86 && e.ctrlKey === true) ||
+                (e.keyCode === 88 && e.ctrlKey === true) ||
+                // Allow home, end, left, right
+                (e.keyCode >= 35 && e.keyCode <= 39)) {
+                return;
+            }
+            // Ensure that it is a number or decimal point
+            if ((e.shiftKey || (e.keyCode < 48 || e.keyCode > 57)) && 
+                (e.keyCode < 96 || e.keyCode > 105) && 
+                e.keyCode !== 190 && e.keyCode !== 110) {
+                e.preventDefault();
+            }
+        });
+    });
+
+    // ============ COMBINED MIX FUNCTIONALITY ============
+    
+    // Combined mix sliders
     const investmentMixSlider = document.getElementById('investment-mix-slider');
-    const investmentMixInput = document.getElementById('investment-mix-input');
-    const investmentMixPercent = document.getElementById('investment-mix-percent');
     const lifestyleMixSlider = document.getElementById('lifestyle-mix-slider');
+    const investmentMixInput = document.getElementById('investment-mix-input');
     const lifestyleMixInput = document.getElementById('lifestyle-mix-input');
-    const lifestyleMixPercent = document.getElementById('lifestyle-mix-percent');
 
     function updateCombinedMix() {
-        const investmentPercent = parseInt(investmentMixSlider.value);
-        const lifestylePercent = 100 - investmentPercent;
+        if (!investmentMixSlider || !lifestyleMixSlider) return;
         
-        // Update sliders and inputs
-        lifestyleMixSlider.value = lifestylePercent;
-        investmentMixInput.value = (investmentPercent / 100).toFixed(2);
-        lifestyleMixInput.value = (lifestylePercent / 100).toFixed(2);
+        const investmentValue = parseFloat(investmentMixSlider.value) / 100;
+        const lifestyleValue = 1 - investmentValue; // Ensure they sum to 1
         
-        // Update labels
-        investmentMixPercent.textContent = investmentPercent + '%';
-        lifestyleMixPercent.textContent = lifestylePercent + '%';
+        // Update all controls
+        investmentMixInput.value = investmentValue.toFixed(2);
+        lifestyleMixInput.value = lifestyleValue.toFixed(2);
+        lifestyleMixSlider.value = Math.round(lifestyleValue * 100);
+        
+        // Update percentage displays
+        const investmentPercent = document.getElementById('investment-mix-percent');
+        const lifestylePercent = document.getElementById('lifestyle-mix-percent');
+        if (investmentPercent) investmentPercent.textContent = Math.round(investmentValue * 100) + '%';
+        if (lifestylePercent) lifestylePercent.textContent = Math.round(lifestyleValue * 100) + '%';
         
         // Update visual bars
-        document.getElementById('combined-investment-bar').style.width = investmentPercent + '%';
-        document.getElementById('combined-investment-bar').innerHTML = `<span class="fw-bold text-white">Investment: ${investmentPercent}%</span>`;
-        document.getElementById('combined-lifestyle-bar').style.width = lifestylePercent + '%';
-        document.getElementById('combined-lifestyle-bar').innerHTML = `<span class="fw-bold text-white">Lifestyle: ${lifestylePercent}%</span>`;
+        const investmentBar = document.getElementById('combined-investment-bar');
+        const lifestyleBar = document.getElementById('combined-lifestyle-bar');
+        if (investmentBar && lifestyleBar) {
+            const invPercent = Math.round(investmentValue * 100);
+            const lifePercent = 100 - invPercent;
+            
+            investmentBar.style.width = invPercent + '%';
+            lifestyleBar.style.width = lifePercent + '%';
+            
+            investmentBar.querySelector('.md3-progress-label').textContent = `Investment: ${invPercent}%`;
+            lifestyleBar.querySelector('.md3-progress-label').textContent = `Lifestyle: ${lifePercent}%`;
+        }
     }
 
-    investmentMixSlider.addEventListener('input', updateCombinedMix);
-    lifestyleMixSlider.addEventListener('input', function() {
-        investmentMixSlider.value = 100 - parseInt(this.value);
-        updateCombinedMix();
-    });
-
-    // Initialize weight management for profiles
-    function setupProfileWeightManagement(profileName) {
-        const form = document.getElementById(`${profileName}-form`);
-        const inputs = form.querySelectorAll('.weight-input');
-        const sliders = form.querySelectorAll('.weight-slider');
-        const adjustButtons = form.querySelectorAll('.weight-adjust');
-        
-        let isAdjusting = false;
-
-        function updateProfileVisualizations() {
-            if (isAdjusting) return;
-            
-            let totalWeight = 0;
-            inputs.forEach(input => {
-                const weight = parseFloat(input.value) || 0;
-                const criterion = input.name.replace('weight_', '');
-                totalWeight += weight;
-                
-                // Update slider
-                const slider = document.getElementById(`${profileName}_slider_${criterion}`);
-                if (slider) slider.value = weight * 100;
-                
-                // Update progress bar
-                const progressBar = document.getElementById(`${profileName}_progress_${criterion}`);
-                if (progressBar) {
-                    progressBar.style.width = (weight * 100) + '%';
-                    progressBar.dataset.weight = weight;
-                }
-                
-                // Update percentage
-                const percentSpan = document.getElementById(`${profileName}_percent_${criterion}`);
-                if (percentSpan) percentSpan.textContent = (weight * 100).toFixed(1) + '%';
-            });
-            
-            // Update total weight bar
-            const totalWeightBar = document.getElementById(`${profileName}-weight-bar`);
-            const totalWeightText = document.getElementById(`${profileName}-weight-text`);
-            if (totalWeightBar && totalWeightText) {
-                const totalPercent = totalWeight * 100;
-                totalWeightText.textContent = `${totalPercent.toFixed(1)}%`;
-                totalWeightBar.style.width = `${Math.min(totalPercent, 100)}%`;
-                
-                // Color code total weight
-                if (Math.abs(totalWeight - 1.0) < 0.01) {
-                    totalWeightBar.className = `progress-bar ${profileName === 'investment' ? 'bg-warning' : 'bg-success'}`;
-                } else if (Math.abs(totalWeight - 1.0) < 0.1) {
-                    totalWeightBar.className = 'progress-bar bg-warning';
-                } else {
-                    totalWeightBar.className = 'progress-bar bg-danger';
-                }
-            }
-        }
-
-        function adjustWeightsProportionally(changedCriteria, newWeight) {
-            isAdjusting = true;
-            const input = document.getElementById(`${profileName}_weight_${changedCriteria}`);
-            const oldWeight = parseFloat(input.value) || 0;
-            const delta = newWeight - oldWeight;
-            
-            // Set the changed weight
-            input.value = newWeight.toFixed(2);
-            
-            // Distribute the delta proportionally among other weights
-            if (delta !== 0) {
-                let totalOtherWeights = 0;
-                const otherWeights = [];
-                
-                inputs.forEach(otherInput => {
-                    const criteriaName = otherInput.name.replace('weight_', '');
-                    if (criteriaName !== changedCriteria) {
-                        const weight = parseFloat(otherInput.value) || 0;
-                        totalOtherWeights += weight;
-                        otherWeights.push({name: criteriaName, weight: weight});
-                    }
-                });
-                
-                if (totalOtherWeights > 0) {
-                    otherWeights.forEach(item => {
-                        const proportion = item.weight / totalOtherWeights;
-                        const adjustment = -delta * proportion;
-                        const newValue = Math.max(0, Math.min(1, item.weight + adjustment));
-                        const otherInput = document.getElementById(`${profileName}_weight_${item.name}`);
-                        if (otherInput) otherInput.value = newValue.toFixed(2);
-                    });
-                }
-            }
-            
-            isAdjusting = false;
-            updateProfileVisualizations();
-        }
-
-        // Event listeners for each profile
-        sliders.forEach(slider => {
-            slider.addEventListener('input', function() {
-                const criteriaName = this.dataset.criteria;
-                const newWeight = parseFloat(this.value) / 100;
-                adjustWeightsProportionally(criteriaName, newWeight);
-            });
+    if (investmentMixSlider) {
+        investmentMixSlider.addEventListener('input', updateCombinedMix);
+    }
+    
+    if (lifestyleMixSlider) {
+        lifestyleMixSlider.addEventListener('input', function() {
+            const lifestyleValue = parseFloat(this.value) / 100;
+            const investmentValue = 1 - lifestyleValue;
+            investmentMixSlider.value = Math.round(investmentValue * 100);
+            updateCombinedMix();
         });
+    }
 
-        inputs.forEach(input => {
-            input.addEventListener('input', function() {
-                if (!isAdjusting) {
-                    const criteriaName = this.name.replace('weight_', '');
-                    const newWeight = Math.max(0, Math.min(1, parseFloat(this.value) || 0));
-                    this.value = newWeight.toFixed(2);
-                    adjustWeightsProportionally(criteriaName, newWeight);
-                }
-            });
+    // Number input sync for combined mix
+    if (investmentMixInput) {
+        investmentMixInput.addEventListener('input', function() {
+            const investmentValue = Math.max(0, Math.min(1, parseFloat(this.value) || 0));
+            investmentMixSlider.value = Math.round(investmentValue * 100);
+            updateCombinedMix();
         });
+    }
 
-        adjustButtons.forEach(button => {
-            button.addEventListener('click', function() {
-                const criteriaName = this.dataset.criteria;
-                const delta = parseFloat(this.dataset.delta);
-                const input = document.getElementById(`${profileName}_weight_${criteriaName}`);
-                const currentWeight = parseFloat(input.value) || 0;
-                const newWeight = Math.max(0, Math.min(1, currentWeight + delta));
-                adjustWeightsProportionally(criteriaName, newWeight);
-            });
+    if (lifestyleMixInput) {
+        lifestyleMixInput.addEventListener('input', function() {
+            const lifestyleValue = Math.max(0, Math.min(1, parseFloat(this.value) || 0));
+            lifestyleMixSlider.value = Math.round(lifestyleValue * 100);
+            updateCombinedMix();
         });
+    }
 
-        // Form submission validation
+    // ============ FORM SUBMISSION HANDLING ============
+    
+    document.querySelectorAll('form[id$="-form"]').forEach(form => {
         form.addEventListener('submit', function(e) {
-            const totalWeight = Array.from(inputs).reduce((sum, input) => {
-                return sum + (parseFloat(input.value) || 0);
-            }, 0);
+            const profile = this.id.replace('-form', '');
+            const totalWeight = updateTotalWeight(profile);
             
+            // Final validation before submit
             if (Math.abs(totalWeight - 1.0) > 0.01) {
-                if (!confirm(`Warning: ${profileName} profile weight sum ${(totalWeight * 100).toFixed(1)}% differs from 100%. MCDM methodology requires exactly 100%. Continue anyway?`)) {
-                    e.preventDefault();
-                    return false;
-                }
+                e.preventDefault();
+                alert(`Error: Total weights must equal 100% (currently ${(totalWeight * 100).toFixed(1)}%)`);
+                return false;
             }
             
-            if (!confirm(`This will update ${profileName} profile weights and rescore all properties. Continue?`)) {
-                e.preventDefault();
-                return false;
+            // Show loading state
+            const submitButton = this.querySelector('button[type="submit"]');
+            if (submitButton) {
+                const originalText = submitButton.textContent;
+                submitButton.disabled = true;
+                submitButton.innerHTML = '<span class="material-symbols-outlined md3-spinner">refresh</span> Updating...';
+                
+                // Re-enable after timeout (fallback)
+                setTimeout(() => {
+                    submitButton.disabled = false;
+                    submitButton.innerHTML = originalText;
+                }, 30000);
             }
         });
-
-        // Initial update
-        updateProfileVisualizations();
-    }
-
-    // Setup weight management for both profiles
-    setupProfileWeightManagement('investment');
-    setupProfileWeightManagement('lifestyle');
-
-    // Combined form validation
-    document.getElementById('combined-form').addEventListener('submit', function(e) {
-        const investmentWeight = parseFloat(investmentMixInput.value);
-        const lifestyleWeight = parseFloat(lifestyleMixInput.value);
-        const total = investmentWeight + lifestyleWeight;
-        
-        if (Math.abs(total - 1.0) > 0.01) {
-            if (!confirm(`Warning: Combined mix weights sum to ${(total * 100).toFixed(1)}% instead of 100%. Continue anyway?`)) {
-                e.preventDefault();
-                return false;
-            }
-        }
-        
-        if (!confirm('This will update the combined score mix and rescore all properties. Continue?')) {
-            e.preventDefault();
-            return false;
-        }
     });
 
-    // Initial setup
+    // ============ INITIALIZATION ============
+    
+    // Initialize all forms
+    ['investment', 'lifestyle'].forEach(profile => {
+        updateTotalWeight(profile);
+        validateForm(profile);
+    });
+    
+    // Initialize combined mix
     updateCombinedMix();
+    
+    console.log('Criteria form functionality initialized successfully');
+
+    // ============ TAB SWITCHING FUNCTIONALITY ============
+    
+    // Simple tab switching function
+    window.switchCriteriaTab = function(targetId) {
+        console.log('[CRITERIA-TABS] Switching to tab:', targetId);
+        
+        // Hide all content
+        document.querySelectorAll('.md3-tab-content').forEach(content => {
+            content.classList.remove('md3-tab-content--active');
+        });
+        
+        // Deactivate all tabs
+        document.querySelectorAll('.md3-tab').forEach(btn => {
+            btn.classList.remove('md3-tab--active');
+            btn.setAttribute('aria-selected', 'false');
+        });
+        
+        // Show target content
+        const targetContent = document.getElementById(targetId);
+        if (targetContent) {
+            targetContent.classList.add('md3-tab-content--active');
+            console.log('[CRITERIA-TABS] Showing content:', targetId);
+        }
+        
+        // Activate clicked tab
+        const targetTab = document.querySelector(`[data-target="${targetId}"]`);
+        if (targetTab) {
+            targetTab.classList.add('md3-tab--active');
+            targetTab.setAttribute('aria-selected', 'true');
+            console.log('[CRITERIA-TABS] Activating tab for:', targetId);
+        }
+    };
+    
+    // Attach click listeners to tabs
+    document.querySelectorAll('.md3-tab').forEach(button => {
+        const targetId = button.getAttribute('data-target');
+        if (targetId) {
+            button.addEventListener('click', function(e) {
+                e.preventDefault();
+                window.switchCriteriaTab(targetId);
+            });
+            
+            // Keyboard navigation
+            button.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    window.switchCriteriaTab(targetId);
+                }
+            });
+        }
+    });
+    
+    console.log('[CRITERIA-TABS] Tab functionality initialized');
+
+    // Initialize total weights on page load
+    updateTotalWeight('investment');
+    updateTotalWeight('lifestyle');
 });
 </script>
 {% endblock %}

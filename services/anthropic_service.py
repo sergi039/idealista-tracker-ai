@@ -406,7 +406,7 @@ Provide ONLY the missing or enhanced data in this EXACT JSON format (keep all te
 Provide analysis in this EXACT JSON format (keep all text in English):
 {{
     "price_analysis": {{
-        "verdict": "FAIR_PRICE|OVERPRICED|UNDERPRICED",
+        "verdict": "Good Value|Overpriced|Underpriced",
         "summary": "Brief market comparison and price per m² analysis",
         "price_per_m2": estimated_market_price_per_m2,
         "recommendation": "Short recommendation about pricing"
@@ -464,7 +464,7 @@ Provide analysis in this EXACT JSON format (keep all text in English):
         "price_to_rent_ratio": price_to_annual_rent_ratio,
         "payback_period_years": years_to_recover_investment,
         "cap_rate": capitalization_rate_percentage,
-        "investment_rating": "EXCELLENT|GOOD|MODERATE|BELOW_AVERAGE",
+        "investment_rating": "EXCELLENT|GOOD|MODERATE|BELOW AVERAGE",
         "demand_factors": ["rental demand factor 1", "factor 2", "factor 3"],
         "rental_strategy": "Recommended rental strategy (long-term, vacation, etc.)"
     }}

@@ -1,6 +1,6 @@
 import logging
 import os
-from flask import Blueprint, jsonify, request, send_from_directory
+from flask import Blueprint, jsonify, request, send_from_directory, current_app
 from models import Land, ScoringCriteria, SyncHistory
 from app import db
 from utils.auth import admin_required, rate_limit
@@ -8,6 +8,8 @@ from utils.auth import admin_required, rate_limit
 logger = logging.getLogger(__name__)
 
 api_bp = Blueprint('api', __name__)
+
+# API routes are exempted from CSRF in app.py during blueprint registration
 
 @api_bp.route('/healthz')
 def health_check():
@@ -112,6 +114,14 @@ def manual_enrichment(land_id):
 @rate_limit(max_requests=5, window_seconds=60)  # 5 requests per minute
 def manual_ingestion():
     """Manually trigger email ingestion"""
+    import signal
+    
+    def timeout_handler(signum, frame):
+        raise TimeoutError("Manual sync timeout - operation took too long")
+    
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(300)  # 5 minute timeout for manual sync
+    
     try:
         # Get sync type from request body (support both JSON and form data)
         if request.is_json:
@@ -134,6 +144,8 @@ def manual_ingestion():
             # Use regular ingestion for incremental or if full sync not available
             processed_count = service.run_ingestion()
         
+        signal.alarm(0)  # Cancel timeout
+        
         return jsonify({
             "success": True,
             "processed_count": processed_count,
@@ -142,7 +154,16 @@ def manual_ingestion():
             "message": f"Successfully processed {processed_count} new properties via {backend_name} ({sync_type} sync)"
         })
         
+    except TimeoutError as e:
+        signal.alarm(0)  # Cancel timeout
+        logger.error(f"Manual ingestion timeout: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Manual sync timed out. Please try again later or contact support if this persists."
+        }), 500
+        
     except Exception as e:
+        signal.alarm(0)  # Cancel timeout
         logger.error(f"Manual ingestion failed: {str(e)}")
         return jsonify({
             "success": False,
@@ -256,6 +277,8 @@ def enhance_description(land_id):
             return jsonify({
                 "success": True,
                 "enhanced_description": result.get('enhanced_description'),
+                "enhanced_en": result.get('enhanced_en'),
+                "enhanced_es": result.get('enhanced_es'),
                 "original_description": result.get('original_description'),
                 "processing_status": result.get('processing_status'),
                 "key_highlights": result.get('key_highlights', []),
@@ -467,10 +490,14 @@ def get_land_detail(land_id):
 def get_criteria():
     """Get current scoring criteria weights"""
     try:
-        from services.scoring_service import ScoringService
+        from services.scoring.weight_manager import WeightManager
         
-        scoring_service = ScoringService()
-        weights = scoring_service.get_current_weights()
+        weight_manager = WeightManager()
+        weights = {
+            'investment': weight_manager.load_profile_weights('investment'),
+            'lifestyle': weight_manager.load_profile_weights('lifestyle'),
+            'combined': weight_manager.load_profile_weights('combined')
+        }
         
         return jsonify({
             "success": True,

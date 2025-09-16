@@ -1,7 +1,13 @@
 from datetime import datetime
+from enum import Enum
 from app import db
-from sqlalchemy import CheckConstraint
+from sqlalchemy import Index
 from sqlalchemy.dialects.postgresql import JSONB
+
+class LandTypeEnum(str, Enum):
+    # Match existing database values (lowercase) until migration is applied
+    developed = 'developed'
+    buildable = 'buildable'
 
 class Land(db.Model):
     __tablename__ = 'lands'
@@ -12,13 +18,13 @@ class Land(db.Model):
     email_sender = db.Column(db.String(255))  # Email sender
     title = db.Column(db.Text)
     url = db.Column(db.Text)
-    price = db.Column(db.Numeric(10, 2))
-    area = db.Column(db.Numeric(10, 2))
-    municipality = db.Column(db.String(255))
+    price = db.Column(db.Numeric(10, 2), index=True)
+    area = db.Column(db.Numeric(10, 2), index=True)
+    municipality = db.Column(db.String(255), index=True)
     location_lat = db.Column(db.Numeric(10, 7))
     location_lon = db.Column(db.Numeric(10, 7))
     location_accuracy = db.Column(db.String(20), default='unknown')  # 'precise', 'approximate', 'unknown'
-    land_type = db.Column(db.String(20), CheckConstraint("land_type IN ('developed', 'buildable')"))
+    land_type = db.Column(db.Enum(LandTypeEnum), nullable=True, index=True)
     description = db.Column(db.Text)
     
     # JSONB fields for complex data
@@ -33,7 +39,7 @@ class Land(db.Model):
     property_details = db.Column(JSONB)  # AI analysis and property details in JSON format
     ai_analysis = db.Column(JSONB)  # Structured AI analysis with 5 blocks
     enhanced_description = db.Column(JSONB)  # AI-enhanced professional description data
-    score_total = db.Column(db.Numeric(5, 2))
+    score_total = db.Column(db.Numeric(5, 2), index=True)
     score_investment = db.Column(db.Numeric(5, 2))  # Investment-focused score (0-100)
     score_lifestyle = db.Column(db.Numeric(5, 2))   # Lifestyle-focused score (0-100)
     
@@ -61,9 +67,15 @@ class Land(db.Model):
     price_change_percentage = db.Column(db.Numeric(5, 2))  # Percentage change
     price_changed_date = db.Column(db.DateTime)  # When price was last changed
     
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
     email_date = db.Column(db.DateTime)  # Date when the email was received
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)  # Last update time
+    
+    # Composite indexes for commonly queried field combinations
+    __table_args__ = (
+        Index('ix_location_coords', 'location_lat', 'location_lon'),  # For exact coordinate lookups
+        Index('ix_score_location', 'municipality', 'score_total'),    # Filter by municipality, then sort by score
+    )
     
     def __repr__(self):
         return f'<Land {self.id}: {self.title[:50]}...>'

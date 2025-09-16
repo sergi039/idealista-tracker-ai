@@ -1,0 +1,1003 @@
+# Scoring System Refactoring Tasks - Idealista Land Watch
+
+## 🎯 OVERVIEW
+The current scoring system has a solid MCDM (Multi-Criteria Decision Making) foundation but suffers from architectural issues that limit scalability and maintainability. This document provides specific refactoring tasks to improve the scoring system's architecture.
+
+**Current System Rating: 7.5/10**
+- ✅ Strong: MCDM methodology, dual scoring profiles, weight normalization
+- ❌ Weak: Monolithic service class, hardcoded values, inefficient mass recalculation
+
+---
+
+## 🚨 CRITICAL PRIORITY TASKS
+
+### TASK 1: Refactor Monolithic ScoringService Class
+**Issue**: Single class handles too many responsibilities (scoring, weights, validation, DB operations)
+
+**Action**: Split into specialized classes with single responsibilities
+
+**Create**: `services/scoring/` directory structure
+```bash
+mkdir -p services/scoring
+touch services/scoring/__init__.py
+touch services/scoring/weight_manager.py
+touch services/scoring/score_calculator.py
+touch services/scoring/data_extractor.py
+touch services/scoring/config_manager.py
+```
+
+**Implementation**:
+
+**File**: `services/scoring/weight_manager.py`
+```python
+import logging
+from typing import Dict, Optional
+from decimal import Decimal
+from models import ScoringCriteria
+from app import db
+
+logger = logging.getLogger(__name__)
+
+class WeightManager:
+    """Handles all scoring weight operations"""
+    
+    def load_profile_weights(self, profile: str) -> Dict[str, float]:
+        """Load weights for a specific profile from database, fallback to Config"""
+        try:
+            criteria = ScoringCriteria.query.filter_by(
+                active=True,
+                profile=profile
+            ).all()
+            
+            if criteria:
+                db_weights = {c.criteria_name: float(c.weight) for c in criteria}
+                return self.normalize_weights(db_weights)
+            
+            # Fallback to config
+            from config import Config
+            if hasattr(Config, 'SCORING_PROFILES') and profile in Config.SCORING_PROFILES:
+                return Config.SCORING_PROFILES[profile].copy()
+            
+            logger.warning(f"No weights found for profile '{profile}'")
+            return {}
+            
+        except Exception as e:
+            logger.error(f"Failed to load profile weights: {str(e)}")
+            return {}
+    
+    def normalize_weights(self, weights: Dict[str, float]) -> Dict[str, float]:
+        """Normalize weights to sum to 1.0 (MCDM requirement)"""
+        if not weights:
+            return {}
+        
+        total_weight = sum(weights.values())
+        if total_weight <= 0:
+            logger.error("Invalid weights: sum is zero or negative")
+            return {}
+        
+        # Normalize to sum = 1.0
+        normalized = {k: v / total_weight for k, v in weights.items()}
+        
+        # Validate normalization
+        new_sum = sum(normalized.values())
+        if abs(new_sum - 1.0) > 0.001:
+            logger.warning(f"Weight normalization imprecise: sum={new_sum:.6f}")
+        
+        logger.info(f"Normalized weights for profile: {normalized}")
+        return normalized
+    
+    def update_profile_weights(self, profile: str, new_weights: Dict[str, float]) -> bool:
+        """Update weights for a specific profile"""
+        try:
+            # Validate profile
+            valid_profiles = ['combined', 'investment', 'lifestyle']
+            if profile not in valid_profiles:
+                raise ValueError(f"Invalid profile: {profile}")
+            
+            # Normalize weights
+            normalized_weights = self.normalize_weights(new_weights)
+            if not normalized_weights:
+                return False
+            
+            # Update database
+            for criteria_name, weight in normalized_weights.items():
+                criterion = ScoringCriteria.query.filter_by(
+                    criteria_name=criteria_name,
+                    profile=profile
+                ).first()
+                
+                if criterion:
+                    criterion.weight = Decimal(str(weight))
+                else:
+                    criterion = ScoringCriteria(
+                        criteria_name=criteria_name,
+                        profile=profile,
+                        weight=Decimal(str(weight)),
+                        active=True
+                    )
+                    db.session.add(criterion)
+            
+            db.session.commit()
+            logger.info(f"Updated weights for profile '{profile}': {normalized_weights}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to update weights: {str(e)}")
+            db.session.rollback()
+            return False
+```
+
+**File**: `services/scoring/config_manager.py`
+```python
+import yaml
+import os
+from typing import Dict, Any
+from dataclasses import dataclass
+
+@dataclass
+class ScoringThreshold:
+    min_value: float
+    max_value: float
+    score: float
+    
+@dataclass
+class InvestmentYieldConfig:
+    excellent: ScoringThreshold  # 6.0%+
+    good: ScoringThreshold       # 4.0-6.0%
+    fair: ScoringThreshold       # 2.0-4.0%
+    poor: ScoringThreshold       # 0-2.0%
+
+class ScoringConfigManager:
+    """Manages scoring configuration and thresholds"""
+    
+    def __init__(self):
+        self.config = self._load_config()
+    
+    def _load_config(self) -> Dict[str, Any]:
+        """Load scoring configuration from files or defaults"""
+        try:
+            config_path = os.path.join('config', 'scoring_rules.yml')
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    return yaml.safe_load(f)
+        except Exception:
+            pass
+        
+        # Default configuration
+        return {
+            'investment_yield': {
+                'excellent': {'min': 6.0, 'max': 100.0, 'base_score': 90, 'multiplier': 2.5},
+                'good': {'min': 4.0, 'max': 6.0, 'score': 75},
+                'fair': {'min': 2.0, 'max': 4.0, 'score': 50},
+                'poor': {'min': 0.0, 'max': 2.0, 'score': 20}
+            },
+            'distance_scoring': {
+                'excellent': {'max_distance': 2000, 'multiplier': 1.0},
+                'good': {'max_distance': 5000, 'multiplier': 0.7},
+                'fair': {'max_distance': 10000, 'multiplier': 0.4},
+                'poor': {'max_distance': float('inf'), 'multiplier': 0.2}
+            },
+            'infrastructure_keywords': {
+                'electricity': ['electricidad', 'luz', 'eléctrico', 'corriente'],
+                'water': ['agua', 'suministro agua', 'abastecimiento', 'red agua'],
+                'internet': ['internet', 'fibra', 'adsl', 'wifi', 'banda ancha'],
+                'gas': ['gas', 'butano', 'propano', 'gas natural']
+            }
+        }
+    
+    def get_investment_yield_score(self, yield_value: float) -> float:
+        """Calculate investment yield score based on configuration"""
+        config = self.config['investment_yield']
+        
+        if yield_value >= config['excellent']['min']:
+            base = config['excellent']['base_score']
+            multiplier = config['excellent']['multiplier']
+            return min(100, base + (yield_value - config['excellent']['min']) * multiplier)
+        elif yield_value >= config['good']['min']:
+            return config['good']['score']
+        elif yield_value >= config['fair']['min']:
+            return config['fair']['score']
+        else:
+            return config['poor']['score']
+    
+    def get_distance_score(self, distance: float, max_points: float) -> float:
+        """Calculate distance-based score"""
+        config = self.config['distance_scoring']
+        
+        for level, params in config.items():
+            if distance <= params['max_distance']:
+                return max_points * params['multiplier']
+        
+        return max_points * config['poor']['multiplier']
+    
+    def get_infrastructure_keywords(self, utility: str) -> list:
+        """Get keywords for infrastructure detection"""
+        return self.config['infrastructure_keywords'].get(utility, [])
+```
+
+**File**: `services/scoring/data_extractor.py`
+```python
+import logging
+from typing import Dict, Any, Optional
+from services.scoring.config_manager import ScoringConfigManager
+
+logger = logging.getLogger(__name__)
+
+class LandDataExtractor:
+    """Extracts and normalizes data from Land objects"""
+    
+    def __init__(self):
+        self.config_manager = ScoringConfigManager()
+    
+    def extract_infrastructure_data(self, land) -> Dict[str, bool]:
+        """Extract infrastructure data from JSONB and description"""
+        result = {
+            'electricity': False,
+            'water': False,
+            'internet': False,
+            'gas': False
+        }
+        
+        # First check JSONB data
+        if land.infrastructure_basic:
+            for utility in result.keys():
+                if land.infrastructure_basic.get(utility):
+                    result[utility] = True
+        
+        # Then check description for missing utilities
+        description = (land.description or "").lower()
+        
+        for utility in result.keys():
+            if not result[utility]:  # Only check if not already found
+                keywords = self.config_manager.get_infrastructure_keywords(utility)
+                if any(keyword in description for keyword in keywords):
+                    result[utility] = True
+                    logger.debug(f"Found {utility} in description for land {land.id}")
+        
+        return result
+    
+    def extract_transport_data(self, land) -> Dict[str, Any]:
+        """Extract transport accessibility data"""
+        if not land.transport:
+            return {}
+        
+        return {
+            'train_station': {
+                'available': land.transport.get('train_station_available', False),
+                'distance': land.transport.get('train_station_distance', float('inf'))
+            },
+            'bus_station': {
+                'available': land.transport.get('bus_station_available', False),
+                'distance': land.transport.get('bus_station_distance', float('inf'))
+            },
+            'airport': {
+                'available': land.transport.get('airport_available', False),
+                'distance': land.transport.get('airport_distance', float('inf'))
+            },
+            'highway': {
+                'available': land.transport.get('highway_available', False),
+                'distance': land.transport.get('highway_distance', float('inf'))
+            }
+        }
+    
+    def extract_environment_data(self, land) -> Dict[str, Any]:
+        """Extract environment and view data"""
+        if not land.environment:
+            return {}
+        
+        return {
+            'sea_view': land.environment.get('sea_view', False),
+            'mountain_view': land.environment.get('mountain_view', False),
+            'forest_view': land.environment.get('forest_view', False),
+            'orientation': land.environment.get('orientation', '').lower()
+        }
+    
+    def extract_investment_data(self, land) -> Dict[str, Optional[float]]:
+        """Extract investment-related data"""
+        try:
+            # Try to get from market analysis service
+            from services.market_analysis_service import MarketAnalysisService
+            
+            market_service = MarketAnalysisService()
+            rental_analysis = market_service.calculate_rental_analysis(land)
+            
+            if rental_analysis:
+                return {
+                    'rental_yield': rental_analysis.get('rental_yield'),
+                    'cap_rate': rental_analysis.get('cap_rate'),
+                    'monthly_rent': rental_analysis.get('monthly_rent')
+                }
+        except Exception as e:
+            logger.warning(f"Could not extract investment data: {str(e)}")
+        
+        return {'rental_yield': None, 'cap_rate': None, 'monthly_rent': None}
+```
+
+### TASK 2: Create Configurable Score Calculator
+**File**: `services/scoring/score_calculator.py`
+```python
+import logging
+from typing import Dict, Optional
+from services.scoring.config_manager import ScoringConfigManager
+from services.scoring.data_extractor import LandDataExtractor
+
+logger = logging.getLogger(__name__)
+
+class ScoreCalculator:
+    """Calculates individual criterion scores using configurable rules"""
+    
+    def __init__(self):
+        self.config_manager = ScoringConfigManager()
+        self.data_extractor = LandDataExtractor()
+    
+    def calculate_individual_scores(self, land) -> Dict[str, Optional[float]]:
+        """Calculate all individual criterion scores for a land"""
+        scores = {}
+        
+        # Calculate each criterion score
+        scoring_methods = {
+            'investment_yield': self._score_investment_yield,
+            'location_quality': self._score_location_quality,
+            'transport': self._score_transport,
+            'infrastructure_basic': self._score_infrastructure_basic,
+            'infrastructure_extended': self._score_infrastructure_extended,
+            'environment': self._score_environment,
+            'physical_characteristics': self._score_physical_characteristics,
+            'services_quality': self._score_services_quality,
+            'legal_status': self._score_legal_status,
+            'development_potential': self._score_development_potential
+        }
+        
+        for criterion, method in scoring_methods.items():
+            try:
+                score = method(land)
+                scores[criterion] = score
+                
+                if score is not None:
+                    logger.debug(f"Calculated {criterion} score: {score:.1f} for land {land.id}")
+            except Exception as e:
+                logger.error(f"Failed to calculate {criterion} score for land {land.id}: {str(e)}")
+                scores[criterion] = None
+        
+        return scores
+    
+    def _score_investment_yield(self, land) -> Optional[float]:
+        """Score investment yield using configurable thresholds"""
+        investment_data = self.data_extractor.extract_investment_data(land)
+        rental_yield = investment_data.get('rental_yield')
+        cap_rate = investment_data.get('cap_rate')
+        
+        if rental_yield is None and cap_rate is None:
+            return None
+        
+        # Score rental yield
+        yield_score = 0
+        cap_score = 0
+        
+        if rental_yield is not None:
+            yield_score = self.config_manager.get_investment_yield_score(rental_yield)
+        
+        if cap_rate is not None:
+            cap_score = self.config_manager.get_investment_yield_score(cap_rate)
+        
+        # Combine scores with weights
+        final_score = 0
+        weight_sum = 0
+        
+        if rental_yield is not None:
+            final_score += yield_score * 0.6
+            weight_sum += 0.6
+        
+        if cap_rate is not None:
+            final_score += cap_score * 0.4
+            weight_sum += 0.4
+        
+        if weight_sum > 0:
+            normalized_score = final_score / weight_sum
+            return min(100, max(0, normalized_score))
+        
+        return None
+    
+    def _score_infrastructure_basic(self, land) -> Optional[float]:
+        """Score basic infrastructure using data extractor"""
+        infrastructure_data = self.data_extractor.extract_infrastructure_data(land)
+        
+        if not any(infrastructure_data.values()):
+            return None
+        
+        # Count available utilities
+        available_utilities = sum(1 for available in infrastructure_data.values() if available)
+        total_utilities = len(infrastructure_data)
+        
+        score = (available_utilities / total_utilities) * 100
+        
+        logger.debug(f"Infrastructure basic score: {score:.1f} ({available_utilities}/{total_utilities} utilities)")
+        return score
+    
+    def _score_transport(self, land) -> Optional[float]:
+        """Score transport accessibility using configurable distance thresholds"""
+        transport_data = self.data_extractor.extract_transport_data(land)
+        
+        if not transport_data:
+            return None
+        
+        transport_weights = {
+            'train_station': 30,
+            'bus_station': 20,
+            'airport': 25,
+            'highway': 25
+        }
+        
+        total_score = 0
+        
+        for transport_type, max_points in transport_weights.items():
+            if transport_type in transport_data:
+                transport_info = transport_data[transport_type]
+                if transport_info['available']:
+                    distance = transport_info['distance']
+                    score = self.config_manager.get_distance_score(distance, max_points)
+                    total_score += score
+        
+        return min(total_score, 100)  # Cap at 100
+    
+    def _score_environment(self, land) -> Optional[float]:
+        """Score environment features"""
+        env_data = self.data_extractor.extract_environment_data(land)
+        
+        if not env_data:
+            return None
+        
+        score = 0
+        
+        # View bonuses
+        if env_data.get('sea_view'):
+            score += 40
+        if env_data.get('mountain_view'):
+            score += 30
+        if env_data.get('forest_view'):
+            score += 20
+        
+        # Orientation bonus (south-facing preferred in Spain)
+        orientation = env_data.get('orientation', '')
+        orientation_scores = {
+            'south': 20,
+            'southeast': 15,
+            'southwest': 15,
+            'east': 10,
+            'west': 10,
+            'north': 0
+        }
+        
+        for direction, points in orientation_scores.items():
+            if direction in orientation:
+                score += points
+                break
+        
+        return min(score, 100)  # Cap at 100
+    
+    # Add other scoring methods here following the same pattern...
+    def _score_location_quality(self, land) -> Optional[float]:
+        # Implementation using data_extractor and config_manager
+        return 50  # Placeholder
+    
+    def _score_infrastructure_extended(self, land) -> Optional[float]:
+        # Implementation
+        return 50  # Placeholder
+    
+    def _score_physical_characteristics(self, land) -> Optional[float]:
+        # Implementation
+        return 50  # Placeholder
+    
+    def _score_services_quality(self, land) -> Optional[float]:
+        # Implementation
+        return 50  # Placeholder
+    
+    def _score_legal_status(self, land) -> Optional[float]:
+        # Implementation
+        return 50  # Placeholder
+    
+    def _score_development_potential(self, land) -> Optional[float]:
+        # Implementation
+        return 50  # Placeholder
+```
+
+### TASK 3: Create New Refactored ScoringService
+**File**: `services/scoring/scoring_service.py`
+```python
+import logging
+from decimal import Decimal
+from typing import Dict, Optional
+from services.scoring.weight_manager import WeightManager
+from services.scoring.score_calculator import ScoreCalculator
+
+logger = logging.getLogger(__name__)
+
+class ScoringService:
+    """Main scoring service - coordinates other scoring components"""
+    
+    def __init__(self):
+        self.weight_manager = WeightManager()
+        self.score_calculator = ScoreCalculator()
+    
+    def calculate_score(self, land) -> float:
+        """Calculate dual scores using MCDM methodology"""
+        try:
+            # Calculate individual criterion scores
+            individual_scores = self.score_calculator.calculate_individual_scores(land)
+            
+            # Calculate profile scores
+            investment_score = self._calculate_profile_score(individual_scores, 'investment')
+            lifestyle_score = self._calculate_profile_score(individual_scores, 'lifestyle')
+            
+            # Calculate combined score
+            combined_score = self._calculate_combined_score(investment_score, lifestyle_score)
+            
+            # Update land record
+            land.score_investment = Decimal(str(round(investment_score, 2)))
+            land.score_lifestyle = Decimal(str(round(lifestyle_score, 2)))
+            land.score_total = Decimal(str(round(combined_score, 2)))
+            
+            # Store scoring breakdown for transparency
+            self._store_scoring_breakdown(land, individual_scores, investment_score, lifestyle_score, combined_score)
+            
+            logger.info(f"Calculated scores for land {land.id}: "
+                       f"Investment={investment_score:.1f}, Lifestyle={lifestyle_score:.1f}, "
+                       f"Combined={combined_score:.1f}")
+            
+            return combined_score
+            
+        except Exception as e:
+            logger.error(f"Failed to calculate score for land {land.id}: {str(e)}")
+            return 0.0
+    
+    def _calculate_profile_score(self, individual_scores: Dict[str, Optional[float]], profile: str) -> float:
+        """Calculate MCDM score for a specific profile"""
+        try:
+            profile_weights = self.weight_manager.load_profile_weights(profile)
+            
+            if not profile_weights:
+                logger.error(f"No weights found for profile: {profile}")
+                return 0.0
+            
+            total_score = 0.0
+            weight_sum_used = 0.0
+            
+            for criterion, weight in profile_weights.items():
+                if criterion in individual_scores and individual_scores[criterion] is not None:
+                    score = individual_scores[criterion]
+                    total_score += score * weight
+                    weight_sum_used += weight
+            
+            # Normalize by actually used weights (handle missing data)
+            if weight_sum_used > 0:
+                normalized_score = total_score / weight_sum_used
+                return min(100, max(0, normalized_score))
+            else:
+                logger.warning(f"No valid criteria found for profile '{profile}'")
+                return 0.0
+                
+        except Exception as e:
+            logger.error(f"Failed to calculate profile score for '{profile}': {str(e)}")
+            return 0.0
+    
+    def _calculate_combined_score(self, investment_score: float, lifestyle_score: float) -> float:
+        """Calculate combined score using configured mix"""
+        try:
+            from config import Config
+            mix = getattr(Config, 'COMBINED_MIX', {'investment': 0.32, 'lifestyle': 0.68})
+            
+            combined = (investment_score * mix['investment'] + 
+                       lifestyle_score * mix['lifestyle'])
+            
+            return min(100, max(0, combined))
+            
+        except Exception as e:
+            logger.error(f"Failed to calculate combined score: {str(e)}")
+            return 0.0
+    
+    def _store_scoring_breakdown(self, land, individual_scores, investment_score, lifestyle_score, combined_score):
+        """Store comprehensive scoring breakdown for transparency"""
+        try:
+            if not land.environment:
+                land.environment = {}
+            
+            land.environment['scoring'] = {
+                'individual_scores': individual_scores,
+                'profiles': {
+                    'investment': {
+                        'score': investment_score,
+                        'weights_used': self._get_profile_weights_used(individual_scores, 'investment')
+                    },
+                    'lifestyle': {
+                        'score': lifestyle_score,
+                        'weights_used': self._get_profile_weights_used(individual_scores, 'lifestyle')
+                    }
+                },
+                'combined_score': combined_score,
+                'calculated_at': None  # Will be set by SQLAlchemy
+            }
+        except Exception as e:
+            logger.error(f"Failed to store scoring breakdown: {str(e)}")
+    
+    def _get_profile_weights_used(self, individual_scores: Dict[str, Optional[float]], profile: str) -> Dict[str, float]:
+        """Get weights actually used for scoring (excluding criteria with None scores)"""
+        profile_weights = self.weight_manager.load_profile_weights(profile)
+        
+        return {
+            criterion: weight
+            for criterion, weight in profile_weights.items()
+            if criterion in individual_scores and individual_scores[criterion] is not None
+        }
+    
+    def update_weights(self, new_weights: Dict[str, float], profile: str = 'combined') -> bool:
+        """Update weights using WeightManager"""
+        return self.weight_manager.update_profile_weights(profile, new_weights)
+    
+    def get_current_weights(self, profile: str = 'combined') -> Dict[str, float]:
+        """Get current weights for a profile"""
+        return self.weight_manager.load_profile_weights(profile)
+```
+
+### TASK 4: Update Main ScoringService Import
+**File**: `services/scoring_service.py`
+```python
+# Replace the entire content with:
+"""
+Legacy import compatibility for existing code.
+All new code should import from services.scoring.scoring_service directly.
+"""
+
+import warnings
+from services.scoring.scoring_service import ScoringService as NewScoringService
+
+# Provide backward compatibility
+class ScoringService(NewScoringService):
+    def __init__(self):
+        warnings.warn(
+            "Importing from services.scoring_service is deprecated. "
+            "Use services.scoring.scoring_service instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        super().__init__()
+
+# For direct imports
+__all__ = ['ScoringService']
+```
+
+---
+
+## 📊 MEDIUM PRIORITY TASKS
+
+### TASK 5: Create Scoring Configuration Files
+**Create**: `config/scoring_rules.yml`
+```yaml
+# Scoring configuration - externalize hardcoded values
+
+investment_yield:
+  excellent:
+    min: 6.0
+    max: 100.0
+    base_score: 90
+    multiplier: 2.5
+  good:
+    min: 4.0
+    max: 6.0
+    score: 75
+  fair:
+    min: 2.0
+    max: 4.0
+    score: 50
+  poor:
+    min: 0.0
+    max: 2.0
+    score: 20
+
+distance_scoring:
+  excellent:
+    max_distance: 2000
+    multiplier: 1.0
+  good:
+    max_distance: 5000
+    multiplier: 0.7
+  fair:
+    max_distance: 10000
+    multiplier: 0.4
+  poor:
+    max_distance: 999999
+    multiplier: 0.2
+
+infrastructure_keywords:
+  electricity: ['electricidad', 'luz', 'eléctrico', 'corriente', 'suministro eléctrico']
+  water: ['agua', 'suministro agua', 'abastecimiento', 'red agua', 'acometida agua']
+  internet: ['internet', 'fibra', 'adsl', 'wifi', 'banda ancha', 'conexión red']
+  gas: ['gas', 'butano', 'propano', 'gas natural', 'suministro gas']
+
+environment_scoring:
+  views:
+    sea_view: 40
+    mountain_view: 30
+    forest_view: 20
+    city_view: 15
+  orientation:
+    south: 20
+    southeast: 15
+    southwest: 15
+    east: 10
+    west: 10
+    north: 0
+
+transport_weights:
+  train_station: 30
+  bus_station: 20
+  airport: 25
+  highway: 25
+```
+
+### TASK 6: Add Comprehensive Tests for New Architecture
+**Create**: `tests/scoring/` directory
+```bash
+mkdir -p tests/scoring
+touch tests/scoring/__init__.py
+touch tests/scoring/test_weight_manager.py
+touch tests/scoring/test_score_calculator.py
+touch tests/scoring/test_config_manager.py
+touch tests/scoring/test_data_extractor.py
+```
+
+**File**: `tests/scoring/test_weight_manager.py`
+```python
+import pytest
+from decimal import Decimal
+from services.scoring.weight_manager import WeightManager
+from models import ScoringCriteria
+from app import db
+
+class TestWeightManager:
+    
+    def test_normalize_weights_success(self):
+        """Test weight normalization"""
+        manager = WeightManager()
+        
+        weights = {
+            'infrastructure_basic': 0.4,
+            'transport': 0.3,
+            'environment': 0.5  # Sum = 1.2
+        }
+        
+        normalized = manager.normalize_weights(weights)
+        
+        # Check normalization
+        assert abs(sum(normalized.values()) - 1.0) < 0.001
+        assert normalized['infrastructure_basic'] == pytest.approx(0.4/1.2)
+        assert normalized['transport'] == pytest.approx(0.3/1.2)
+        assert normalized['environment'] == pytest.approx(0.5/1.2)
+    
+    def test_normalize_weights_empty(self):
+        """Test normalization with empty weights"""
+        manager = WeightManager()
+        result = manager.normalize_weights({})
+        assert result == {}
+    
+    def test_normalize_weights_zero_sum(self):
+        """Test normalization with zero sum"""
+        manager = WeightManager()
+        weights = {'a': 0.0, 'b': 0.0}
+        result = manager.normalize_weights(weights)
+        assert result == {}
+    
+    @pytest.mark.parametrize("profile,expected_keys", [
+        ('investment', ['investment_yield', 'location_quality']),
+        ('lifestyle', ['environment', 'services_quality'])
+    ])
+    def test_load_profile_weights_from_config(self, profile, expected_keys):
+        """Test loading weights from config fallback"""
+        manager = WeightManager()
+        weights = manager.load_profile_weights(profile)
+        
+        assert isinstance(weights, dict)
+        for key in expected_keys:
+            assert key in weights
+    
+    def test_update_profile_weights_success(self, app):
+        """Test successful weight update"""
+        with app.app_context():
+            manager = WeightManager()
+            
+            new_weights = {
+                'infrastructure_basic': 0.5,
+                'transport': 0.5
+            }
+            
+            result = manager.update_profile_weights('investment', new_weights)
+            
+            assert result is True
+            
+            # Verify database update
+            criteria = ScoringCriteria.query.filter_by(profile='investment').all()
+            assert len(criteria) == 2
+            
+            # Check normalization
+            total_weight = sum(float(c.weight) for c in criteria)
+            assert abs(total_weight - 1.0) < 0.001
+    
+    def test_update_profile_weights_invalid_profile(self, app):
+        """Test weight update with invalid profile"""
+        with app.app_context():
+            manager = WeightManager()
+            
+            result = manager.update_profile_weights('invalid', {'test': 0.5})
+            
+            assert result is False
+```
+
+### TASK 7: Add Score Versioning Support
+**File**: `models.py` - Add new model
+```python
+class ScoreHistory(db.Model):
+    """Track score calculation history for audit and rollback"""
+    __tablename__ = 'score_history'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    land_id = db.Column(db.Integer, db.ForeignKey('lands.id'), nullable=False)
+    algorithm_version = db.Column(db.String(50), nullable=False)  # e.g., "2.0.1"
+    weights_hash = db.Column(db.String(64), nullable=False)  # Hash of weights used
+    
+    # Scores at time of calculation
+    score_investment = db.Column(db.Numeric(5, 2))
+    score_lifestyle = db.Column(db.Numeric(5, 2))
+    score_total = db.Column(db.Numeric(5, 2))
+    
+    # Individual scores snapshot
+    individual_scores = db.Column(JSONB)
+    profile_weights_used = db.Column(JSONB)
+    
+    # Metadata
+    calculated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    calculation_duration_ms = db.Column(db.Integer)  # Performance tracking
+    
+    # Relationships
+    land = db.relationship('Land', backref='score_history')
+    
+    def __repr__(self):
+        return f'<ScoreHistory {self.land_id} v{self.algorithm_version}>'
+```
+
+---
+
+## 🔮 LOW PRIORITY / FUTURE TASKS
+
+### TASK 8: Add Async Score Recalculation
+**File**: `services/scoring/async_calculator.py`
+```python
+from celery import Celery
+import logging
+from typing import List
+from services.scoring.scoring_service import ScoringService
+from models import Land
+from app import db
+
+logger = logging.getLogger(__name__)
+
+celery = Celery('scoring_tasks')
+
+@celery.task(bind=True)
+def recalculate_scores_batch(self, land_ids: List[int], weights_version: str):
+    """Recalculate scores for a batch of lands asynchronously"""
+    try:
+        scoring_service = ScoringService()
+        processed = 0
+        errors = 0
+        
+        for land_id in land_ids:
+            try:
+                land = Land.query.get(land_id)
+                if land:
+                    scoring_service.calculate_score(land)
+                    processed += 1
+                    
+                    # Commit every 10 records for progress
+                    if processed % 10 == 0:
+                        db.session.commit()
+                        self.update_state(
+                            state='PROGRESS',
+                            meta={'processed': processed, 'total': len(land_ids)}
+                        )
+                        
+            except Exception as e:
+                logger.error(f"Failed to recalculate score for land {land_id}: {str(e)}")
+                errors += 1
+        
+        # Final commit
+        db.session.commit()
+        
+        logger.info(f"Batch recalculation complete: {processed} processed, {errors} errors")
+        
+        return {
+            'status': 'complete',
+            'processed': processed,
+            'errors': errors,
+            'weights_version': weights_version
+        }
+        
+    except Exception as e:
+        logger.error(f"Batch recalculation failed: {str(e)}")
+        return {
+            'status': 'error',
+            'message': str(e)
+        }
+
+def trigger_mass_recalculation(profile: str, batch_size: int = 100):
+    """Trigger mass recalculation in batches"""
+    try:
+        # Get all land IDs
+        land_ids = [land.id for land in Land.query.with_entities(Land.id).all()]
+        
+        # Split into batches
+        batches = [land_ids[i:i + batch_size] for i in range(0, len(land_ids), batch_size)]
+        
+        # Launch tasks
+        task_ids = []
+        weights_version = f"{profile}_recalc_{int(time.time())}"
+        
+        for batch in batches:
+            task = recalculate_scores_batch.delay(batch, weights_version)
+            task_ids.append(task.id)
+        
+        logger.info(f"Launched {len(batches)} recalculation tasks for profile '{profile}'")
+        return task_ids
+        
+    except Exception as e:
+        logger.error(f"Failed to trigger mass recalculation: {str(e)}")
+        return []
+```
+
+---
+
+## 📋 IMPLEMENTATION ORDER & TESTING
+
+### Week 1: Core Refactoring
+1. ✅ Create services/scoring/ directory structure
+2. ✅ Implement WeightManager class
+3. ✅ Implement ConfigManager class
+4. ✅ Test weight management functionality
+
+### Week 2: Score Calculation
+5. ✅ Implement DataExtractor class
+6. ✅ Implement ScoreCalculator class
+7. ✅ Create new ScoringService coordinator
+8. ✅ Test individual scoring methods
+
+### Week 3: Integration & Testing
+9. ✅ Update imports for backward compatibility
+10. ✅ Create comprehensive test suite
+11. ✅ Add configuration files
+12. ✅ Performance testing
+
+### Future: Advanced Features
+13. 🔮 Score versioning and history
+14. 🔮 Async recalculation
+15. 🔮 A/B testing framework
+
+---
+
+## 🎯 SUCCESS CRITERIA
+
+After completing these tasks:
+- **Maintainability**: 90%+ (clear separation of concerns)
+- **Testability**: 85%+ code coverage for scoring components
+- **Performance**: No regression in scoring speed
+- **Flexibility**: Easy to modify scoring rules without code changes
+- **Reliability**: Consistent scoring results with better error handling
+
+## 🔧 REPLIT SPECIFIC NOTES
+
+1. **File Structure**: Ensure proper Python package structure with `__init__.py` files
+2. **Dependencies**: Add `pyyaml==6.0.1` to requirements.txt for configuration files
+3. **Database**: Test that new ScoreHistory model creates correctly
+4. **Environment**: Verify that config/ directory is accessible in Replit
+5. **Testing**: Run pytest after each task to ensure no regressions
+
+---
+
+*This refactoring maintains full backward compatibility while providing a much more maintainable and extensible scoring architecture.*

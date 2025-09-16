@@ -2,17 +2,44 @@
  * Main JavaScript functionality for Idealista Land Watch & Rank
  */
 
+// Debug logging helper
+const DEBUG = Boolean(window.__IDEALISTA_DEBUG__);
+const debugLog = (...args) => {
+    if (DEBUG) {
+        console.log(...args);
+    }
+};
+
 // Global app object
 window.IdealistaApp = {
     init: function() {
+        this.setupGlobalErrorHandling();
         this.setupEventListeners();
         this.setupHTMX();
         this.setupTooltips();
-        this.updateLastSync();
+        this.updateLastSync().catch(error => {
+            console.warn('Initial sync update failed:', error);
+        });
         this.setupTableInteractions();
     },
 
+    setupGlobalErrorHandling: function() {
+        // Handle unhandled Promise rejections
+        window.addEventListener('unhandledrejection', function(event) {
+            console.warn('Unhandled promise rejection:', event.reason);
+            // Prevent the default console error
+            event.preventDefault();
+        });
+
+        // Handle general JavaScript errors
+        window.addEventListener('error', function(event) {
+            console.warn('JavaScript error:', event.error || event.message);
+        });
+    },
+
     setupEventListeners: function() {
+        debugLog('[INIT] Setting up event listeners...');
+        
         // Form auto-submission with debouncing
         this.setupFilterForms();
         
@@ -25,8 +52,23 @@ window.IdealistaApp = {
         // Criteria form enhancements
         this.setupCriteriaForm();
         
+        // Setup tabs with delay to ensure DOM is fully ready (only for non-criteria pages)
+        if (!window.location.pathname.includes('/criteria')) {
+            setTimeout(() => {
+                debugLog('[INIT] Setting up tabs after DOM ready...');
+                this.setupCriteriaTabs();
+            }, 100);
+        } else {
+            debugLog('[INIT] Skipping global tab setup for criteria page - using inline script');
+        }
+        
         // Description enhancement functionality
         this.setupDescriptionEnhancement();
+        
+        // View switching functionality
+        this.setupViewSwitching();
+        
+        debugLog('[INIT] Event listeners setup completed');
     },
 
     setupHTMX: function() {
@@ -122,10 +164,14 @@ window.IdealistaApp = {
     },
 
     setupTooltips: function() {
-        // Initialize Bootstrap tooltips
-        const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-        const tooltipList = tooltipTriggerList.map(function(tooltipTriggerEl) {
-            return new bootstrap.Tooltip(tooltipTriggerEl);
+        // Initialize native HTML tooltips (title attribute)
+        const tooltipElements = document.querySelectorAll('[data-tooltip], [title]');
+        tooltipElements.forEach(element => {
+            // Ensure tooltip content is available via title attribute
+            const tooltipText = element.getAttribute('data-tooltip') || element.getAttribute('title');
+            if (tooltipText && !element.getAttribute('title')) {
+                element.setAttribute('title', tooltipText);
+            }
         });
     },
 
@@ -249,195 +295,250 @@ window.IdealistaApp = {
         });
     },
 
-    setupCriteriaForm: function() {
-        const criteriaForm = document.getElementById('criteria-form');
-        if (!criteriaForm) return;
-
-        // MCDM weight normalization on input change
-        const inputs = criteriaForm.querySelectorAll('input[type="number"]');
-        inputs.forEach(input => {
-            input.addEventListener('input', function() {
-                IdealistaApp.normalizeWeightsMCDM(this);
-                IdealistaApp.updateWeightVisualizations();
+    setupCriteriaTabs: function() {
+        debugLog('[TABS] Setting up criteria tabs...');
+        
+        // Wait for DOM to be fully ready
+        const checkTabsExist = () => {
+            const tabButtons = document.querySelectorAll('.md3-tab');
+            const tabContents = document.querySelectorAll('.md3-tab-content');
+            
+            debugLog('[TABS] Found', tabButtons.length, 'tab buttons and', tabContents.length, 'tab contents');
+            
+            if (tabButtons.length === 0) {
+                debugLog('[TABS] No tab buttons found, retrying in 100ms...');
+                setTimeout(checkTabsExist, 100);
+                return;
+            }
+            
+            // Create simple tab switching function
+            window.switchTab = function(targetId) {
+                debugLog('[TABS] Switching to tab:', targetId);
+                
+                // Hide all content
+                tabContents.forEach(content => {
+                    content.classList.remove('md3-tab-content--active');
+                    debugLog('[TABS] Hiding content:', content.id);
+                });
+                
+                // Deactivate all tabs
+                tabButtons.forEach(btn => {
+                    btn.classList.remove('md3-tab--active');
+                    btn.setAttribute('aria-selected', 'false');
+                });
+                
+                // Show target content
+                const targetContent = document.getElementById(targetId);
+                if (targetContent) {
+                    targetContent.classList.add('md3-tab-content--active');
+                    debugLog('[TABS] Showing content:', targetId);
+                }
+                
+                // Activate clicked tab
+                const targetTab = document.querySelector(`[data-target="${targetId}"]`);
+                if (targetTab) {
+                    targetTab.classList.add('md3-tab--active');
+                    targetTab.setAttribute('aria-selected', 'true');
+                    debugLog('[TABS] Activating tab for:', targetId);
+                }
+                
+                // Initialize form for the active tab
+                if (targetId === 'investment' || targetId === 'lifestyle') {
+                    setTimeout(() => {
+                        IdealistaApp.initializeActiveProfile(targetId);
+                    }, 100);
+                }
+            };
+            
+            // Attach click listeners to each tab
+            tabButtons.forEach((button, index) => {
+                const targetId = button.getAttribute('data-target');
+                debugLog('[TABS] Setting up button', index, 'with data-target:', targetId);
+                
+                button.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    debugLog('[TABS] Tab clicked:', targetId);
+                    window.switchTab(targetId);
+                });
+                
+                // Keyboard navigation
+                button.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        window.switchTab(targetId);
+                    }
+                });
             });
-        });
+            
+            debugLog('[TABS] Tab setup completed successfully');
+        };
+        
+        // Start checking for tabs
+        checkTabsExist();
+    },
 
+    setupCriteriaForm: function() {
+        // Setup both investment and lifestyle forms
+        ['investment', 'lifestyle'].forEach(profile => {
+            this.setupProfileForm(profile);
+        });
+        
+        // Initialize the currently active profile
+        const activeTab = document.querySelector('.md3-tab--active');
+        if (activeTab) {
+            const activeProfile = activeTab.getAttribute('data-target');
+            setTimeout(() => {
+                this.initializeActiveProfile(activeProfile);
+            }, 100);
+        }
+    },
+
+    setupProfileForm: function(profile) {
+        const form = document.getElementById(`${profile}-form`);
+        if (!form) return;
+        
         // Weight adjustment buttons
-        const adjustButtons = criteriaForm.querySelectorAll('button.weight-adjust');
+        const adjustButtons = form.querySelectorAll('button.weight-adjust');
         adjustButtons.forEach(button => {
-            button.addEventListener('click', function() {
+            button.addEventListener('click', function(e) {
+                e.preventDefault();
                 const criteria = this.getAttribute('data-criteria');
+                const profile = this.getAttribute('data-profile');
                 const delta = parseFloat(this.getAttribute('data-delta'));
-                const input = document.getElementById(`weight_${criteria}`);
+                const input = document.getElementById(`${profile}_weight_${criteria}`);
                 
                 if (input) {
                     const newValue = Math.max(0, Math.min(1, parseFloat(input.value) + delta));
-                    input.value = newValue.toFixed(3);
-                    IdealistaApp.normalizeWeightsMCDM(input);
-                    IdealistaApp.updateWeightVisualizations();
+                    input.value = newValue.toFixed(2);
+                    
+                    // Update slider and visualizations
+                    IdealistaApp.syncSliderWithInput(profile, criteria, newValue);
+                    IdealistaApp.normalizeProfileWeights(profile);
+                    IdealistaApp.updateProfileVisualizations(profile);
                 }
             });
         });
-
+        
         // Slider interactions
-        const sliders = criteriaForm.querySelectorAll('input[type="range"]');
+        const sliders = form.querySelectorAll('input[type="range"].weight-slider');
         sliders.forEach(slider => {
             slider.addEventListener('input', function() {
                 const criteria = this.getAttribute('data-criteria');
-                const weightInput = document.getElementById(`weight_${criteria}`);
+                const profile = this.getAttribute('data-profile');
+                const value = parseFloat(this.value) / 100;
+                const weightInput = document.getElementById(`${profile}_weight_${criteria}`);
+                
                 if (weightInput) {
-                    weightInput.value = (parseFloat(this.value) / 100).toFixed(3);
-                    IdealistaApp.normalizeWeightsMCDM(weightInput);
-                    IdealistaApp.updateWeightVisualizations();
+                    weightInput.value = value.toFixed(2);
+                    IdealistaApp.normalizeProfileWeights(profile);
+                    IdealistaApp.updateProfileVisualizations(profile);
                 }
             });
         });
-
-        // Initial normalization
-        IdealistaApp.normalizeWeightsMCDM();
-        IdealistaApp.updateWeightVisualizations();
-
+        
+        // Number input changes
+        const numberInputs = form.querySelectorAll('input[type="number"].weight-input');
+        numberInputs.forEach(input => {
+            input.addEventListener('input', function() {
+                const inputName = this.name.replace('weight_', '');
+                const profile = this.id.split('_')[0]; // Extract profile from ID
+                const value = Math.max(0, Math.min(1, parseFloat(this.value) || 0));
+                
+                // Sync with slider
+                IdealistaApp.syncSliderWithInput(profile, inputName, value);
+                IdealistaApp.normalizeProfileWeights(profile);
+                IdealistaApp.updateProfileVisualizations(profile);
+            });
+        });
+        
         // Form validation
-        criteriaForm.addEventListener('submit', function(e) {
-            if (!IdealistaApp.validateCriteriaForm()) {
+        form.addEventListener('submit', function(e) {
+            if (!IdealistaApp.validateProfileForm(profile)) {
                 e.preventDefault();
                 return false;
             }
             
             // Confirmation dialog
-            if (!confirm('This will update scoring weights using MCDM methodology and rescore all properties. This may take a few moments. Continue?')) {
+            const profileName = profile.charAt(0).toUpperCase() + profile.slice(1);
+            if (!confirm(`This will update ${profileName} profile weights and rescore all properties. This may take a few moments. Continue?`)) {
                 e.preventDefault();
                 return false;
             }
             
             // Show loading state
-            const submitButton = this.querySelector('button[type="submit"]');
-            if (submitButton) {
-                // Store original content safely
-                const originalIcon = submitButton.querySelector('i');
-                const originalIconClasses = originalIcon ? originalIcon.className : '';
-                const originalTextContent = submitButton.textContent.trim();
-                
-                // Clear button content safely
-                submitButton.textContent = '';
-                
-                // Create loading state with safe DOM methods
-                const loadingIcon = document.createElement('i');
-                loadingIcon.className = 'fas fa-spinner fa-spin me-2';
-                const loadingText = document.createTextNode('Updating...');
-                
-                submitButton.appendChild(loadingIcon);
-                submitButton.appendChild(loadingText);
-                submitButton.disabled = true;
-                
-                // Re-enable after timeout (fallback)
-                setTimeout(() => {
-                    // Restore original content safely
-                    submitButton.textContent = '';
-                    
-                    if (originalIconClasses) {
-                        const restoredIcon = document.createElement('i');
-                        restoredIcon.className = originalIconClasses;
-                        submitButton.appendChild(restoredIcon);
-                    }
-                    
-                    const restoredText = document.createTextNode(originalTextContent);
-                    submitButton.appendChild(restoredText);
-                    submitButton.disabled = false;
-                }, 30000);
-            }
+            IdealistaApp.setFormLoadingState(form, true);
         });
     },
 
-    normalizeWeightsMCDM: function(changedInput = null) {
-        const inputs = document.querySelectorAll('#criteria-form input[type="number"]');
-        const weights = [];
-        let changedIndex = -1;
+    initializeActiveProfile: function(profile) {
+        if (!profile || (profile !== 'investment' && profile !== 'lifestyle')) return;
         
-        // Collect all weights and find changed input index
-        inputs.forEach((input, index) => {
+        // Normalize weights and update visualizations for the active profile
+        this.normalizeProfileWeights(profile);
+        this.updateProfileVisualizations(profile);
+    },
+
+    syncSliderWithInput: function(profile, criteria, value) {
+        const slider = document.getElementById(`${profile}_slider_${criteria}`);
+        if (slider) {
+            slider.value = (value * 100).toFixed(0);
+        }
+    },
+
+    normalizeProfileWeights: function(profile) {
+        const form = document.getElementById(`${profile}-form`);
+        if (!form) return;
+        
+        const inputs = form.querySelectorAll('input[type="number"].weight-input');
+        const weights = [];
+        
+        // Collect all weights
+        inputs.forEach(input => {
             const weight = Math.max(0, parseFloat(input.value) || 0);
             weights.push(weight);
-            if (changedInput && input === changedInput) {
-                changedIndex = index;
-            }
         });
         
-        // Calculate current total
-        const currentTotal = weights.reduce((sum, w) => sum + w, 0);
+        // Calculate sum
+        const sum = weights.reduce((a, b) => a + b, 0);
         
-        // If total is 0, set equal weights
-        if (currentTotal === 0) {
-            const equalWeight = (1 / weights.length).toFixed(3);
+        if (sum === 0) {
+            // If all weights are 0, distribute equally
+            const equalWeight = 1 / weights.length;
             inputs.forEach(input => {
-                input.value = equalWeight;
+                input.value = equalWeight.toFixed(2);
             });
-            return;
-        }
-        
-        // MCDM normalization: adjust other weights proportionally
-        if (changedIndex !== -1 && currentTotal !== 1) {
-            const changedWeight = weights[changedIndex];
-            const othersTotal = currentTotal - changedWeight;
-            const remainingWeight = Math.max(0, 1 - changedWeight);
-            
-            // Adjust other weights proportionally
+        } else if (Math.abs(sum - 1) > 0.001) {
+            // Normalize to sum to 1 (100%)
             inputs.forEach((input, index) => {
-                if (index !== changedIndex && othersTotal > 0) {
-                    const originalWeight = weights[index];
-                    const newWeight = (originalWeight / othersTotal) * remainingWeight;
-                    input.value = Math.max(0, newWeight).toFixed(3);
-                } else if (index === changedIndex) {
-                    // Ensure changed weight doesn't exceed 1
-                    input.value = Math.min(1, changedWeight).toFixed(3);
-                }
-            });
-        } else if (currentTotal !== 1) {
-            // Normalize all weights to sum to 1
-            inputs.forEach((input, index) => {
-                const normalizedWeight = weights[index] / currentTotal;
-                input.value = normalizedWeight.toFixed(3);
+                const normalizedWeight = weights[index] / sum;
+                input.value = normalizedWeight.toFixed(2);
+                
+                // Sync sliders
+                const inputName = input.name.replace('weight_', '');
+                IdealistaApp.syncSliderWithInput(profile, inputName, normalizedWeight);
             });
         }
-        
-        // Update sliders to match normalized weights
-        inputs.forEach(input => {
-            const criteriaName = input.name.replace('weight_', '');
-            const slider = document.getElementById(`slider_${criteriaName}`);
-            if (slider) {
-                slider.value = (parseFloat(input.value) * 100).toFixed(0);
-            }
-        });
     },
 
-    updateWeightVisualizations: function() {
-        const inputs = document.querySelectorAll('#criteria-form input[type="number"]');
+    updateProfileVisualizations: function(profile) {
+        const form = document.getElementById(`${profile}-form`);
+        if (!form) return;
+        
+        const inputs = form.querySelectorAll('input[type="number"].weight-input');
         let totalWeight = 0;
         
         inputs.forEach(input => {
-            const criteriaName = input.name.replace('weight_', '');
+            const inputName = input.name.replace('weight_', '');
             const weight = parseFloat(input.value) || 0;
-            const progressBar = document.getElementById(`progress_${criteriaName}`);
-            const percentSpan = document.getElementById(`percent_${criteriaName}`);
+            const progressBar = document.getElementById(`${profile}_progress_${inputName}`);
+            const percentSpan = document.getElementById(`${profile}_percent_${inputName}`);
             
             totalWeight += weight;
             
             if (progressBar) {
-                // Update progress bar (show actual percentage of total)
                 const percentage = weight * 100;
                 progressBar.style.width = `${percentage}%`;
-                
-                // Color coding based on MCDM standards
-                progressBar.className = 'progress-bar';
-                if (weight >= 0.2) {  // High importance (≥20%)
-                    progressBar.classList.add('bg-success');
-                } else if (weight >= 0.1) {  // Medium importance (10-19%)
-                    progressBar.classList.add('bg-info');
-                } else if (weight >= 0.05) {  // Low importance (5-9%)
-                    progressBar.classList.add('bg-warning');
-                } else {  // Very low importance (<5%)
-                    progressBar.classList.add('bg-secondary');
-                }
+                progressBar.setAttribute('data-weight', weight.toString());
             }
             
             if (percentSpan) {
@@ -445,26 +546,31 @@ window.IdealistaApp = {
             }
         });
         
-        // Update total weight display (should always be 1.0 for MCDM)
-        const totalWeightSpan = document.getElementById('total-weight');
-        if (totalWeightSpan) {
-            totalWeightSpan.textContent = totalWeight.toFixed(3);
+        // Update total weight indicator
+        const weightBar = document.getElementById(`${profile}-weight-bar`);
+        const weightText = document.getElementById(`${profile}-weight-text`);
+        
+        if (weightBar && weightText) {
+            const percentage = Math.min(100, totalWeight * 100);
+            weightBar.style.width = `${percentage}%`;
+            weightText.textContent = `${percentage.toFixed(1)}%`;
             
-            // Color coding for total (MCDM requires exactly 1.0)
-            totalWeightSpan.className = 'fw-bold';
-            const difference = Math.abs(totalWeight - 1.0);
-            if (difference < 0.001) {  // Within tolerance
-                totalWeightSpan.classList.add('text-success');
-            } else if (difference < 0.01) {  // Minor deviation
-                totalWeightSpan.classList.add('text-warning');
-            } else {  // Significant deviation
-                totalWeightSpan.classList.add('text-danger');
+            // Color coding based on total
+            if (Math.abs(totalWeight - 1) < 0.001) {
+                weightBar.className = 'md3-progress-bar md3-progress-bar--success';
+            } else if (totalWeight > 1.1) {
+                weightBar.className = 'md3-progress-bar md3-progress-bar--error';
+            } else {
+                weightBar.className = 'md3-progress-bar md3-progress-bar--warning';
             }
         }
     },
 
-    validateCriteriaForm: function() {
-        const inputs = document.querySelectorAll('#criteria-form input[type="number"]');
+    validateProfileForm: function(profile) {
+        const form = document.getElementById(`${profile}-form`);
+        if (!form) return false;
+        
+        const inputs = form.querySelectorAll('input[type="number"].weight-input');
         let totalWeight = 0;
         let hasError = false;
         
@@ -472,73 +578,122 @@ window.IdealistaApp = {
             const weight = parseFloat(input.value) || 0;
             totalWeight += weight;
             
-            // Individual validation (MCDM standards)
             if (weight < 0) {
-                IdealistaApp.showNotification('Weights cannot be negative (MCDM requirement)', 'error');
-                input.focus();
+                IdealistaApp.showNotification('Weights cannot be negative', 'error');
                 hasError = true;
-                return;
             }
             
             if (weight > 1) {
-                IdealistaApp.showNotification('Individual weights cannot exceed 1.0 (MCDM requirement)', 'error');
-                input.focus();
+                IdealistaApp.showNotification('Individual weights cannot exceed 100%', 'error');
                 hasError = true;
-                return;
             }
         });
         
-        if (hasError) return false;
-        
-        // MCDM validation: weights must sum to 1.0
-        const difference = Math.abs(totalWeight - 1.0);
-        if (difference > 0.001) {
-            IdealistaApp.showNotification(`MCDM validation failed: Total weights must equal 1.0 (current: ${totalWeight.toFixed(3)})`, 'error');
-            return false;
+        // Check if sum is approximately 1 (100%)
+        if (Math.abs(totalWeight - 1) > 0.01) {
+            IdealistaApp.showNotification(`${profile.charAt(0).toUpperCase() + profile.slice(1)} profile weights must sum to 100% (currently ${(totalWeight * 100).toFixed(1)}%)`, 'error');
+            hasError = true;
         }
         
-        return true;
+        return !hasError;
     },
 
-    updateLastSync: function() {
+    setFormLoadingState: function(form, loading) {
+        const submitButton = form.querySelector('button[type="submit"]');
+        if (!submitButton) return;
+        
+        if (loading) {
+            // Store original content
+            submitButton.dataset.originalContent = submitButton.innerHTML;
+            
+            // Set loading state
+            submitButton.innerHTML = '<span class="material-symbols-outlined">hourglass_empty</span>Updating...';
+            submitButton.disabled = true;
+        } else {
+            // Restore original content
+            if (submitButton.dataset.originalContent) {
+                submitButton.innerHTML = submitButton.dataset.originalContent;
+            }
+            submitButton.disabled = false;
+        }
+    },
+
+    normalizeWeightsMCDM: function(changedInput = null) {
+        // Legacy function - redirect to appropriate profile
+        const activeTab = document.querySelector('.md3-tab--active');
+        if (activeTab) {
+            const profile = activeTab.getAttribute('data-target');
+            if (profile === 'investment' || profile === 'lifestyle') {
+                this.normalizeProfileWeights(profile);
+            }
+        }
+    },
+
+    updateWeightVisualizations: function() {
+        // Legacy function - redirect to appropriate profile
+        const activeTab = document.querySelector('.md3-tab--active');
+        if (activeTab) {
+            const profile = activeTab.getAttribute('data-target');
+            if (profile === 'investment' || profile === 'lifestyle') {
+                this.updateProfileVisualizations(profile);
+            }
+        }
+    },
+
+    validateCriteriaForm: function() {
+        // Legacy function - redirect to appropriate profile
+        const activeTab = document.querySelector('.md3-tab--active');
+        if (activeTab) {
+            const profile = activeTab.getAttribute('data-target');
+            if (profile === 'investment' || profile === 'lifestyle') {
+                return this.validateProfileForm(profile);
+            }
+        }
+        return false;
+    },
+
+    updateLastSync: async function() {
         // Fetch and update last sync time
-        fetch('/api/stats')
-            .then(response => response.json())
-            .then(data => {
-                if (data.success && data.stats.last_sync) {
-                    const lastSyncElement = document.getElementById('last-sync');
-                    if (lastSyncElement) {
-                        const sync = data.stats.last_sync;
-                        
-                        // Handle null or invalid completed_at
-                        if (sync.completed_at) {
-                            const date = new Date(sync.completed_at);
-                            // Check if date is valid
-                            if (!isNaN(date.getTime()) && date.getFullYear() > 1970) {
-                                const dateStr = date.toLocaleDateString();
-                                const timeStr = date.toLocaleTimeString();
-                                lastSyncElement.textContent = `${dateStr} at ${timeStr} (+${sync.new_properties} new)`;
-                            } else {
-                                lastSyncElement.textContent = `Sync completed (+${sync.new_properties} new) - time unavailable`;
-                            }
+        try {
+            const response = await fetch('/api/stats');
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            const data = await response.json();
+            if (data.success && data.stats.last_sync) {
+                const lastSyncElement = document.getElementById('last-sync');
+                if (lastSyncElement) {
+                    const sync = data.stats.last_sync;
+                    
+                    // Handle null or invalid completed_at
+                    if (sync.completed_at) {
+                        const date = new Date(sync.completed_at);
+                        // Check if date is valid
+                        if (!isNaN(date.getTime()) && date.getFullYear() > 1970) {
+                            const dateStr = date.toLocaleDateString();
+                            const timeStr = date.toLocaleTimeString();
+                            lastSyncElement.textContent = `${dateStr} at ${timeStr} (+${sync.new_properties} new)`;
                         } else {
                             lastSyncElement.textContent = `Sync completed (+${sync.new_properties} new) - time unavailable`;
                         }
-                    }
-                } else {
-                    const lastSyncElement = document.getElementById('last-sync');
-                    if (lastSyncElement) {
-                        lastSyncElement.textContent = 'No sync data';
+                    } else {
+                        lastSyncElement.textContent = `Sync completed (+${sync.new_properties} new) - time unavailable`;
                     }
                 }
-            })
-            .catch(error => {
-                console.warn('Failed to update last sync time:', error);
+            } else {
                 const lastSyncElement = document.getElementById('last-sync');
                 if (lastSyncElement) {
-                    lastSyncElement.textContent = 'Error loading';
+                    lastSyncElement.textContent = 'No sync data';
                 }
-            });
+            }
+        } catch (error) {
+            console.warn('Failed to update last sync time:', error);
+            const lastSyncElement = document.getElementById('last-sync');
+            if (lastSyncElement) {
+                lastSyncElement.textContent = 'Error loading';
+            }
+        }
     },
 
     showNotification: function(message, type = 'info') {
@@ -649,58 +804,81 @@ window.IdealistaApp = {
 
     // Description Enhancement Functions
     setupDescriptionEnhancement: function() {
-        console.log('[DESC] Setting up description enhancement...');
+        debugLog('[DESC] Setting up description enhancement...');
         
-        // Check if we're on the property detail page
-        const descriptionSection = document.getElementById('description-section');
-        if (!descriptionSection) {
-            console.log('[DESC] No description section found, skipping');
+        // Use a retry mechanism to handle timing issues
+        const trySetup = () => {
+            const descriptionSection = document.getElementById('description-section');
+            if (!descriptionSection) {
+                debugLog('[DESC] Description section not ready yet, retrying...');
+                return false;
+            }
+
+            debugLog('[DESC] Description section found, initializing UI...');
+            // Initialize description enhancement UI
+            this.initializeDescriptionUI();
+            
+            // Setup language toggle
+            const langToggle = document.getElementById('description-language-toggle');
+            if (langToggle) {
+                debugLog('[DESC] Language toggle found, adding event listener');
+                langToggle.addEventListener('click', this.handleLanguageToggle.bind(this));
+            } else {
+                debugLog('[DESC] Language toggle not found');
+            }
+            return true;
+        };
+
+        // Try immediate setup
+        if (trySetup()) {
             return;
         }
 
-        console.log('[DESC] Description section found, initializing UI...');
-        // Initialize description enhancement UI
-        this.initializeDescriptionUI();
-        
-        // Setup language toggle
-        const langToggle = document.getElementById('description-language-toggle');
-        if (langToggle) {
-            console.log('[DESC] Language toggle found, adding event listener');
-            langToggle.addEventListener('click', this.handleLanguageToggle.bind(this));
-        } else {
-            console.log('[DESC] Language toggle not found');
-        }
+        // If not found, retry with delays
+        let attempts = 0;
+        const maxAttempts = 10;
+        const retryInterval = setInterval(() => {
+            attempts++;
+            debugLog(`[DESC] Retry attempt ${attempts}/${maxAttempts}`);
+            
+            if (trySetup() || attempts >= maxAttempts) {
+                clearInterval(retryInterval);
+                if (attempts >= maxAttempts) {
+                    debugLog('[DESC] Max attempts reached, description enhancement setup failed');
+                }
+            }
+        }, 100);
     },
 
     initializeDescriptionUI: function() {
-        console.log('[DESC] Initializing description UI...');
+        debugLog('[DESC] Initializing description UI...');
         
         // Check if enhanced description already exists
         const landId = document.querySelector('[data-land-id]')?.getAttribute('data-land-id');
         if (!landId) {
-            console.log('[DESC] No land ID found, skipping description enhancement');
+            debugLog('[DESC] No land ID found, skipping description enhancement');
             return;
         }
 
-        console.log(`[DESC] Found land ID: ${landId}, fetching description variants...`);
+        debugLog(`[DESC] Found land ID: ${landId}, fetching description variants...`);
 
         // Fetch existing description variants
         fetch(`/api/description/variants/${landId}`)
             .then(response => response.json())
             .then(data => {
-                console.log('[DESC] Received description variants response:', data);
+                debugLog('[DESC] Received description variants response:', data);
                 if (data.success) {
                     if (data.status === 'not_processed') {
-                        console.log('[DESC] Description not processed, auto-enhancing...');
+                        debugLog('[DESC] Description not processed, auto-enhancing...');
                         // Auto-enhance the description silently
                         this.autoEnhanceDescription(landId);
                     } else {
-                        console.log('[DESC] Description already processed, displaying enhanced version...');
+                        debugLog('[DESC] Description already processed, displaying enhanced version...');
                         // Show language toggle and enhanced description
                         this.displayEnhancedDescription(data);
                     }
                 } else {
-                    console.log('[DESC] API returned error:', data.error);
+                    debugLog('[DESC] API returned error:', data.error);
                 }
             })
             .catch(error => {
@@ -725,7 +903,7 @@ window.IdealistaApp = {
                 this.displayEnhancedDescription(data);
             } else {
                 // Keep original description visible, hide any loading indicators
-                console.log('Auto-enhancement failed, keeping original description');
+                debugLog('Auto-enhancement failed, keeping original description');
             }
         })
         .catch(error => {
@@ -733,7 +911,6 @@ window.IdealistaApp = {
             // Keep original description visible
         });
     },
-
 
     displayEnhancedDescription: function(data) {
         // Store description variants for language switching
@@ -850,7 +1027,7 @@ window.IdealistaApp = {
             
             return 'Original description not available';
         } catch (e) {
-            console.log('[DESC] Could not get original description:', e);
+            debugLog('[DESC] Could not get original description:', e);
             return 'Error loading original description';
         }
     },
@@ -952,9 +1129,204 @@ function saveEnvironment(event, landId) {
     });
 }
 
+// View switching functionality - extend IdealistaApp
+IdealistaApp.switchView = function(viewType) {
+        const listView = document.getElementById('list-view');
+        const cardsView = document.getElementById('cards-view');
+        const listBtn = document.getElementById('view-list-btn');
+        const cardsBtn = document.getElementById('view-cards-btn');
+        
+        if (!listView || !cardsView || !listBtn || !cardsBtn) {
+            console.warn('View switching elements not found');
+            return;
+        }
+        
+        // Save user preference to localStorage
+        localStorage.setItem('preferredViewType', viewType);
+        
+        // Add transition classes
+        listView.style.transition = 'opacity 0.3s ease-in-out';
+        cardsView.style.transition = 'opacity 0.3s ease-in-out';
+        
+        if (viewType === 'list') {
+            // Fade out current view
+            cardsView.style.opacity = '0';
+            setTimeout(() => {
+                cardsView.style.display = 'none';
+                listView.style.display = 'block';
+                listView.style.opacity = '0';
+                // Fade in new view
+                setTimeout(() => {
+                    listView.style.opacity = '1';
+                }, 10);
+            }, 300);
+            
+            // Update button states - use MD3 classes
+            listBtn.classList.add('md3-button--filled');
+            cardsBtn.classList.remove('md3-button--filled');
+        } else {
+            // Fade out current view
+            listView.style.opacity = '0';
+            setTimeout(() => {
+                listView.style.display = 'none';
+                cardsView.style.display = 'block';
+                cardsView.style.opacity = '0';
+                // Fade in new view
+                setTimeout(() => {
+                    cardsView.style.opacity = '1';
+                }, 10);
+            }, 300);
+            
+            // Update button states - use MD3 classes
+            cardsBtn.classList.add('md3-button--filled');
+            listBtn.classList.remove('md3-button--filled');
+        }
+        
+        // Update URL without page reload
+        IdealistaApp.updateViewTypeInUrl(viewType);
+};
+
+// Update view type in URL - extend IdealistaApp
+IdealistaApp.updateViewTypeInUrl = function(viewType) {
+        const url = new URL(window.location);
+        url.searchParams.set('view_type', viewType);
+        
+        // Update URL without reload
+        window.history.pushState({ viewType: viewType }, '', url.toString());
+};
+
+// Initialize view on load - extend IdealistaApp
+IdealistaApp.initializeViewOnLoad = function() {
+        const listView = document.getElementById('list-view');
+        const cardsView = document.getElementById('cards-view');
+        const listBtn = document.getElementById('view-list-btn');
+        const cardsBtn = document.getElementById('view-cards-btn');
+        
+        if (!listView || !cardsView || !listBtn || !cardsBtn) {
+            console.warn('View elements not found during initialization');
+            return;
+        }
+        
+        // Load user preference from localStorage
+        const savedViewType = localStorage.getItem('preferredViewType');
+        const url = new URL(window.location);
+        const currentServerView = url.searchParams.get('view_type') || 'cards';
+        
+        if (savedViewType && (savedViewType === 'list' || savedViewType === 'cards')) {
+            // Apply saved preference if different from server-side default
+            if (savedViewType !== currentServerView) {
+                // Switch instantly without animation on page load
+                if (savedViewType === 'list') {
+                    cardsView.style.display = 'none';
+                    listView.style.display = 'block';
+                    listView.style.opacity = '1';
+                    listBtn.classList.add('md3-button--filled');
+                    cardsBtn.classList.remove('md3-button--filled');
+                    
+                    // Update URL without reload
+                    url.searchParams.set('view_type', 'list');
+                    window.history.replaceState({ viewType: 'list' }, '', url.toString());
+                } else {
+                    listView.style.display = 'none';
+                    cardsView.style.display = 'block';
+                    cardsView.style.opacity = '1';
+                    cardsBtn.classList.add('md3-button--filled');
+                    listBtn.classList.remove('md3-button--filled');
+                    
+                    // Update URL without reload
+                    url.searchParams.set('view_type', 'cards');
+                    window.history.replaceState({ viewType: 'cards' }, '', url.toString());
+                }
+            } else {
+                // Set opacity for the current view
+                if (listView.style.display !== 'none') {
+                    listView.style.opacity = '1';
+                    listBtn.classList.add('md3-button--filled');
+                    cardsBtn.classList.remove('md3-button--filled');
+                }
+                if (cardsView.style.display !== 'none') {
+                    cardsView.style.opacity = '1';
+                    cardsBtn.classList.add('md3-button--filled');
+                    listBtn.classList.remove('md3-button--filled');
+                }
+            }
+        } else {
+            // Set opacity for the current view (no saved preference)
+            if (listView.style.display !== 'none') {
+                listView.style.opacity = '1';
+                listBtn.classList.add('md3-button--filled');
+                cardsBtn.classList.remove('md3-button--filled');
+            }
+            if (cardsView.style.display !== 'none') {
+                cardsView.style.opacity = '1';
+                cardsBtn.classList.add('md3-button--filled');
+                listBtn.classList.remove('md3-button--filled');
+            }
+        }
+};
+
+// Setup view switching - extend IdealistaApp
+IdealistaApp.setupViewSwitching = function() {
+    debugLog('[INIT] Setting up view switching...');
+    
+    // Initialize view on page load
+    this.initializeViewOnLoad();
+    
+    // Handle browser back/forward buttons
+    window.addEventListener('popstate', (event) => {
+        if (event.state && event.state.viewType) {
+            const viewType = event.state.viewType;
+            this.switchView(viewType);
+        }
+    });
+    
+    debugLog('[INIT] View switching setup completed');
+};
+
+// Make switchView globally accessible for template onclick handlers
+window.switchView = function(viewType) {
+    if (window.IdealistaApp && window.IdealistaApp.switchView) {
+        window.IdealistaApp.switchView(viewType);
+    } else {
+        console.error('IdealistaApp not ready for view switching');
+    }
+};
+
+// Mode switching functionality (moved from template)
+window.switchMode = function(mode) {
+    const url = new URL(window.location);
+    url.searchParams.set('mode', mode);
+    
+    // Auto-sync sort with mode selection for better UX
+    const currentSort = url.searchParams.get('sort');
+    if (mode === 'investment' && currentSort !== 'score_investment') {
+        url.searchParams.set('sort', 'score_investment');
+    } else if (mode === 'lifestyle' && currentSort !== 'score_lifestyle') {
+        url.searchParams.set('sort', 'score_lifestyle');
+    } else if (mode === 'combined' && currentSort !== 'score_total') {
+        url.searchParams.set('sort', 'score_total');
+    }
+    
+    // Reset to first page when changing mode
+    url.searchParams.delete('page');
+    
+    // Update the URL and reload to apply mode change
+    window.location.href = url.toString();
+};
+
 // Initialize app when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
+    debugLog('[INIT] DOM loaded, initializing app...');
     window.IdealistaApp.init();
+    debugLog('[INIT] App initialization completed');
+    
+    // Extra fallback for tabs specifically
+    setTimeout(() => {
+        debugLog('[INIT] Fallback tabs setup...');
+        if (window.IdealistaApp && typeof window.IdealistaApp.setupCriteriaTabs === 'function') {
+            window.IdealistaApp.setupCriteriaTabs();
+        }
+    }, 500);
 });
 
 // Handle page visibility changes
@@ -978,4 +1350,26 @@ if ('serviceWorker' in navigator) {
     window.addEventListener('load', function() {
         // Service worker would be implemented later for offline capabilities
     });
+}
+
+// Toggle Score Breakdown Details
+function toggleScoreBreakdown() {
+    const details = document.getElementById('score-breakdown-details');
+    const button = document.getElementById('score-breakdown-btn');
+    const icon = button ? button.querySelector('.material-icons') : null;
+    const textSpan = button ? button.querySelector('span:not(.material-icons)') : null;
+    
+    if (details && button && icon) {
+        const isHidden = details.style.display === 'none' || !details.style.display;
+        
+        if (isHidden) {
+            details.style.display = 'block';
+            icon.textContent = 'expand_less';
+            if (textSpan) textSpan.textContent = 'Hide Detailed Breakdown';
+        } else {
+            details.style.display = 'none';
+            icon.textContent = 'expand_more';
+            if (textSpan) textSpan.textContent = 'View Detailed Breakdown';
+        }
+    }
 }
