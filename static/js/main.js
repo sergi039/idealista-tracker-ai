@@ -2,6 +2,14 @@
  * Main JavaScript functionality for Idealista Land Watch & Rank
  */
 
+// Debug logging helper
+const DEBUG = Boolean(window.__IDEALISTA_DEBUG__);
+const debugLog = (...args) => {
+    if (DEBUG) {
+        console.log(...args);
+    }
+};
+
 // Global app object
 window.IdealistaApp = {
     init: function() {
@@ -30,7 +38,7 @@ window.IdealistaApp = {
     },
 
     setupEventListeners: function() {
-        console.log('[INIT] Setting up event listeners...');
+        debugLog('[INIT] Setting up event listeners...');
         
         // Form auto-submission with debouncing
         this.setupFilterForms();
@@ -47,11 +55,11 @@ window.IdealistaApp = {
         // Setup tabs with delay to ensure DOM is fully ready (only for non-criteria pages)
         if (!window.location.pathname.includes('/criteria')) {
             setTimeout(() => {
-                console.log('[INIT] Setting up tabs after DOM ready...');
+                debugLog('[INIT] Setting up tabs after DOM ready...');
                 this.setupCriteriaTabs();
             }, 100);
         } else {
-            console.log('[INIT] Skipping global tab setup for criteria page - using inline script');
+            debugLog('[INIT] Skipping global tab setup for criteria page - using inline script');
         }
         
         // Description enhancement functionality
@@ -60,7 +68,7 @@ window.IdealistaApp = {
         // View switching functionality
         this.setupViewSwitching();
         
-        console.log('[INIT] Event listeners setup completed');
+        debugLog('[INIT] Event listeners setup completed');
     },
 
     setupHTMX: function() {
@@ -288,29 +296,29 @@ window.IdealistaApp = {
     },
 
     setupCriteriaTabs: function() {
-        console.log('[TABS] Setting up criteria tabs...');
+        debugLog('[TABS] Setting up criteria tabs...');
         
         // Wait for DOM to be fully ready
         const checkTabsExist = () => {
             const tabButtons = document.querySelectorAll('.md3-tab');
             const tabContents = document.querySelectorAll('.md3-tab-content');
             
-            console.log('[TABS] Found', tabButtons.length, 'tab buttons and', tabContents.length, 'tab contents');
+            debugLog('[TABS] Found', tabButtons.length, 'tab buttons and', tabContents.length, 'tab contents');
             
             if (tabButtons.length === 0) {
-                console.log('[TABS] No tab buttons found, retrying in 100ms...');
+                debugLog('[TABS] No tab buttons found, retrying in 100ms...');
                 setTimeout(checkTabsExist, 100);
                 return;
             }
             
             // Create simple tab switching function
             window.switchTab = function(targetId) {
-                console.log('[TABS] Switching to tab:', targetId);
+                debugLog('[TABS] Switching to tab:', targetId);
                 
                 // Hide all content
                 tabContents.forEach(content => {
                     content.classList.remove('md3-tab-content--active');
-                    console.log('[TABS] Hiding content:', content.id);
+                    debugLog('[TABS] Hiding content:', content.id);
                 });
                 
                 // Deactivate all tabs
@@ -323,7 +331,7 @@ window.IdealistaApp = {
                 const targetContent = document.getElementById(targetId);
                 if (targetContent) {
                     targetContent.classList.add('md3-tab-content--active');
-                    console.log('[TABS] Showing content:', targetId);
+                    debugLog('[TABS] Showing content:', targetId);
                 }
                 
                 // Activate clicked tab
@@ -331,7 +339,7 @@ window.IdealistaApp = {
                 if (targetTab) {
                     targetTab.classList.add('md3-tab--active');
                     targetTab.setAttribute('aria-selected', 'true');
-                    console.log('[TABS] Activating tab for:', targetId);
+                    debugLog('[TABS] Activating tab for:', targetId);
                 }
                 
                 // Initialize form for the active tab
@@ -345,11 +353,11 @@ window.IdealistaApp = {
             // Attach click listeners to each tab
             tabButtons.forEach((button, index) => {
                 const targetId = button.getAttribute('data-target');
-                console.log('[TABS] Setting up button', index, 'with data-target:', targetId);
+                debugLog('[TABS] Setting up button', index, 'with data-target:', targetId);
                 
                 button.addEventListener('click', function(e) {
                     e.preventDefault();
-                    console.log('[TABS] Tab clicked:', targetId);
+                    debugLog('[TABS] Tab clicked:', targetId);
                     window.switchTab(targetId);
                 });
                 
@@ -362,7 +370,7 @@ window.IdealistaApp = {
                 });
             });
             
-            console.log('[TABS] Tab setup completed successfully');
+            debugLog('[TABS] Tab setup completed successfully');
         };
         
         // Start checking for tabs
@@ -796,27 +804,27 @@ window.IdealistaApp = {
 
     // Description Enhancement Functions
     setupDescriptionEnhancement: function() {
-        console.log('[DESC] Setting up description enhancement...');
+        debugLog('[DESC] Setting up description enhancement...');
         
         // Use a retry mechanism to handle timing issues
         const trySetup = () => {
             const descriptionSection = document.getElementById('description-section');
             if (!descriptionSection) {
-                console.log('[DESC] Description section not ready yet, retrying...');
+                debugLog('[DESC] Description section not ready yet, retrying...');
                 return false;
             }
 
-            console.log('[DESC] Description section found, initializing UI...');
+            debugLog('[DESC] Description section found, initializing UI...');
             // Initialize description enhancement UI
             this.initializeDescriptionUI();
             
             // Setup language toggle
             const langToggle = document.getElementById('description-language-toggle');
             if (langToggle) {
-                console.log('[DESC] Language toggle found, adding event listener');
+                debugLog('[DESC] Language toggle found, adding event listener');
                 langToggle.addEventListener('click', this.handleLanguageToggle.bind(this));
             } else {
-                console.log('[DESC] Language toggle not found');
+                debugLog('[DESC] Language toggle not found');
             }
             return true;
         };
@@ -831,46 +839,46 @@ window.IdealistaApp = {
         const maxAttempts = 10;
         const retryInterval = setInterval(() => {
             attempts++;
-            console.log(`[DESC] Retry attempt ${attempts}/${maxAttempts}`);
+            debugLog(`[DESC] Retry attempt ${attempts}/${maxAttempts}`);
             
             if (trySetup() || attempts >= maxAttempts) {
                 clearInterval(retryInterval);
                 if (attempts >= maxAttempts) {
-                    console.log('[DESC] Max attempts reached, description enhancement setup failed');
+                    debugLog('[DESC] Max attempts reached, description enhancement setup failed');
                 }
             }
         }, 100);
     },
 
     initializeDescriptionUI: function() {
-        console.log('[DESC] Initializing description UI...');
+        debugLog('[DESC] Initializing description UI...');
         
         // Check if enhanced description already exists
         const landId = document.querySelector('[data-land-id]')?.getAttribute('data-land-id');
         if (!landId) {
-            console.log('[DESC] No land ID found, skipping description enhancement');
+            debugLog('[DESC] No land ID found, skipping description enhancement');
             return;
         }
 
-        console.log(`[DESC] Found land ID: ${landId}, fetching description variants...`);
+        debugLog(`[DESC] Found land ID: ${landId}, fetching description variants...`);
 
         // Fetch existing description variants
         fetch(`/api/description/variants/${landId}`)
             .then(response => response.json())
             .then(data => {
-                console.log('[DESC] Received description variants response:', data);
+                debugLog('[DESC] Received description variants response:', data);
                 if (data.success) {
                     if (data.status === 'not_processed') {
-                        console.log('[DESC] Description not processed, auto-enhancing...');
+                        debugLog('[DESC] Description not processed, auto-enhancing...');
                         // Auto-enhance the description silently
                         this.autoEnhanceDescription(landId);
                     } else {
-                        console.log('[DESC] Description already processed, displaying enhanced version...');
+                        debugLog('[DESC] Description already processed, displaying enhanced version...');
                         // Show language toggle and enhanced description
                         this.displayEnhancedDescription(data);
                     }
                 } else {
-                    console.log('[DESC] API returned error:', data.error);
+                    debugLog('[DESC] API returned error:', data.error);
                 }
             })
             .catch(error => {
@@ -895,7 +903,7 @@ window.IdealistaApp = {
                 this.displayEnhancedDescription(data);
             } else {
                 // Keep original description visible, hide any loading indicators
-                console.log('Auto-enhancement failed, keeping original description');
+                debugLog('Auto-enhancement failed, keeping original description');
             }
         })
         .catch(error => {
@@ -1019,7 +1027,7 @@ window.IdealistaApp = {
             
             return 'Original description not available';
         } catch (e) {
-            console.log('[DESC] Could not get original description:', e);
+            debugLog('[DESC] Could not get original description:', e);
             return 'Error loading original description';
         }
     },
@@ -1259,7 +1267,7 @@ IdealistaApp.initializeViewOnLoad = function() {
 
 // Setup view switching - extend IdealistaApp
 IdealistaApp.setupViewSwitching = function() {
-    console.log('[INIT] Setting up view switching...');
+    debugLog('[INIT] Setting up view switching...');
     
     // Initialize view on page load
     this.initializeViewOnLoad();
@@ -1272,7 +1280,7 @@ IdealistaApp.setupViewSwitching = function() {
         }
     });
     
-    console.log('[INIT] View switching setup completed');
+    debugLog('[INIT] View switching setup completed');
 };
 
 // Make switchView globally accessible for template onclick handlers
@@ -1308,13 +1316,13 @@ window.switchMode = function(mode) {
 
 // Initialize app when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('[INIT] DOM loaded, initializing app...');
+    debugLog('[INIT] DOM loaded, initializing app...');
     window.IdealistaApp.init();
-    console.log('[INIT] App initialization completed');
+    debugLog('[INIT] App initialization completed');
     
     // Extra fallback for tabs specifically
     setTimeout(() => {
-        console.log('[INIT] Fallback tabs setup...');
+        debugLog('[INIT] Fallback tabs setup...');
         if (window.IdealistaApp && typeof window.IdealistaApp.setupCriteriaTabs === 'function') {
             window.IdealistaApp.setupCriteriaTabs();
         }

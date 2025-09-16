@@ -1,6 +1,6 @@
 import logging
 from decimal import Decimal
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, current_app
 from sqlalchemy import or_, and_
 from sqlalchemy.orm import defer
 from models import Land, ScoringCriteria
@@ -92,7 +92,8 @@ def lands():
             active_mode = mode
         
         # Debug logging (temporary)
-        logger.debug(f"UI params mode={mode!r} sort={sort_by!r} -> active_mode={active_mode}")
+        if current_app.config.get('DEBUG'):
+            logger.debug(f"UI params mode={mode!r} sort={sort_by!r} -> active_mode={active_mode}")
         
         return render_template(
             'lands.html',
