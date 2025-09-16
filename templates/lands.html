@@ -2,10 +2,14 @@
 
 {% block title %}Properties - Idealista Land Watch{% endblock %}
 
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/lands.css') }}">
+{% endblock %}
+
+{% block body_attrs %} class="page-lands"{% endblock %}
+
 {% block content %}
-<!-- MD3 Container -->
-<div class="md3-container">
-    <!-- MD3 Page Header -->
+<div class="md3-container lands-page">
     <header class="md3-page-header md3-page-header--compact">
         <div class="md3-page-title">
             <span class="material-symbols-outlined">apartment</span>
@@ -16,232 +20,201 @@
                 <span class="md3-badge md3-secondary-container">{{ lands|length }}</span>
             {% endif %}
         </div>
-        <div class="body-small" style="color: var(--md-sys-color-on-surface-variant); margin-top: var(--md-sys-spacing-1);">
+        <p class="body-small page-subtitle">
             {{ t('last_sync') }}: <span id="last-sync" class="label-medium">{{ t('loading') }}...</span>
-        </div>
+        </p>
     </header>
 
+    <section class="filters-panel">
+        <form method="GET" id="filter-form" class="filters-form">
+            <input type="hidden" name="mode" value="{{ current_filters.mode or 'combined' }}">
+            <input type="hidden" name="view_type" value="{{ current_filters.view_type or 'cards' }}">
 
-    <!-- MD3 Filters Card -->
-    <div class="md3-card md3-card--elevated" style="margin-bottom: var(--md-sys-spacing-8);">
-        <div class="md3-card__header">
-            <h2 class="title-medium" style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); margin: 0;">
-                <span class="material-symbols-outlined" style="color: var(--md-sys-color-primary);">tune</span>
-                {{ t('filters_search') }}
-            </h2>
-        </div>
-        <div class="md3-card__content">
-            <form method="GET" id="filter-form">
-                <!-- Hidden inputs to preserve state -->
-                <input type="hidden" name="mode" value="{{ current_filters.mode or 'combined' }}">
-                <input type="hidden" name="view_type" value="{{ current_filters.view_type or 'cards' }}">
-                
-                <!-- Filter Fields Grid -->
-                <div class="md3-grid md3-filters-grid" style="gap: var(--md-sys-spacing-4); align-items: end; margin-bottom: var(--md-sys-spacing-6);">
-                    <!-- Search Field -->
-                    <div class="md3-text-field">
-                        <label class="md3-text-field__label" for="search">
-                            <span class="material-symbols-outlined" style="font-size: 18px; vertical-align: middle; margin-right: var(--md-sys-spacing-1);">search</span>
-                            {{ t('search_properties') }}
-                        </label>
-                        <input type="text" class="md3-text-field__input body-large" id="search" name="search" 
-                               value="{{ current_filters.search or '' }}">
-                    </div>
-                    
-                    <!-- Land Type Field -->
-                    <div class="md3-text-field">
-                        <label class="md3-text-field__label" for="land_type">
-                            <span class="material-symbols-outlined" style="font-size: 18px; vertical-align: middle; margin-right: var(--md-sys-spacing-1);">category</span>
-                            {{ t('land_type') }}
-                        </label>
-                        <select class="md3-text-field__input body-large" id="land_type" name="land_type">
-                            <option value="">{{ t('land_type_all') }}</option>
-                            <option value="developed" {{ 'selected' if current_filters.land_type == 'developed' }}>
-                                {{ t('developed') }}
+            <div class="filters-form__top-row">
+                <div class="filters-form__title">
+                    <span class="material-symbols-outlined">tune</span>
+                    <h2 class="title-medium">{{ t('filters_search') }}</h2>
+                </div>
+                <div class="filters-form__view-toggle toggle-group" role="group" aria-label="View type">
+                    <button type="button"
+                            class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.view_type == 'list' else '' }}"
+                            id="view-list-btn"
+                            onclick="switchView('list')"
+                            title="Table view - Compact data in rows">
+                        <span class="material-symbols-outlined">view_list</span>
+                    </button>
+                    <button type="button"
+                            class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.view_type == 'cards' or not current_filters.view_type else '' }}"
+                            id="view-cards-btn"
+                            onclick="switchView('cards')"
+                            title="Card view - Visual property cards">
+                        <span class="material-symbols-outlined">view_module</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="filters-form__fields">
+                <div class="filters-form__field filters-form__field--grow">
+                    <span class="material-symbols-outlined filters-form__icon">search</span>
+                    <input type="text"
+                           id="search"
+                           name="search"
+                           placeholder="{{ t('search_properties') }}"
+                           aria-label="{{ t('search_properties') }}"
+                           value="{{ current_filters.search or '' }}">
+                </div>
+
+                <div class="filters-form__field filters-form__field--select">
+                    <span class="material-symbols-outlined filters-form__icon">category</span>
+                    <select id="land_type"
+                            name="land_type"
+                            aria-label="{{ t('land_type') }}">
+                        <option value="">{{ t('land_type_all') }}</option>
+                        <option value="developed" {{ 'selected' if current_filters.land_type == 'developed' }}>
+                            {{ t('developed') }}
+                        </option>
+                        <option value="buildable" {{ 'selected' if current_filters.land_type == 'buildable' }}>
+                            {{ t('buildable') }}
+                        </option>
+                    </select>
+                </div>
+
+                <div class="filters-form__field filters-form__field--select">
+                    <span class="material-symbols-outlined filters-form__icon">location_on</span>
+                    <select id="municipality"
+                            name="municipality"
+                            aria-label="{{ t('location') }}">
+                        <option value="">{{ t('all_municipalities') }}</option>
+                        {% for municipality in municipalities %}
+                            <option value="{{ municipality }}" {{ 'selected' if current_filters.municipality == municipality }}>
+                                {{ municipality }}
                             </option>
-                            <option value="buildable" {{ 'selected' if current_filters.land_type == 'buildable' }}>
-                                {{ t('buildable') }}
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <label class="filters-form__checkbox" for="sea_view">
+                    <input type="checkbox"
+                           id="sea_view"
+                           name="sea_view"
+                           {{ 'checked' if current_filters.sea_view }}>
+                    <span class="material-symbols-outlined">waves</span>
+                    <span class="label-medium">{{ t('sea_view_only') }}</span>
+                </label>
+
+                <div class="filters-form__field filters-form__field--sort">
+                    <span class="material-symbols-outlined filters-form__icon">sort</span>
+                    <select id="sort"
+                            name="sort"
+                            aria-label="{{ t('sort_by') }}">
+                        <option value="" {{ 'selected' if not current_filters.sort_by else '' }}>{{ t('sort_by') }}</option>
+                        {% if current_filters.mode == 'investment' %}
+                            <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
+                                Investment Score
                             </option>
-                        </select>
-                    </div>
-                    
-                    <!-- Municipality Field -->
-                    <div class="md3-text-field">
-                        <label class="md3-text-field__label" for="municipality">
-                            <span class="material-symbols-outlined" style="font-size: 18px; vertical-align: middle; margin-right: var(--md-sys-spacing-1);">location_on</span>
-                            {{ t('location') }}
-                        </label>
-                        <select class="md3-text-field__input body-large" id="municipality" name="municipality">
-                            <option value="">{{ t('all_municipalities') }}</option>
-                            {% for municipality in municipalities %}
-                                <option value="{{ municipality }}" 
-                                        {{ 'selected' if current_filters.municipality == municipality }}>
-                                    {{ municipality }}
-                                </option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    
-                    <!-- Sea View Checkbox -->
-                    <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-2); white-space: nowrap;">
-                        <input type="checkbox" id="sea_view" name="sea_view" 
-                               {{ 'checked' if current_filters.sea_view }}
-                               style="accent-color: var(--md-sys-color-primary);">
-                        <label class="label-medium" for="sea_view" style="color: var(--md-sys-color-on-surface); cursor: pointer; display: flex; align-items: center; gap: var(--md-sys-spacing-1);">
-                            <span class="material-symbols-outlined" style="font-size: 18px; color: var(--md-sys-color-primary);">waves</span>
-                            {{ t('sea_view_only') }}
-                        </label>
-                    </div>
-                    
-                    <!-- Sort Controls -->
-                    <div style="display: flex; gap: var(--md-sys-spacing-2); align-items: end;">
-                        <div class="md3-text-field" style="flex: 1;">
-                            <label class="md3-text-field__label" for="sort">
-                                <span class="material-symbols-outlined" style="font-size: 18px; vertical-align: middle; margin-right: var(--md-sys-spacing-1);">sort</span>
-                                {{ t('sort_by') }}
-                            </label>
-                            <select class="md3-text-field__input body-large" id="sort" name="sort">
-                                <option value="" {{ 'selected' if not current_filters.sort_by else '' }}>{{ t('sort_by') }}</option>
-                                <!-- Mode-based score options -->
-                                {% if current_filters.mode == 'investment' %}
-                                    <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
-                                        Investment Score
-                                    </option>
-                                    <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
-                                        Lifestyle Score
-                                    </option>
-                                    <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
-                                        Combined Score
-                                    </option>
-                                {% elif current_filters.mode == 'lifestyle' %}
-                                    <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
-                                        Lifestyle Score
-                                    </option>
-                                    <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
-                                        Investment Score
-                                    </option>
-                                    <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
-                                        Combined Score
-                                    </option>
-                                {% else %}
-                                    <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
-                                        Combined Score
-                                    </option>
-                                    <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
-                                        Investment Score
-                                    </option>
-                                    <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
-                                        Lifestyle Score
-                                    </option>
-                                {% endif %}
-                                <!-- Other sort options -->
-                                <option value="price" {{ 'selected' if current_filters.sort_by == 'price' }}>
-                                    {{ t('price') }}
-                                </option>
-                                <option value="area" {{ 'selected' if current_filters.sort_by == 'area' }}>
-                                    {{ t('area') }}
-                                </option>
-                                <option value="travel_time_nearest_beach" {{ 'selected' if current_filters.sort_by == 'travel_time_nearest_beach' }}>
-                                    {{ t('beach_distance') }}
-                                </option>
-                                <option value="created_at" {{ 'selected' if current_filters.sort_by == 'created_at' }}>
-                                    {{ t('date_added') }}
-                                </option>
-                            </select>
-                        </div>
-                        <!-- Sort Direction Buttons -->
-                        <div style="display: flex; flex-direction: column; gap: var(--md-sys-spacing-1);">
-                            <button type="submit" class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.order == 'desc' else '' }}" 
-                                    onclick="document.querySelector('input[name=order]').value='desc'" 
-                                    title="{{ t('sort_descending') }}">
-                                <span class="material-symbols-outlined">arrow_downward</span>
-                            </button>
-                            <button type="submit" class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.order == 'asc' else '' }}" 
-                                    onclick="document.querySelector('input[name=order]').value='asc'" 
-                                    title="{{ t('sort_ascending') }}">
-                                <span class="material-symbols-outlined">arrow_upward</span>
-                            </button>
-                        </div>
+                            <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
+                                Lifestyle Score
+                            </option>
+                            <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
+                                Combined Score
+                            </option>
+                        {% elif current_filters.mode == 'lifestyle' %}
+                            <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
+                                Lifestyle Score
+                            </option>
+                            <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
+                                Investment Score
+                            </option>
+                            <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
+                                Combined Score
+                            </option>
+                        {% else %}
+                            <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>
+                                Combined Score
+                            </option>
+                            <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>
+                                Investment Score
+                            </option>
+                            <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>
+                                Lifestyle Score
+                            </option>
+                        {% endif %}
+                        <option value="price" {{ 'selected' if current_filters.sort_by == 'price' }}>
+                            {{ t('price') }}
+                        </option>
+                        <option value="area" {{ 'selected' if current_filters.sort_by == 'area' }}>
+                            {{ t('area') }}
+                        </option>
+                        <option value="travel_time_nearest_beach" {{ 'selected' if current_filters.sort_by == 'travel_time_nearest_beach' }}>
+                            {{ t('beach_distance') }}
+                        </option>
+                        <option value="created_at" {{ 'selected' if current_filters.sort_by == 'created_at' }}>
+                            {{ t('date_added') }}
+                        </option>
+                    </select>
+                    <div class="filters-form__order">
+                        <button type="submit"
+                                class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.order == 'desc' else '' }}"
+                                onclick="document.querySelector('input[name=order]').value='desc'"
+                                title="{{ t('sort_descending') }}">
+                            <span class="material-symbols-outlined">arrow_downward</span>
+                        </button>
+                        <button type="submit"
+                                class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.order == 'asc' else '' }}"
+                                onclick="document.querySelector('input[name=order]').value='asc'"
+                                title="{{ t('sort_ascending') }}">
+                            <span class="material-symbols-outlined">arrow_upward</span>
+                        </button>
                         <input type="hidden" name="order" value="{{ current_filters.order or 'desc' }}">
                     </div>
                 </div>
-                        
-                    </div>
-                
-                <!-- MD3 Action Buttons and View Toggle -->
-                <div class="md3-card__actions" style="justify-content: space-between;">
-                    <div style="display: flex; gap: var(--md-sys-spacing-3);">
-                        <button type="submit" class="md3-button md3-button--filled">
-                            <span class="material-symbols-outlined">search</span>
-                            {{ t('apply') }}
-                        </button>
-                        <a href="{{ url_for('main.lands') }}" class="md3-button md3-button--outlined">
-                            <span class="material-symbols-outlined">clear</span>
-                            {{ t('clear') }}
-                        </a>
-                    </div>
-                    
-                    <!-- MD3 View Toggle -->
-                    <div style="display: flex; border: 1px solid var(--md-sys-color-outline-variant); border-radius: var(--md-sys-shape-corner-large); overflow: hidden;" role="group" aria-label="View type">
-                        <button type="button" 
-                                class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.view_type == 'list' else '' }}" 
-                                id="view-list-btn" 
-                                onclick="switchView('list')" 
-                                title="Table view - Compact data in rows"
-                                style="border-radius: 0; border: none; width: 48px; height: 48px;">
-                            <span class="material-symbols-outlined">view_list</span>
-                        </button>
-                        
-                        <button type="button" 
-                                class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.view_type == 'cards' or not current_filters.view_type else '' }}" 
-                                id="view-cards-btn" 
-                                onclick="switchView('cards')" 
-                                title="Card view - Visual property cards"
-                                style="border-radius: 0; border: none; border-left: 1px solid var(--md-sys-color-outline-variant); width: 48px; height: 48px;">
-                            <span class="material-symbols-outlined">view_module</span>
-                        </button>
-                    </div>
+
+                <div class="filters-form__actions-group">
+                    <button type="submit" class="md3-button md3-button--filled">
+                        <span class="material-symbols-outlined">search</span>
+                        {{ t('apply') }}
+                    </button>
+                    <a href="{{ url_for('main.lands') }}" class="md3-button md3-button--outlined">
+                        <span class="material-symbols-outlined">clear</span>
+                        {{ t('clear') }}
+                    </a>
                 </div>
-            </form>
-        </div>
-    </div>
+            </div>
+        </form>
+    </section>
 
     <!-- MD3 Properties Display -->
     {% if lands %}
         <!-- Results Summary and Mode Controls -->
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--md-sys-spacing-6);">
-            <div>
-                <h3 class="title-large" style="margin: 0;">{{ pagination.total }} {{ t('properties_found') }}</h3>
+        <div class="lands-results">
+            <div class="lands-results__summary">
+                <h3 class="title-large">{{ pagination.total }} {{ t('properties_found') }}</h3>
                 {% if filters_applied %}
-                    <p class="body-small" style="color: var(--md-sys-color-on-surface-variant); margin: 0;">(filtered)</p>
+                    <p class="body-small lands-results__status">(filtered)</p>
                 {% endif %}
             </div>
-            
-            <div style="display: flex; align-items: center; gap: var(--md-sys-spacing-4);">
-                <!-- MD3 Analysis Mode Toggle -->
-                <div style="display: flex; border: 1px solid var(--md-sys-color-outline-variant); border-radius: var(--md-sys-shape-corner-large); overflow: hidden;" role="group" aria-label="Analysis mode">
+
+            <div class="lands-results__controls">
+                <div class="toggle-group" role="group" aria-label="Analysis mode">
                     <button type="button"
                             class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.active_mode == 'combined' else '' }}"
                             onclick="switchMode('combined')"
                             id="mode-combined-btn"
-                            title="Combined Analysis - Shows overall property rating"
-                            style="border-radius: 0; border: none; width: 48px; height: 48px;">
+                            title="Combined Analysis - Shows overall property rating">
                         <span class="material-symbols-outlined">balance</span>
                     </button>
-                    <button type="button" 
+                    <button type="button"
                             class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.active_mode == 'investment' else '' }}"
-                            onclick="switchMode('investment')" 
+                            onclick="switchMode('investment')"
                             id="mode-investment-btn"
-                            title="Investment Analysis - Focus on rental yield and ROI"
-                            style="border-radius: 0; border: none; border-left: 1px solid var(--md-sys-color-outline-variant); width: 48px; height: 48px;">
+                            title="Investment Analysis - Focus on rental yield and ROI">
                         <span class="material-symbols-outlined">business_center</span>
                     </button>
-                    <button type="button" 
+                    <button type="button"
                             class="md3-button md3-button--icon{{ ' md3-button--filled' if current_filters.active_mode == 'lifestyle' else '' }}"
-                            onclick="switchMode('lifestyle')" 
+                            onclick="switchMode('lifestyle')"
                             id="mode-lifestyle-btn"
-                            title="Lifestyle Analysis - Focus on quality of life factors"
-                            style="border-radius: 0; border: none; border-left: 1px solid var(--md-sys-color-outline-variant); width: 48px; height: 48px;">
+                            title="Lifestyle Analysis - Focus on quality of life factors">
                             <span class="material-symbols-outlined">home</span>
                     </button>
                 </div>
