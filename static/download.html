@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Download Idealista Project</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #e0e0e0;
+        }
+        h1 { color: #4CAF50; }
+        .download-btn {
+            display: inline-block;
+            padding: 15px 30px;
+            margin: 10px;
+            background: #4CAF50;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            font-size: 18px;
+        }
+        .download-btn:hover { background: #45a049; }
+        .info { 
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        pre { background: #0a0a0a; padding: 10px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>📦 Idealista Land Watch & Rank Project</h1>
+    
+    <div class="info">
+        <h2>Download Options:</h2>
+        
+        <a href="/static/idealista-project-new.zip" class="download-btn" download>
+            ⬇️ Download ZIP (55KB)
+        </a>
+        
+        <a href="/static/idealista-project.tar.gz" class="download-btn" download>
+            ⬇️ Download TAR.GZ (72KB)
+        </a>
+        
+        <a href="/static/all_code.txt" class="download-btn" download>
+            📄 Download as Text (1933 lines)
+        </a>
+    </div>
+    
+    <div class="info">
+        <h3>Project includes:</h3>
+        <ul>
+            <li>✅ Flask application with PostgreSQL</li>
+            <li>✅ IMAP email ingestion service</li>
+            <li>✅ Multi-criteria scoring system</li>
+            <li>✅ Web interface with Bootstrap</li>
+            <li>✅ REST API endpoints</li>
+            <li>✅ Automated scheduler (7 AM & 7 PM CET)</li>
+            <li>✅ Test suite</li>
+        </ul>
+    </div>
+    
+    <div class="info">
+        <h3>Installation:</h3>
+        <pre>
+1. Extract archive
+2. Set environment variables:
+   - EMAIL_BACKEND=imap
+   - IMAP_USER=your@gmail.com
+   - IMAP_PASSWORD=app_password
+   - DATABASE_URL=postgresql://...
+3. Install dependencies:
+   pip install -r requirements.txt
+4. Run application:
+   python main.py
+        </pre>
+    </div>
+</body>
+</html>

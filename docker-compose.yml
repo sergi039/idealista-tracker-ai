@@ -1,0 +1,52 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: idealista-app
+    ports:
+      - "5001:5001"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER:-idealista}:${DB_PASSWORD:-idealista}@db:5432/${DB_NAME:-idealista}
+    volumes:
+      # Mount code for development (comment out for production)
+      - .:/app
+      # Persist last seen UID
+      - ./data:/app/data
+    restart: unless-stopped
+    networks:
+      - idealista-network
+
+  db:
+    image: postgres:15-alpine
+    container_name: idealista-db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-idealista}
+      POSTGRES_USER: ${DB_USER:-idealista}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-idealista}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Expose for debugging (remove in production)
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-idealista} -d ${DB_NAME:-idealista}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - idealista-network
+
+volumes:
+  pgdata:
+    name: idealista-pgdata
+
+networks:
+  idealista-network:
+    name: idealista-network

@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Testing
+.pytest_cache/
+tests/
+*.test.py
+test_*.py
+
+# Docs and assets
+*.md
+attached_assets/
+LICENSE
+
+# Data (will be mounted as volume)
+data/
+instance/
+.last_seen_uid

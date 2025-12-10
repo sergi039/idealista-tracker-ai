@@ -1,0 +1,74 @@
+import os
+import logging
+from flask import Flask
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import DeclarativeBase
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+class Base(DeclarativeBase):
+    pass
+
+db = SQLAlchemy(model_class=Base)
+
+def create_app():
+    # Create the app
+    app = Flask(__name__)
+    # Security: Validate all required secrets before continuing
+    from utils.security import SecurityValidator
+    
+    security_results = SecurityValidator.validate_all_secrets(raise_on_missing_required=True)
+    logger.info(f"Security check passed: {security_results['optional_available_count']}/{security_results['total_optional']} optional secrets available")
+    
+    app.secret_key = os.environ.get("SESSION_SECRET")
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+
+    # Configure the database
+    app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        "pool_recycle": 300,
+        "pool_pre_ping": True,
+    }
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+    # Initialize the app with the extension
+    db.init_app(app)
+
+    with app.app_context():
+        # Import models to ensure tables are created
+        import models  # noqa: F401
+        
+        # Import and register routes
+        from routes.main_routes import main_bp
+        from routes.api_routes import api_bp
+        from routes.language_routes import language_bp
+        
+        app.register_blueprint(main_bp)
+        app.register_blueprint(api_bp, url_prefix='/api')
+        app.register_blueprint(language_bp, url_prefix='/api')
+        
+        # Create all tables
+        db.create_all()
+        
+        # Initialize caching
+        from utils.cache import init_cache
+        init_cache(app)
+        
+        # Initialize scheduler
+        from services.scheduler_service import init_scheduler
+        
+        # Add localization functions to template context
+        from utils.i18n import t, get_current_language
+        app.jinja_env.globals['t'] = t
+        app.jinja_env.globals['get_current_language'] = get_current_language
+        init_scheduler(app)
+        
+        logger.info("Application initialized successfully")
+
+    return app
+
+# Create the app instance
+app = create_app()

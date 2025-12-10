@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Idealista Land Watch & Rank{% endblock %}</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.replit.com/agent/bootstrap-agent-dark-theme.min.css" rel="stylesheet">
+    
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    
+    <script>
+        function setLanguage(langCode) {
+            fetch('/api/set-language', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ language: langCode })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload();
+                } else {
+                    console.error('Failed to set language:', data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error setting language:', error);
+            });
+        }
+    </script>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="{{ url_for('main.index') }}">
+                <i class="fas fa-map-marked-alt me-2"></i>
+                {{ t('app_title') }}
+            </a>
+            
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('main.lands') }}">
+                            <i class="fas fa-list me-1"></i>{{ t('properties') }}
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('main.criteria') }}">
+                            <i class="fas fa-sliders-h me-1"></i>{{ t('scoring_criteria') }}
+                        </a>
+                    </li>
+                </ul>
+                
+                <ul class="navbar-nav">
+                    <li class="nav-item me-2">
+                        <button class="btn btn-outline-primary btn-sm" 
+                                hx-post="{{ url_for('api.manual_ingestion') }}"
+                                hx-trigger="click"
+                                hx-indicator="#ingestion-spinner">
+                            <i class="fas fa-sync-alt me-1"></i>
+                            {{ t('manual_sync') }}
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <div class="dropdown">
+                            <button class="btn btn-outline-secondary btn-sm dropdown-toggle" 
+                                    type="button" 
+                                    id="languageDropdown" 
+                                    data-bs-toggle="dropdown">
+                                <i class="fas fa-globe me-1"></i>
+                                <span id="current-lang">{{ 'EN' if get_current_language() == 'en' else 'ES' }}</span>
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li>
+                                    <a class="dropdown-item" href="#" onclick="setLanguage('en')">
+                                        <i class="flag-icon flag-icon-gb me-2"></i>English
+                                    </a>
+                                </li>
+                                <li>
+                                    <a class="dropdown-item" href="#" onclick="setLanguage('es')">
+                                        <i class="flag-icon flag-icon-es me-2"></i>Español
+                                    </a>
+                                </li>
+                            </ul>
+                        </div>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Loading indicators -->
+    <div id="ingestion-spinner" class="htmx-indicator">
+        <div class="container mt-3">
+            <div class="alert alert-info">
+                <i class="fas fa-spinner fa-spin me-2"></i>
+                {{ t('running_gmail_ingestion') }}
+            </div>
+        </div>
+    </div>
+    
+
+    <!-- Flash messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <div class="container mt-3">
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% endwith %}
+
+    <!-- Main content -->
+    <main class="container mt-4 pb-5">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-dark text-light py-4 mt-5">
+        <div class="container">
+            <div class="row">
+                <div class="col-md-6">
+                    <h6>Idealista Land Watch & Rank</h6>
+                    <p class="small text-muted">
+                        Automated Spanish real estate analysis with multi-criteria scoring
+                    </p>
+                </div>
+                <div class="col-md-6 text-md-end">
+                    <small class="text-muted">
+                        Automated real estate analysis platform
+                    </small>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Custom JS -->
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    
+    {% block scripts %}{% endblock %}
+</body>
+</html>

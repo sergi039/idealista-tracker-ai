@@ -1,0 +1,1933 @@
+import os
+import logging
+from flask import Flask
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import DeclarativeBase
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+class Base(DeclarativeBase):
+    pass
+
+db = SQLAlchemy(model_class=Base)
+
+def create_app():
+    # Create the app
+    app = Flask(__name__)
+    app.secret_key = os.environ.get("SESSION_SECRET", "dev-secret-key")
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+
+    # Configure the database
+    app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        "pool_recycle": 300,
+        "pool_pre_ping": True,
+    }
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+    # Initialize the app with the extension
+    db.init_app(app)
+
+    with app.app_context():
+        # Import models to ensure tables are created
+        import models  # noqa: F401
+        
+        # Import and register routes
+        from routes.main_routes import main_bp
+        from routes.api_routes import api_bp
+        
+        app.register_blueprint(main_bp)
+        app.register_blueprint(api_bp, url_prefix='/api')
+        
+        # Create all tables
+        db.create_all()
+        
+        # Initialize scheduler
+        from services.scheduler_service import init_scheduler
+        init_scheduler(app)
+        
+        logger.info("Application initialized successfully")
+
+    return app
+
+# Create the app instance
+app = create_app()
+import os
+
+class Config:
+    # Email backend selection
+    EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "imap").lower()  # 'imap' or 'gmail'
+    
+    # IMAP settings (for Gmail with App Password)
+    IMAP_HOST = os.environ.get("IMAP_HOST", "imap.gmail.com")
+    IMAP_PORT = int(os.environ.get("IMAP_PORT", "993"))
+    IMAP_SSL = os.environ.get("IMAP_SSL", "true").lower() == "true"
+    IMAP_USER = os.environ.get("IMAP_USER", "")
+    IMAP_PASSWORD = os.environ.get("IMAP_PASSWORD", "")
+    IMAP_FOLDER = os.environ.get("IMAP_FOLDER", "Idealista")  # Gmail label mapped as folder
+    IMAP_SEARCH_QUERY = os.environ.get("IMAP_SEARCH_QUERY", "ALL")  # e.g. 'UNSEEN' or date filters
+    MAX_EMAILS_PER_RUN = int(os.environ.get("MAX_EMAILS_PER_RUN", "200"))
+    
+    # Gmail API (legacy, kept for compatibility)
+    GMAIL_API_KEY = os.environ.get("GMAIL_API_KEY", "")
+    GMAIL_CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID", "")
+    GMAIL_CLIENT_SECRET = os.environ.get("GMAIL_CLIENT_SECRET", "")
+    GMAIL_REFRESH_TOKEN = os.environ.get("GMAIL_REFRESH_TOKEN", "")
+    GMAIL_LABEL = "Idealista"
+    
+    # Google APIs
+    GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+    GOOGLE_PLACES_API_KEY = os.environ.get("GOOGLE_PLACES_API_KEY", "")
+    
+    # Database
+    DATABASE_URL = os.environ.get("DATABASE_URL", "")
+    
+    # App settings
+    SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key")
+    
+    # Scheduler settings
+    SCHEDULER_TIMEZONE = 'Europe/Madrid'  # CET timezone
+    INGESTION_TIMES = ['07:00', '19:00']  # 7 AM and 7 PM CET
+    
+    # OSM Overpass API
+    OSM_OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+    
+    # Default scoring weights
+    DEFAULT_SCORING_WEIGHTS = {
+        'infrastructure_basic': 0.20,      # 20%
+        'infrastructure_extended': 0.15,   # 15%
+        'transport': 0.20,                 # 20%
+        'environment': 0.15,               # 15%
+        'neighborhood': 0.15,              # 15%
+        'services_quality': 0.10,          # 10%
+        'legal_status': 0.05               # 5%
+    }
+from datetime import datetime
+from app import db
+from sqlalchemy import CheckConstraint
+from sqlalchemy.dialects.postgresql import JSONB
+
+class Land(db.Model):
+    __tablename__ = 'lands'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    source_email_id = db.Column(db.String(255), unique=True, nullable=False)
+    title = db.Column(db.Text)
+    url = db.Column(db.Text)
+    price = db.Column(db.Numeric(10, 2))
+    area = db.Column(db.Numeric(10, 2))
+    municipality = db.Column(db.String(255))
+    location_lat = db.Column(db.Numeric(10, 7))
+    location_lon = db.Column(db.Numeric(10, 7))
+    land_type = db.Column(db.String(20), CheckConstraint("land_type IN ('developed', 'buildable')"))
+    description = db.Column(db.Text)
+    
+    # JSONB fields for complex data
+    infrastructure_basic = db.Column(JSONB)  # electricity, water, internet, gas
+    infrastructure_extended = db.Column(JSONB)  # supermarket, school, restaurants, hospital
+    transport = db.Column(JSONB)  # train, airport, highway, bus
+    environment = db.Column(JSONB)  # sea_view, mountain_view, forest, orientation
+    neighborhood = db.Column(JSONB)  # new_houses, area_price_level, noise
+    services_quality = db.Column(JSONB)  # schools rating, restaurants rating, cafes rating
+    
+    legal_status = db.Column(db.String(50))
+    score_total = db.Column(db.Numeric(5, 2))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    def __repr__(self):
+        return f'<Land {self.id}: {self.title[:50]}...>'
+    
+    def to_dict(self):
+        """Convert land to dictionary for API responses"""
+        return {
+            'id': self.id,
+            'source_email_id': self.source_email_id,
+            'title': self.title,
+            'url': self.url,
+            'price': float(self.price) if self.price else None,
+            'area': float(self.area) if self.area else None,
+            'municipality': self.municipality,
+            'location_lat': float(self.location_lat) if self.location_lat else None,
+            'location_lon': float(self.location_lon) if self.location_lon else None,
+            'land_type': self.land_type,
+            'description': self.description,
+            'infrastructure_basic': self.infrastructure_basic or {},
+            'infrastructure_extended': self.infrastructure_extended or {},
+            'transport': self.transport or {},
+            'environment': self.environment or {},
+            'neighborhood': self.neighborhood or {},
+            'services_quality': self.services_quality or {},
+            'legal_status': self.legal_status,
+            'score_total': float(self.score_total) if self.score_total else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+class ScoringCriteria(db.Model):
+    __tablename__ = 'scoring_criteria'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    criteria_name = db.Column(db.String(100), nullable=False)
+    weight = db.Column(db.Numeric(3, 2), default=1.0)
+    active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def __repr__(self):
+        return f'<ScoringCriteria {self.criteria_name}: {self.weight}>'
+from app import app
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
+===== SERVICES =====
+import os
+import logging
+import requests
+import time
+from typing import Dict, List, Optional
+from utils.geocoding import GeocodingService
+
+logger = logging.getLogger(__name__)
+
+class EnrichmentService:
+    def __init__(self):
+        self.google_maps_key = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+        self.google_places_key = os.environ.get("GOOGLE_PLACES_API_KEY", "")
+        self.osm_overpass_url = "https://overpass-api.de/api/interpreter"
+        self.geocoding_service = GeocodingService()
+        
+    def enrich_land(self, land_id: int) -> bool:
+        """Main method to enrich a land record with external data"""
+        try:
+            from models import Land
+            from app import db
+            
+            land = Land.query.get(land_id)
+            if not land:
+                logger.error(f"Land with ID {land_id} not found")
+                return False
+            
+            logger.info(f"Starting enrichment for land {land_id}: {land.title}")
+            
+            # Step 1: Geocode the location if coordinates are missing
+            if not land.location_lat or not land.location_lon:
+                coordinates = self.geocoding_service.geocode_address(
+                    f"{land.municipality}, Spain"
+                )
+                if coordinates:
+                    land.location_lat = coordinates['lat']
+                    land.location_lon = coordinates['lng']
+                    db.session.commit()
+                    logger.info(f"Geocoded land {land_id}: {coordinates}")
+            
+            if not land.location_lat or not land.location_lon:
+                logger.warning(f"Could not geocode land {land_id}, skipping enrichment")
+                return False
+            
+            # Step 2: Enrich with Google Places data
+            self._enrich_with_google_places(land)
+            
+            # Step 3: Enrich with Google Maps data (distances, travel times)
+            self._enrich_with_google_maps(land)
+            
+            # Step 4: Enrich with OSM data (fallback and additional POIs)
+            self._enrich_with_osm_data(land)
+            
+            # Step 5: Analyze environment (views, orientation)
+            self._analyze_environment(land)
+            
+            # Step 6: Calculate final score
+            from services.scoring_service import ScoringService
+            scoring_service = ScoringService()
+            scoring_service.calculate_score(land)
+            
+            db.session.commit()
+            logger.info(f"Successfully enriched land {land_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to enrich land {land_id}: {str(e)}")
+            return False
+    
+    def _enrich_with_google_places(self, land):
+        """Enrich with Google Places API data"""
+        try:
+            if not self.google_places_key:
+                logger.warning("Google Places API key not available")
+                return
+            
+            lat, lon = float(land.location_lat), float(land.location_lon)
+            
+            # Search for nearby amenities
+            amenities = {
+                'supermarket': ['supermarket', 'grocery_or_supermarket'],
+                'school': ['school', 'primary_school', 'secondary_school'],
+                'hospital': ['hospital', 'doctor'],
+                'restaurant': ['restaurant'],
+                'cafe': ['cafe'],
+                'train_station': ['train_station', 'subway_station'],
+                'bus_station': ['bus_station'],
+                'airport': ['airport']
+            }
+            
+            infrastructure_extended = land.infrastructure_extended or {}
+            transport = land.transport or {}
+            services_quality = land.services_quality or {}
+            
+            for amenity, place_types in amenities.items():
+                nearby_places = self._search_nearby_places(lat, lon, place_types)
+                
+                if amenity in ['supermarket', 'school', 'hospital', 'restaurant', 'cafe']:
+                    # Calculate distance to nearest and average rating
+                    if nearby_places:
+                        nearest = min(nearby_places, key=lambda x: x.get('distance', float('inf')))
+                        infrastructure_extended[f'{amenity}_distance'] = nearest.get('distance')
+                        infrastructure_extended[f'{amenity}_available'] = True
+                        
+                        # Get average rating for services
+                        if amenity in ['school', 'restaurant', 'cafe']:
+                            ratings = [p.get('rating', 0) for p in nearby_places if p.get('rating')]
+                            if ratings:
+                                services_quality[f'{amenity}_avg_rating'] = sum(ratings) / len(ratings)
+                    else:
+                        infrastructure_extended[f'{amenity}_available'] = False
+                
+                elif amenity in ['train_station', 'bus_station', 'airport']:
+                    # Calculate transport accessibility
+                    if nearby_places:
+                        nearest = min(nearby_places, key=lambda x: x.get('distance', float('inf')))
+                        transport[f'{amenity}_distance'] = nearest.get('distance')
+                        transport[f'{amenity}_available'] = True
+                    else:
+                        transport[f'{amenity}_available'] = False
+            
+            land.infrastructure_extended = infrastructure_extended
+            land.transport = transport
+            land.services_quality = services_quality
+            
+        except Exception as e:
+            logger.error(f"Failed to enrich with Google Places: {str(e)}")
+    
+    def _search_nearby_places(self, lat: float, lon: float, place_types: List[str], radius: int = 5000) -> List[Dict]:
+        """Search for nearby places using Google Places API"""
+        try:
+            places = []
+            
+            for place_type in place_types:
+                url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+                params = {
+                    'location': f"{lat},{lon}",
+                    'radius': radius,
+                    'type': place_type,
+                    'key': self.google_places_key
+                }
+                
+                response = requests.get(url, params=params)
+                if response.status_code == 200:
+                    data = response.json()
+                    for place in data.get('results', []):
+                        place_info = {
+                            'name': place.get('name'),
+                            'rating': place.get('rating'),
+                            'place_id': place.get('place_id'),
+                            'types': place.get('types', []),
+                            'location': place.get('geometry', {}).get('location', {}),
+                            'distance': self._calculate_distance(
+                                lat, lon,
+                                place.get('geometry', {}).get('location', {}).get('lat', 0),
+                                place.get('geometry', {}).get('location', {}).get('lng', 0)
+                            )
+                        }
+                        places.append(place_info)
+                
+                # Rate limiting
+                time.sleep(0.1)
+            
+            return places
+            
+        except Exception as e:
+            logger.error(f"Failed to search nearby places: {str(e)}")
+            return []
+    
+    def _enrich_with_google_maps(self, land):
+        """Enrich with Google Maps data (distances, travel times)"""
+        try:
+            if not self.google_maps_key:
+                logger.warning("Google Maps API key not available")
+                return
+            
+            lat, lon = float(land.location_lat), float(land.location_lon)
+            
+            # Get distance matrix to major cities/destinations
+            destinations = [
+                "Madrid, Spain",
+                "Barcelona, Spain",
+                "Valencia, Spain",
+                f"{land.municipality} city center, Spain"
+            ]
+            
+            transport = land.transport or {}
+            
+            for destination in destinations:
+                distance_data = self._get_distance_matrix(lat, lon, destination)
+                if distance_data:
+                    dest_key = destination.split(',')[0].lower().replace(' ', '_')
+                    transport[f'distance_to_{dest_key}'] = distance_data.get('distance')
+                    transport[f'duration_to_{dest_key}'] = distance_data.get('duration')
+            
+            land.transport = transport
+            
+        except Exception as e:
+            logger.error(f"Failed to enrich with Google Maps: {str(e)}")
+    
+    def _get_distance_matrix(self, lat: float, lon: float, destination: str) -> Optional[Dict]:
+        """Get distance and duration to destination using Google Maps Distance Matrix API"""
+        try:
+            url = "https://maps.googleapis.com/maps/api/distancematrix/json"
+            params = {
+                'origins': f"{lat},{lon}",
+                'destinations': destination,
+                'mode': 'driving',
+                'key': self.google_maps_key
+            }
+            
+            response = requests.get(url, params=params)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('rows') and data['rows'][0].get('elements'):
+                    element = data['rows'][0]['elements'][0]
+                    if element.get('status') == 'OK':
+                        return {
+                            'distance': element.get('distance', {}).get('value'),  # in meters
+                            'duration': element.get('duration', {}).get('value')   # in seconds
+                        }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Failed to get distance matrix: {str(e)}")
+            return None
+    
+    def _enrich_with_osm_data(self, land):
+        """Enrich with OpenStreetMap data as fallback"""
+        try:
+            lat, lon = float(land.location_lat), float(land.location_lon)
+            
+            # OSM Overpass query for nearby amenities
+            overpass_query = f"""
+            [out:json][timeout:25];
+            (
+              node["amenity"~"^(supermarket|school|hospital|restaurant|cafe|fuel)$"](around:2000,{lat},{lon});
+              way["amenity"~"^(supermarket|school|hospital|restaurant|cafe|fuel)$"](around:2000,{lat},{lon});
+              relation["amenity"~"^(supermarket|school|hospital|restaurant|cafe|fuel)$"](around:2000,{lat},{lon});
+            );
+            out center;
+            """
+            
+            response = requests.post(
+                self.osm_overpass_url,
+                data=overpass_query,
+                headers={'Content-Type': 'application/x-www-form-urlencoded'}
+            )
+            
+            if response.status_code == 200:
+                osm_data = response.json()
+                infrastructure_extended = land.infrastructure_extended or {}
+                
+                # Process OSM amenities as fallback data
+                amenity_counts = {}
+                for element in osm_data.get('elements', []):
+                    amenity = element.get('tags', {}).get('amenity')
+                    if amenity:
+                        amenity_counts[amenity] = amenity_counts.get(amenity, 0) + 1
+                
+                # Store OSM fallback data
+                infrastructure_extended['osm_amenities'] = amenity_counts
+                land.infrastructure_extended = infrastructure_extended
+            
+        except Exception as e:
+            logger.error(f"Failed to enrich with OSM data: {str(e)}")
+    
+    def _analyze_environment(self, land):
+        """Analyze environment features like views and orientation"""
+        try:
+            environment = land.environment or {}
+            
+            # Analyze description for view keywords
+            description = (land.description or "").lower()
+            
+            # Sea view detection
+            sea_keywords = ['mar', 'playa', 'costa', 'litoral', 'vista al mar']
+            environment['sea_view'] = any(keyword in description for keyword in sea_keywords)
+            
+            # Mountain view detection
+            mountain_keywords = ['montaña', 'sierra', 'monte', 'vista montaña']
+            environment['mountain_view'] = any(keyword in description for keyword in mountain_keywords)
+            
+            # Forest view detection
+            forest_keywords = ['bosque', 'forestal', 'pinar', 'verde']
+            environment['forest_view'] = any(keyword in description for keyword in forest_keywords)
+            
+            # Orientation detection
+            orientation_keywords = {
+                'norte': 'north', 'sur': 'south', 'este': 'east', 'oeste': 'west',
+                'noreste': 'northeast', 'noroeste': 'northwest',
+                'sureste': 'southeast', 'suroeste': 'southwest'
+            }
+            
+            for spanish_orientation, english_orientation in orientation_keywords.items():
+                if spanish_orientation in description:
+                    environment['orientation'] = english_orientation
+                    break
+            
+            land.environment = environment
+            
+        except Exception as e:
+            logger.error(f"Failed to analyze environment: {str(e)}")
+    
+    def _calculate_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Calculate distance between two points in meters using Haversine formula"""
+        import math
+        
+        R = 6371000  # Earth's radius in meters
+        
+        lat1_rad = math.radians(lat1)
+        lat2_rad = math.radians(lat2)
+        delta_lat = math.radians(lat2 - lat1)
+        delta_lon = math.radians(lon2 - lon1)
+        
+        a = (math.sin(delta_lat/2) * math.sin(delta_lat/2) +
+             math.cos(lat1_rad) * math.cos(lat2_rad) *
+             math.sin(delta_lon/2) * math.sin(delta_lon/2))
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+        
+        return R * c
+import os
+import logging
+import base64
+import re
+from email.mime.text import MIMEText
+from googleapiclient.discovery import build
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from utils.email_parser import EmailParser
+
+logger = logging.getLogger(__name__)
+
+class GmailService:
+    SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+    
+    def __init__(self):
+        self.service = None
+        self.email_parser = EmailParser()
+        
+    def authenticate(self):
+        """Authenticate with Gmail API using service account or OAuth"""
+        try:
+            # For production, use service account credentials
+            # For development, this would need OAuth flow
+            api_key = os.environ.get("GMAIL_API_KEY")
+            if not api_key:
+                logger.error("GMAIL_API_KEY not found in environment variables")
+                return False
+                
+            self.service = build('gmail', 'v1', developerKey=api_key)
+            logger.info("Gmail service authenticated successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to authenticate Gmail service: {str(e)}")
+            return False
+    
+    def get_idealista_emails(self, max_results=50):
+        """Fetch emails with Idealista label"""
+        if not self.service:
+            if not self.authenticate():
+                return []
+        
+        try:
+            # Search for emails with Idealista label
+            query = 'label:Idealista'
+            results = self.service.users().messages().list(
+                userId='me', 
+                q=query, 
+                maxResults=max_results
+            ).execute()
+            
+            messages = results.get('messages', [])
+            logger.info(f"Found {len(messages)} Idealista emails")
+            
+            email_data = []
+            for message in messages:
+                email_content = self.get_email_content(message['id'])
+                if email_content:
+                    parsed_data = self.email_parser.parse_idealista_email(email_content)
+                    if parsed_data:
+                        parsed_data['source_email_id'] = message['id']
+                        email_data.append(parsed_data)
+            
+            logger.info(f"Successfully parsed {len(email_data)} emails")
+            return email_data
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch Idealista emails: {str(e)}")
+            return []
+    
+    def get_email_content(self, message_id):
+        """Get the content of a specific email"""
+        try:
+            message = self.service.users().messages().get(
+                userId='me', 
+                id=message_id, 
+                format='full'
+            ).execute()
+            
+            # Extract email content
+            payload = message['payload']
+            body = ""
+            subject = ""
+            
+            # Get subject
+            headers = payload.get('headers', [])
+            for header in headers:
+                if header['name'] == 'Subject':
+                    subject = header['value']
+                    break
+            
+            # Get body content
+            if 'parts' in payload:
+                for part in payload['parts']:
+                    if part['mimeType'] == 'text/html' or part['mimeType'] == 'text/plain':
+                        if 'data' in part['body']:
+                            body = base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
+                            break
+            else:
+                if payload['body'].get('data'):
+                    body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
+            
+            return {
+                'subject': subject,
+                'body': body,
+                'message_id': message_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get email content for {message_id}: {str(e)}")
+            return None
+    
+    def run_ingestion(self):
+        """Main method to run email ingestion"""
+        try:
+            logger.info("Starting Gmail ingestion process")
+            emails = self.get_idealista_emails()
+            
+            if not emails:
+                logger.warning("No emails found for ingestion")
+                return 0
+            
+            # Import here to avoid circular imports
+            from models import Land
+            from app import db
+            
+            processed_count = 0
+            for email_data in emails:
+                try:
+                    # Check if already exists
+                    existing = Land.query.filter_by(
+                        source_email_id=email_data['source_email_id']
+                    ).first()
+                    
+                    if existing:
+                        logger.debug(f"Email {email_data['source_email_id']} already processed")
+                        continue
+                    
+                    # Create new land record
+                    land = Land(
+                        source_email_id=email_data['source_email_id'],
+                        title=email_data.get('title'),
+                        url=email_data.get('url'),
+                        price=email_data.get('price'),
+                        area=email_data.get('area'),
+                        municipality=email_data.get('municipality'),
+                        land_type=email_data.get('land_type'),
+                        description=email_data.get('description'),
+                        legal_status=email_data.get('legal_status')
+                    )
+                    
+                    db.session.add(land)
+                    db.session.commit()
+                    
+                    # Enrich the land data
+                    from services.enrichment_service import EnrichmentService
+                    enrichment_service = EnrichmentService()
+                    enrichment_service.enrich_land(land.id)
+                    
+                    processed_count += 1
+                    logger.info(f"Processed new land: {land.title}")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to process email {email_data.get('source_email_id')}: {str(e)}")
+                    db.session.rollback()
+                    continue
+            
+            logger.info(f"Gmail ingestion completed. Processed {processed_count} new properties")
+            return processed_count
+            
+        except Exception as e:
+            logger.error(f"Gmail ingestion failed: {str(e)}")
+            return 0
+import os
+import logging
+import hashlib
+from datetime import datetime, timezone
+from typing import List, Dict, Optional, Any
+from imapclient import IMAPClient
+from email import message_from_bytes
+from email.header import decode_header
+from utils.email_parser import EmailParser
+from models import Land
+from app import db
+from config import Config
+
+logger = logging.getLogger(__name__)
+
+class IMAPService:
+    def __init__(self):
+        self.host = Config.IMAP_HOST
+        self.port = Config.IMAP_PORT
+        self.ssl = Config.IMAP_SSL
+        self.user = Config.IMAP_USER
+        self.password = Config.IMAP_PASSWORD
+        self.folder = Config.IMAP_FOLDER
+        self.search_query = Config.IMAP_SEARCH_QUERY
+        self.max_emails = Config.MAX_EMAILS_PER_RUN
+        self.email_parser = EmailParser()
+        self.last_seen_uid = self._get_last_seen_uid()
+    
+    def _get_last_seen_uid(self) -> int:
+        """Get the last processed UID from database to avoid reprocessing"""
+        try:
+            # Check if we have a settings table or use a simple file
+            uid_file = ".last_seen_uid"
+            if os.path.exists(uid_file):
+                with open(uid_file, 'r') as f:
+                    return int(f.read().strip() or "0")
+            return 0
+        except Exception:
+            return 0
+    
+    def _save_last_seen_uid(self, uid: int):
+        """Save the last processed UID"""
+        try:
+            with open(".last_seen_uid", 'w') as f:
+                f.write(str(uid))
+        except Exception as e:
+            logger.error(f"Failed to save last UID: {e}")
+    
+    def authenticate(self) -> bool:
+        """Test IMAP connection and authentication"""
+        try:
+            if not self.user or not self.password:
+                logger.error("IMAP credentials not configured")
+                return False
+            
+            with IMAPClient(self.host, port=self.port, ssl=self.ssl) as client:
+                client.login(self.user, self.password)
+                logger.info(f"IMAP authentication successful for {self.user}")
+                return True
+        except Exception as e:
+            logger.error(f"IMAP authentication failed: {str(e)}")
+            return False
+    
+    def _decode_header_value(self, value: str) -> str:
+        """Decode email header value"""
+        try:
+            decoded_parts = decode_header(value)
+            result = []
+            for part, encoding in decoded_parts:
+                if isinstance(part, bytes):
+                    if encoding:
+                        result.append(part.decode(encoding, errors='ignore'))
+                    else:
+                        result.append(part.decode('utf-8', errors='ignore'))
+                else:
+                    result.append(part)
+            return ' '.join(result)
+        except Exception:
+            return value
+    
+    def _extract_html_parts(self, msg) -> List[str]:
+        """Extract HTML parts from email message"""
+        html_parts = []
+        
+        if msg.is_multipart():
+            for part in msg.walk():
+                content_type = part.get_content_type()
+                if content_type == "text/html":
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        html_parts.append(payload.decode('utf-8', errors='ignore'))
+        else:
+            if msg.get_content_type() == "text/html":
+                payload = msg.get_payload(decode=True)
+                if payload:
+                    html_parts.append(payload.decode('utf-8', errors='ignore'))
+        
+        return html_parts
+    
+    def _extract_text_parts(self, msg) -> str:
+        """Extract plain text parts from email message"""
+        text_parts = []
+        
+        if msg.is_multipart():
+            for part in msg.walk():
+                content_type = part.get_content_type()
+                if content_type == "text/plain":
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        text_parts.append(payload.decode('utf-8', errors='ignore'))
+        else:
+            if msg.get_content_type() == "text/plain":
+                payload = msg.get_payload(decode=True)
+                if payload:
+                    text_parts.append(payload.decode('utf-8', errors='ignore'))
+        
+        return '\n'.join(text_parts)
+    
+    def get_idealista_emails(self, max_results: int = None) -> List[Dict]:
+        """Fetch and parse Idealista emails via IMAP"""
+        if not self.user or not self.password:
+            logger.error("IMAP credentials not configured")
+            return []
+        
+        email_data = []
+        max_results = max_results or self.max_emails
+        
+        try:
+            with IMAPClient(self.host, port=self.port, ssl=self.ssl) as client:
+                # Login
+                client.login(self.user, self.password)
+                logger.info(f"Connected to IMAP server as {self.user}")
+                
+                # Select the folder/label
+                try:
+                    client.select_folder(self.folder, readonly=True)
+                    logger.info(f"Selected folder: {self.folder}")
+                except Exception as e:
+                    # If label doesn't exist, try INBOX
+                    logger.warning(f"Folder '{self.folder}' not found, trying INBOX")
+                    client.select_folder("INBOX", readonly=True)
+                
+                # Search for emails
+                if self.search_query == "ALL":
+                    # Get all UIDs
+                    uids = client.search(['ALL'])
+                elif self.search_query == "UNSEEN":
+                    uids = client.search(['UNSEEN'])
+                else:
+                    # Custom search query
+                    uids = client.search([self.search_query])
+                
+                # Filter only new UIDs
+                if self.last_seen_uid > 0:
+                    uids = [uid for uid in uids if uid > self.last_seen_uid]
+                
+                # Sort and limit
+                uids = sorted(uids)[:max_results]
+                
+                if not uids:
+                    logger.info("No new emails found")
+                    return []
+                
+                logger.info(f"Found {len(uids)} new emails to process")
+                
+                # Fetch emails
+                fetch_data = client.fetch(uids, ['RFC822', 'INTERNALDATE', 'FLAGS'])
+                
+                for uid in uids:
+                    try:
+                        raw_email = fetch_data[uid][b'RFC822']
+                        msg = message_from_bytes(raw_email)
+                        internal_date = fetch_data[uid][b'INTERNALDATE']
+                        
+                        # Get subject
+                        subject = self._decode_header_value(msg.get('Subject', ''))
+                        
+                        # Skip if not Idealista email
+                        if 'idealista' not in subject.lower():
+                            continue
+                        
+                        # Extract HTML content
+                        html_parts = self._extract_html_parts(msg)
+                        html_body = '\n'.join(html_parts) if html_parts else ''
+                        
+                        # If no HTML, try text
+                        if not html_body:
+                            text_body = self._extract_text_parts(msg)
+                            if text_body:
+                                html_body = text_body
+                        
+                        if not html_body:
+                            logger.warning(f"No content found in email UID {uid}")
+                            continue
+                        
+                        # Parse the email content
+                        email_content = {
+                            'subject': subject,
+                            'body': html_body,
+                            'message_id': str(uid)
+                        }
+                        
+                        parsed_data = self.email_parser.parse_idealista_email(email_content)
+                        
+                        if parsed_data:
+                            # Generate unique ID based on email UID
+                            parsed_data['source_email_id'] = f"imap_{uid}"
+                            parsed_data['email_received_at'] = internal_date
+                            email_data.append(parsed_data)
+                            logger.info(f"Successfully parsed email UID {uid}: {subject[:50]}...")
+                        else:
+                            logger.warning(f"Could not parse Idealista data from email UID {uid}")
+                        
+                        # Update last seen UID
+                        self.last_seen_uid = max(self.last_seen_uid, uid)
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to process email UID {uid}: {str(e)}")
+                        continue
+                
+                # Save the last seen UID
+                if self.last_seen_uid > 0:
+                    self._save_last_seen_uid(self.last_seen_uid)
+                    logger.info(f"Saved last seen UID: {self.last_seen_uid}")
+                
+                logger.info(f"Successfully processed {len(email_data)} Idealista emails")
+                
+        except Exception as e:
+            logger.error(f"Failed to fetch emails via IMAP: {str(e)}")
+        
+        return email_data
+    
+    def run_ingestion(self) -> int:
+        """Main method to run email ingestion via IMAP"""
+        try:
+            logger.info("Starting IMAP ingestion process")
+            
+            # Fetch and parse emails
+            emails = self.get_idealista_emails()
+            
+            if not emails:
+                logger.warning("No emails found for ingestion")
+                return 0
+            
+            # Import here to avoid circular imports
+            from services.enrichment_service import EnrichmentService
+            
+            processed_count = 0
+            for email_data in emails:
+                try:
+                    # Check if already exists
+                    existing = Land.query.filter_by(
+                        source_email_id=email_data['source_email_id']
+                    ).first()
+                    
+                    if existing:
+                        logger.debug(f"Email {email_data['source_email_id']} already processed")
+                        continue
+                    
+                    # Create new land record
+                    land = Land(
+                        source_email_id=email_data['source_email_id'],
+                        title=email_data.get('title'),
+                        url=email_data.get('url'),
+                        price=email_data.get('price'),
+                        area=email_data.get('area'),
+                        municipality=email_data.get('municipality'),
+                        land_type=email_data.get('land_type'),
+                        description=email_data.get('description'),
+                        legal_status=email_data.get('legal_status')
+                    )
+                    
+                    db.session.add(land)
+                    db.session.commit()
+                    
+                    # Enrich the land data
+                    enrichment_service = EnrichmentService()
+                    enrichment_service.enrich_land(land.id)
+                    
+                    processed_count += 1
+                    logger.info(f"Processed new land: {land.title}")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to process email {email_data.get('source_email_id')}: {str(e)}")
+                    db.session.rollback()
+                    continue
+            
+            logger.info(f"IMAP ingestion completed. Processed {processed_count} new properties")
+            return processed_count
+            
+        except Exception as e:
+            logger.error(f"IMAP ingestion failed: {str(e)}")
+            return 0# Services package initialization
+import os
+import logging
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+import atexit
+
+logger = logging.getLogger(__name__)
+
+scheduler = None
+
+def init_scheduler(app):
+    """Initialize the background scheduler"""
+    global scheduler
+    
+    if scheduler is not None:
+        return scheduler
+    
+    try:
+        scheduler = BackgroundScheduler()
+        
+        # Schedule ingestion for 7:00 AM and 7:00 PM CET
+        scheduler.add_job(
+            func=run_scheduled_ingestion,
+            trigger=CronTrigger(hour=7, minute=0, timezone='Europe/Madrid'),
+            id='morning_ingestion',
+            name='Morning Gmail Ingestion',
+            replace_existing=True
+        )
+        
+        scheduler.add_job(
+            func=run_scheduled_ingestion,
+            trigger=CronTrigger(hour=19, minute=0, timezone='Europe/Madrid'),
+            id='evening_ingestion',
+            name='Evening Gmail Ingestion',
+            replace_existing=True
+        )
+        
+        scheduler.start()
+        
+        # Shut down the scheduler when exiting the app
+        atexit.register(lambda: scheduler.shutdown())
+        
+        logger.info("Scheduler initialized with ingestion jobs at 07:00 and 19:00 CET")
+        return scheduler
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize scheduler: {str(e)}")
+        return None
+
+def run_scheduled_ingestion():
+    """Run the scheduled ingestion job"""
+    try:
+        from config import Config
+        
+        if Config.EMAIL_BACKEND == "imap":
+            logger.info("Starting scheduled IMAP ingestion")
+            from services.imap_service import IMAPService
+            service = IMAPService()
+            processed_count = service.run_ingestion()
+        else:
+            logger.info("Starting scheduled Gmail API ingestion")
+            from services.gmail_service import GmailService
+            service = GmailService()
+            processed_count = service.run_ingestion()
+        
+        logger.info(f"Scheduled ingestion completed. Processed {processed_count} properties")
+        
+    except Exception as e:
+        logger.error(f"Scheduled ingestion failed: {str(e)}")
+
+def get_scheduler_status():
+    """Get current scheduler status"""
+    global scheduler
+    
+    if scheduler is None:
+        return {"status": "not_initialized"}
+    
+    jobs = []
+    for job in scheduler.get_jobs():
+        jobs.append({
+            "id": job.id,
+            "name": job.name,
+            "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+            "trigger": str(job.trigger)
+        })
+    
+    return {
+        "status": "running" if scheduler.running else "stopped",
+        "jobs": jobs
+    }
+import logging
+from typing import Dict, Optional
+from config import Config
+
+logger = logging.getLogger(__name__)
+
+class ScoringService:
+    def __init__(self):
+        self.weights = Config.DEFAULT_SCORING_WEIGHTS
+        self.load_custom_weights()
+    
+    def load_custom_weights(self):
+        """Load custom scoring weights from database"""
+        try:
+            from models import ScoringCriteria
+            
+            criteria = ScoringCriteria.query.filter_by(active=True).all()
+            if criteria:
+                custom_weights = {}
+                for criterion in criteria:
+                    custom_weights[criterion.criteria_name] = float(criterion.weight)
+                
+                # Update weights if we have custom ones
+                if custom_weights:
+                    self.weights.update(custom_weights)
+                    logger.info(f"Loaded custom scoring weights: {custom_weights}")
+            
+        except Exception as e:
+            logger.error(f"Failed to load custom weights: {str(e)}")
+    
+    def calculate_score(self, land) -> float:
+        """Calculate total score for a land based on all criteria"""
+        try:
+            scores = {}
+            
+            # Calculate individual scores
+            scores['infrastructure_basic'] = self._score_infrastructure_basic(land)
+            scores['infrastructure_extended'] = self._score_infrastructure_extended(land)
+            scores['transport'] = self._score_transport(land)
+            scores['environment'] = self._score_environment(land)
+            scores['neighborhood'] = self._score_neighborhood(land)
+            scores['services_quality'] = self._score_services_quality(land)
+            scores['legal_status'] = self._score_legal_status(land)
+            
+            # Calculate weighted total score
+            total_score = 0
+            total_weight = 0
+            
+            for criterion, score in scores.items():
+                if score is not None and criterion in self.weights:
+                    weight = self.weights[criterion]
+                    total_score += score * weight
+                    total_weight += weight
+            
+            # Normalize to 0-100 scale
+            if total_weight > 0:
+                final_score = (total_score / total_weight) * 100
+            else:
+                final_score = 0
+            
+            # Update land record
+            land.score_total = round(final_score, 2)
+            
+            # Store individual scores in JSONB fields for transparency
+            if not hasattr(land, 'score_breakdown'):
+                # We'll store this in the environment field for now
+                if not land.environment:
+                    land.environment = {}
+                land.environment['score_breakdown'] = scores
+            
+            logger.info(f"Calculated score for land {land.id}: {final_score}")
+            return final_score
+            
+        except Exception as e:
+            logger.error(f"Failed to calculate score for land {land.id}: {str(e)}")
+            return 0
+    
+    def _score_infrastructure_basic(self, land) -> Optional[float]:
+        """Score basic infrastructure (electricity, water, internet, gas)"""
+        try:
+            if not land.infrastructure_basic:
+                return None
+            
+            basic_infra = land.infrastructure_basic
+            score = 0
+            max_score = 4  # 4 basic utilities
+            
+            # Check for basic utilities mentions in description
+            description = (land.description or "").lower()
+            
+            utilities = {
+                'electricity': ['electricidad', 'luz', 'eléctrico'],
+                'water': ['agua', 'suministro agua', 'abastecimiento'],
+                'internet': ['internet', 'fibra', 'adsl', 'wifi'],
+                'gas': ['gas', 'butano', 'propano']
+            }
+            
+            for utility, keywords in utilities.items():
+                if basic_infra.get(utility) or any(kw in description for kw in keywords):
+                    score += 1
+            
+            return (score / max_score) * 100
+            
+        except Exception as e:
+            logger.error(f"Failed to score basic infrastructure: {str(e)}")
+            return None
+    
+    def _score_infrastructure_extended(self, land) -> Optional[float]:
+        """Score extended infrastructure (supermarket, school, restaurants, hospital)"""
+        try:
+            if not land.infrastructure_extended:
+                return None
+            
+            extended_infra = land.infrastructure_extended
+            score = 0
+            
+            # Score based on availability and distance
+            amenities = ['supermarket', 'school', 'restaurant', 'hospital']
+            
+            for amenity in amenities:
+                if extended_infra.get(f'{amenity}_available'):
+                    distance = extended_infra.get(f'{amenity}_distance', float('inf'))
+                    
+                    # Score based on distance (closer is better)
+                    if distance <= 1000:  # Within 1km
+                        score += 25
+                    elif distance <= 3000:  # Within 3km
+                        score += 15
+                    elif distance <= 5000:  # Within 5km
+                        score += 10
+                    else:
+                        score += 5
+            
+            return min(score, 100)  # Cap at 100
+            
+        except Exception as e:
+            logger.error(f"Failed to score extended infrastructure: {str(e)}")
+            return None
+    
+    def _score_transport(self, land) -> Optional[float]:
+        """Score transport accessibility"""
+        try:
+            if not land.transport:
+                return None
+            
+            transport = land.transport
+            score = 0
+            
+            # Score transport options
+            transport_options = {
+                'train_station': 30,
+                'bus_station': 20,
+                'airport': 25,
+                'highway': 25
+            }
+            
+            for option, max_points in transport_options.items():
+                if transport.get(f'{option}_available'):
+                    distance = transport.get(f'{option}_distance', float('inf'))
+                    
+                    # Score based on distance
+                    if distance <= 2000:  # Within 2km
+                        score += max_points
+                    elif distance <= 5000:  # Within 5km
+                        score += max_points * 0.7
+                    elif distance <= 10000:  # Within 10km
+                        score += max_points * 0.4
+                    else:
+                        score += max_points * 0.2
+            
+            return min(score, 100)  # Cap at 100
+            
+        except Exception as e:
+            logger.error(f"Failed to score transport: {str(e)}")
+            return None
+    
+    def _score_environment(self, land) -> Optional[float]:
+        """Score environment features"""
+        try:
+            if not land.environment:
+                return None
+            
+            environment = land.environment
+            score = 0
+            
+            # View bonuses
+            if environment.get('sea_view'):
+                score += 40
+            if environment.get('mountain_view'):
+                score += 30
+            if environment.get('forest_view'):
+                score += 20
+            
+            # Orientation bonus (south-facing is preferred in Spain)
+            orientation = environment.get('orientation', '').lower()
+            if 'south' in orientation:
+                score += 20
+            elif 'southeast' in orientation or 'southwest' in orientation:
+                score += 15
+            elif 'east' in orientation or 'west' in orientation:
+                score += 10
+            
+            return min(score, 100)  # Cap at 100
+            
+        except Exception as e:
+            logger.error(f"Failed to score environment: {str(e)}")
+            return None
+    
+    def _score_neighborhood(self, land) -> Optional[float]:
+        """Score neighborhood characteristics"""
+        try:
+            if not land.neighborhood:
+                return 50  # Default neutral score
+            
+            neighborhood = land.neighborhood
+            score = 50  # Start with neutral score
+            
+            # Price level impact
+            price_level = neighborhood.get('area_price_level', 'medium')
+            if price_level == 'high':
+                score += 20
+            elif price_level == 'medium':
+                score += 10
+            
+            # New houses nearby (indicates development)
+            if neighborhood.get('new_houses'):
+                score += 15
+            
+            # Noise level impact
+            noise_level = neighborhood.get('noise', 'medium')
+            if noise_level == 'low':
+                score += 15
+            elif noise_level == 'high':
+                score -= 15
+            
+            return min(max(score, 0), 100)  # Keep between 0-100
+            
+        except Exception as e:
+            logger.error(f"Failed to score neighborhood: {str(e)}")
+            return None
+    
+    def _score_services_quality(self, land) -> Optional[float]:
+        """Score quality of nearby services"""
+        try:
+            if not land.services_quality:
+                return None
+            
+            services = land.services_quality
+            score = 0
+            count = 0
+            
+            # Average ratings of nearby services
+            service_types = ['school_avg_rating', 'restaurant_avg_rating', 'cafe_avg_rating']
+            
+            for service_type in service_types:
+                rating = services.get(service_type)
+                if rating and rating > 0:
+                    # Convert rating (1-5 scale) to percentage
+                    score += (rating / 5) * 100
+                    count += 1
+            
+            if count > 0:
+                return score / count
+            else:
+                return None
+            
+        except Exception as e:
+            logger.error(f"Failed to score services quality: {str(e)}")
+            return None
+    
+    def _score_legal_status(self, land) -> Optional[float]:
+        """Score legal status"""
+        try:
+            legal_status = (land.legal_status or "").lower()
+            land_type = (land.land_type or "").lower()
+            
+            # Only developed and buildable are acceptable
+            if 'developed' in legal_status or land_type == 'developed':
+                return 100  # Fully developed land
+            elif 'buildable' in legal_status or land_type == 'buildable':
+                return 80   # Buildable land (some risk)
+            else:
+                return 0    # Rustic or other (not suitable)
+            
+        except Exception as e:
+            logger.error(f"Failed to score legal status: {str(e)}")
+            return None
+    
+    def update_weights(self, new_weights: Dict[str, float]) -> bool:
+        """Update scoring weights and rescore all lands"""
+        try:
+            from models import ScoringCriteria, Land
+            from app import db
+            
+            # Update or create criteria records
+            for criteria_name, weight in new_weights.items():
+                criterion = ScoringCriteria.query.filter_by(
+                    criteria_name=criteria_name
+                ).first()
+                
+                if criterion:
+                    criterion.weight = weight
+                else:
+                    criterion = ScoringCriteria(
+                        criteria_name=criteria_name,
+                        weight=weight
+                    )
+                    db.session.add(criterion)
+            
+            db.session.commit()
+            
+            # Update local weights
+            self.weights.update(new_weights)
+            
+            # Rescore all lands
+            lands = Land.query.all()
+            for land in lands:
+                self.calculate_score(land)
+            
+            db.session.commit()
+            
+            logger.info(f"Updated scoring weights and rescored {len(lands)} lands")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to update weights: {str(e)}")
+            return False
+    
+    def get_current_weights(self) -> Dict[str, float]:
+        """Get current scoring weights"""
+        return self.weights.copy()
+===== ROUTES =====
+import logging
+import os
+from flask import Blueprint, jsonify, request, send_from_directory
+from models import Land, ScoringCriteria
+from app import db
+
+logger = logging.getLogger(__name__)
+
+api_bp = Blueprint('api', __name__)
+
+@api_bp.route('/healthz')
+def health_check():
+    """API health check"""
+    return jsonify({"ok": True})
+
+@api_bp.route('/download/project')
+def download_project():
+    """Download project archive"""
+    try:
+        static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static')
+        return send_from_directory(static_dir, 'idealista-project.zip', as_attachment=True)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 404
+
+@api_bp.route('/ingest/email/run', methods=['POST'])
+def manual_ingestion():
+    """Manually trigger email ingestion"""
+    try:
+        from config import Config
+        
+        if Config.EMAIL_BACKEND == "imap":
+            from services.imap_service import IMAPService
+            service = IMAPService()
+            backend_name = "IMAP"
+        else:
+            from services.gmail_service import GmailService
+            service = GmailService()
+            backend_name = "Gmail API"
+        
+        processed_count = service.run_ingestion()
+        
+        return jsonify({
+            "success": True,
+            "processed_count": processed_count,
+            "backend": backend_name,
+            "message": f"Successfully processed {processed_count} new properties via {backend_name}"
+        })
+        
+    except Exception as e:
+        logger.error(f"Manual ingestion failed: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@api_bp.route('/lands')
+def get_lands():
+    """Get lands with optional filtering and sorting"""
+    try:
+        # Get query parameters
+        sort_by = request.args.get('sort', 'score_total')
+        sort_order = request.args.get('order', 'desc')
+        land_type_filter = request.args.get('filter')
+        limit = request.args.get('limit', 100, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        
+        # Build query
+        query = Land.query
+        
+        # Apply land type filter
+        if land_type_filter and land_type_filter in ['developed', 'buildable']:
+            query = query.filter(Land.land_type == land_type_filter)
+        
+        # Apply sorting
+        if hasattr(Land, sort_by):
+            sort_column = getattr(Land, sort_by)
+            if sort_order == 'asc':
+                query = query.order_by(sort_column.asc())
+            else:
+                query = query.order_by(sort_column.desc())
+        
+        # Apply pagination
+        lands = query.offset(offset).limit(limit).all()
+        
+        # Convert to JSON
+        lands_data = [land.to_dict() for land in lands]
+        
+        return jsonify({
+            "success": True,
+            "count": len(lands_data),
+            "lands": lands_data
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to get lands: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@api_bp.route('/lands/<int:land_id>')
+def get_land_detail(land_id):
+    """Get detailed information about a specific land"""
+    try:
+        land = Land.query.get(land_id)
+        
+        if not land:
+            return jsonify({
+                "success": False,
+                "error": "Land not found"
+            }), 404
+        
+        land_data = land.to_dict()
+        
+        # Add score breakdown if available
+        if land.environment and 'score_breakdown' in land.environment:
+            land_data['score_breakdown'] = land.environment['score_breakdown']
+        
+        return jsonify({
+            "success": True,
+            "land": land_data
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to get land detail {land_id}: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@api_bp.route('/criteria')
+def get_criteria():
+    """Get current scoring criteria weights"""
+    try:
+        from services.scoring_service import ScoringService
+        
+        scoring_service = ScoringService()
+        weights = scoring_service.get_current_weights()
+        
+        return jsonify({
+            "success": True,
+            "criteria": weights
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to get criteria: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@api_bp.route('/criteria', methods=['PUT'])
+def update_criteria():
+    """Update scoring criteria weights"""
+    try:
+        data = request.get_json()
+        
+        if not data or 'criteria' not in data:
+            return jsonify({
+                "success": False,
+                "error": "Missing criteria data"
+            }), 400
+        
+        weights = data['criteria']
+        
+        # Validate weights
+        for criteria_name, weight in weights.items():
+            if not isinstance(weight, (int, float)) or weight < 0:
+                return jsonify({
+                    "success": False,
+                    "error": f"Invalid weight for {criteria_name}: must be a positive number"
+                }), 400
+        
+        # Update weights
+        from services.scoring_service import ScoringService
+        scoring_service = ScoringService()
+        
+        if scoring_service.update_weights(weights):
+            return jsonify({
+                "success": True,
+                "message": "Criteria updated successfully and all lands rescored"
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Failed to update criteria"
+            }), 500
+        
+    except Exception as e:
+        logger.error(f"Failed to update criteria: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@api_bp.route('/scheduler/status')
+def scheduler_status():
+    """Get scheduler status"""
+    try:
+        from services.scheduler_service import get_scheduler_status
+        
+        status = get_scheduler_status()
+        
+        return jsonify({
+            "success": True,
+            "scheduler": status
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to get scheduler status: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@api_bp.route('/stats')
+def get_stats():
+    """Get application statistics"""
+    try:
+        # Basic statistics
+        total_lands = Land.query.count()
+        developed_lands = Land.query.filter_by(land_type='developed').count()
+        buildable_lands = Land.query.filter_by(land_type='buildable').count()
+        
+        # Score statistics
+        avg_score = db.session.query(db.func.avg(Land.score_total)).scalar()
+        max_score = db.session.query(db.func.max(Land.score_total)).scalar()
+        min_score = db.session.query(db.func.min(Land.score_total)).scalar()
+        
+        # Municipality distribution
+        municipality_stats = db.session.query(
+            Land.municipality,
+            db.func.count(Land.id)
+        ).group_by(Land.municipality).all()
+        
+        municipality_distribution = {
+            municipality: count for municipality, count in municipality_stats if municipality
+        }
+        
+        return jsonify({
+            "success": True,
+            "stats": {
+                "total_lands": total_lands,
+                "land_types": {
+                    "developed": developed_lands,
+                    "buildable": buildable_lands
+                },
+                "scores": {
+                    "average": float(avg_score) if avg_score else 0,
+                    "maximum": float(max_score) if max_score else 0,
+                    "minimum": float(min_score) if min_score else 0
+                },
+                "municipality_distribution": municipality_distribution
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to get stats: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+# Routes package initialization
+import logging
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from sqlalchemy import or_, and_
+from models import Land, ScoringCriteria
+from app import db
+
+logger = logging.getLogger(__name__)
+
+main_bp = Blueprint('main', __name__)
+
+@main_bp.route('/')
+def index():
+    """Home page redirects to lands listing"""
+    return redirect(url_for('main.lands'))
+
+@main_bp.route('/lands')
+def lands():
+    """Main lands listing page with filtering and sorting"""
+    try:
+        # Get query parameters
+        sort_by = request.args.get('sort', 'score_total')
+        sort_order = request.args.get('order', 'desc')
+        land_type_filter = request.args.get('land_type', '')
+        municipality_filter = request.args.get('municipality', '')
+        min_price = request.args.get('min_price', type=float)
+        max_price = request.args.get('max_price', type=float)
+        min_area = request.args.get('min_area', type=float)
+        max_area = request.args.get('max_area', type=float)
+        search_query = request.args.get('search', '')
+        
+        # Build query
+        query = Land.query
+        
+        # Apply filters
+        if land_type_filter:
+            query = query.filter(Land.land_type == land_type_filter)
+        
+        if municipality_filter:
+            query = query.filter(Land.municipality.ilike(f'%{municipality_filter}%'))
+        
+        if min_price is not None:
+            query = query.filter(Land.price >= min_price)
+        
+        if max_price is not None:
+            query = query.filter(Land.price <= max_price)
+        
+        if min_area is not None:
+            query = query.filter(Land.area >= min_area)
+        
+        if max_area is not None:
+            query = query.filter(Land.area <= max_area)
+        
+        if search_query:
+            search_pattern = f'%{search_query}%'
+            query = query.filter(
+                or_(
+                    Land.title.ilike(search_pattern),
+                    Land.description.ilike(search_pattern),
+                    Land.municipality.ilike(search_pattern)
+                )
+            )
+        
+        # Apply sorting
+        if hasattr(Land, sort_by):
+            sort_column = getattr(Land, sort_by)
+            if sort_order == 'asc':
+                query = query.order_by(sort_column.asc())
+            else:
+                query = query.order_by(sort_column.desc())
+        
+        # Get results
+        lands = query.all()
+        
+        # Get unique municipalities for filter dropdown
+        municipalities = db.session.query(Land.municipality).distinct().filter(
+            Land.municipality.isnot(None)
+        ).all()
+        municipalities = [m[0] for m in municipalities if m[0]]
+        municipalities.sort()
+        
+        return render_template(
+            'lands.html',
+            lands=lands,
+            municipalities=municipalities,
+            current_filters={
+                'sort': sort_by,
+                'order': sort_order,
+                'land_type': land_type_filter,
+                'municipality': municipality_filter,
+                'min_price': min_price,
+                'max_price': max_price,
+                'min_area': min_area,
+                'max_area': max_area,
+                'search': search_query
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to load lands page: {str(e)}")
+        flash(f"Error loading lands: {str(e)}", 'error')
+        return render_template('lands.html', lands=[], municipalities=[])
+
+@main_bp.route('/lands/<int:land_id>')
+def land_detail(land_id):
+    """Detailed view of a specific land"""
+    try:
+        land = Land.query.get_or_404(land_id)
+        
+        # Get score breakdown from environment field
+        score_breakdown = {}
+        if land.environment and 'score_breakdown' in land.environment:
+            score_breakdown = land.environment['score_breakdown']
+        
+        return render_template(
+            'land_detail.html',
+            land=land,
+            score_breakdown=score_breakdown
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to load land detail {land_id}: {str(e)}")
+        flash(f"Error loading land details: {str(e)}", 'error')
+        return redirect(url_for('main.lands'))
+
+@main_bp.route('/criteria')
+def criteria():
+    """Scoring criteria management page"""
+    try:
+        criteria = ScoringCriteria.query.filter_by(active=True).all()
+        
+        # If no criteria exist, create defaults
+        if not criteria:
+            from config import Config
+            for criteria_name, weight in Config.DEFAULT_SCORING_WEIGHTS.items():
+                criterion = ScoringCriteria(
+                    criteria_name=criteria_name,
+                    weight=weight
+                )
+                db.session.add(criterion)
+            db.session.commit()
+            criteria = ScoringCriteria.query.filter_by(active=True).all()
+        
+        return render_template('criteria.html', criteria=criteria)
+        
+    except Exception as e:
+        logger.error(f"Failed to load criteria page: {str(e)}")
+        flash(f"Error loading criteria: {str(e)}", 'error')
+        return render_template('criteria.html', criteria=[])
+
+@main_bp.route('/criteria/update', methods=['POST'])
+def update_criteria():
+    """Update scoring criteria weights"""
+    try:
+        # Get form data
+        weights = {}
+        for key, value in request.form.items():
+            if key.startswith('weight_'):
+                criteria_name = key.replace('weight_', '')
+                try:
+                    weights[criteria_name] = float(value)
+                except ValueError:
+                    flash(f"Invalid weight value for {criteria_name}", 'error')
+                    return redirect(url_for('main.criteria'))
+        
+        # Update weights using scoring service
+        from services.scoring_service import ScoringService
+        scoring_service = ScoringService()
+        
+        if scoring_service.update_weights(weights):
+            flash('Scoring criteria updated successfully. All lands have been rescored.', 'success')
+        else:
+            flash('Failed to update scoring criteria', 'error')
+        
+        return redirect(url_for('main.criteria'))
+        
+    except Exception as e:
+        logger.error(f"Failed to update criteria: {str(e)}")
+        flash(f"Error updating criteria: {str(e)}", 'error')
+        return redirect(url_for('main.criteria'))
+
+@main_bp.route('/export.csv')
+def export_csv():
+    """Export current land selection to CSV"""
+    try:
+        from flask import make_response
+        import csv
+        import io
+        
+        # Get same filters as lands page
+        land_type_filter = request.args.get('land_type', '')
+        municipality_filter = request.args.get('municipality', '')
+        min_price = request.args.get('min_price', type=float)
+        max_price = request.args.get('max_price', type=float)
+        min_area = request.args.get('min_area', type=float)
+        max_area = request.args.get('max_area', type=float)
+        search_query = request.args.get('search', '')
+        
+        # Build query with same filters
+        query = Land.query
+        
+        if land_type_filter:
+            query = query.filter(Land.land_type == land_type_filter)
+        
+        if municipality_filter:
+            query = query.filter(Land.municipality.ilike(f'%{municipality_filter}%'))
+        
+        if min_price is not None:
+            query = query.filter(Land.price >= min_price)
+        
+        if max_price is not None:
+            query = query.filter(Land.price <= max_price)
+        
+        if min_area is not None:
+            query = query.filter(Land.area >= min_area)
+        
+        if max_area is not None:
+            query = query.filter(Land.area <= max_area)
+        
+        if search_query:
+            search_pattern = f'%{search_query}%'
+            query = query.filter(
+                or_(
+                    Land.title.ilike(search_pattern),
+                    Land.description.ilike(search_pattern),
+                    Land.municipality.ilike(search_pattern)
+                )
+            )
+        
+        lands = query.order_by(Land.score_total.desc()).all()
+        
+        # Create CSV
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Header
+        writer.writerow([
+            'ID', 'Title', 'URL', 'Price (€)', 'Area (m²)', 'Municipality',
+            'Land Type', 'Legal Status', 'Score Total', 'Latitude', 'Longitude',
+            'Created At'
+        ])
+        
+        # Data rows
+        for land in lands:
+            writer.writerow([
+                land.id,
+                land.title,
+                land.url,
+                land.price,
+                land.area,
+                land.municipality,
+                land.land_type,
+                land.legal_status,
+                land.score_total,
+                land.location_lat,
+                land.location_lon,
+                land.created_at.isoformat() if land.created_at else ''
+            ])
+        
+        # Create response
+        response = make_response(output.getvalue())
+        response.headers['Content-Type'] = 'text/csv'
+        response.headers['Content-Disposition'] = 'attachment; filename=idealista_lands.csv'
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Failed to export CSV: {str(e)}")
+        flash(f"Error exporting CSV: {str(e)}", 'error')
+        return redirect(url_for('main.lands'))
+
+@main_bp.route('/healthz')
+def health_check():
+    """Health check endpoint"""
+    return jsonify({"ok": True})
