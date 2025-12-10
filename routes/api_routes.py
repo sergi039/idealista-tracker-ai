@@ -741,8 +741,8 @@ def get_stats():
             municipality: count for municipality, count in municipality_stats if municipality
         }
         
-        # Get last sync information
-        last_sync = SyncHistory.query.order_by(SyncHistory.completed_at.desc()).first()
+        # Get last sync information (nulls last to get most recent completed sync)
+        last_sync = SyncHistory.query.order_by(SyncHistory.completed_at.desc().nullslast()).first()
         last_sync_info = None
         
         if last_sync:
