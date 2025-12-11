@@ -194,6 +194,40 @@ def land_detail(land_id):
         flash(f"Error loading land details: {str(e)}", 'error')
         return redirect(url_for('main.lands'))
 
+@main_bp.route('/map')
+def map_view():
+    """Interactive map view of all properties with coordinates"""
+    try:
+        # Fetch all lands with valid coordinates
+        lands = Land.query.filter(
+            Land.location_lat.isnot(None),
+            Land.location_lon.isnot(None),
+            Land.listing_status != 'removed'
+        ).all()
+
+        # Prepare data for map markers
+        markers = []
+        for land in lands:
+            markers.append({
+                'id': land.id,
+                'lat': float(land.location_lat),
+                'lon': float(land.location_lon),
+                'title': land.title or f'Property #{land.id}',
+                'price': float(land.price) if land.price else None,
+                'area': float(land.area) if land.area else None,
+                'score': float(land.score_total) if land.score_total else None,
+                'land_type': land.land_type,
+                'url': land.url,
+                'municipality': land.municipality
+            })
+
+        return render_template('map.html', markers=markers)
+
+    except Exception as e:
+        logger.error(f"Failed to load map view: {str(e)}")
+        flash(f"Error loading map: {str(e)}", 'error')
+        return render_template('map.html', markers=[])
+
 @main_bp.route('/criteria')
 def criteria():
     """Scoring criteria management page with dual scoring profiles"""

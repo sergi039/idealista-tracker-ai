@@ -532,8 +532,14 @@
                                             </td>
                                             <td>
                                                 <div class="d-flex gap-1">
+                                                    {% if land.location_lat and land.location_lon %}
+                                                        <a href="{{ url_for('main.map_view') }}?focus={{ land.id }}"
+                                                           class="btn btn-info btn-sm" title="Show on Map">
+                                                            <i class="fas fa-map-marker-alt"></i>
+                                                        </a>
+                                                    {% endif %}
                                                     {% if land.url %}
-                                                        <a href="{{ land.url }}" target="_blank" 
+                                                        <a href="{{ land.url }}" target="_blank"
                                                            class="btn btn-success btn-sm" title="View on Idealista">
                                                             <i class="fas fa-home"></i>
                                                         </a>

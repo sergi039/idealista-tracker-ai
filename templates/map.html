@@ -1,0 +1,287 @@
+{% extends "base.html" %}
+
+{% block title %}Map - Idealista Land Watch{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h1>
+                <i class="fas fa-map me-2"></i>
+                Properties Map
+                <span class="badge bg-secondary">{{ markers|length }}</span>
+            </h1>
+            <a href="{{ url_for('main.lands') }}" class="btn btn-outline-secondary">
+                <i class="fas fa-list me-1"></i>List View
+            </a>
+        </div>
+
+        <div class="card">
+            <div class="card-body p-0">
+                <div id="map" style="height: calc(100vh - 250px); min-height: 500px; border-radius: 0.375rem;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<!-- Leaflet MarkerCluster CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- Leaflet MarkerCluster JS -->
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+<style>
+    /* Custom popup styling */
+    .leaflet-popup-content-wrapper {
+        background: #212529;
+        color: #fff;
+        border-radius: 8px;
+    }
+    .leaflet-popup-tip {
+        background: #212529;
+    }
+    .leaflet-popup-content {
+        margin: 12px 16px;
+        min-width: 250px;
+    }
+    .property-popup h6 {
+        margin-bottom: 10px;
+        font-weight: 600;
+        color: #fff;
+    }
+    .property-popup .info-row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 6px;
+        font-size: 0.9em;
+    }
+    .property-popup .info-label {
+        color: #adb5bd;
+    }
+    .property-popup .info-value {
+        font-weight: 500;
+    }
+    .property-popup .links {
+        margin-top: 12px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .property-popup .links a {
+        font-size: 0.8em;
+        padding: 4px 10px;
+    }
+    .score-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-weight: bold;
+        font-size: 0.85em;
+    }
+    .score-high { background-color: #198754; color: white; }
+    .score-medium { background-color: #ffc107; color: black; }
+    .score-low { background-color: #dc3545; color: white; }
+    .type-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 0.8em;
+    }
+    .type-developed { background-color: #198754; color: white; }
+    .type-buildable { background-color: #ffc107; color: black; }
+
+    /* Cluster styling */
+    .marker-cluster-small {
+        background-color: rgba(110, 204, 57, 0.6);
+    }
+    .marker-cluster-small div {
+        background-color: rgba(110, 204, 57, 0.8);
+    }
+    .marker-cluster-medium {
+        background-color: rgba(240, 194, 12, 0.6);
+    }
+    .marker-cluster-medium div {
+        background-color: rgba(240, 194, 12, 0.8);
+    }
+    .marker-cluster-large {
+        background-color: rgba(241, 128, 23, 0.6);
+    }
+    .marker-cluster-large div {
+        background-color: rgba(241, 128, 23, 0.8);
+    }
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Property markers data from Flask
+    const markers = {{ markers | tojson | safe }};
+
+    // Initialize map centered on Asturias
+    const map = L.map('map').setView([43.36, -5.85], 9);
+
+    // Base layers
+    const streetMap = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    });
+
+    const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        attribution: '&copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics'
+    });
+
+    const hybrid = L.tileLayer('https://{s}.google.com/vt/lyrs=s,h&x={x}&y={y}&z={z}', {
+        subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+        attribution: '&copy; Google'
+    });
+
+    // Add default layer
+    streetMap.addTo(map);
+
+    // Layer control
+    const baseLayers = {
+        "Street Map": streetMap,
+        "Satellite": satellite,
+        "Hybrid": hybrid
+    };
+
+    L.control.layers(baseLayers, null, { position: 'topright' }).addTo(map);
+
+    // Create marker cluster group
+    const markerCluster = L.markerClusterGroup({
+        maxClusterRadius: 50,
+        spiderfyOnMaxZoom: true,
+        showCoverageOnHover: false,
+        zoomToBoundsOnClick: true
+    });
+
+    // Helper function to format price
+    function formatPrice(price) {
+        if (!price) return 'N/A';
+        return new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(price);
+    }
+
+    // Helper function to format area
+    function formatArea(area) {
+        if (!area) return 'N/A';
+        return new Intl.NumberFormat('es-ES').format(area) + ' m²';
+    }
+
+    // Helper function to get score badge
+    function getScoreBadge(score) {
+        if (!score) return '<span class="text-muted">No score</span>';
+        const scoreClass = score >= 70 ? 'score-high' : score >= 50 ? 'score-medium' : 'score-low';
+        return `<span class="score-badge ${scoreClass}">${score.toFixed(1)}</span>`;
+    }
+
+    // Helper function to get type badge
+    function getTypeBadge(landType) {
+        if (!landType) return '';
+        const typeClass = landType === 'developed' ? 'type-developed' : 'type-buildable';
+        return `<span class="type-badge ${typeClass}">${landType.charAt(0).toUpperCase() + landType.slice(1)}</span>`;
+    }
+
+    // Create custom icon
+    function createIcon(score) {
+        const color = !score ? '#6c757d' : score >= 70 ? '#198754' : score >= 50 ? '#ffc107' : '#dc3545';
+        return L.divIcon({
+            html: `<div style="background-color: ${color}; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
+            className: 'custom-marker',
+            iconSize: [16, 16],
+            iconAnchor: [8, 8],
+            popupAnchor: [0, -8]
+        });
+    }
+
+    // Add markers
+    markers.forEach(function(prop) {
+        const popupContent = `
+            <div class="property-popup">
+                <h6>${prop.title}</h6>
+                <div class="d-flex gap-2 mb-2">
+                    ${getScoreBadge(prop.score)}
+                    ${getTypeBadge(prop.land_type)}
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Price:</span>
+                    <span class="info-value">${formatPrice(prop.price)}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Area:</span>
+                    <span class="info-value">${formatArea(prop.area)}</span>
+                </div>
+                ${prop.municipality ? `
+                <div class="info-row">
+                    <span class="info-label">Municipality:</span>
+                    <span class="info-value">${prop.municipality}</span>
+                </div>
+                ` : ''}
+                <div class="links">
+                    <a href="/lands/${prop.id}" class="btn btn-primary btn-sm">
+                        <i class="fas fa-eye me-1"></i>Details
+                    </a>
+                    ${prop.url ? `
+                    <a href="${prop.url}" target="_blank" class="btn btn-success btn-sm">
+                        <i class="fas fa-home me-1"></i>Idealista
+                    </a>
+                    ` : ''}
+                    <a href="https://www.google.com/maps?q=${prop.lat},${prop.lon}" target="_blank" class="btn btn-outline-light btn-sm">
+                        <i class="fas fa-map-marker-alt me-1"></i>Google Maps
+                    </a>
+                </div>
+            </div>
+        `;
+
+        const marker = L.marker([prop.lat, prop.lon], {
+            icon: createIcon(prop.score)
+        }).bindPopup(popupContent, {
+            maxWidth: 300
+        });
+
+        markerCluster.addLayer(marker);
+    });
+
+    map.addLayer(markerCluster);
+
+    // Check for focus parameter in URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const focusId = urlParams.get('focus');
+
+    if (focusId) {
+        // Find the focused marker and zoom to it
+        const focusMarker = markers.find(m => m.id == focusId);
+        if (focusMarker) {
+            map.setView([focusMarker.lat, focusMarker.lon], 13);
+            // Find and open the popup for this marker
+            markerCluster.eachLayer(function(layer) {
+                if (layer.getLatLng().lat === focusMarker.lat && layer.getLatLng().lng === focusMarker.lon) {
+                    // Zoom to marker first, then open popup after a short delay
+                    setTimeout(() => {
+                        markerCluster.zoomToShowLayer(layer, function() {
+                            layer.openPopup();
+                        });
+                    }, 300);
+                }
+            });
+        } else {
+            // Fallback to fit all markers
+            if (markers.length > 0) {
+                const bounds = L.latLngBounds(markers.map(m => [m.lat, m.lon]));
+                map.fitBounds(bounds, { padding: [20, 20] });
+            }
+        }
+    } else {
+        // Fit bounds to show all markers
+        if (markers.length > 0) {
+            const bounds = L.latLngBounds(markers.map(m => [m.lat, m.lon]));
+            map.fitBounds(bounds, { padding: [20, 20] });
+        }
+    }
+});
+</script>
+{% endblock %}
