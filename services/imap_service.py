@@ -180,8 +180,6 @@ class IMAPService:
                         
                         # Skip non-property emails (explicit blacklist)
                         skip_subjects = [
-                            'One of your favourites is no longer listed',
-                            'Tu favorito ya no está disponible',
                             'Welcome to Idealista',
                             'Bienvenido a Idealista',
                             'Contactos que ha recibido',
@@ -208,6 +206,27 @@ class IMAPService:
                             logger.info(f"Skipping non-property email: {subject[:50]}")
                             continue
                         
+                        # Check for "no longer listed" emails first
+                        no_longer_subjects = [
+                            'One of your favourites is no longer listed',
+                            'Tu favorito ya no está disponible'
+                        ]
+
+                        is_no_longer_listed = any(nl in subject for nl in no_longer_subjects)
+                        if is_no_longer_listed:
+                            # Handle "no longer listed" email
+                            email_content = {'subject': subject, 'body': body, 'message_id': f"imap_{uid}"}
+                            no_longer_data = self.email_parser.parse_no_longer_listed_email(email_content)
+                            if no_longer_data:
+                                email_data.append({
+                                    'source_email_id': f"imap_{uid}",
+                                    'email_received_at': fetch_data[uid][b'INTERNALDATE'],
+                                    'type': 'no_longer_listed',
+                                    'url': no_longer_data['url']
+                                })
+                                logger.info(f"Found 'no longer listed' email for URL: {no_longer_data['url']}")
+                            continue
+
                         # Only process property listing emails (whitelist approach)
                         valid_subjects = [
                             'New plot of land in your search',
@@ -215,7 +234,7 @@ class IMAPService:
                             'Price reduction in your search',
                             'Bajada de precio en tu búsqueda'
                         ]
-                        
+
                         is_valid = any(valid_text in subject for valid_text in valid_subjects)
                         if not is_valid:
                             logger.warning(f"Unknown email type, skipping: {subject[:50]}")
@@ -302,24 +321,48 @@ class IMAPService:
             from services.enrichment_service import EnrichmentService
             
             processed_count = 0
+            price_updated_count = 0
+            expired_count = 0
             for email_data in emails:
                 try:
                     # Check if email already processed
                     existing_email = Land.query.filter_by(
                         source_email_id=email_data['source_email_id']
                     ).first()
-                    
+
                     if existing_email:
                         logger.debug(f"Email {email_data['source_email_id']} already processed")
                         continue
-                    
+
+                    # Handle "no longer listed" emails
+                    if email_data.get('type') == 'no_longer_listed':
+                        url = email_data.get('url')
+                        if url:
+                            existing_property = Land.query.filter_by(url=url).first()
+                            if existing_property and existing_property.listing_status == 'active':
+                                existing_property.listing_status = 'removed'
+                                existing_property.listing_removed_date = datetime.utcnow()
+
+                                # Create history snapshot for favorites
+                                if existing_property.is_favorite:
+                                    snapshot = LandHistory.create_snapshot(existing_property, 'removed_from_listing')
+                                    db.session.add(snapshot)
+                                    logger.info(f"Created removal snapshot for favorite land {existing_property.id}")
+
+                                db.session.commit()
+                                expired_count += 1
+                                logger.info(f"Marked property as removed via email notification: {existing_property.title}")
+                            else:
+                                logger.debug(f"Property not found or already removed for URL: {url}")
+                        continue
+
                     # Check if property already exists by URL (for price updates)
                     existing_property = None
                     if email_data.get('url'):
                         existing_property = Land.query.filter_by(
                             url=email_data['url']
                         ).first()
-                    
+
                     # If property exists, update price if changed
                     if existing_property and email_data.get('price'):
                         new_price = float(email_data['price'])
@@ -377,7 +420,7 @@ class IMAPService:
                             else:
                                 logger.info(f"Price INCREASED for {existing_property.title}: {old_price:.0f}€ → {new_price:.0f}€ (+{price_change:.0f}€, +{price_change_percentage:.1f}%)")
 
-                            processed_count += 1
+                            price_updated_count += 1
                             continue
                     
                     # Create new land record
@@ -449,6 +492,8 @@ class IMAPService:
             
             # Update sync history
             sync_history.new_properties_added = processed_count
+            sync_history.price_updated_count = price_updated_count
+            sync_history.expired_count = expired_count
             sync_history.status = 'completed'
             sync_history.completed_at = datetime.utcnow()
             sync_history.sync_duration = int((datetime.utcnow() - start_time).total_seconds())

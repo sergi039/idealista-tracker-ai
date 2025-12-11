@@ -10,7 +10,7 @@ import random
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple
 
-from models import Land, LandHistory
+from models import Land, LandHistory, SyncHistory
 from app import db
 
 logger = logging.getLogger(__name__)
@@ -263,7 +263,7 @@ class ListingStatusService:
 
         return results
 
-    def check_all_active_listings(self, limit: int = 100, days_since_check: int = 7) -> Dict:
+    def check_all_active_listings(self, limit: int = 100, days_since_check: int = 7, record_sync: bool = True) -> Dict:
         """
         Check all active listings that haven't been checked in X days.
         Favorites are checked more frequently (daily), others weekly.
@@ -271,10 +271,12 @@ class ListingStatusService:
         Args:
             limit: Maximum number to check
             days_since_check: Only check if last check was more than X days ago
+            record_sync: Whether to record this check in SyncHistory
 
         Returns:
             Summary of the check operation
         """
+        start_time = datetime.utcnow()
         cutoff_date = datetime.utcnow() - timedelta(days=days_since_check)
 
         # Get active listings that need checking
@@ -327,6 +329,27 @@ class ListingStatusService:
                     })
             else:
                 results['errors'] += 1
+
+        # Record in SyncHistory if any listings were removed/sold
+        if record_sync and (results['removed'] > 0 or results['sold'] > 0):
+            try:
+                sync_history = SyncHistory(
+                    sync_type='status_check',
+                    backend='web_scrape',
+                    total_emails_found=results['checked'],
+                    new_properties_added=0,
+                    price_updated_count=0,
+                    expired_count=results['removed'] + results['sold'],
+                    status='completed',
+                    started_at=start_time,
+                    completed_at=datetime.utcnow(),
+                    sync_duration=int((datetime.utcnow() - start_time).total_seconds())
+                )
+                db.session.add(sync_history)
+                db.session.commit()
+                logger.info(f"Recorded status check in SyncHistory: {results['removed']} removed, {results['sold']} sold")
+            except Exception as e:
+                logger.error(f"Failed to record status check in SyncHistory: {e}")
 
         logger.info(f"Checked {results['checked']} listings: "
                    f"{results['active']} active, {results['removed']} removed, "

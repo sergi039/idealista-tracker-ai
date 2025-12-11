@@ -341,20 +341,29 @@ def update_combined_mix():
             'lifestyle': lifestyle_weight
         }
         
-        # Rescore all lands with new mix
+        # Rescore all lands with new mix in batches
         from models import Land
         from services.scoring_service import ScoringService
         from app import db
-        
+
         scoring_service = ScoringService()
-        lands = Land.query.all()
-        
-        for land in lands:
-            scoring_service.calculate_score(land)
-            
-        db.session.commit()
-        
-        flash(f'Combined mix updated to {investment_weight*100:.0f}% Investment + {lifestyle_weight*100:.0f}% Lifestyle. All properties rescored!', 'success')
+        batch_size = 100
+        offset = 0
+        total_rescored = 0
+
+        while True:
+            lands = Land.query.limit(batch_size).offset(offset).all()
+            if not lands:
+                break
+
+            for land in lands:
+                scoring_service.calculate_score(land)
+
+            db.session.commit()
+            total_rescored += len(lands)
+            offset += batch_size
+
+        flash(f'Combined mix updated to {investment_weight*100:.0f}% Investment + {lifestyle_weight*100:.0f}% Lifestyle. {total_rescored} properties rescored!', 'success')
         
     except Exception as e:
         logger.error(f"Failed to update combined mix: {str(e)}")

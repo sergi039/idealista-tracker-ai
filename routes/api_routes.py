@@ -108,6 +108,57 @@ def manual_enrichment(land_id):
             "error": str(e)
         }), 500
 
+@api_bp.route('/lands/reanalyze-environment', methods=['POST'])
+@admin_required
+def reanalyze_environment():
+    """Re-analyze environment (sea_view, mountain_view, etc.) for all lands using updated logic"""
+    try:
+        from services.enrichment_service import EnrichmentService
+        from sqlalchemy.orm.attributes import flag_modified
+
+        enrichment_service = EnrichmentService()
+        lands = Land.query.all()
+
+        updated_count = 0
+        sea_view_removed = 0
+
+        for land in lands:
+            old_environment = dict(land.environment) if land.environment else {}
+            old_sea_view = old_environment.get('sea_view', False)
+
+            # Re-analyze environment with new strict logic
+            enrichment_service._analyze_environment(land)
+
+            new_sea_view = land.environment.get('sea_view', False)
+
+            # Mark JSONB field as modified for SQLAlchemy to detect changes
+            flag_modified(land, 'environment')
+
+            # Track changes
+            if old_sea_view != new_sea_view:
+                updated_count += 1
+                if old_sea_view and not new_sea_view:
+                    sea_view_removed += 1
+                    logger.info(f"Removed false sea_view from land {land.id}: {land.title[:50]}")
+
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "total_lands": len(lands),
+            "updated": updated_count,
+            "sea_view_removed": sea_view_removed,
+            "message": f"Re-analyzed {len(lands)} lands. {sea_view_removed} false sea_view flags removed."
+        })
+
+    except Exception as e:
+        logger.error(f"Environment re-analysis failed: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
 @api_bp.route('/ingest/email/run', methods=['POST'])
 @rate_limit(max_requests=5, window_seconds=60)  # 5 requests per minute
 def manual_ingestion():
@@ -690,6 +741,31 @@ def check_favorites_status():
         }), 500
 
 
+@api_bp.route('/listings/check-all', methods=['POST'])
+@admin_required
+def check_all_listings_status():
+    """Check status of all active listings that need checking"""
+    try:
+        from services.listing_status_service import ListingStatusService
+
+        limit = request.args.get('limit', 50, type=int)
+        days = request.args.get('days', 7, type=int)
+        service = ListingStatusService()
+        results = service.check_all_active_listings(limit=limit, days_since_check=days)
+
+        return jsonify({
+            "success": True,
+            **results
+        })
+
+    except Exception as e:
+        logger.error(f"Failed to check all listings status: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
 @api_bp.route('/land/<int:land_id>/history')
 def get_land_history(land_id):
     """Get change history for a land property"""
@@ -750,6 +826,8 @@ def get_stats():
                 "sync_type": last_sync.sync_type,
                 "backend": last_sync.backend,
                 "new_properties": last_sync.new_properties_added,
+                "price_updated": getattr(last_sync, 'price_updated_count', 0) or 0,
+                "expired": getattr(last_sync, 'expired_count', 0) or 0,
                 "total_emails": last_sync.total_emails_found,
                 "status": last_sync.status,
                 "completed_at": last_sync.completed_at.isoformat() if last_sync.completed_at else None,

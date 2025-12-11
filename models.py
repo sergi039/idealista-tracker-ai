@@ -1,11 +1,21 @@
 from datetime import datetime
 from app import db
 from sqlalchemy import CheckConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.types import JSON
 
 class Land(db.Model):
     __tablename__ = 'lands'
-    
+    __table_args__ = (
+        db.Index('ix_lands_land_type', 'land_type'),
+        db.Index('ix_lands_municipality', 'municipality'),
+        db.Index('ix_lands_listing_status', 'listing_status'),
+        db.Index('ix_lands_is_favorite', 'is_favorite'),
+        db.Index('ix_lands_created_at', 'created_at'),
+        db.Index('ix_lands_score_total', 'score_total'),
+        db.Index('ix_lands_score_investment', 'score_investment'),
+        db.Index('ix_lands_score_lifestyle', 'score_lifestyle'),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
     source_email_id = db.Column(db.String(255), unique=True, nullable=False)
     email_subject = db.Column(db.Text)  # Original email subject line
@@ -21,18 +31,18 @@ class Land(db.Model):
     land_type = db.Column(db.String(20), CheckConstraint("land_type IN ('developed', 'buildable')"))
     description = db.Column(db.Text)
     
-    # JSONB fields for complex data
-    infrastructure_basic = db.Column(JSONB)  # electricity, water, internet, gas
-    infrastructure_extended = db.Column(JSONB)  # supermarket, school, restaurants, hospital
-    transport = db.Column(JSONB)  # train, airport, highway, bus
-    environment = db.Column(JSONB)  # sea_view, mountain_view, forest, orientation
-    neighborhood = db.Column(JSONB)  # new_houses, area_price_level, noise
-    services_quality = db.Column(JSONB)  # schools rating, restaurants rating, cafes rating
+    # JSON fields for complex data (works with both PostgreSQL and SQLite)
+    infrastructure_basic = db.Column(JSON)  # electricity, water, internet, gas
+    infrastructure_extended = db.Column(JSON)  # supermarket, school, restaurants, hospital
+    transport = db.Column(JSON)  # train, airport, highway, bus
+    environment = db.Column(JSON)  # sea_view, mountain_view, forest, orientation
+    neighborhood = db.Column(JSON)  # new_houses, area_price_level, noise
+    services_quality = db.Column(JSON)  # schools rating, restaurants rating, cafes rating
     
     legal_status = db.Column(db.String(50))
-    property_details = db.Column(JSONB)  # AI analysis and property details in JSON format
-    ai_analysis = db.Column(JSONB)  # Structured AI analysis with 5 blocks
-    enhanced_description = db.Column(JSONB)  # AI-enhanced professional description data
+    property_details = db.Column(JSON)  # AI analysis and property details in JSON format
+    ai_analysis = db.Column(JSON)  # Structured AI analysis with 5 blocks
+    enhanced_description = db.Column(JSON)  # AI-enhanced professional description data
     score_total = db.Column(db.Numeric(5, 2))
     score_investment = db.Column(db.Numeric(5, 2))  # Investment-focused score (0-100)
     score_lifestyle = db.Column(db.Numeric(5, 2))   # Lifestyle-focused score (0-100)
@@ -212,6 +222,8 @@ class SyncHistory(db.Model):
     backend = db.Column(db.String(20), nullable=False)    # 'imap', 'gmail'
     total_emails_found = db.Column(db.Integer, default=0)
     new_properties_added = db.Column(db.Integer, default=0)
+    price_updated_count = db.Column(db.Integer, default=0)  # Properties with price changes
+    expired_count = db.Column(db.Integer, default=0)  # Properties marked as expired/removed
     sync_duration = db.Column(db.Integer)  # Duration in seconds
     status = db.Column(db.String(20), default='completed')  # 'completed', 'failed', 'partial'
     error_message = db.Column(db.Text)

@@ -5,8 +5,10 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-# Set up logging
-logging.basicConfig(level=logging.DEBUG)
+# Set up logging - use INFO in production, DEBUG only when DEV_MODE is set
+import os
+log_level = logging.DEBUG if os.environ.get('DEV_MODE', '').lower() == 'true' else logging.INFO
+logging.basicConfig(level=log_level)
 logger = logging.getLogger(__name__)
 
 class Base(DeclarativeBase):

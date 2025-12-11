@@ -594,41 +594,56 @@ class EnrichmentService:
         """Analyze environment features like views and orientation"""
         try:
             environment = land.environment or {}
-            
+
             # Analyze description and location for view keywords
             description = (land.description or "").lower()
             title = (land.title or "").lower()
-            municipality = (land.municipality or "").lower()
-            
-            # Combine all text for analysis
-            all_text = f"{description} {title} {municipality}"
-            
-            # Enhanced sea view detection (Spanish + English + known coastal areas)
-            sea_keywords = ['mar', 'playa', 'costa', 'litoral', 'vista al mar', 'sea', 'beach', 'coast', 'coastal', 'ocean', 'bay', 'shore', 'cudillero', 'santander', 'gijon', 'llanes', 'comillas', 'ribadesella']
-            environment['sea_view'] = any(keyword in all_text for keyword in sea_keywords) or self._is_coastal_location(land)
-            
-            # Enhanced mountain view detection
-            mountain_keywords = ['montaña', 'sierra', 'monte', 'vista montaña', 'mountain', 'hill', 'valley', 'peak', 'cordillera', 'picos de europa', 'cantabrica']
-            environment['mountain_view'] = any(keyword in all_text for keyword in mountain_keywords)
-            
-            # Enhanced forest view detection
-            forest_keywords = ['bosque', 'forestal', 'pinar', 'verde', 'forest', 'wood', 'trees', 'natural', 'rural', 'countryside']
-            environment['forest_view'] = any(keyword in all_text for keyword in forest_keywords)
-            
+
+            # Only use description and title for sea view detection, NOT municipality
+            # Municipality like "Gijón" doesn't mean the property has sea view
+            text_for_views = f"{description} {title}"
+
+            # Sea view detection - only from explicit mentions in description/title
+            # NOT from city names or general coastal region
+            sea_keywords = [
+                'vista al mar', 'vistas al mar', 'vista mar', 'vistas mar',
+                'sea view', 'sea views', 'ocean view', 'ocean views',
+                'frente al mar', 'primera linea', 'primera línea',
+                'beach front', 'beachfront', 'waterfront',
+                'junto al mar', 'cerca del mar', 'a pie de playa'
+            ]
+            environment['sea_view'] = any(keyword in text_for_views for keyword in sea_keywords)
+
+            # Mountain view detection - only from explicit mentions
+            mountain_keywords = [
+                'vista montaña', 'vistas montaña', 'vista a la montaña', 'vistas a la montaña',
+                'mountain view', 'mountain views',
+                'vista sierra', 'vistas sierra',
+                'picos de europa', 'cordillera cantábrica', 'cordillera cantabrica'
+            ]
+            environment['mountain_view'] = any(keyword in text_for_views for keyword in mountain_keywords)
+
+            # Forest/nature view detection
+            forest_keywords = [
+                'vista bosque', 'rodeado de naturaleza', 'entorno natural',
+                'forest view', 'woodland', 'surrounded by nature'
+            ]
+            environment['forest_view'] = any(keyword in text_for_views for keyword in forest_keywords)
+
             # Orientation detection
             orientation_keywords = {
                 'norte': 'north', 'sur': 'south', 'este': 'east', 'oeste': 'west',
                 'noreste': 'northeast', 'noroeste': 'northwest',
                 'sureste': 'southeast', 'suroeste': 'southwest'
             }
-            
+
             for spanish_orientation, english_orientation in orientation_keywords.items():
                 if spanish_orientation in description:
                     environment['orientation'] = english_orientation
                     break
-            
+
             land.environment = environment
-            
+
         except Exception as e:
             logger.error(f"Failed to analyze environment: {str(e)}")
     

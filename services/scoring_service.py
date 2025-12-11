@@ -535,14 +535,24 @@ class ScoringService:
             if profile == 'combined':
                 self.weights.update(new_weights)
             
-            # Rescore all lands (they will use new profile weights)
-            lands = Land.query.all()
-            for land in lands:
-                self.calculate_score(land)
-            
-            db.session.commit()
-            
-            logger.info(f"Updated {profile} profile weights and rescored {len(lands)} lands")
+            # Rescore all lands in batches (they will use new profile weights)
+            batch_size = 100
+            offset = 0
+            total_rescored = 0
+
+            while True:
+                lands = Land.query.limit(batch_size).offset(offset).all()
+                if not lands:
+                    break
+
+                for land in lands:
+                    self.calculate_score(land)
+
+                db.session.commit()
+                total_rescored += len(lands)
+                offset += batch_size
+
+            logger.info(f"Updated {profile} profile weights and rescored {total_rescored} lands")
             return True
             
         except Exception as e:

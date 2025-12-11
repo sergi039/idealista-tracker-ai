@@ -437,3 +437,47 @@ class EmailParser:
             description = description[:1000] + '...'
         
         return description if description else "Property listing from Idealista"
+
+    def parse_no_longer_listed_email(self, email_content: Dict) -> Optional[Dict]:
+        """
+        Parse 'no longer listed' notification email from Idealista.
+        These emails notify that a favorite property has been removed.
+
+        Subject patterns:
+        - "One of your favourites is no longer listed"
+        - "Tu favorito ya no está disponible"
+
+        Returns dict with URL of removed property, or None if can't parse.
+        """
+        try:
+            subject = email_content.get('subject', '')
+            body = email_content.get('body', '')
+
+            # Verify this is a "no longer listed" email
+            no_longer_patterns = [
+                'no longer listed',
+                'ya no está disponible',
+                'ya no está publicado',
+                'is no longer available'
+            ]
+
+            if not any(p in subject.lower() or p in body.lower() for p in no_longer_patterns):
+                return None
+
+            # Extract property URL from email body
+            url = self._extract_url(body)
+
+            if not url:
+                logger.warning("Could not extract URL from 'no longer listed' email")
+                return None
+
+            logger.info(f"Parsed 'no longer listed' email for URL: {url}")
+
+            return {
+                'url': url,
+                'type': 'removed'
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to parse 'no longer listed' email: {str(e)}")
+            return None

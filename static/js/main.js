@@ -510,6 +510,13 @@ window.IdealistaApp = {
                     if (lastSyncElement) {
                         const sync = data.stats.last_sync;
                         
+                        // Build sync stats string
+                        const statsParts = [];
+                        if (sync.new_properties > 0) statsParts.push(`+${sync.new_properties} new`);
+                        if (sync.price_updated > 0) statsParts.push(`${sync.price_updated} price updated`);
+                        if (sync.expired > 0) statsParts.push(`${sync.expired} expired`);
+                        const statsStr = statsParts.length > 0 ? `(${statsParts.join(', ')})` : '(no changes)';
+
                         // Handle null or invalid completed_at
                         if (sync.completed_at) {
                             const date = new Date(sync.completed_at);
@@ -517,12 +524,12 @@ window.IdealistaApp = {
                             if (!isNaN(date.getTime()) && date.getFullYear() > 1970) {
                                 const dateStr = date.toLocaleDateString();
                                 const timeStr = date.toLocaleTimeString();
-                                lastSyncElement.textContent = `${dateStr} at ${timeStr} (+${sync.new_properties} new)`;
+                                lastSyncElement.textContent = `${dateStr} at ${timeStr} ${statsStr}`;
                             } else {
-                                lastSyncElement.textContent = `Sync completed (+${sync.new_properties} new) - time unavailable`;
+                                lastSyncElement.textContent = `Sync completed ${statsStr} - time unavailable`;
                             }
                         } else {
-                            lastSyncElement.textContent = `Sync completed (+${sync.new_properties} new) - time unavailable`;
+                            lastSyncElement.textContent = `Sync completed ${statsStr} - time unavailable`;
                         }
                     }
                 } else {
