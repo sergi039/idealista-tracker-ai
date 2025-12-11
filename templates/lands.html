@@ -149,6 +149,12 @@
                                     <option value="travel_time_nearest_beach" {{ 'selected' if current_filters.sort_by == 'travel_time_nearest_beach' }}>
                                         {{ t('beach_distance') }}
                                     </option>
+                                    <option value="travel_time_oviedo" {{ 'selected' if current_filters.sort_by == 'travel_time_oviedo' }}>
+                                        Travel to Oviedo (OV)
+                                    </option>
+                                    <option value="travel_time_gijon" {{ 'selected' if current_filters.sort_by == 'travel_time_gijon' }}>
+                                        Travel to Gijón (GJ)
+                                    </option>
                                     <option value="created_at" {{ 'selected' if current_filters.sort_by == 'created_at' }}>
                                         {{ t('date_added') }}
                                     </option>
@@ -319,7 +325,23 @@
                                                 {% endif %}
                                             </a>
                                         </th>
-                                        <th style="white-space: nowrap;">{{ t('travel') }}</th>
+                                        <th style="white-space: nowrap;">
+                                            <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='travel_time_oviedo', order='asc' if current_filters.sort_by == 'travel_time_oviedo' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}"
+                                               class="text-white text-decoration-none" title="Sort by travel time to Oviedo">
+                                                OV
+                                                {% if current_filters.sort_by == 'travel_time_oviedo' %}
+                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }}"></i>
+                                                {% endif %}
+                                            </a>
+                                            <span class="text-muted mx-1">|</span>
+                                            <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='travel_time_gijon', order='asc' if current_filters.sort_by == 'travel_time_gijon' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}"
+                                               class="text-white text-decoration-none" title="Sort by travel time to Gijón">
+                                                GJ
+                                                {% if current_filters.sort_by == 'travel_time_gijon' %}
+                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }}"></i>
+                                                {% endif %}
+                                            </a>
+                                        </th>
                                         <th>{{ t('type') }}</th>
                                         <th style="min-width: 120px !important; white-space: nowrap !important;">
                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='created_at', order='desc' if current_filters.sort_by == 'created_at' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
@@ -468,19 +490,19 @@
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td style="min-width: 140px !important; white-space: nowrap !important;">
+                                            <td style="white-space: nowrap;">
                                                 {% if land.travel_time_oviedo or land.travel_time_gijon %}
-                                                    <div class="d-flex flex-wrap align-items-center gap-1 small">
+                                                    <div class="d-flex flex-column small">
                                                         {% if land.travel_time_oviedo %}
-                                                            <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Oviedo,+Asturias,+Spain" 
-                                                               target="_blank" class="text-decoration-none d-inline-flex align-items-center me-2" title="Drive to Oviedo">
+                                                            <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Oviedo,+Asturias,+Spain"
+                                                               target="_blank" class="text-decoration-none d-inline-flex align-items-center" title="Drive to Oviedo">
                                                                 <i class="fas fa-car me-1 text-primary"></i>
                                                                 <span class="fw-bold">{{ land.travel_time_oviedo }}min</span>
                                                                 <small class="text-muted ms-1">OV</small>
                                                             </a>
                                                         {% endif %}
                                                         {% if land.travel_time_gijon %}
-                                                            <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Gijón,+Asturias,+Spain" 
+                                                            <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Gijón,+Asturias,+Spain"
                                                                target="_blank" class="text-decoration-none d-inline-flex align-items-center" title="Drive to Gijón">
                                                                 <i class="fas fa-car me-1 text-primary"></i>
                                                                 <span class="fw-bold">{{ land.travel_time_gijon }}min</span>
