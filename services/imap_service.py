@@ -189,8 +189,6 @@ class IMAPService:
                             'Update your preferences',
                             'Actualiza tus preferencias',
                             'Respuesta de',  # Skip user responses/replies
-                            'Price change',  # Skip price change notifications
-                            'Cambio de precio',
                             'detached house',  # Skip house listings
                             'casa adosada',
                             'vivienda',
@@ -201,6 +199,17 @@ class IMAPService:
                             'dúplex',
                             'Bilbao homes'
                         ]
+
+                        # Price change emails - process to update existing properties
+                        price_change_subjects = [
+                            'Price change',
+                            'Price reduction',
+                            'Price drop',
+                            'Cambio de precio',
+                            'Bajada de precio'
+                        ]
+
+                        is_price_change = any(pc.lower() in subject.lower() for pc in price_change_subjects)
                         
                         if any(skip_text in subject for skip_text in skip_subjects):
                             logger.info(f"Skipping non-property email: {subject[:50]}")
@@ -323,22 +332,35 @@ class IMAPService:
             processed_count = 0
             price_updated_count = 0
             expired_count = 0
+            processed_email_ids = set()  # Track processed emails in this run
+
             for email_data in emails:
                 try:
-                    # Check if email already processed
-                    existing_email = Land.query.filter_by(
-                        source_email_id=email_data['source_email_id']
-                    ).first()
+                    email_id = email_data['source_email_id']
 
-                    if existing_email:
-                        logger.debug(f"Email {email_data['source_email_id']} already processed")
+                    # Skip if we already processed this email in this run
+                    if email_id in processed_email_ids:
                         continue
+                    processed_email_ids.add(email_id)
 
                     # Handle "no longer listed" emails
                     if email_data.get('type') == 'no_longer_listed':
                         url = email_data.get('url')
                         if url:
-                            existing_property = Land.query.filter_by(url=url).first()
+                            import re
+                            # Extract property ID from URL to match regardless of UTM params
+                            property_id_match = re.search(r'/inmueble/(\d+)', url)
+                            existing_property = None
+                            if property_id_match:
+                                property_id = property_id_match.group(1)
+                                existing_property = Land.query.filter(
+                                    Land.url.like(f'%/inmueble/{property_id}%')
+                                ).first()
+
+                            # Fallback to exact URL match
+                            if not existing_property:
+                                existing_property = Land.query.filter_by(url=url).first()
+
                             if existing_property and existing_property.listing_status == 'active':
                                 existing_property.listing_status = 'removed'
                                 existing_property.listing_removed_date = datetime.utcnow()
@@ -356,12 +378,25 @@ class IMAPService:
                                 logger.debug(f"Property not found or already removed for URL: {url}")
                         continue
 
-                    # Check if property already exists by URL (for price updates)
+                    # Check if property already exists by property ID from URL (for price updates)
+                    # URLs have different UTM params, so we extract the property ID (e.g., /inmueble/109365344/)
                     existing_property = None
                     if email_data.get('url'):
-                        existing_property = Land.query.filter_by(
-                            url=email_data['url']
-                        ).first()
+                        import re
+                        # Extract property ID from URL
+                        property_id_match = re.search(r'/inmueble/(\d+)', email_data['url'])
+                        if property_id_match:
+                            property_id = property_id_match.group(1)
+                            # Search by property ID in URL (ignoring UTM parameters)
+                            existing_property = Land.query.filter(
+                                Land.url.like(f'%/inmueble/{property_id}%')
+                            ).first()
+
+                        # Fallback to exact URL match
+                        if not existing_property:
+                            existing_property = Land.query.filter_by(
+                                url=email_data['url']
+                            ).first()
 
                     # If property exists, update price if changed
                     if existing_property and email_data.get('price'):
@@ -410,8 +445,8 @@ class IMAPService:
 
                             existing_property.email_date = email_date_obj
 
-                            # Add this email ID to prevent reprocessing
-                            existing_property.source_email_id = email_data['source_email_id']
+                            # Don't update source_email_id - keep original
+                            # The source_email_id is unique and belongs to the original new property email
 
                             db.session.commit()
 
@@ -422,7 +457,12 @@ class IMAPService:
 
                             price_updated_count += 1
                             continue
-                    
+
+                    # If property already exists (found above), skip creating duplicate
+                    if existing_property:
+                        logger.debug(f"Property already exists (ID: {existing_property.id}), skipping duplicate creation")
+                        continue
+
                     # Create new land record
                     # Parse email date if available
                     email_date = None
