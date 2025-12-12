@@ -271,27 +271,65 @@
                 {% endif %}
 
                 <!-- AI Analysis Section -->
-                <div id="ai-analysis-section" class="mt-4" style="{{ 'display: block;' if land.ai_analysis else 'display: none;' }}">
-                    <div class="card bg-info bg-opacity-10 border-info">
-                        <div class="card-header bg-info bg-opacity-25 d-flex justify-content-between align-items-center">
-                            <h6 class="mb-0">
-                                <i class="fas fa-brain me-2"></i>AI Investment Analysis
-                            </h6>
-                            <small class="text-muted">Powered by Claude AI</small>
+                <div id="ai-analysis-section" class="mt-4">
+                    <div class="card">
+                        <div class="card-header py-2">
+                            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                                <ul class="nav nav-tabs card-header-tabs" id="ai-analysis-tabs" role="tablist">
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link active" id="ai-claude-tab" data-bs-toggle="tab" data-bs-target="#ai-claude-pane" type="button" role="tab" aria-controls="ai-claude-pane" aria-selected="true">
+                                            <i class="fas fa-brain me-1"></i>Claude
+                                        </button>
+                                    </li>
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link" id="ai-chatgpt-tab" data-bs-toggle="tab" data-bs-target="#ai-chatgpt-pane" type="button" role="tab" aria-controls="ai-chatgpt-pane" aria-selected="false">
+                                            <i class="fas fa-robot me-1"></i>ChatGPT
+                                        </button>
+                                    </li>
+                                </ul>
+                                <div class="small text-body-secondary">
+                                    <i class="fas fa-chart-line me-1"></i>AI Investment Analysis
+                                </div>
+                            </div>
                         </div>
-                        <div class="card-body" id="ai-analysis-content">
-                            {% if land.ai_analysis %}
-                                <!-- Display existing AI analysis -->
-                                <div class="analysis-content" id="structured-analysis">
-                                    <!-- Content will be populated by JavaScript -->
+                        <div class="card-body">
+                            <div class="tab-content" id="ai-analysis-tab-content">
+                                <div class="tab-pane fade show active" id="ai-claude-pane" role="tabpanel" aria-labelledby="ai-claude-tab" tabindex="0">
+                                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                                        <div class="small text-body-secondary" id="ai-claude-model-label">
+                                            Powered by Claude
+                                        </div>
+                                        <button type="button" class="btn btn-sm btn-outline-primary" id="ai-claude-run-btn" onclick="runClaudeAnalysis({{ land.id }})">
+                                            <i class="fas fa-wand-magic-sparkles me-1"></i>Run Claude
+                                        </button>
+                                    </div>
+                                    <div class="analysis-content" id="ai-claude-analysis">
+                                        <div id="ai-claude-structured-analysis"></div>
+                                        <div class="text-center text-muted py-4" id="ai-claude-placeholder" style="{{ 'display: none;' if land.ai_analysis else '' }}">
+                                            <i class="fas fa-robot fa-3x mb-3 opacity-50"></i>
+                                            <p class="mb-0">Run Claude to generate analysis</p>
+                                        </div>
+                                    </div>
                                 </div>
-                            {% else %}
-                                <!-- Placeholder for new analysis -->
-                                <div class="text-center text-muted">
-                                    <i class="fas fa-robot fa-3x mb-3 opacity-50"></i>
-                                    <p>Click "AI Analysis" button to generate investment insights</p>
+                                <div class="tab-pane fade" id="ai-chatgpt-pane" role="tabpanel" aria-labelledby="ai-chatgpt-tab" tabindex="0">
+                                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                                        <div class="small text-body-secondary" id="ai-chatgpt-model-label">
+                                            Powered by ChatGPT{% if openai_model %} ({{ openai_model }}){% endif %}
+                                        </div>
+                                        <button type="button" class="btn btn-sm btn-outline-primary" id="ai-chatgpt-run-btn" onclick="generateChatGPTAnalysis()">
+                                            <i class="fas fa-wand-magic-sparkles me-1"></i>Run ChatGPT
+                                        </button>
+                                    </div>
+                                    <div class="analysis-content" id="ai-chatgpt-analysis">
+                                        <div id="ai-chatgpt-structured-analysis"></div>
+                                        <div class="text-center text-muted py-4" id="ai-chatgpt-placeholder" style="{{ 'display: none;' if openai_analysis else '' }}">
+                                            <i class="fas fa-robot fa-3x mb-3 opacity-50"></i>
+                                            <p class="mb-0">Run ChatGPT to generate analysis</p>
+                                            <small class="d-block text-body-secondary mt-1" id="ai-chatgpt-config-hint"></small>
+                                        </div>
+                                    </div>
                                 </div>
-                            {% endif %}
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -306,9 +344,6 @@
                             <div class="d-flex gap-2">
                                 <button type="button" class="btn btn-sm btn-outline-secondary" onclick="refreshAiComparison()">
                                     <i class="fas fa-rotate me-1"></i>Refresh
-                                </button>
-                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="generateChatGPTAnalysis()">
-                                    <i class="fas fa-wand-magic-sparkles me-1"></i>Generate ChatGPT
                                 </button>
                             </div>
                         </div>
@@ -340,14 +375,9 @@
                         </a>
                     {% endif %}
                     
-                    <!-- AI Analysis Button - highlighted if analysis exists -->
-                    <button onclick="analyzeWithClaude({{ land.id }})" 
-                            class="btn {{ 'btn-success' if land.ai_analysis else 'btn-outline-info' }}">
-                        <i class="fas fa-brain me-2 {{ 'text-white' if land.ai_analysis else '' }}"></i>
-                        AI Analysis
-                        {% if land.ai_analysis %}
-                            <span class="badge bg-light text-dark ms-1">✓</span>
-                        {% endif %}
+                    <!-- AI Analysis shortcut (opens Claude tab) -->
+                    <button type="button" class="btn btn-outline-info" onclick="openAiSection('claude')">
+                        <i class="fas fa-brain me-2"></i>AI Analyses
                     </button>
                     
                     
@@ -1523,183 +1553,6 @@ document.addEventListener('DOMContentLoaded', function() {
     {% endif %}
 });
 
-function analyzeWithClaude(landId) {
-    const button = event.target.closest('button');
-    const originalContent = button.innerHTML;
-    const aiSection = document.getElementById('ai-analysis-section');
-    const aiContent = document.getElementById('ai-analysis-content');
-    
-    // Check if there's existing analysis for enrichment
-    let existingAnalysis = null;
-    let isEnrichment = false;
-    
-    try {
-        {% if land.ai_analysis %}
-            const currentData = {{ land.ai_analysis|tojson|safe }};
-            if (currentData && typeof currentData === 'object') {
-                existingAnalysis = currentData;
-                isEnrichment = true;
-            }
-        {% endif %}
-    } catch (e) {
-        console.log('No valid existing analysis found, performing fresh analysis');
-    }
-    
-    // Show loading state
-    button.disabled = true;
-    const loadingText = isEnrichment ? 'Enriching Analysis...' : 'Analyzing...';
-    button.innerHTML = `<i class="fas fa-spinner fa-spin me-2"></i>${loadingText}`;
-    
-    // Show AI section and display loading
-    aiSection.style.display = 'block';
-    
-    // For enrichment, don't clear existing content - just show loading overlay
-    if (isEnrichment) {
-        const existingContent = aiContent.innerHTML;
-        aiContent.innerHTML = `
-            <div class="position-relative">
-                <div class="analysis-loading-overlay position-absolute w-100 h-100 d-flex align-items-center justify-content-center" style="background: rgba(0,0,0,0.7); z-index: 10; border-radius: 0.375rem;">
-                    <div class="text-center text-white">
-                        <div class="spinner-border text-light mb-3" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                        <p class="mb-1">Enriching existing analysis...</p>
-                        <small>Adding new insights and rental market data</small>
-                    </div>
-                </div>
-                ${existingContent}
-            </div>
-        `;
-    } else {
-        aiContent.innerHTML = `
-            <div class="text-center">
-                <div class="spinner-border text-primary mb-3" role="status">
-                    <span class="visually-hidden">Loading...</span>
-                </div>
-                <p class="text-muted">Claude AI is analyzing this property...</p>
-                <small class="text-muted">This may take 10-30 seconds</small>
-            </div>
-        `;
-    }
-    
-    // Prepare request body
-    const requestBody = {};
-    if (existingAnalysis) {
-        requestBody.existing_analysis = existingAnalysis;
-    }
-    
-    // Call structured analysis API
-    fetch(`/api/analyze/property/${landId}/structured`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(requestBody)
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            // Debug: log the response structure
-            console.log('AI Analysis Response:', data);
-            
-            // The analysis data is directly in data.analysis - use it for structured display
-            let analysisContent = '';
-            
-            if (data.analysis && typeof data.analysis === 'object') {
-                // Use the structured analysis directly
-                analysisContent = renderStructuredAIAnalysis(data.analysis);
-            } else {
-                // Fallback for non-structured responses
-                analysisContent = `<div class="analysis-text">${String(data.analysis).replace(/\n/g, '<br>')}</div>`;
-            }
-            
-            const successText = data.is_enrichment ? 'Analysis enriched successfully!' : 'Analysis completed successfully!';
-            
-            // For enrichment, smoothly update content, for new analysis, replace entirely
-            if (data.is_enrichment) {
-                // Remove loading overlay first
-                const overlay = aiContent.querySelector('.analysis-loading-overlay');
-                if (overlay) {
-                    overlay.remove();
-                }
-                
-                // Update existing content with enriched data
-                aiContent.innerHTML = `
-                    <div class="analysis-content">
-                        <div class="alert alert-info alert-dismissible fade show" role="alert" id="success-alert">
-                            <i class="fas fa-plus-circle me-2"></i>
-                            ${successText}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                        </div>
-                        ${analysisContent}
-                    </div>
-                `;
-            } else {
-                // New analysis - replace entirely
-                aiContent.innerHTML = `
-                    <div class="analysis-content">
-                        <div class="alert alert-success alert-dismissible fade show" role="alert" id="success-alert">
-                            <i class="fas fa-check-circle me-2"></i>
-                            ${successText}
-                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                        </div>
-                        ${analysisContent}
-                    </div>
-                `;
-            }
-            
-            // Auto-hide success alert after 3 seconds
-            setTimeout(() => {
-                const successAlert = document.getElementById('success-alert');
-                if (successAlert) {
-                    const bsAlert = new bootstrap.Alert(successAlert);
-                    bsAlert.close();
-                }
-            }, 3000);
-            
-            // Update button to show success state
-            button.classList.remove('btn-outline-info');
-            button.classList.add('btn-success');
-            const buttonText = data.is_enrichment ? 'Analysis Enriched' : 'AI Analysis';
-            button.innerHTML = `<i class="fas fa-brain me-2 text-white"></i>${buttonText} <span class="badge bg-light text-dark ms-1">✓</span>`;
-        } else {
-            // Display error in the analysis section
-            aiContent.innerHTML = `
-                <div class="alert alert-danger" role="alert">
-                    <i class="fas fa-exclamation-triangle me-2"></i>
-                    <strong>Analysis Failed:</strong> ${data.error || 'Unknown error occurred'}
-                </div>
-                <div class="text-center text-muted">
-                    <i class="fas fa-robot fa-3x mb-3 opacity-50"></i>
-                    <p>Please try again or contact support if the problem persists</p>
-                </div>
-            `;
-        }
-    })
-    .catch(error => {
-        // Display network error in the analysis section
-        aiContent.innerHTML = `
-            <div class="alert alert-danger" role="alert">
-                <i class="fas fa-wifi me-2"></i>
-                <strong>Network Error:</strong> Unable to connect to AI service. Please check your connection and try again.
-            </div>
-            <div class="text-center text-muted">
-                <i class="fas fa-robot fa-3x mb-3 opacity-50"></i>
-                <p>Connection failed. Please try again in a moment.</p>
-            </div>
-        `;
-    })
-    .finally(() => {
-        // Restore button (unless it was successful)
-        if (!button.classList.contains('btn-success')) {
-            button.disabled = false;
-            button.innerHTML = originalContent;
-        } else {
-            button.disabled = false;
-        }
-    });
-}
-
 // Formatting functions for AI analysis
 function renderListItems(items, label, colorClass) {
     if (!items || !Array.isArray(items) || items.length === 0) return '';
@@ -2035,62 +1888,174 @@ function getPaybackPeriodClass(years) {
 // Make land data available globally for JavaScript
 window.landData = {{ land.to_dict() | tojson }};
 
+// Existing analyses (if present)
+window.__EXISTING_CLAUDE_ANALYSIS__ = {% if land.ai_analysis %}{{ land.ai_analysis|tojson|safe }}{% else %}null{% endif %};
+window.__EXISTING_OPENAI_ANALYSIS__ = {% if openai_analysis %}{{ openai_analysis|tojson|safe }}{% else %}null{% endif %};
+
 // Initialize structured AI analysis on page load
 document.addEventListener('DOMContentLoaded', function() {
-    const structuredAnalysis = document.getElementById('structured-analysis');
-    
-    {% if land.ai_analysis %}
-        try {
-            // Try to parse AI analysis as JSON
-            const analysisData = {{ land.ai_analysis|tojson|safe }};
-            console.log('Existing AI Analysis Data:', analysisData, typeof analysisData);
-            
-            if (typeof analysisData === 'string') {
-                // If it's a string, try to parse it as JSON
-                try {
-                    const parsedAnalysis = JSON.parse(analysisData);
-                    structuredAnalysis.innerHTML = renderStructuredAIAnalysis(parsedAnalysis);
-                } catch (parseError) {
-                    console.log('Failed to parse JSON, displaying as formatted text');
-                    structuredAnalysis.innerHTML = `<div class="analysis-text">${analysisData.replace(/\n/g, '<br>')}</div>`;
-                }
-            } else if (typeof analysisData === 'object' && analysisData !== null) {
-                // If it's already an object, use it directly
-                console.log('Using structured analysis display');
-                try {
-                    const renderedHTML = renderStructuredAIAnalysis(analysisData);
-                    console.log('Rendered HTML length:', renderedHTML.length);
-                    structuredAnalysis.innerHTML = renderedHTML;
-                    console.log('Successfully rendered AI analysis');
-                } catch (renderError) {
-                    console.error('Error in renderStructuredAIAnalysis:', renderError);
-                    console.error('Error details:', renderError.message, renderError.stack);
-                    structuredAnalysis.innerHTML = '<div class="alert alert-warning">Error rendering analysis. Please try refreshing the page.</div>';
-                }
-            } else {
-                // Fallback to displaying raw content
-                console.log('Fallback: displaying raw content');
-                structuredAnalysis.innerHTML = `<pre class="text-body mb-0">${JSON.stringify(analysisData, null, 2)}</pre>`;
-            }
-        } catch (e) {
-            console.error('Error processing AI analysis:', e);
-            console.error('Error message:', e.message);
-            console.error('Error stack:', e.stack);
-            // If parsing fails, display raw content properly
-            const rawData = {{ land.ai_analysis|tojson|safe }};
-            if (typeof rawData === 'object' && rawData !== null) {
-                // For objects, display as formatted JSON
-                structuredAnalysis.innerHTML = `<pre class="text-body mb-0">${JSON.stringify(rawData, null, 2)}</pre>`;
-            } else {
-                // For strings, display with line breaks
-                structuredAnalysis.innerHTML = `<div class="analysis-text">${String(rawData).replace(/\n/g, '<br>')}</div>`;
-            }
-        }
-    {% endif %}
-
     // Load model comparison table (Claude vs ChatGPT)
     refreshAiComparison();
+
+    // Render existing analyses into tabs
+    renderAnalysisInto('ai-claude-structured-analysis', window.__EXISTING_CLAUDE_ANALYSIS__, 'ai-claude-placeholder');
+    renderAnalysisInto('ai-chatgpt-structured-analysis', window.__EXISTING_OPENAI_ANALYSIS__, 'ai-chatgpt-placeholder');
 });
+
+function _normalizeAnalysisData(raw) {
+    if (raw === null || raw === undefined) return null;
+    if (typeof raw === 'object') return raw;
+    if (typeof raw === 'string') {
+        try {
+            return JSON.parse(raw);
+        } catch {
+            return { _raw_text: raw };
+        }
+    }
+    return { _raw_text: String(raw) };
+}
+
+function renderAnalysisInto(targetId, rawData, placeholderId) {
+    const target = document.getElementById(targetId);
+    if (!target) return;
+
+    const placeholder = placeholderId ? document.getElementById(placeholderId) : null;
+    const normalized = _normalizeAnalysisData(rawData);
+
+    if (!normalized) {
+        target.innerHTML = '';
+        if (placeholder) placeholder.style.display = '';
+        return;
+    }
+
+    if (placeholder) placeholder.style.display = 'none';
+
+    if (normalized._raw_text) {
+        target.innerHTML = `<div class="analysis-text">${String(normalized._raw_text).replace(/\n/g, '<br>')}</div>`;
+        return;
+    }
+
+    try {
+        target.innerHTML = renderStructuredAIAnalysis(normalized);
+    } catch (e) {
+        target.innerHTML = `<div class="alert alert-warning mb-0">Error rendering analysis: ${e}</div>`;
+    }
+}
+
+function setActiveAiTab(tabName) {
+    const tabId = tabName === 'chatgpt' ? 'ai-chatgpt-tab' : 'ai-claude-tab';
+    const trigger = document.getElementById(tabId);
+    if (!trigger) return;
+    const tab = bootstrap.Tab.getOrCreateInstance(trigger);
+    tab.show();
+}
+
+function openAiSection(tabName) {
+    setActiveAiTab(tabName || 'claude');
+    const section = document.getElementById('ai-analysis-section');
+    if (section && typeof section.scrollIntoView === 'function') {
+        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+}
+
+function analyzeWithClaude(landId) {
+    openAiSection('claude');
+    runClaudeAnalysis(landId);
+}
+
+function runClaudeAnalysis(landId) {
+    setActiveAiTab('claude');
+
+    const button = document.getElementById('ai-claude-run-btn');
+    const originalContent = button ? button.innerHTML : '';
+    const targetId = 'ai-claude-structured-analysis';
+    const placeholderId = 'ai-claude-placeholder';
+
+    const existing = _normalizeAnalysisData(window.__EXISTING_CLAUDE_ANALYSIS__);
+    const existingAnalysis = existing && !existing._raw_text ? existing : null;
+    const isEnrichment = Boolean(existingAnalysis);
+
+    if (button) {
+        button.disabled = true;
+        const loadingText = isEnrichment ? 'Enriching…' : 'Analyzing…';
+        button.innerHTML = `<i class="fas fa-spinner fa-spin me-2"></i>${loadingText}`;
+    }
+
+    const placeholder = document.getElementById(placeholderId);
+    if (placeholder) placeholder.style.display = 'none';
+
+    const target = document.getElementById(targetId);
+    if (target) {
+        target.innerHTML = `
+            <div class="text-center">
+                <div class="spinner-border text-primary mb-3" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="text-muted mb-1">${isEnrichment ? 'Claude is enriching this analysis…' : 'Claude is analyzing this property…'}</p>
+                <small class="text-body-secondary">This may take 10-30 seconds</small>
+            </div>
+        `;
+    }
+
+    const requestBody = {};
+    if (existingAnalysis) requestBody.existing_analysis = existingAnalysis;
+
+    fetch(`/api/analyze/property/${landId}/structured`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (!data.success) {
+            if (target) {
+                target.innerHTML = `
+                    <div class="alert alert-danger mb-0" role="alert">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        <strong>Claude failed:</strong> ${data.error || 'Unknown error'}
+                    </div>
+                `;
+            }
+            return;
+        }
+
+        window.__EXISTING_CLAUDE_ANALYSIS__ = data.analysis;
+
+        if (target) {
+            target.innerHTML = `
+                <div class="alert alert-${data.is_enrichment ? 'info' : 'success'} alert-dismissible fade show" role="alert" id="claude-success-alert">
+                    <i class="fas fa-check-circle me-2"></i>
+                    ${data.is_enrichment ? 'Analysis enriched successfully!' : 'Analysis completed successfully!'}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+                ${renderStructuredAIAnalysis(_normalizeAnalysisData(data.analysis))}
+            `;
+        }
+
+        setTimeout(() => {
+            const successAlert = document.getElementById('claude-success-alert');
+            if (successAlert) bootstrap.Alert.getOrCreateInstance(successAlert).close();
+        }, 2500);
+
+        refreshAiComparison();
+    })
+    .catch(err => {
+        if (target) {
+            target.innerHTML = `
+                <div class="alert alert-danger mb-0" role="alert">
+                    <i class="fas fa-wifi me-2"></i>
+                    <strong>Network error:</strong> ${err}
+                </div>
+            `;
+        }
+    })
+    .finally(() => {
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = originalContent;
+        }
+    });
+}
 
 function _formatMetricValue(value, suffix='') {
     if (value === null || value === undefined || value === '') return '—';
@@ -2123,7 +2088,10 @@ async function refreshAiComparison() {
     const statusEl = document.getElementById('ai-compare-status');
     const tableEl = document.getElementById('ai-compare-table');
     const tbody = document.getElementById('ai-compare-tbody');
-    const generateBtn = document.querySelector('#ai-compare-section button[onclick="generateChatGPTAnalysis()"]');
+    const generateBtn = document.getElementById('ai-chatgpt-run-btn');
+    const chatgptHint = document.getElementById('ai-chatgpt-config-hint');
+    const claudeModelLabel = document.getElementById('ai-claude-model-label');
+    const chatgptModelLabel = document.getElementById('ai-chatgpt-model-label');
 
     if (!statusEl || !tableEl || !tbody) return;
 
@@ -2142,7 +2110,10 @@ async function refreshAiComparison() {
         const openaiConfigured = data.openai_configured === true;
         if (generateBtn) {
             generateBtn.disabled = !openaiConfigured;
-            generateBtn.title = openaiConfigured ? 'Generate ChatGPT analysis' : 'Set OPENAI_API_KEY in .env and restart app';
+            generateBtn.title = openaiConfigured ? 'Run ChatGPT analysis' : 'Set OPENAI_API_KEY in .env and restart app';
+        }
+        if (chatgptHint) {
+            chatgptHint.textContent = openaiConfigured ? '' : 'ChatGPT is not configured: set OPENAI_API_KEY in .env and restart the app.';
         }
 
         const claude = data.comparison?.claude;
@@ -2211,12 +2182,20 @@ async function refreshAiComparison() {
         );
 
         const claudeModel = data.claude_model || 'unknown';
+        if (claudeModelLabel) claudeModelLabel.textContent = `Powered by Claude (${claudeModel})`;
+        if (chatgptModelLabel) {
+            if (data.has_chatgpt) {
+                chatgptModelLabel.textContent = `Powered by ChatGPT (${data.chatgpt_model || 'unknown'})`;
+            } else {
+                chatgptModelLabel.textContent = 'Powered by ChatGPT';
+            }
+        }
         if (data.has_chatgpt) {
             statusEl.textContent = `Claude: ${claudeModel} • ChatGPT: ${data.chatgpt_model || 'unknown'}`;
         } else if (!openaiConfigured) {
             statusEl.textContent = `Claude: ${claudeModel} • ChatGPT is not configured (set OPENAI_API_KEY in .env, then restart the app).`;
         } else {
-            statusEl.textContent = `Claude: ${claudeModel} • ChatGPT analysis not generated yet (click “Generate ChatGPT”).`;
+            statusEl.textContent = `Claude: ${claudeModel} • ChatGPT analysis not generated yet (open the ChatGPT tab and click “Run ChatGPT”).`;
         }
 
         tableEl.style.display = '';
@@ -2227,6 +2206,31 @@ async function refreshAiComparison() {
 
 async function generateChatGPTAnalysis() {
     try {
+        setActiveAiTab('chatgpt');
+        const btn = document.getElementById('ai-chatgpt-run-btn');
+        const targetId = 'ai-chatgpt-structured-analysis';
+        const placeholderId = 'ai-chatgpt-placeholder';
+        const placeholder = document.getElementById(placeholderId);
+        if (placeholder) placeholder.style.display = 'none';
+
+        const target = document.getElementById(targetId);
+        if (target) {
+            target.innerHTML = `
+                <div class="text-center">
+                    <div class="spinner-border text-primary mb-3" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="text-muted mb-1">ChatGPT is analyzing this property…</p>
+                    <small class="text-body-secondary">This may take 10-30 seconds</small>
+                </div>
+            `;
+        }
+
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fas fa-spinner fa-spin me-2"></i>Analyzing…`;
+        }
+
         const resp = await fetch(`/api/analysis/generate/{{ land.id }}/openai`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2237,7 +2241,28 @@ async function generateChatGPTAnalysis() {
             if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
                 window.IdealistaApp.showNotification(data.error || 'Failed to generate ChatGPT analysis', 'error');
             }
+            if (target) {
+                target.innerHTML = `
+                    <div class="alert alert-danger mb-0" role="alert">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        <strong>ChatGPT failed:</strong> ${data.error || 'Unknown error'}
+                    </div>
+                `;
+            }
             return;
+        }
+
+        window.__EXISTING_OPENAI_ANALYSIS__ = data.analysis;
+
+        if (target) {
+            target.innerHTML = `
+                <div class="alert alert-success alert-dismissible fade show" role="alert" id="chatgpt-success-alert">
+                    <i class="fas fa-check-circle me-2"></i>
+                    ChatGPT analysis generated
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+                ${renderStructuredAIAnalysis(_normalizeAnalysisData(data.analysis))}
+            `;
         }
         if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
             window.IdealistaApp.showNotification('ChatGPT analysis generated', 'success');
@@ -2246,6 +2271,21 @@ async function generateChatGPTAnalysis() {
     } catch (e) {
         if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
             window.IdealistaApp.showNotification(`Failed to generate ChatGPT analysis: ${e}`, 'error');
+        }
+        const target = document.getElementById('ai-chatgpt-structured-analysis');
+        if (target) {
+            target.innerHTML = `
+                <div class="alert alert-danger mb-0" role="alert">
+                    <i class="fas fa-wifi me-2"></i>
+                    <strong>Network error:</strong> ${e}
+                </div>
+            `;
+        }
+    } finally {
+        const btn = document.getElementById('ai-chatgpt-run-btn');
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = `<i class="fas fa-wand-magic-sparkles me-1"></i>Run ChatGPT`;
         }
     }
 }

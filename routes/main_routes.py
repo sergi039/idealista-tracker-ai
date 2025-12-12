@@ -251,12 +251,31 @@ def land_detail(land_id):
                     )
         except Exception as e:
             logger.warning("Failed to load reference cities for detail view: %s", e)
+
+        # Latest ChatGPT/OpenAI structured analysis variant (if present)
+        openai_analysis = None
+        openai_model = None
+        try:
+            from models import AiAnalysisVariant
+
+            openai_variant = (
+                AiAnalysisVariant.query.filter_by(land_id=land.id, provider="openai")
+                .order_by(AiAnalysisVariant.created_at.desc())
+                .first()
+            )
+            if openai_variant:
+                openai_analysis = openai_variant.analysis
+                openai_model = openai_variant.model
+        except Exception as e:
+            logger.warning("Failed to load OpenAI analysis variant for land %s: %s", land.id, e)
         
         return render_template(
             'land_detail.html',
             land=land,
             score_breakdown=score_breakdown,
-            reference_cities=reference_cities_for_view
+            reference_cities=reference_cities_for_view,
+            openai_analysis=openai_analysis,
+            openai_model=openai_model,
         )
         
     except Exception as e:
