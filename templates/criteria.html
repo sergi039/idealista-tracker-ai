@@ -363,43 +363,40 @@
                             After changing them, re-enrich properties to refresh travel times.
                         </p>
 
-                        {% set city_a = (reference_cities[0] if reference_cities and reference_cities|length > 0 else {}) %}
-                        {% set city_b = (reference_cities[1] if reference_cities and reference_cities|length > 1 else {}) %}
-
-                        <form method="POST" action="{{ url_for('main.update_reference_cities') }}">
-                            <div class="row g-3 align-items-end">
-                                <div class="col-md-4">
-                                    <label class="form-label fw-bold">City A Name</label>
-                                    <input class="form-control" name="city_a_name" value="{{ city_a.get('name', 'Oviedo') }}" required>
-                                </div>
-                                <div class="col-md-4">
-                                    <label class="form-label fw-bold">City A Latitude</label>
-                                    <input class="form-control" name="city_a_lat" value="{{ city_a.get('lat', 43.3614) }}" required>
-                                </div>
-                                <div class="col-md-4">
-                                    <label class="form-label fw-bold">City A Longitude</label>
-                                    <input class="form-control" name="city_a_lon" value="{{ city_a.get('lon', -5.8593) }}" required>
-                                </div>
-
-                                <div class="col-md-4">
-                                    <label class="form-label fw-bold">City B Name</label>
-                                    <input class="form-control" name="city_b_name" value="{{ city_b.get('name', 'Gijón') }}" required>
-                                </div>
-                                <div class="col-md-4">
-                                    <label class="form-label fw-bold">City B Latitude</label>
-                                    <input class="form-control" name="city_b_lat" value="{{ city_b.get('lat', 43.5322) }}" required>
-                                </div>
-                                <div class="col-md-4">
-                                    <label class="form-label fw-bold">City B Longitude</label>
-                                    <input class="form-control" name="city_b_lon" value="{{ city_b.get('lon', -5.6611) }}" required>
-                                </div>
+                        <form method="POST" action="{{ url_for('main.update_reference_cities') }}" id="reference-cities-form">
+                            <div id="reference-cities-rows" class="vstack gap-2">
+                                {% for city in reference_cities %}
+                                    <div class="d-flex gap-2 align-items-center reference-city-row">
+                                        <input class="form-control"
+                                               name="reference_city_name"
+                                               value="{{ city.name }}"
+                                               list="city-registry"
+                                               placeholder="Start typing a city..."
+                                               required>
+                                        <button type="button" class="btn btn-outline-danger btn-sm remove-city">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </div>
+                                {% endfor %}
                             </div>
 
-                            <div class="mt-3 d-flex justify-content-end">
+                            <datalist id="city-registry">
+                                {% for city_name in (city_registry_names or []) %}
+                                    <option value="{{ city_name }}"></option>
+                                {% endfor %}
+                            </datalist>
+
+                            <div class="mt-3 d-flex justify-content-between align-items-center">
+                                <button type="button" class="btn btn-outline-secondary" id="add-reference-city">
+                                    <i class="fas fa-plus me-2"></i>Add City
+                                </button>
                                 <button type="submit" class="btn btn-info">
                                     <i class="fas fa-save me-2"></i>Save Reference Cities
                                 </button>
                             </div>
+                            <small class="text-muted d-block mt-2">
+                                First 2 cities are used for travel-time scoring. Additional cities show distance only.
+                            </small>
                         </form>
                     </div>
                 </div>
@@ -410,6 +407,58 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    // Reference cities add/remove UI
+    const refForm = document.getElementById('reference-cities-form');
+    const rows = document.getElementById('reference-cities-rows');
+    const addBtn = document.getElementById('add-reference-city');
+    if (refForm && rows && addBtn) {
+        const updateRemoveState = () => {
+            const allRows = rows.querySelectorAll('.reference-city-row');
+            allRows.forEach((row, idx) => {
+                const removeBtn = row.querySelector('.remove-city');
+                if (removeBtn) {
+                    removeBtn.disabled = allRows.length <= 2; // keep minimum 2
+                    removeBtn.title = allRows.length <= 2 ? 'At least 2 cities required' : 'Remove';
+                }
+            });
+        };
+
+        rows.addEventListener('click', (e) => {
+            const btn = e.target.closest('.remove-city');
+            if (!btn) return;
+            const row = btn.closest('.reference-city-row');
+            if (!row) return;
+            if (rows.querySelectorAll('.reference-city-row').length <= 2) return;
+            row.remove();
+            updateRemoveState();
+        });
+
+        addBtn.addEventListener('click', () => {
+            const row = document.createElement('div');
+            row.className = 'd-flex gap-2 align-items-center reference-city-row';
+
+            const input = document.createElement('input');
+            input.className = 'form-control';
+            input.name = 'reference_city_name';
+            input.placeholder = 'Start typing a city...';
+            input.setAttribute('list', 'city-registry');
+            input.required = true;
+
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'btn btn-outline-danger btn-sm remove-city';
+            remove.innerHTML = '<i class="fas fa-trash"></i>';
+
+            row.appendChild(input);
+            row.appendChild(remove);
+            rows.appendChild(row);
+            updateRemoveState();
+            input.focus();
+        });
+
+        updateRemoveState();
+    }
+
     // Configuration from backend (will be populated by template)
     const investmentProfile = {
         'investment_yield': 0.35,

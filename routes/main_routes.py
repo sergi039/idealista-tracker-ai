@@ -205,9 +205,9 @@ def land_detail(land_id):
                 lat = float(land.location_lat)
                 lon = float(land.location_lon)
 
-                for city in cities:
+                for idx, city in enumerate(cities):
                     distance_km = round(_haversine_km(lat, lon, float(city["lat"]), float(city["lon"])))
-                    travel_time = land.travel_time_oviedo if city["slot"] == "city_a" else land.travel_time_gijon
+                    travel_time = land.travel_time_oviedo if idx == 0 else land.travel_time_gijon if idx == 1 else None
                     reference_cities_for_view.append(
                         {
                             "name": city["name"],
@@ -271,6 +271,7 @@ def criteria():
         from config import Config
         from services.scoring_service import ScoringService
         from services.settings_service import SettingsService
+        from utils.city_registry import all_city_names
         
         # Load profile weights using ScoringService for consistency
         scoring_service = ScoringService()
@@ -303,13 +304,15 @@ def criteria():
         }
 
         reference_cities = SettingsService.get_reference_cities()
+        city_registry_names = all_city_names()
         
         return render_template('criteria.html', 
                              investment_weights=investment_weights,
                              lifestyle_weights=lifestyle_weights,
                              combined_mix=combined_mix,
                              criteria_descriptions=criteria_descriptions,
-                             reference_cities=reference_cities)
+                             reference_cities=reference_cities,
+                             city_registry_names=city_registry_names)
         
     except Exception as e:
         logger.error(f"Failed to load criteria page: {str(e)}")
@@ -449,26 +452,12 @@ def update_combined_mix():
 @main_bp.route('/criteria/update_reference_cities', methods=['POST'])
 @admin_required
 def update_reference_cities():
-    """Update the 2 reference city slots (used for travel-time scoring/display)."""
+    """Update reference cities used for travel-time scoring/display."""
     try:
         from services.settings_service import SettingsService
 
-        cities = [
-            {
-                "slot": "city_a",
-                "name": request.form.get("city_a_name", ""),
-                "lat": request.form.get("city_a_lat", ""),
-                "lon": request.form.get("city_a_lon", ""),
-            },
-            {
-                "slot": "city_b",
-                "name": request.form.get("city_b_name", ""),
-                "lat": request.form.get("city_b_lat", ""),
-                "lon": request.form.get("city_b_lon", ""),
-            },
-        ]
-
-        SettingsService.set_reference_cities(cities)
+        city_names = [n for n in request.form.getlist("reference_city_name") if (n or "").strip()]
+        SettingsService.set_reference_city_names(city_names)
         flash("Reference cities updated. Re-enrich properties to update travel times.", "success")
     except Exception as e:
         logger.error("Failed to update reference cities: %s", e)
