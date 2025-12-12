@@ -440,3 +440,25 @@ footer {
     background-color: var(--bs-tertiary-bg);
     border-color: var(--bs-border-color) !important;
 }
+
+/* Land detail overview (header + stats) */
+.favorite-btn-header {
+    width: 40px;
+    height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.overview-label {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.overview-value {
+    font-weight: 600;
+    font-size: 1.05rem;
+    line-height: 1.2;
+    margin-top: 0.15rem;
+}

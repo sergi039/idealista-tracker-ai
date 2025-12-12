@@ -5,33 +5,42 @@
 {% block content %}
 <div class="row">
     <div class="col-12 mb-4">
-        <div class="d-flex justify-content-between align-items-center">
-            <div class="d-flex align-items-center">
-                <button class="btn btn-link p-0 me-3 favorite-btn"
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+            <div class="d-flex align-items-start gap-3">
+                <button class="btn btn-outline-secondary btn-sm rounded-circle favorite-btn-header"
                         data-land-id="{{ land.id }}"
                         onclick="toggleFavorite({{ land.id }})"
-                        title="{{ 'Remove from favorites' if land.is_favorite else 'Add to favorites' }}">
-                    <i class="fas fa-star {{ 'text-warning' if land.is_favorite else 'text-muted' }}"
-                       style="font-size: 1.8rem; cursor: pointer;"></i>
+                        title="{{ 'Remove from favorites' if land.is_favorite else 'Add to favorites' }}"
+                        aria-label="Toggle favorite">
+                    <i class="fas fa-star {{ 'text-warning' if land.is_favorite else 'text-muted' }}"></i>
                 </button>
-                <h1 class="mb-0">
-                    <i class="fas fa-map-marker-alt me-2"></i>
-                    {{ land.title[:60] }}{% if land.title|length > 60 %}...{% endif %}
-                </h1>
-                {% if land.listing_status == 'removed' %}
-                    <span class="badge bg-danger ms-2" style="font-size: 0.6em; vertical-align: middle;">
-                        <i class="fas fa-times-circle me-1"></i>REMOVED
-                    </span>
-                {% elif land.listing_status == 'sold' %}
-                    <span class="badge bg-secondary ms-2" style="font-size: 0.6em; vertical-align: middle;">
-                        <i class="fas fa-check-circle me-1"></i>SOLD
-                    </span>
-                {% endif %}
+                <div>
+                    <h1 class="h3 mb-1">
+                        <i class="fas fa-map-marker-alt me-2"></i>
+                        {{ land.title }}
+                    </h1>
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        {% if land.listing_status == 'removed' %}
+                            <span class="badge bg-danger">
+                                <i class="fas fa-times-circle me-1"></i>REMOVED
+                            </span>
+                        {% elif land.listing_status == 'sold' %}
+                            <span class="badge bg-secondary">
+                                <i class="fas fa-check-circle me-1"></i>SOLD
+                            </span>
+                        {% endif %}
+                        {% if land.municipality %}
+                            <span class="text-body-secondary small">
+                                <i class="fas fa-city me-1"></i>{{ land.municipality }}
+                            </span>
+                        {% endif %}
+                    </div>
+                </div>
             </div>
-            <a href="{{ url_for('main.lands', sort=request.args.get('sort'), order=request.args.get('order'), land_type=request.args.get('land_type'), municipality=request.args.get('municipality'), search=request.args.get('search'), per_page=request.args.get('per_page')) }}" class="btn btn-outline-secondary">
+            <a href="{{ url_for('main.lands', sort=request.args.get('sort'), order=request.args.get('order'), land_type=request.args.get('land_type'), municipality=request.args.get('municipality'), search=request.args.get('search'), per_page=request.args.get('per_page')) }}"
+               class="btn btn-outline-secondary btn-sm">
                 <i class="fas fa-arrow-left me-1"></i>Back to Properties
             </a>
-        </div>
     </div>
 </div>
 
@@ -65,11 +74,13 @@
     <!-- Main Info -->
     <div class="col-lg-8">
         <div class="card mb-4">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h2 class="card-title mb-0">{{ land.title }}</h2>
+            <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
+                <h2 class="h6 mb-0">
+                    <i class="fas fa-info-circle me-2"></i>Overview
+                </h2>
                 <div class="d-flex align-items-center gap-2">
                     {% if land.score_total %}
-                        <span class="badge score-badge fs-5" 
+                        <span class="badge score-badge" 
                               style="background-color: {{ 'var(--bs-success)' if land.score_total >= 70 else 'var(--bs-warning)' if land.score_total >= 50 else 'var(--bs-danger)' }}">
                             Score: {{ "%.1f"|format(land.score_total) }}
                         </span>
@@ -80,82 +91,123 @@
                 </div>
             </div>
             <div class="card-body">
-                <!-- Basic Info -->
-                <div class="row mb-4">
-                    <div class="col-md-3">
-                        <strong>Price:</strong><br>
-                        {% if land.price %}
-                            <span class="fs-4 text-success">{{ "{:,.0f}".format(land.price) }}€</span>
-                        {% else %}
-                            <span class="text-muted">Not specified</span>
-                        {% endif %}
+                <div class="row g-3 mb-3">
+                    <div class="col-6 col-lg-3">
+                        <div class="overview-stat bg-body-tertiary border rounded p-3 h-100">
+                            <div class="overview-label text-body-secondary">
+                                <i class="fas fa-euro-sign me-1"></i>Price
+                            </div>
+                            <div class="overview-value">
+                                {% if land.price %}
+                                    <span class="text-success">{{ "{:,.0f}".format(land.price) }}€</span>
+                                {% else %}
+                                    <span class="text-body-secondary">Not specified</span>
+                                {% endif %}
+                            </div>
+                        </div>
                     </div>
-                    <div class="col-md-3">
-                        <strong>Area:</strong><br>
-                        {% if land.area %}
-                            <span class="fs-5">{{ "{:,.0f}".format(land.area) }} m²</span>
-                        {% else %}
-                            <span class="text-muted">Not specified</span>
-                        {% endif %}
+                    <div class="col-6 col-lg-3">
+                        <div class="overview-stat bg-body-tertiary border rounded p-3 h-100">
+                            <div class="overview-label text-body-secondary">
+                                <i class="fas fa-ruler-combined me-1"></i>Area
+                            </div>
+                            <div class="overview-value">
+                                {% if land.area %}
+                                    {{ "{:,.0f}".format(land.area) }} m²
+                                {% else %}
+                                    <span class="text-body-secondary">Not specified</span>
+                                {% endif %}
+                            </div>
+                        </div>
                     </div>
-                    <div class="col-md-3">
-                        <strong>Municipality:</strong><br>
-                        <span class="fs-6">{{ land.municipality or 'Unknown' }}</span>
+                    <div class="col-6 col-lg-3">
+                        <div class="overview-stat bg-body-tertiary border rounded p-3 h-100">
+                            <div class="overview-label text-body-secondary">
+                                <i class="fas fa-city me-1"></i>Municipality
+                            </div>
+                            <div class="overview-value">
+                                {{ land.municipality or 'Unknown' }}
+                            </div>
+                        </div>
                     </div>
-                    <div class="col-md-3">
-                        <strong>Type:</strong><br>
-                        {% if land.land_type %}
-                            <span class="badge {{ 'bg-success' if land.land_type == 'developed' else 'bg-warning' }} fs-6">
-                                {{ land.land_type.title() }}
-                            </span>
-                        {% else %}
-                            <span class="text-muted">Unknown</span>
-                        {% endif %}
+                    <div class="col-6 col-lg-3">
+                        <div class="overview-stat bg-body-tertiary border rounded p-3 h-100">
+                            <div class="overview-label text-body-secondary">
+                                <i class="fas fa-tag me-1"></i>Type
+                            </div>
+                            <div class="overview-value">
+                                {% if land.land_type %}
+                                    <span class="badge {{ 'bg-success' if land.land_type == 'developed' else 'bg-warning' }}">
+                                        {{ land.land_type.title() }}
+                                    </span>
+                                {% else %}
+                                    <span class="text-body-secondary">Unknown</span>
+                                {% endif %}
+                            </div>
+                        </div>
                     </div>
                 </div>
 
                 <!-- Location -->
                 {% if land.location_lat and land.location_lon %}
-                    <div class="mb-4">
-                        <strong>Location:</strong><br>
-                        <i class="fas fa-map-marker-alt me-2"></i>
-                        {{ "%.6f"|format(land.location_lat) }}, {{ "%.6f"|format(land.location_lon) }}
-                        <a href="https://www.google.com/maps/search/?api=1&query={{ land.location_lat }},{{ land.location_lon }}" 
-                           target="_blank" class="btn btn-sm btn-outline-primary ms-2">
-                            <i class="fas fa-external-link-alt me-1"></i>{{ t('view_on_maps') }}
-                        </a>
-                        {% if land.url %}
-                        <a href="{{ land.url }}" 
-                           target="_blank" class="btn btn-sm btn-outline-info ms-2">
-                            <i class="fas fa-home me-1"></i>{{ t('view_on_idealista') }}
-                        </a>
-                        {% endif %}
-                        <a href="{{ url_for('main.map_view', focus=land.id) }}"
-                           class="btn btn-sm btn-outline-secondary ms-2"
-                           title="{{ t('view_on_app_map') }}">
-                            <i class="fas fa-map me-1"></i>{{ t('view_on_app_map') }}
-                        </a>
+                    <div class="overview-location bg-body-tertiary border rounded p-3 mb-4">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                            <div>
+                                <div class="overview-label text-body-secondary">
+                                    <i class="fas fa-location-dot me-1"></i>Location
+                                </div>
+                                <div class="overview-value font-monospace">
+                                    {{ "%.6f"|format(land.location_lat) }}, {{ "%.6f"|format(land.location_lon) }}
+                                </div>
+                            </div>
+                            <div class="btn-group btn-group-sm" role="group" aria-label="Location links">
+                                <a href="https://www.google.com/maps/search/?api=1&query={{ land.location_lat }},{{ land.location_lon }}"
+                                   target="_blank" class="btn btn-outline-primary">
+                                    <i class="fas fa-map me-1"></i>Google Maps
+                                </a>
+                                {% if land.url %}
+                                <a href="{{ land.url }}"
+                                   target="_blank" class="btn btn-outline-success">
+                                    <i class="fas fa-home me-1"></i>Idealista
+                                </a>
+                                {% endif %}
+                                <a href="{{ url_for('main.map_view', focus=land.id) }}"
+                                   class="btn btn-outline-secondary"
+                                   title="{{ t('view_on_app_map') }}">
+                                    <i class="fas fa-map-marked-alt me-1"></i>Our Maps
+                                </a>
+                            </div>
+                        </div>
                     </div>
                 {% elif land.municipality %}
-                    <div class="mb-4">
-                        <strong>Location:</strong><br>
-                        <i class="fas fa-map-marker-alt me-2"></i>
-                        {{ land.municipality }}
-                        <a href="https://www.google.com/maps/search/{{ land.municipality|urlencode }},+Spain" 
-                           target="_blank" class="btn btn-sm btn-outline-primary ms-2">
-                            <i class="fas fa-external-link-alt me-1"></i>{{ t('view_on_maps') }}
-                        </a>
-                        {% if land.url %}
-                        <a href="{{ land.url }}" 
-                           target="_blank" class="btn btn-sm btn-outline-info ms-2">
-                            <i class="fas fa-home me-1"></i>{{ t('view_on_idealista') }}
-                        </a>
-                        {% endif %}
-                        <a href="{{ url_for('main.map_view', focus=land.id) }}"
-                           class="btn btn-sm btn-outline-secondary ms-2"
-                           title="{{ t('view_on_app_map') }}">
-                            <i class="fas fa-map me-1"></i>{{ t('view_on_app_map') }}
-                        </a>
+                    <div class="overview-location bg-body-tertiary border rounded p-3 mb-4">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                            <div>
+                                <div class="overview-label text-body-secondary">
+                                    <i class="fas fa-location-dot me-1"></i>Location
+                                </div>
+                                <div class="overview-value">
+                                    {{ land.municipality }}
+                                </div>
+                            </div>
+                            <div class="btn-group btn-group-sm" role="group" aria-label="Location links">
+                                <a href="https://www.google.com/maps/search/{{ land.municipality|urlencode }},+Spain"
+                                   target="_blank" class="btn btn-outline-primary">
+                                    <i class="fas fa-map me-1"></i>Google Maps
+                                </a>
+                                {% if land.url %}
+                                <a href="{{ land.url }}"
+                                   target="_blank" class="btn btn-outline-success">
+                                    <i class="fas fa-home me-1"></i>Idealista
+                                </a>
+                                {% endif %}
+                                <a href="{{ url_for('main.map_view', focus=land.id) }}"
+                                   class="btn btn-outline-secondary"
+                                   title="{{ t('view_on_app_map') }}">
+                                    <i class="fas fa-map-marked-alt me-1"></i>Our Maps
+                                </a>
+                            </div>
+                        </div>
                     </div>
                 {% endif %}
 
