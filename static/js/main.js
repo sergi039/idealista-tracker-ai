@@ -10,6 +10,7 @@ window.IdealistaApp = {
         this.setupTooltips();
         this.updateLastSync();
         this.setupTableInteractions();
+        this.setupThemeToggle();
     },
 
     setupEventListeners: function() {
@@ -27,6 +28,46 @@ window.IdealistaApp = {
         
         // Description enhancement functionality
         this.setupDescriptionEnhancement();
+    },
+
+    setupThemeToggle: function() {
+        const button = document.getElementById('theme-toggle');
+        if (!button) return;
+
+        const icon = document.getElementById('theme-toggle-icon');
+        const label = document.getElementById('theme-toggle-label');
+        const themeMeta = document.getElementById('theme-color-meta');
+
+        const setTheme = (theme) => {
+            const normalized = theme === 'light' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-bs-theme', normalized);
+            try {
+                localStorage.setItem('theme', normalized);
+            } catch (e) {
+                // ignore
+            }
+
+            if (themeMeta) {
+                themeMeta.setAttribute('content', normalized === 'dark' ? '#111827' : '#f8f9fa');
+            }
+
+            if (icon) {
+                icon.className = normalized === 'dark' ? 'fas fa-sun me-1' : 'fas fa-moon me-1';
+            }
+            if (label) {
+                label.textContent = normalized === 'dark' ? 'Light' : 'Dark';
+            }
+
+            button.setAttribute('aria-label', `Switch to ${normalized === 'dark' ? 'light' : 'dark'} theme`);
+        };
+
+        const current = document.documentElement.getAttribute('data-bs-theme') || 'dark';
+        setTheme(current);
+
+        button.addEventListener('click', () => {
+            const now = document.documentElement.getAttribute('data-bs-theme') || 'dark';
+            setTheme(now === 'dark' ? 'light' : 'dark');
+        });
     },
 
     setupHTMX: function() {
