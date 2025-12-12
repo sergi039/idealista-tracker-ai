@@ -296,6 +296,41 @@
                     </div>
                 </div>
 
+                <!-- Claude vs ChatGPT comparison -->
+                <div class="mt-3" id="ai-compare-section">
+                    <div class="card">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h6 class="mb-0">
+                                <i class="fas fa-scale-balanced me-2"></i>Claude vs ChatGPT
+                            </h6>
+                            <div class="d-flex gap-2">
+                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="refreshAiComparison()">
+                                    <i class="fas fa-rotate me-1"></i>Refresh
+                                </button>
+                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="generateChatGPTAnalysis()">
+                                    <i class="fas fa-wand-magic-sparkles me-1"></i>Generate ChatGPT
+                                </button>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div id="ai-compare-status" class="small text-body-secondary">Loading…</div>
+                            <div class="table-responsive mt-2">
+                                <table class="table table-sm align-middle mb-0" id="ai-compare-table" style="display:none;">
+                                    <thead>
+                                        <tr>
+                                            <th style="min-width: 190px;">Metric</th>
+                                            <th style="min-width: 160px;">Claude</th>
+                                            <th style="min-width: 160px;">ChatGPT</th>
+                                            <th style="min-width: 160px;">Baseline</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="ai-compare-tbody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Actions -->
                 <div class="mt-4 d-flex justify-content-center gap-2" style="flex-wrap: nowrap;">
                     {% if land.url %}
@@ -2052,6 +2087,155 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
     {% endif %}
+
+    // Load model comparison table (Claude vs ChatGPT)
+    refreshAiComparison();
 });
+
+function _formatMetricValue(value, suffix='') {
+    if (value === null || value === undefined || value === '') return '—';
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return `${value}${suffix}`;
+    }
+    return String(value);
+}
+
+function _appendRow(tbody, label, claudeVal, gptVal, baselineVal) {
+    const tr = document.createElement('tr');
+    const td0 = document.createElement('td');
+    td0.className = 'fw-semibold';
+    td0.textContent = label;
+    const td1 = document.createElement('td');
+    td1.textContent = claudeVal;
+    const td2 = document.createElement('td');
+    td2.textContent = gptVal;
+    const td3 = document.createElement('td');
+    td3.className = 'text-body-secondary';
+    td3.textContent = baselineVal;
+    tr.appendChild(td0);
+    tr.appendChild(td1);
+    tr.appendChild(td2);
+    tr.appendChild(td3);
+    tbody.appendChild(tr);
+}
+
+async function refreshAiComparison() {
+    const statusEl = document.getElementById('ai-compare-status');
+    const tableEl = document.getElementById('ai-compare-table');
+    const tbody = document.getElementById('ai-compare-tbody');
+
+    if (!statusEl || !tableEl || !tbody) return;
+
+    statusEl.textContent = 'Loading…';
+    tableEl.style.display = 'none';
+    tbody.textContent = '';
+
+    try {
+        const resp = await fetch(`/api/analysis/compare/{{ land.id }}`);
+        const data = await resp.json();
+        if (!data.success) {
+            statusEl.textContent = data.error || 'Failed to load comparison';
+            return;
+        }
+
+        const claude = data.comparison?.claude;
+        const gpt = data.comparison?.chatgpt;
+        const expected = data.comparison?.expected || {};
+
+        const c = claude?.metrics || {};
+        const g = gpt?.metrics || {};
+
+        _appendRow(
+            tbody,
+            'Investment rating',
+            _formatMetricValue(c.investment_rating),
+            gpt ? _formatMetricValue(g.investment_rating) : 'Not generated',
+            _formatMetricValue(expected.investment_rating)
+        );
+        _appendRow(
+            tbody,
+            'Rental yield',
+            _formatMetricValue(c.rental_yield, '%'),
+            gpt ? _formatMetricValue(g.rental_yield, '%') : 'Not generated',
+            _formatMetricValue(expected.rental_yield, '%')
+        );
+        _appendRow(
+            tbody,
+            'Cap rate',
+            _formatMetricValue(c.cap_rate, '%'),
+            gpt ? _formatMetricValue(g.cap_rate, '%') : 'Not generated',
+            _formatMetricValue(expected.cap_rate, '%')
+        );
+        _appendRow(
+            tbody,
+            'Price / rent ratio',
+            _formatMetricValue(c.price_to_rent_ratio),
+            gpt ? _formatMetricValue(g.price_to_rent_ratio) : 'Not generated',
+            _formatMetricValue(expected.price_to_rent_ratio)
+        );
+        _appendRow(
+            tbody,
+            'Payback (years)',
+            _formatMetricValue(c.payback_period_years),
+            gpt ? _formatMetricValue(g.payback_period_years) : 'Not generated',
+            _formatMetricValue(expected.payback_period_years)
+        );
+
+        _appendRow(
+            tbody,
+            'Schema completeness',
+            `${claude?.schema?.found || 0}/${claude?.schema?.total || 0}`,
+            gpt ? `${gpt?.schema?.found || 0}/${gpt?.schema?.total || 0}` : 'Not generated',
+            '—'
+        );
+        _appendRow(
+            tbody,
+            'Numeric fidelity',
+            _formatMetricValue(claude?.fidelity_score, '/100'),
+            gpt ? _formatMetricValue(gpt?.fidelity_score, '/100') : 'Not generated',
+            '—'
+        );
+        _appendRow(
+            tbody,
+            'Overall score',
+            _formatMetricValue(claude?.overall_score, '/100'),
+            gpt ? _formatMetricValue(gpt?.overall_score, '/100') : 'Not generated',
+            '—'
+        );
+
+        statusEl.textContent = data.has_chatgpt
+            ? `ChatGPT model: ${data.chatgpt_model || 'unknown'}`
+            : 'ChatGPT analysis not generated yet (set OPENAI_API_KEY and click “Generate ChatGPT”).';
+
+        tableEl.style.display = '';
+    } catch (e) {
+        statusEl.textContent = `Failed to load comparison: ${e}`;
+    }
+}
+
+async function generateChatGPTAnalysis() {
+    try {
+        const resp = await fetch(`/api/analysis/generate/{{ land.id }}/openai`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        });
+        const data = await resp.json();
+        if (!data.success) {
+            if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
+                window.IdealistaApp.showNotification(data.error || 'Failed to generate ChatGPT analysis', 'error');
+            }
+            return;
+        }
+        if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
+            window.IdealistaApp.showNotification('ChatGPT analysis generated', 'success');
+        }
+        refreshAiComparison();
+    } catch (e) {
+        if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
+            window.IdealistaApp.showNotification(`Failed to generate ChatGPT analysis: ${e}`, 'error');
+        }
+    }
+}
 </script>
 {% endblock %}

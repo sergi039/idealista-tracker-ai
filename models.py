@@ -298,3 +298,25 @@ class AppSetting(db.Model):
 
     def __repr__(self):
         return f"<AppSetting {self.key}>"
+
+
+class AiAnalysisVariant(db.Model):
+    """Stores alternative AI analyses per land (e.g., Claude vs ChatGPT)."""
+
+    __tablename__ = 'ai_analysis_variants'
+
+    id = db.Column(db.Integer, primary_key=True)
+    land_id = db.Column(db.Integer, db.ForeignKey('lands.id', ondelete='CASCADE'), nullable=False, index=True)
+    provider = db.Column(db.String(32), nullable=False, index=True)  # 'claude', 'openai'
+    model = db.Column(db.String(128), nullable=True)
+    analysis = db.Column(JSON, nullable=False, default=dict)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    land = db.relationship('Land', backref=db.backref('ai_analysis_variants', lazy='dynamic'))
+
+    __table_args__ = (
+        db.Index('ix_ai_analysis_variants_land_provider', 'land_id', 'provider'),
+    )
+
+    def __repr__(self):
+        return f"<AiAnalysisVariant land={self.land_id} provider={self.provider}>"

@@ -1,7 +1,8 @@
 import logging
 import os
+from datetime import datetime
 from flask import Blueprint, jsonify, request, send_from_directory
-from models import Land, LandHistory, ScoringCriteria, SyncHistory
+from models import Land, LandHistory, ScoringCriteria, SyncHistory, AiAnalysisVariant
 from app import db
 from utils.auth import admin_required, rate_limit
 
@@ -276,6 +277,97 @@ def analyze_property_structured(land_id):
             "success": False,
             "error": str(e)
         }), 500
+
+
+@api_bp.route('/analysis/generate/<int:land_id>/openai', methods=['POST'])
+@rate_limit(max_requests=3, window_seconds=300)
+def generate_openai_structured(land_id):
+    """Generate structured AI analysis with OpenAI (ChatGPT) and store it for comparison."""
+    try:
+        from services.openai_service import get_openai_service
+
+        land = Land.query.get_or_404(land_id)
+
+        # Optional: allow overwrite
+        request_data = request.get_json() if request.is_json else {}
+        force = bool(request_data.get("force"))
+
+        existing = (
+            AiAnalysisVariant.query.filter_by(land_id=land_id, provider='openai')
+            .order_by(AiAnalysisVariant.created_at.desc())
+            .first()
+        )
+        if existing and not force:
+            return jsonify({
+                "success": True,
+                "message": "ChatGPT analysis already exists",
+                "analysis": existing.analysis,
+                "model": existing.model,
+            })
+
+        service = get_openai_service()
+        result = service.analyze_property_structured(land)
+
+        if not result or result.get("status") != "success":
+            return jsonify({"success": False, "error": "OpenAI analysis failed"}), 500
+
+        analysis = result.get("structured_analysis") or {}
+        model = result.get("model")
+
+        if existing:
+            existing.analysis = analysis
+            existing.model = model
+            existing.created_at = datetime.utcnow()
+            variant = existing
+        else:
+            variant = AiAnalysisVariant(
+                land_id=land_id,
+                provider="openai",
+                model=model,
+                analysis=analysis,
+            )
+            db.session.add(variant)
+
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "analysis": variant.analysis,
+            "model": variant.model,
+        })
+
+    except Exception as e:
+        logger.error("OpenAI structured analysis failed for land %s: %s", land_id, e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_bp.route('/analysis/compare/<int:land_id>', methods=['GET'])
+def compare_ai_analyses(land_id):
+    """Return a rubric-based comparison between stored Claude analysis and ChatGPT analysis."""
+    try:
+        from utils.analysis_compare import build_comparison
+
+        land = Land.query.get_or_404(land_id)
+        claude_analysis = land.ai_analysis
+
+        openai_variant = (
+            AiAnalysisVariant.query.filter_by(land_id=land_id, provider='openai')
+            .order_by(AiAnalysisVariant.created_at.desc())
+            .first()
+        )
+
+        comparison = build_comparison(land, claude_analysis, openai_variant.analysis if openai_variant else None)
+
+        return jsonify({
+            "success": True,
+            "land_id": land_id,
+            "has_chatgpt": bool(openai_variant),
+            "chatgpt_model": openai_variant.model if openai_variant else None,
+            "comparison": comparison,
+        })
+    except Exception as e:
+        logger.error("AI comparison failed for land %s: %s", land_id, e)
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @api_bp.route('/enhance/description/<int:land_id>', methods=['POST'])
 def enhance_description(land_id):

@@ -29,6 +29,10 @@ class Config:
     # Using claude_key from secrets for authentication (legacy alias)
     ANTHROPIC_API_KEY = _first_env('ANTHROPIC_API_KEY', 'claude_key')
     ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-4-5-20250929"
+
+    # AI Integration - OpenAI (ChatGPT)
+    OPENAI_API_KEY = _first_env("OPENAI_API_KEY")
+    OPENAI_MODEL = os.environ.get("OPENAI_MODEL") or "gpt-4o-mini"
     
     # IMAP settings (for Gmail with App Password)
     IMAP_HOST = os.environ.get("IMAP_HOST") or "imap.gmail.com"
