@@ -2210,12 +2210,13 @@ async function refreshAiComparison() {
             '—'
         );
 
+        const claudeModel = data.claude_model || 'unknown';
         if (data.has_chatgpt) {
-            statusEl.textContent = `ChatGPT model: ${data.chatgpt_model || 'unknown'}`;
+            statusEl.textContent = `Claude: ${claudeModel} • ChatGPT: ${data.chatgpt_model || 'unknown'}`;
         } else if (!openaiConfigured) {
-            statusEl.textContent = 'ChatGPT is not configured (set OPENAI_API_KEY in .env, then restart the app).';
+            statusEl.textContent = `Claude: ${claudeModel} • ChatGPT is not configured (set OPENAI_API_KEY in .env, then restart the app).`;
         } else {
-            statusEl.textContent = 'ChatGPT analysis not generated yet (click “Generate ChatGPT”).';
+            statusEl.textContent = `Claude: ${claudeModel} • ChatGPT analysis not generated yet (click “Generate ChatGPT”).`;
         }
 
         tableEl.style.display = '';

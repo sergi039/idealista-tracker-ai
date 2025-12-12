@@ -240,6 +240,7 @@ def analyze_property_structured(land_id):
         
         if result and result.get('status') == 'success':
             new_analysis = result.get('structured_analysis')
+            model_used = result.get('model')
             
             # If enrichment, merge with existing analysis, otherwise replace
             if is_enrichment and existing_analysis and new_analysis:
@@ -254,6 +255,30 @@ def analyze_property_structured(land_id):
                 final_analysis = new_analysis
                 
             db.session.commit()
+
+            # Store a Claude variant for later comparison (best-effort).
+            try:
+                existing_variant = (
+                    AiAnalysisVariant.query.filter_by(land_id=land_id, provider='claude')
+                    .order_by(AiAnalysisVariant.created_at.desc())
+                    .first()
+                )
+                if existing_variant:
+                    existing_variant.analysis = final_analysis
+                    existing_variant.model = model_used
+                    existing_variant.created_at = datetime.utcnow()
+                else:
+                    db.session.add(
+                        AiAnalysisVariant(
+                            land_id=land_id,
+                            provider='claude',
+                            model=model_used,
+                            analysis=final_analysis,
+                        )
+                    )
+                db.session.commit()
+            except Exception as e:
+                logger.warning("Failed to store Claude analysis variant for land %s: %s", land_id, e)
             
             return jsonify({
                 "success": True,
@@ -351,6 +376,12 @@ def compare_ai_analyses(land_id):
         land = Land.query.get_or_404(land_id)
         claude_analysis = land.ai_analysis
 
+        claude_variant = (
+            AiAnalysisVariant.query.filter_by(land_id=land_id, provider='claude')
+            .order_by(AiAnalysisVariant.created_at.desc())
+            .first()
+        )
+
         openai_variant = (
             AiAnalysisVariant.query.filter_by(land_id=land_id, provider='openai')
             .order_by(AiAnalysisVariant.created_at.desc())
@@ -365,6 +396,7 @@ def compare_ai_analyses(land_id):
             "has_chatgpt": bool(openai_variant),
             "chatgpt_model": openai_variant.model if openai_variant else None,
             "openai_configured": bool(getattr(Config, "OPENAI_API_KEY", None)),
+            "claude_model": (claude_variant.model if claude_variant else getattr(Config, "ANTHROPIC_MODEL", None)),
             "comparison": comparison,
         })
     except Exception as e:
