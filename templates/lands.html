@@ -334,15 +334,18 @@
                                                 {% endif %}
                                             </a>
                                             <span class="text-muted mx-1">|</span>
-                                            <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='travel_time_gijon', order='asc' if current_filters.sort_by == 'travel_time_gijon' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}"
-                                               class="lands-th-link text-decoration-none" title="Sort by travel time to Gijón">
-                                                GJ
-                                                {% if current_filters.sort_by == 'travel_time_gijon' %}
-                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }}"></i>
-                                                {% endif %}
-                                            </a>
-                                        </th>
-                                        <th>{{ t('type') }}</th>
+	                                            <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='travel_time_gijon', order='asc' if current_filters.sort_by == 'travel_time_gijon' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}"
+	                                               class="lands-th-link text-decoration-none" title="Sort by travel time to Gijón">
+	                                                GJ
+	                                                {% if current_filters.sort_by == 'travel_time_gijon' %}
+	                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }}"></i>
+	                                                {% endif %}
+	                                            </a>
+	                                        </th>
+	                                        <th style="min-width: 120px; white-space: nowrap;">
+	                                            Investment Metrics
+	                                        </th>
+	                                        <th>{{ t('type') }}</th>
                                         <th style="min-width: 120px !important; white-space: nowrap !important;">
                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='created_at', order='desc' if current_filters.sort_by == 'created_at' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
                                class="lands-th-link text-decoration-none d-flex align-items-center">
@@ -510,14 +513,24 @@
                                                             </a>
                                                         {% endif %}
                                                     </div>
-                                                {% else %}
-                                                    <span class="text-muted">-</span>
-                                                {% endif %}
-                                            </td>
-                                            <td>
-                                                {% if land.land_type %}
-                                                    <span class="badge {{ 'bg-success' if land.land_type == 'developed' else 'bg-warning' }}">
-                                                        {{ land.land_type.title() }}
+	                                                {% else %}
+	                                                    <span class="text-muted">-</span>
+	                                                {% endif %}
+	                                            </td>
+	                                            <td style="text-align: center; min-width: 120px; white-space: nowrap;">
+	                                                {% if land.investment_metrics_rating %}
+	                                                    <span class="badge {{ land.investment_metrics_badge_class or 'bg-secondary' }}"
+	                                                          title="{{ land.investment_metrics_rating_full or '' }}">
+	                                                        {{ land.investment_metrics_rating }}
+	                                                    </span>
+	                                                {% else %}
+	                                                    <span class="text-muted">-</span>
+	                                                {% endif %}
+	                                            </td>
+	                                            <td>
+	                                                {% if land.land_type %}
+	                                                    <span class="badge {{ 'bg-success' if land.land_type == 'developed' else 'bg-warning' }}">
+	                                                        {{ land.land_type.title() }}
                                                     </span>
                                                 {% else %}
                                                     <span class="text-muted">-</span>

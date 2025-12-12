@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 from app import db
 from sqlalchemy import CheckConstraint
 from sqlalchemy.types import JSON
@@ -121,6 +122,58 @@ class Land(db.Model):
             'listing_last_checked': self.listing_last_checked.isoformat() if self.listing_last_checked else None,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
+
+    def _ai_analysis_dict(self):
+        """Return ai_analysis as a dict regardless of storage type."""
+        data = self.ai_analysis
+        if not data:
+            return {}
+        if isinstance(data, dict):
+            return data
+        if isinstance(data, str):
+            try:
+                parsed = json.loads(data)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+        return {}
+
+    @property
+    def investment_metrics_rating_full(self):
+        """Full investment rating text from structured rental market analysis (if present)."""
+        analysis = self._ai_analysis_dict()
+        rental = analysis.get('rental_market_analysis') if isinstance(analysis, dict) else None
+        if not isinstance(rental, dict):
+            return None
+        rating = rental.get('investment_rating')
+        if not rating:
+            return None
+        return str(rating).strip()
+
+    @property
+    def investment_metrics_rating(self):
+        """Short investment rating label (e.g., GOOD/MODERATE/EXCELLENT)."""
+        full = self.investment_metrics_rating_full
+        if not full:
+            return None
+        short = full.split('-')[0].strip()
+        return short.upper() if short else None
+
+    @property
+    def investment_metrics_badge_class(self):
+        """Bootstrap badge class for investment rating."""
+        full = (self.investment_metrics_rating_full or self.investment_metrics_rating or '').upper()
+        if not full:
+            return None
+        if 'EXCELLENT' in full or full == 'HIGH':
+            return 'bg-success'
+        if 'GOOD' in full:
+            return 'bg-primary'
+        if 'MODERATE' in full or 'MEDIUM' in full:
+            return 'bg-warning text-dark'
+        if 'BELOW' in full or 'POOR' in full or 'LOW' in full:
+            return 'bg-danger'
+        return 'bg-secondary'
 
 class ScoringCriteria(db.Model):
     __tablename__ = 'scoring_criteria'
