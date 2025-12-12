@@ -232,3 +232,16 @@ class SyncHistory(db.Model):
     
     def __repr__(self):
         return f'<SyncHistory {self.sync_type} - {self.new_properties_added} properties>'
+
+
+class AppSetting(db.Model):
+    __tablename__ = 'app_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String(120), unique=True, nullable=False, index=True)
+    value = db.Column(JSON, nullable=False, default=dict)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<AppSetting {self.key}>"

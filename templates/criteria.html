@@ -335,6 +335,59 @@
                         </form>
                     </div>
                 </div>
+
+                <div class="card mt-4 border-info">
+                    <div class="card-header bg-info bg-opacity-10">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-city me-2"></i>Reference Cities (Travel Times)
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted mb-3">
+                            These two city slots are used for travel-time scoring and are shown on each property card.
+                            After changing them, re-enrich properties to refresh travel times.
+                        </p>
+
+                        {% set city_a = (reference_cities[0] if reference_cities and reference_cities|length > 0 else {}) %}
+                        {% set city_b = (reference_cities[1] if reference_cities and reference_cities|length > 1 else {}) %}
+
+                        <form method="POST" action="{{ url_for('main.update_reference_cities') }}">
+                            <div class="row g-3 align-items-end">
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold">City A Name</label>
+                                    <input class="form-control" name="city_a_name" value="{{ city_a.get('name', 'Oviedo') }}" required>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold">City A Latitude</label>
+                                    <input class="form-control" name="city_a_lat" value="{{ city_a.get('lat', 43.3614) }}" required>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold">City A Longitude</label>
+                                    <input class="form-control" name="city_a_lon" value="{{ city_a.get('lon', -5.8593) }}" required>
+                                </div>
+
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold">City B Name</label>
+                                    <input class="form-control" name="city_b_name" value="{{ city_b.get('name', 'Gijón') }}" required>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold">City B Latitude</label>
+                                    <input class="form-control" name="city_b_lat" value="{{ city_b.get('lat', 43.5322) }}" required>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-bold">City B Longitude</label>
+                                    <input class="form-control" name="city_b_lon" value="{{ city_b.get('lon', -5.6611) }}" required>
+                                </div>
+                            </div>
+
+                            <div class="mt-3 d-flex justify-content-end">
+                                <button type="submit" class="btn btn-info">
+                                    <i class="fas fa-save me-2"></i>Save Reference Cities
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

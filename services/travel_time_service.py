@@ -9,12 +9,24 @@ logger = logging.getLogger(__name__)
 class TravelTimeService:
     def __init__(self):
         self.google_maps_key = Config.GOOGLE_MAPS_API_KEY
-        
-        # Key destinations
+
+        # Key destinations (configurable via Scoring Criteria -> Reference Cities)
         self.destinations = {
             'oviedo': 'Oviedo, Asturias, Spain',
             'gijon': 'Gijón, Asturias, Spain'
         }
+        try:
+            from services.settings_service import SettingsService
+
+            cities = SettingsService.get_reference_cities()
+            if cities and len(cities) >= 2:
+                self.destinations = {
+                    'oviedo': f"{cities[0]['lat']},{cities[0]['lon']}",
+                    'gijon': f"{cities[1]['lat']},{cities[1]['lon']}"
+                }
+        except Exception:
+            # Safe fallback to defaults
+            pass
         
         # Popular beaches in Asturias and Cantabria
         self.beaches = [
@@ -236,6 +248,17 @@ class TravelTimeService:
     
     def _get_destination_coordinates(self, destination: str) -> Optional[tuple]:
         """Get coordinates for common destinations"""
+        # Destination can be provided as "lat,lon"
+        try:
+            if isinstance(destination, str) and ',' in destination:
+                lat_s, lon_s = destination.split(',', 1)
+                lat = float(lat_s.strip())
+                lon = float(lon_s.strip())
+                if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+                    return (lat, lon)
+        except Exception:
+            pass
+
         # Predefined coordinates for major destinations
         coords_map = {
             'Oviedo, Asturias, Spain': (43.3614, -5.8593),

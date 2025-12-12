@@ -462,7 +462,7 @@
         {% endif %}
 
         <!-- Travel Times to Cities & Beaches -->
-        {% if land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital or land.travel_time_police or land.distance_airport or land.distance_train_station %}
+        {% if land.travel_time_oviedo or land.travel_time_gijon or land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital or land.travel_time_police or land.distance_airport or land.distance_train_station %}
             <div class="card mb-4">
                 <div class="card-header">
                     <h6 class="card-title mb-0 compact-header" title="{{ t('travel_times_distances') }}">
@@ -470,6 +470,22 @@
                     </h6>
                 </div>
                 <div class="card-body">
+                    {% if reference_cities and reference_cities|length > 0 %}
+                        <!-- Reference Cities (configurable) -->
+                        {% for city in reference_cities %}
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="small fw-bold compact-text" title="{{ city.name }}">
+                                    <i class="fas fa-city me-1 text-warning"></i>{{ city.name }}
+                                </span>
+                                <div>
+                                    {% if city.travel_time_min %}<span class="badge bg-info me-1">{{ city.travel_time_min }}min</span>{% endif %}
+                                    {% if city.distance_km is not none %}<span class="badge bg-secondary">{{ city.distance_km }}km</span>{% endif %}
+                                </div>
+                            </div>
+                        {% endfor %}
+                        <hr class="my-2">
+                    {% endif %}
+
                     <!-- Major Cities & Transport Hubs -->
                     {% if land.travel_time_airport or land.distance_airport %}
                         <div class="d-flex justify-content-between align-items-center mb-2">

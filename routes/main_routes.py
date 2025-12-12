@@ -1,4 +1,5 @@
 import logging
+import math
 from decimal import Decimal
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
 from sqlalchemy import or_, and_
@@ -10,6 +11,16 @@ from utils.auth import admin_required
 logger = logging.getLogger(__name__)
 
 main_bp = Blueprint('main', __name__)
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two points, in kilometers."""
+    r = 6371.0
+    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    c = 2 * math.asin(math.sqrt(a))
+    return r * c
 
 @main_bp.route('/')
 def index():
@@ -183,11 +194,35 @@ def land_detail(land_id):
         score_breakdown = {}
         if land.environment and 'scoring' in land.environment:
             score_breakdown = land.environment['scoring']
+
+        # Reference cities (configurable via Scoring Criteria page)
+        reference_cities_for_view = []
+        try:
+            from services.settings_service import SettingsService
+
+            cities = SettingsService.get_reference_cities()
+            if land.location_lat and land.location_lon:
+                lat = float(land.location_lat)
+                lon = float(land.location_lon)
+
+                for city in cities:
+                    distance_km = round(_haversine_km(lat, lon, float(city["lat"]), float(city["lon"])))
+                    travel_time = land.travel_time_oviedo if city["slot"] == "city_a" else land.travel_time_gijon
+                    reference_cities_for_view.append(
+                        {
+                            "name": city["name"],
+                            "distance_km": distance_km,
+                            "travel_time_min": travel_time,
+                        }
+                    )
+        except Exception as e:
+            logger.warning("Failed to load reference cities for detail view: %s", e)
         
         return render_template(
             'land_detail.html',
             land=land,
-            score_breakdown=score_breakdown
+            score_breakdown=score_breakdown,
+            reference_cities=reference_cities_for_view
         )
         
     except Exception as e:
@@ -235,6 +270,7 @@ def criteria():
     try:
         from config import Config
         from services.scoring_service import ScoringService
+        from services.settings_service import SettingsService
         
         # Load profile weights using ScoringService for consistency
         scoring_service = ScoringService()
@@ -265,12 +301,15 @@ def criteria():
             'legal_status': 'Zoning status, building permissions, land classification',
             'development_potential': 'Future development possibilities, urbanization plans'
         }
+
+        reference_cities = SettingsService.get_reference_cities()
         
         return render_template('criteria.html', 
                              investment_weights=investment_weights,
                              lifestyle_weights=lifestyle_weights,
                              combined_mix=combined_mix,
-                             criteria_descriptions=criteria_descriptions)
+                             criteria_descriptions=criteria_descriptions,
+                             reference_cities=reference_cities)
         
     except Exception as e:
         logger.error(f"Failed to load criteria page: {str(e)}")
@@ -404,6 +443,37 @@ def update_combined_mix():
         logger.error(f"Failed to update combined mix: {str(e)}")
         flash(f'Error updating combined mix: {str(e)}', 'error')
         
+    return redirect(url_for('main.criteria'))
+
+
+@main_bp.route('/criteria/update_reference_cities', methods=['POST'])
+@admin_required
+def update_reference_cities():
+    """Update the 2 reference city slots (used for travel-time scoring/display)."""
+    try:
+        from services.settings_service import SettingsService
+
+        cities = [
+            {
+                "slot": "city_a",
+                "name": request.form.get("city_a_name", ""),
+                "lat": request.form.get("city_a_lat", ""),
+                "lon": request.form.get("city_a_lon", ""),
+            },
+            {
+                "slot": "city_b",
+                "name": request.form.get("city_b_name", ""),
+                "lat": request.form.get("city_b_lat", ""),
+                "lon": request.form.get("city_b_lon", ""),
+            },
+        ]
+
+        SettingsService.set_reference_cities(cities)
+        flash("Reference cities updated. Re-enrich properties to update travel times.", "success")
+    except Exception as e:
+        logger.error("Failed to update reference cities: %s", e)
+        flash(f"Error updating reference cities: {e}", "error")
+
     return redirect(url_for('main.criteria'))
 
 @main_bp.route('/land/<int:land_id>/edit-environment', methods=['GET', 'POST'])
