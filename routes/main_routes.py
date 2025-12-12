@@ -2,7 +2,7 @@ import logging
 import math
 from decimal import Decimal
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
-from sqlalchemy import or_, and_
+from sqlalchemy import or_, and_, case, func
 from sqlalchemy.orm import defer
 from models import Land, ScoringCriteria
 from app import db
@@ -47,13 +47,14 @@ def lands():
         land_type_filter = request.args.get('land_type', '')
         municipality_filter = request.args.get('municipality', '')
         search_query = request.args.get('search', '')
+        investment_metrics_filter = request.args.get('inv_metr', '')
         sea_view_filter = request.args.get('sea_view', '') == 'on'
         favorites_filter = request.args.get('favorites', '') == 'on'
         # Hide removed: ON by default. Checkbox sends 'on' when checked, absent when unchecked.
         # We need special handling: if 'hide_removed' param is missing AND no other filters applied, default to True
         # If form was submitted (has any filter param), absence means unchecked (False)
         hide_removed_param = request.args.get('hide_removed', None)
-        form_submitted = any(request.args.get(p) for p in ['search', 'land_type', 'municipality', 'sea_view', 'favorites', 'sort', 'hide_removed'])
+        form_submitted = any(request.args.get(p) for p in ['search', 'land_type', 'municipality', 'inv_metr', 'sea_view', 'favorites', 'sort', 'hide_removed'])
         if form_submitted:
             hide_removed_filter = hide_removed_param == 'on'
         else:
@@ -74,7 +75,6 @@ def lands():
             defer(Land.environment),
             defer(Land.neighborhood),
             defer(Land.services_quality),
-            defer(Land.ai_analysis),
             defer(Land.enhanced_description),
             defer(Land.property_details),
             defer(Land.description)
@@ -96,6 +96,22 @@ def lands():
                     Land.municipality.ilike(search_pattern)
                 )
             )
+
+        if investment_metrics_filter:
+            rating_text = func.coalesce(
+                Land.ai_analysis['rental_market_analysis']['investment_rating'].as_string(),
+                ''
+            )
+            upper_rating = func.upper(rating_text)
+            filter_value = investment_metrics_filter.strip().upper()
+            if filter_value == 'EXCELLENT':
+                query = query.filter(upper_rating.like('EXCELLENT%'))
+            elif filter_value == 'GOOD':
+                query = query.filter(upper_rating.like('GOOD%'))
+            elif filter_value == 'MODERATE':
+                query = query.filter(upper_rating.like('MODERATE%'))
+            elif filter_value == 'BELOW':
+                query = query.filter(upper_rating.like('BELOW%'))
         
         if sea_view_filter:
             # SQLAlchemy 2.x: .astext removed; use JSON accessors
@@ -113,7 +129,24 @@ def lands():
             )
 
         # Apply sorting with NULL values last
-        if hasattr(Land, sort_by):
+        if sort_by == 'investment_metrics':
+            rating_text = func.coalesce(
+                Land.ai_analysis['rental_market_analysis']['investment_rating'].as_string(),
+                ''
+            )
+            upper_rating = func.upper(rating_text)
+            rank = case(
+                (upper_rating.like('EXCELLENT%'), 4),
+                (upper_rating.like('GOOD%'), 3),
+                (upper_rating.like('MODERATE%'), 2),
+                (upper_rating.like('BELOW%'), 1),
+                else_=None
+            )
+            if sort_order == 'asc':
+                query = query.order_by(rank.asc().nullslast(), Land.score_total.desc().nullslast())
+            else:
+                query = query.order_by(rank.desc().nullslast(), Land.score_total.desc().nullslast())
+        elif hasattr(Land, sort_by):
             sort_column = getattr(Land, sort_by)
             if sort_order == 'asc':
                 # For ascending, NULLs go last
@@ -156,21 +189,22 @@ def lands():
             lands=lands,
             pagination=pagination,
             municipalities=municipalities,
-            current_filters={
-                'mode': mode,
-                'sort_by': sort_by,
-                'order': sort_order,
-                'land_type': land_type_filter,
-                'municipality': municipality_filter,
-                'search': search_query,
-                'sea_view': sea_view_filter,
-                'favorites': favorites_filter,
-                'hide_removed': hide_removed_filter,
-                'active_mode': active_mode,
-                'view_type': view_type,
-                'page': page,
-                'per_page': per_page
-            }
+                current_filters={
+                    'mode': mode,
+                    'sort_by': sort_by,
+                    'order': sort_order,
+                    'land_type': land_type_filter,
+                    'municipality': municipality_filter,
+                    'search': search_query,
+                    'inv_metr': investment_metrics_filter,
+                    'sea_view': sea_view_filter,
+                    'favorites': favorites_filter,
+                    'hide_removed': hide_removed_filter,
+                    'active_mode': active_mode,
+                    'view_type': view_type,
+                    'page': page,
+                    'per_page': per_page
+                }
         )
         
     except Exception as e:
@@ -561,6 +595,7 @@ def export_csv():
         land_type_filter = request.args.get('land_type', '')
         municipality_filter = request.args.get('municipality', '')
         search_query = request.args.get('search', '')
+        investment_metrics_filter = request.args.get('inv_metr', '')
         sea_view_filter = request.args.get('sea_view', '') == 'on'
         favorites_filter = request.args.get('favorites', '') == 'on'
 
@@ -591,6 +626,22 @@ def export_csv():
                     Land.municipality.ilike(search_pattern)
                 )
             )
+
+        if investment_metrics_filter:
+            rating_text = func.coalesce(
+                Land.ai_analysis['rental_market_analysis']['investment_rating'].as_string(),
+                ''
+            )
+            upper_rating = func.upper(rating_text)
+            filter_value = investment_metrics_filter.strip().upper()
+            if filter_value == 'EXCELLENT':
+                query = query.filter(upper_rating.like('EXCELLENT%'))
+            elif filter_value == 'GOOD':
+                query = query.filter(upper_rating.like('GOOD%'))
+            elif filter_value == 'MODERATE':
+                query = query.filter(upper_rating.like('MODERATE%'))
+            elif filter_value == 'BELOW':
+                query = query.filter(upper_rating.like('BELOW%'))
         
         if sea_view_filter:
             # SQLAlchemy 2.x: .astext removed; use JSON accessors
@@ -600,7 +651,24 @@ def export_csv():
             query = query.filter(Land.is_favorite == True)
 
         # Apply sorting with same logic as main lands route
-        if hasattr(Land, sort_by):
+        if sort_by == 'investment_metrics':
+            rating_text = func.coalesce(
+                Land.ai_analysis['rental_market_analysis']['investment_rating'].as_string(),
+                ''
+            )
+            upper_rating = func.upper(rating_text)
+            rank = case(
+                (upper_rating.like('EXCELLENT%'), 4),
+                (upper_rating.like('GOOD%'), 3),
+                (upper_rating.like('MODERATE%'), 2),
+                (upper_rating.like('BELOW%'), 1),
+                else_=None
+            )
+            if sort_order == 'asc':
+                lands = query.order_by(rank.asc().nullslast(), Land.score_total.desc().nullslast()).all()
+            else:
+                lands = query.order_by(rank.desc().nullslast(), Land.score_total.desc().nullslast()).all()
+        elif hasattr(Land, sort_by):
             sort_column = getattr(Land, sort_by)
             if sort_order == 'asc':
                 # For ascending, NULLs go last

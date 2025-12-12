@@ -20,7 +20,7 @@
             </h1>
             
             <div>
-                <a href="{{ url_for('main.export_csv', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}" class="btn btn-success">
+                <a href="{{ url_for('main.export_csv', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view='on' if current_filters.sea_view else '') }}" class="btn btn-success">
                     <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
                 </a>
             </div>
@@ -73,6 +73,18 @@
                                         {{ municipality }}
                                     </option>
                                 {% endfor %}
+                            </select>
+                        </div>
+
+                        <!-- Investment Metrics -->
+                        <div class="col-md-2 mb-3">
+                            <label for="inv_metr" class="form-label">Inv. Metr.</label>
+                            <select class="form-select" id="inv_metr" name="inv_metr">
+                                <option value="" {{ 'selected' if not current_filters.inv_metr }}>All</option>
+                                <option value="EXCELLENT" {{ 'selected' if current_filters.inv_metr == 'EXCELLENT' }}>Excellent</option>
+                                <option value="GOOD" {{ 'selected' if current_filters.inv_metr == 'GOOD' }}>Good</option>
+                                <option value="MODERATE" {{ 'selected' if current_filters.inv_metr == 'MODERATE' }}>Moderate</option>
+                                <option value="BELOW" {{ 'selected' if current_filters.inv_metr == 'BELOW' }}>Below</option>
                             </select>
                         </div>
                         
@@ -155,6 +167,9 @@
                                     <option value="travel_time_gijon" {{ 'selected' if current_filters.sort_by == 'travel_time_gijon' }}>
                                         Travel to Gijón (GJ)
                                     </option>
+                                    <option value="investment_metrics" {{ 'selected' if current_filters.sort_by == 'investment_metrics' }}>
+                                        Inv. Metr.
+                                    </option>
                                     <option value="created_at" {{ 'selected' if current_filters.sort_by == 'created_at' }}>
                                         {{ t('date_added') }}
                                     </option>
@@ -233,7 +248,7 @@
                             <i class="fas fa-home"></i>
                         </button>
                     </div>
-                    <a href="{{ url_for('main.export_csv', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '') }}" class="btn btn-success btn-sm" title="Download filtered data as CSV file">
+                    <a href="{{ url_for('main.export_csv', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view='on' if current_filters.sea_view else '') }}" class="btn btn-success btn-sm" title="Download filtered data as CSV file">
                         <i class="fas fa-download me-1"></i>Export CSV
                     </a>
                 </div>
@@ -343,7 +358,15 @@
 	                                            </a>
 	                                        </th>
 	                                        <th style="min-width: 90px; width: 90px; white-space: nowrap;" title="Investment Metrics">
-	                                            Inv. Metr.
+	                                            <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='investment_metrics', order='desc' if current_filters.sort_by == 'investment_metrics' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view='on' if current_filters.sea_view else '', favorites='on' if current_filters.favorites else '', hide_removed='on' if current_filters.hide_removed != false else '', view_type=current_filters.view_type) }}"
+	                                               class="lands-th-link text-decoration-none d-flex align-items-center">
+	                                                Inv. Metr.
+	                                                {% if current_filters.sort_by == 'investment_metrics' %}
+	                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
+	                                                {% else %}
+	                                                    <i class="fas fa-sort ms-1 opacity-50"></i>
+	                                                {% endif %}
+	                                            </a>
 	                                        </th>
 	                                        <th>{{ t('type') }}</th>
                                         <th style="min-width: 120px !important; white-space: nowrap !important;">
