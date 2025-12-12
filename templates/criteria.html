@@ -53,6 +53,18 @@
                     <i class="fas fa-balance-scale me-2"></i>Combined
                 </button>
             </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link"
+                        id="reference-cities-tab"
+                        data-bs-toggle="tab"
+                        data-bs-target="#reference-cities"
+                        type="button"
+                        role="tab"
+                        aria-controls="reference-cities"
+                        aria-selected="false">
+                    <i class="fas fa-city me-2"></i>Reference Cities
+                </button>
+            </li>
         </ul>
 
         <!-- Tab Content -->
@@ -335,8 +347,11 @@
                         </form>
                     </div>
                 </div>
+            </div>
 
-                <div class="card mt-4 border-info">
+            <!-- Reference Cities Tab -->
+            <div class="tab-pane fade" id="reference-cities" role="tabpanel" aria-labelledby="reference-cities-tab">
+                <div class="card border-info">
                     <div class="card-header bg-info bg-opacity-10">
                         <h5 class="card-title mb-0">
                             <i class="fas fa-city me-2"></i>Reference Cities (Travel Times)
