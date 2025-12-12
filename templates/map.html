@@ -78,6 +78,15 @@
         font-size: 0.8em;
         padding: 4px 10px;
     }
+    /* Ensure readable button text on colored buttons inside dark popup */
+    .property-popup .links a.btn.btn-primary,
+    .property-popup .links a.btn.btn-success {
+        color: #fff !important;
+    }
+    .property-popup .links a.btn.btn-primary i,
+    .property-popup .links a.btn.btn-success i {
+        color: inherit !important;
+    }
     .score-badge {
         display: inline-block;
         padding: 2px 8px;
