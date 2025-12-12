@@ -473,6 +473,13 @@ footer {
     color: var(--bs-primary) !important;
 }
 
+/* List view: compact Investment Metrics badge */
+.inv-metr-badge {
+    font-size: 0.72rem;
+    padding: 0.22rem 0.4rem;
+    letter-spacing: 0.02em;
+}
+
 /* Land detail overview (header + stats) */
 .favorite-btn-header {
     width: 40px;

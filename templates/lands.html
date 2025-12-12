@@ -342,8 +342,8 @@
 	                                                {% endif %}
 	                                            </a>
 	                                        </th>
-	                                        <th style="min-width: 120px; white-space: nowrap;">
-	                                            Investment Metrics
+	                                        <th style="min-width: 90px; width: 90px; white-space: nowrap;" title="Investment Metrics">
+	                                            Inv. Metr.
 	                                        </th>
 	                                        <th>{{ t('type') }}</th>
                                         <th style="min-width: 120px !important; white-space: nowrap !important;">
@@ -517,9 +517,9 @@
 	                                                    <span class="text-muted">-</span>
 	                                                {% endif %}
 	                                            </td>
-	                                            <td style="text-align: center; min-width: 120px; white-space: nowrap;">
+	                                            <td style="text-align: center; min-width: 90px; width: 90px; white-space: nowrap;">
 	                                                {% if land.investment_metrics_rating %}
-	                                                    <span class="badge {{ land.investment_metrics_badge_class or 'bg-secondary' }}"
+	                                                    <span class="badge inv-metr-badge {{ land.investment_metrics_badge_class or 'bg-secondary' }}"
 	                                                          title="{{ land.investment_metrics_rating_full or '' }}">
 	                                                        {{ land.investment_metrics_rating }}
 	                                                    </span>
