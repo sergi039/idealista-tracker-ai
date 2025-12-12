@@ -244,14 +244,14 @@
                 <div class="card mb-4">
                     <div class="card-body p-0">
                         <div class="table-responsive">
-                            <table class="table table-hover mb-0">
-                                <thead class="table-dark">
+                            <table class="table table-hover mb-0 lands-table">
+                                <thead class="lands-table-head">
                                     <tr>
                                         <!-- Combined Mode: Show total score -->
                                         {% if current_filters.mode == 'combined' or not current_filters.mode %}
                                         <th>
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_total', order='desc' if current_filters.sort_by == 'score_total' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
-                                               class="text-white text-decoration-none d-flex align-items-center">
+                                               class="lands-th-link text-decoration-none d-flex align-items-center">
                                                 Score
                                                 {% if current_filters.sort_by == 'score_total' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
@@ -262,9 +262,9 @@
                                         </th>
                                         {% elif current_filters.mode == 'investment' %}
                                         <!-- Investment Mode: Show only investment column -->
-                                        <th style="background-color: #198754; white-space: nowrap;">
+                                        <th style="background-color: #198754; color: #fff; white-space: nowrap;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_investment', order='desc' if current_filters.sort_by == 'score_investment' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
-                                               class="text-white text-decoration-none d-flex align-items-center">
+                                               class="lands-th-link text-decoration-none d-flex align-items-center">
                                                 Investment
                                                 {% if current_filters.sort_by == 'score_investment' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
@@ -275,9 +275,9 @@
                                         </th>
                                         {% elif current_filters.mode == 'lifestyle' %}
                                         <!-- Lifestyle Mode: Show only lifestyle column -->
-                                        <th style="background-color: #ffc107; white-space: nowrap;">
+                                        <th style="background-color: #ffc107; color: #212529; white-space: nowrap;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='score_lifestyle', order='desc' if current_filters.sort_by == 'score_lifestyle' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
-                                               class="text-white text-decoration-none d-flex align-items-center">
+                                               class="lands-th-link text-decoration-none d-flex align-items-center">
                                                 Lifestyle
                                                 {% if current_filters.sort_by == 'score_lifestyle' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
@@ -293,7 +293,7 @@
                                         <th>{{ t('title') }}</th>
                                         <th style="min-width: 120px !important; white-space: nowrap !important;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='price', order='desc' if current_filters.sort_by == 'price' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
-                                               class="text-white text-decoration-none d-flex align-items-center">
+                                               class="lands-th-link text-decoration-none d-flex align-items-center">
                                                 {{ t('price') }}
                                                 {% if current_filters.sort_by == 'price' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
@@ -304,7 +304,7 @@
                                         </th>
                                         <th style="min-width: 100px !important; white-space: nowrap !important;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='area', order='desc' if current_filters.sort_by == 'area' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
-                                               class="text-white text-decoration-none d-flex align-items-center">
+                                               class="lands-th-link text-decoration-none d-flex align-items-center">
                                                 {{ t('area') }}
                                                 {% if current_filters.sort_by == 'area' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
@@ -316,7 +316,7 @@
                                         <th style="white-space: nowrap;">{{ t('coords') }}</th>
                                         <th style="min-width: 110px !important; white-space: nowrap !important;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='travel_time_nearest_beach', order='asc' if current_filters.sort_by == 'travel_time_nearest_beach' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
-                                               class="text-white text-decoration-none d-flex align-items-center">
+                                               class="lands-th-link text-decoration-none d-flex align-items-center">
                                                 {{ t('beach') }}
                                                 {% if current_filters.sort_by == 'travel_time_nearest_beach' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
@@ -327,7 +327,7 @@
                                         </th>
                                         <th style="white-space: nowrap;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='travel_time_oviedo', order='asc' if current_filters.sort_by == 'travel_time_oviedo' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}"
-                                               class="text-white text-decoration-none" title="Sort by travel time to Oviedo">
+                                               class="lands-th-link text-decoration-none" title="Sort by travel time to Oviedo">
                                                 OV
                                                 {% if current_filters.sort_by == 'travel_time_oviedo' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }}"></i>
@@ -335,7 +335,7 @@
                                             </a>
                                             <span class="text-muted mx-1">|</span>
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='travel_time_gijon', order='asc' if current_filters.sort_by == 'travel_time_gijon' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}"
-                                               class="text-white text-decoration-none" title="Sort by travel time to Gijón">
+                                               class="lands-th-link text-decoration-none" title="Sort by travel time to Gijón">
                                                 GJ
                                                 {% if current_filters.sort_by == 'travel_time_gijon' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }}"></i>
@@ -345,7 +345,7 @@
                                         <th>{{ t('type') }}</th>
                                         <th style="min-width: 120px !important; white-space: nowrap !important;">
                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='created_at', order='desc' if current_filters.sort_by == 'created_at' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
-                               class="text-white text-decoration-none d-flex align-items-center">
+                               class="lands-th-link text-decoration-none d-flex align-items-center">
                                 {{ t('added') }}
                                 {% if current_filters.sort_by == 'created_at' %}
                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
@@ -562,7 +562,7 @@
                     <div class="col-lg-6 col-xl-4 mb-4" data-listing-status="{{ land.listing_status or 'active' }}">
                         <div class="card h-100 property-card {% if land.listing_status in ('removed', 'sold') %}listing-inactive-card{% endif %}" data-land-id="{{ land.id }}" style="overflow: hidden;">
                             <!-- Card Header with Score and AI Indicator -->
-                            <div class="card-header bg-dark text-white" style="padding: 0.5rem 1rem;">
+                            <div class="card-header bg-body-tertiary" style="padding: 0.5rem 1rem;">
                                 <div class="d-flex justify-content-between align-items-center">
                                     <div class="d-flex align-items-center" style="min-width: 0; flex: 1;">
                                         <!-- Combined Mode: Show total score -->
@@ -959,11 +959,11 @@ function renderSimilarProperties(similarProperties) {
         const landTypeClass = prop.land_type === 'developed' ? 'bg-success' : 'bg-warning';
         
         return `
-            <div class="similar-property-card border rounded p-3 mb-2" style="background-color: rgba(255,255,255,0.05);">
+            <div class="similar-property-card border rounded p-3 mb-2">
                 <div class="d-flex justify-content-between align-items-start mb-2">
                     <div class="flex-grow-1">
                         <h6 class="mb-1">
-                            <a href="/lands/${prop.id}" class="text-decoration-none text-white">
+                            <a href="/lands/${prop.id}" class="text-decoration-none link-body-emphasis">
                                 ${prop.title ? prop.title.substring(0, 50) + (prop.title.length > 50 ? '...' : '') : 'Property #' + prop.id}
                             </a>
                         </h6>
@@ -979,7 +979,7 @@ function renderSimilarProperties(similarProperties) {
                             <i class="fas fa-star"></i> ${scoreText}
                         </div>
                         <div class="mt-2">
-                            <a href="/lands/${prop.id}" class="btn btn-sm btn-outline-light">
+                            <a href="/lands/${prop.id}" class="btn btn-sm btn-outline-secondary">
                                 <i class="fas fa-eye"></i> View Details
                             </a>
                             <a href="${prop.url || '#'}" class="btn btn-sm btn-outline-primary ms-1" target="_blank">

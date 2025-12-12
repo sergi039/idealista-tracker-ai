@@ -413,3 +413,30 @@ footer {
     white-space: normal;
     line-height: 1.2;
 }
+
+/* Theme-aware table header styling for Lands list view */
+.lands-table-head th {
+    background-color: var(--bs-tertiary-bg);
+    color: var(--bs-body-color);
+    border-bottom-color: var(--bs-border-color);
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.lands-th-link {
+    color: inherit;
+}
+
+.lands-th-link:hover {
+    color: var(--bs-primary);
+}
+
+.lands-th-link i {
+    color: inherit;
+}
+
+/* Similar properties cards (rendered via JS) */
+.similar-property-card {
+    background-color: var(--bs-tertiary-bg);
+    border-color: var(--bs-border-color) !important;
+}

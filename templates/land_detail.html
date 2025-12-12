@@ -167,13 +167,13 @@
                             <div class="d-flex gap-2">
                                 <!-- Language Toggle -->
                                 <div class="btn-group btn-group-sm" role="group" id="description-language-toggle" style="display: none;">
-                                    <button type="button" class="btn btn-outline-light active" data-lang="en">
+                                    <button type="button" class="btn btn-outline-secondary active" data-lang="en">
                                         <i class="fas fa-language me-1"></i>English
                                     </button>
-                                    <button type="button" class="btn btn-outline-light" data-lang="es">
+                                    <button type="button" class="btn btn-outline-secondary" data-lang="es">
                                         <i class="fas fa-language me-1"></i>Spanish
                                     </button>
-                                    <button type="button" class="btn btn-outline-light" data-lang="original">
+                                    <button type="button" class="btn btn-outline-secondary" data-lang="original">
                                         <i class="fas fa-home me-1"></i>Idealista
                                     </button>
                                 </div>
@@ -181,11 +181,11 @@
                         </div>
                         
                         <!-- Description Content -->
-                        <div class="mt-2 p-3 bg-dark rounded position-relative" id="description-content">
+                        <div class="mt-2 p-3 bg-body-tertiary border rounded position-relative" id="description-content">
                             
                             <!-- Enhanced Description -->
                             <div id="enhanced-description" style="display: none;">
-                                <div class="text-light" id="enhanced-description-text"></div>
+                                <div class="text-body" id="enhanced-description-text"></div>
                                 <div class="mt-2" id="description-highlights" style="display: none;">
                                     <small class="text-muted d-block mb-1">Key Highlights:</small>
                                     <div id="highlights-list"></div>
@@ -207,10 +207,10 @@
                 {% if land.property_details %}
                     {% if land.property_details is string %}
                         <!-- Display as plain text if it's a string -->
-                        <div class="mb-4">
-                            <strong>Property Details:</strong>
-                            <div class="mt-2 p-3 bg-dark rounded">
-                                <pre class="text-light mb-0" style="white-space: pre-wrap; word-wrap: break-word;">{{ land.property_details }}</pre>
+                            <div class="mb-4">
+                                <strong>Property Details:</strong>
+                            <div class="mt-2 p-3 bg-body-tertiary border rounded">
+                                <pre class="text-body mb-0" style="white-space: pre-wrap; word-wrap: break-word;">{{ land.property_details }}</pre>
                             </div>
                         </div>
                     {% else %}
@@ -411,10 +411,10 @@
         
         <!-- Compact Dual Scoring Analysis -->
         {% if land.score_investment or land.score_lifestyle %}
-            <div class="card mb-3" style="border: 1px solid #495057;">
+            <div class="card mb-3">
                 <div class="card-body p-3">
                     <div class="d-flex justify-content-between align-items-center mb-2">
-                        <h6 class="mb-0 text-light compact-header" title="{{ t('dual_scoring_analysis') }}">
+                        <h6 class="mb-0 compact-header" title="{{ t('dual_scoring_analysis') }}">
                             <i class="fas fa-chart-bar me-1"></i>{{ t('dual_scoring_analysis') }}
                         </h6>
                     </div>
@@ -1638,11 +1638,11 @@ function renderSimilarProperties(similarProperties) {
         const landTypeClass = prop.land_type === 'developed' ? 'bg-success' : 'bg-warning';
         
         return `
-            <div class="similar-property-card border rounded p-3 mb-2" style="background-color: rgba(255,255,255,0.05);">
+            <div class="similar-property-card border rounded p-3 mb-2">
                 <div class="d-flex justify-content-between align-items-start mb-2">
                     <div class="flex-grow-1">
                         <h6 class="mb-1">
-                            <a href="/lands/${prop.id}" class="text-decoration-none text-white">
+                            <a href="/lands/${prop.id}" class="text-decoration-none link-body-emphasis">
                                 ${prop.title ? prop.title.substring(0, 50) + (prop.title.length > 50 ? '...' : '') : 'Property #' + prop.id}
                             </a>
                         </h6>
@@ -1833,7 +1833,7 @@ function renderStructuredAIAnalysis(analysis) {
                                 <strong>€${(analysis.rental_market_analysis.monthly_rent_min || 0).toLocaleString()}</strong>
                             </div>
                             <div class="col-4">
-                                <div style="background-color: rgba(255,255,255,0.1); border-radius: 5px; padding: 5px;">
+                                <div class="bg-body-tertiary border rounded p-2">
                                     <small class="text-muted d-block">Avg Monthly</small>
                                     <strong class="text-warning">€${(analysis.rental_market_analysis.monthly_rent_avg || 0).toLocaleString()}</strong>
                                 </div>
@@ -1884,7 +1884,7 @@ function renderStructuredAIAnalysis(analysis) {
             </div>
             
             ${analysis.rental_market_analysis.demand_factors ? `
-            <div class="border rounded p-2 bg-dark">
+            <div class="border rounded p-2 bg-body-tertiary">
                 <strong><i class="fas fa-trending-up text-info"></i> Rental Demand Factors:</strong>
                 ${renderListItems(analysis.rental_market_analysis.demand_factors, '', 'info')}
             </div>
@@ -1894,7 +1894,7 @@ function renderStructuredAIAnalysis(analysis) {
         
         <!-- Similar Objects - Additional Information -->
         ${analysis.similar_objects ? `
-        <div class="border rounded p-3 mt-4" style="background-color: rgba(255,255,255,0.02);">
+        <div class="border rounded p-3 mt-4 bg-body-tertiary">
             <h6><i class="fas fa-link text-primary"></i> Similar Objects</h6>
             <p class="mb-3 small text-muted">${analysis.similar_objects.comparison_summary || 'Similar properties from our database:'}</p>
             ${renderSimilarProperties(analysis.similar_properties_data || [])}
@@ -1977,7 +1977,7 @@ document.addEventListener('DOMContentLoaded', function() {
             } else {
                 // Fallback to displaying raw content
                 console.log('Fallback: displaying raw content');
-                structuredAnalysis.innerHTML = `<pre class="text-light">${JSON.stringify(analysisData, null, 2)}</pre>`;
+                structuredAnalysis.innerHTML = `<pre class="text-body mb-0">${JSON.stringify(analysisData, null, 2)}</pre>`;
             }
         } catch (e) {
             console.error('Error processing AI analysis:', e);
@@ -1987,7 +1987,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const rawData = {{ land.ai_analysis|tojson|safe }};
             if (typeof rawData === 'object' && rawData !== null) {
                 // For objects, display as formatted JSON
-                structuredAnalysis.innerHTML = `<pre class="text-light">${JSON.stringify(rawData, null, 2)}</pre>`;
+                structuredAnalysis.innerHTML = `<pre class="text-body mb-0">${JSON.stringify(rawData, null, 2)}</pre>`;
             } else {
                 // For strings, display with line breaks
                 structuredAnalysis.innerHTML = `<div class="analysis-text">${String(rawData).replace(/\n/g, '<br>')}</div>`;
