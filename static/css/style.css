@@ -463,6 +463,16 @@ footer {
     color: var(--bs-body-color);
 }
 
+/* Guardrail: prevent white titles in Similar Objects when user is in light theme */
+[data-bs-theme="light"] .similar-property-card h6 a,
+[data-bs-theme="light"] .similar-property-card h6 a.text-white {
+    color: var(--bs-body-color) !important;
+}
+
+[data-bs-theme="light"] .similar-property-card h6 a:hover {
+    color: var(--bs-primary) !important;
+}
+
 /* Land detail overview (header + stats) */
 .favorite-btn-header {
     width: 40px;
