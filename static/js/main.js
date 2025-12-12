@@ -620,7 +620,8 @@ window.IdealistaApp = {
                                 const firstNew = newLands[0];
                                 const link = document.createElement('a');
                                 link.href = `/lands/${firstNew.id}`;
-                                link.className = 'text-decoration-underline text-white';
+                                // Theme-aware link color (avoids white-on-white in light theme)
+                                link.className = 'link-body-emphasis text-decoration-underline';
                                 link.textContent = `+${sync.new_properties} new: ${firstNew.title || `Land #${firstNew.id}`}`;
                                 statsParts.push(link);
                             } else {
