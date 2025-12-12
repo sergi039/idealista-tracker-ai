@@ -32,7 +32,7 @@ export DEV_MODE="true"  # Bypasses admin auth for development
 
 4. **Initialize the database**
 ```bash
-python -c "from app import app, db; app.app_context().push(); db.create_all()"
+python -c "from app import create_app, db; app=create_app(); app.app_context().push(); db.create_all()"
 ```
 
 5. **Run the application**

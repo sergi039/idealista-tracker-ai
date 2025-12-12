@@ -2,13 +2,13 @@ import os
 import logging
 import requests
 from typing import Dict, Optional, List
+from config import Config
 
 logger = logging.getLogger(__name__)
 
 class TravelTimeService:
     def __init__(self):
-        # Use existing secret names with fallback to standard names
-        self.google_maps_key = os.environ.get("Google_api") or os.environ.get("GOOGLE_MAPS_API") or os.environ.get("GOOGLE_MAPS_API_KEY")
+        self.google_maps_key = Config.GOOGLE_MAPS_API_KEY
         
         # Key destinations
         self.destinations = {

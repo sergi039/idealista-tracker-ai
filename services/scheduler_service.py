@@ -5,6 +5,7 @@ import tempfile
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import atexit
+from config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,14 @@ def init_scheduler(app):
     """Initialize the background scheduler with protection against duplicate instances"""
     global scheduler, scheduler_lock_file
     
+    if app.config.get('TESTING'):
+        logger.info("Scheduler disabled in TESTING")
+        return None
+
+    if not getattr(Config, 'AUTO_START_SCHEDULER', False):
+        logger.info("Scheduler disabled by config")
+        return None
+
     if scheduler is not None:
         return scheduler
     
@@ -32,31 +41,49 @@ def init_scheduler(app):
     
     try:
         scheduler = BackgroundScheduler()
-        
-        # Schedule ingestion for 7:00 AM and 7:00 PM CET
-        scheduler.add_job(
-            func=run_scheduled_ingestion,
-            trigger=CronTrigger(hour=7, minute=0, timezone='Europe/Madrid'),
-            id='morning_ingestion',
-            name='Morning IMAP Ingestion',
-            replace_existing=True
-        )
-        
-        scheduler.add_job(
-            func=run_scheduled_ingestion,
-            trigger=CronTrigger(hour=19, minute=0, timezone='Europe/Madrid'),
-            id='evening_ingestion',
-            name='Evening IMAP Ingestion',
-            replace_existing=True
-        )
 
-        # Schedule listing status check for favorites daily at 10:00 AM CET
+        timezone = getattr(Config, 'SCHEDULER_TIMEZONE', 'Europe/Madrid')
+
+        # Schedule ingestion jobs from config.
+        ingestion_times = list(getattr(Config, 'INGESTION_TIMES', ['07:00', '19:00']))
+        if len(ingestion_times) == 2:
+            ingestion_job_ids = ['morning_ingestion', 'evening_ingestion']
+        else:
+            ingestion_job_ids = [f'ingestion_{i}' for i in range(len(ingestion_times))]
+
+        for idx, time_str in enumerate(ingestion_times):
+            try:
+                hour_str, minute_str = time_str.split(':', 1)
+                hour = int(hour_str)
+                minute = int(minute_str)
+            except Exception:
+                logger.warning(f"Invalid ingestion time '{time_str}', skipping")
+                continue
+
+            scheduler.add_job(
+                func=run_scheduled_ingestion,
+                trigger=CronTrigger(hour=hour, minute=minute, timezone=timezone),
+                id=ingestion_job_ids[idx],
+                name=f"IMAP Ingestion {time_str}",
+                replace_existing=True,
+            )
+
+        # Schedule listing status check for favorites.
+        listing_time = getattr(Config, 'LISTING_STATUS_CHECK_TIME', '10:00')
+        try:
+            hour_str, minute_str = listing_time.split(':', 1)
+            hour = int(hour_str)
+            minute = int(minute_str)
+        except Exception:
+            hour = 10
+            minute = 0
+
         scheduler.add_job(
             func=run_listing_status_check,
-            trigger=CronTrigger(hour=10, minute=0, timezone='Europe/Madrid'),
+            trigger=CronTrigger(hour=hour, minute=minute, timezone=timezone),
             id='listing_status_check',
             name='Daily Listing Status Check',
-            replace_existing=True
+            replace_existing=True,
         )
 
         scheduler.start()
@@ -71,12 +98,17 @@ def init_scheduler(app):
                     fcntl.flock(scheduler_lock_file.fileno(), fcntl.LOCK_UN)
                     scheduler_lock_file.close()
                     os.remove(scheduler_lock_file.name)
-                except:
+                except Exception:
                     pass
         
         atexit.register(cleanup)
-        
-        logger.info("Scheduler initialized with ingestion jobs at 07:00 and 19:00 CET, listing status check at 10:00 CET")
+
+        logger.info(
+            "Scheduler initialized. Ingestion times=%s, listing_status_time=%s, timezone=%s",
+            ingestion_times,
+            listing_time,
+            timezone,
+        )
         return scheduler
         
     except Exception as e:

@@ -6,15 +6,16 @@ import time
 from typing import Dict, List, Optional
 from utils.geocoding import GeocodingService
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
+from config import Config
+from services.scoring_service import ScoringService
 
 logger = logging.getLogger(__name__)
 
 class EnrichmentService:
     def __init__(self):
-        # Use existing secret names with fallback to standard names
-        self.google_maps_key = os.environ.get("Google_api") or os.environ.get("GOOGLE_MAPS_API") or os.environ.get("GOOGLE_MAPS_API_KEY")
-        self.google_places_key = os.environ.get("Google_api") or os.environ.get("GOOGLE_MAPS_API") or os.environ.get("GOOGLE_PLACES_API_KEY")
-        self.osm_overpass_url = "https://overpass-api.de/api/interpreter"
+        self.google_maps_key = Config.GOOGLE_MAPS_API_KEY
+        self.google_places_key = Config.GOOGLE_PLACES_API_KEY
+        self.osm_overpass_url = Config.OSM_OVERPASS_URL
         self.geocoding_service = GeocodingService()
         
     def enrich_land(self, land_id: int) -> bool:
@@ -63,7 +64,6 @@ class EnrichmentService:
             
             
             # Step 7: Calculate final score
-            from services.scoring_service import ScoringService
             scoring_service = ScoringService()
             scoring_service.calculate_score(land)
             
@@ -337,6 +337,7 @@ class EnrichmentService:
                 if amenity in ['supermarket', 'school', 'hospital', 'restaurant', 'cafe']:
                     # Calculate distance to nearest and average rating
                     if nearby_places:
+                        infrastructure_extended[f'{amenity}_available'] = True
                         nearest = min(nearby_places, key=lambda x: x.get('distance', float('inf')))
                         distance_m = nearest.get('distance')
                         if distance_m and distance_m > 0:
@@ -350,31 +351,28 @@ class EnrichmentService:
                             ratings = [p.get('rating', 0) for p in nearby_places if p.get('rating')]
                             if ratings:
                                 services_quality[f'{amenity}_avg_rating'] = sum(ratings) / len(ratings)
-                    # Note: No longer setting _available = false to avoid duplicates
+                    else:
+                        infrastructure_extended.setdefault(f'{amenity}_available', False)
                 
                 elif amenity in ['train_station', 'bus_station', 'airport']:
                     # Calculate transport accessibility
-                    if nearby_places:
-                        nearest = min(nearby_places, key=lambda x: x.get('distance', float('inf')))
+                    places_for_transport = nearby_places
+                    if not places_for_transport and amenity == 'airport':
+                        # For airports, check if there's one within 100km radius
+                        places_for_transport = self._search_nearby_places(lat, lon, place_types, radius=100000)
+
+                    if places_for_transport:
+                        transport[f'{amenity}_available'] = True
+                        nearest = min(places_for_transport, key=lambda x: x.get('distance', float('inf')))
                         distance_m = nearest.get('distance')
                         if distance_m and distance_m > 0:
                             transport[f'{amenity}_distance'] = distance_m
-                            # Use higher speed for transport hubs (50 km/h average)
-                            travel_time_min = max(1, round((distance_m / 1000) * 60 / 50))
+                            # Use higher speed for transport hubs (50 km/h average, 80 for long distance)
+                            avg_speed = 80 if amenity == 'airport' and distance_m > 5000 else 50
+                            travel_time_min = max(1, round((distance_m / 1000) * 60 / avg_speed))
                             transport[f'{amenity}_travel_time'] = travel_time_min
                     else:
-                        # For airports, check if there's one within 100km radius
-                        if amenity == 'airport':
-                            wider_places = self._search_nearby_places(lat, lon, place_types, radius=100000)
-                            if wider_places:
-                                nearest = min(wider_places, key=lambda x: x.get('distance', float('inf')))
-                                distance_m = nearest.get('distance')
-                                if distance_m and distance_m > 0:
-                                    transport[f'{amenity}_distance'] = distance_m
-                                    # Highway speed for long distance (80 km/h average)
-                                    travel_time_min = max(1, round((distance_m / 1000) * 60 / 80))
-                                    transport[f'{amenity}_travel_time'] = travel_time_min
-                    # Note: No longer setting _available fields to avoid duplicates
+                        transport.setdefault(f'{amenity}_available', False)
             
             land.infrastructure_extended = infrastructure_extended
             land.transport = transport
@@ -625,7 +623,9 @@ class EnrichmentService:
 
             # Forest/nature view detection
             forest_keywords = [
-                'vista bosque', 'rodeado de naturaleza', 'entorno natural',
+                'vista bosque', 'bosque', 'rodeado de bosque', 'rodeada de bosque',
+                'rodeado de naturaleza', 'rodeada de naturaleza', 'entorno natural',
+                'zona arbolada', 'arbolado', 'mucho verde',
                 'forest view', 'woodland', 'surrounded by nature'
             ]
             environment['forest_view'] = any(keyword in text_for_views for keyword in forest_keywords)

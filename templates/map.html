@@ -116,6 +116,64 @@
     .marker-cluster-large div {
         background-color: rgba(241, 128, 23, 0.8);
     }
+
+    /* Focused marker: single larger dot with different color */
+    @keyframes focusRingPulse {
+        0% {
+            transform: translate(-50%, -50%) scale(0.7);
+            opacity: 0.9;
+        }
+        70% {
+            transform: translate(-50%, -50%) scale(1.25);
+            opacity: 0.2;
+        }
+        100% {
+            transform: translate(-50%, -50%) scale(1.3);
+            opacity: 0;
+        }
+    }
+
+    .custom-marker-focus {
+        z-index: 1000 !important;
+    }
+    .custom-marker-focus > div {
+        position: relative;
+        box-shadow:
+            0 0 0 3px rgba(255, 255, 255, 0.95),
+            0 0 14px rgba(13, 202, 240, 0.95) !important;
+    }
+    .custom-marker-focus > div::after {
+        content: '';
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        border: 2px solid rgba(13, 202, 240, 0.9);
+        box-shadow: 0 0 16px rgba(13, 202, 240, 0.65);
+        animation: focusRingPulse 1.6s ease-out infinite;
+        pointer-events: none;
+    }
+
+    /* Close map control */
+    .leaflet-control-closemap {
+        margin-top: 48px; /* sit under zoom controls */
+    }
+    .leaflet-control-closemap a {
+        background: rgba(33, 37, 41, 0.9);
+        color: #fff;
+        width: 34px;
+        height: 34px;
+        line-height: 34px;
+        text-align: center;
+        font-size: 16px;
+        border-radius: 4px;
+    }
+    .leaflet-control-closemap a:hover {
+        background: rgba(13, 202, 240, 0.95);
+        color: #000;
+    }
 </style>
 
 <script>
@@ -187,19 +245,29 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Create custom icon
-    function createIcon(score) {
-        const color = !score ? '#6c757d' : score >= 70 ? '#198754' : score >= 50 ? '#ffc107' : '#dc3545';
+    function createIcon(score, options = {}) {
+        const isFocused = options.isFocused === true;
+        const baseColor = !score ? '#6c757d' : score >= 70 ? '#198754' : score >= 50 ? '#ffc107' : '#dc3545';
+        const color = isFocused ? '#0dcaf0' : baseColor;
+        const size = isFocused ? 18 : 12;
+        const border = isFocused ? 3 : 2;
+        const className = isFocused ? 'custom-marker custom-marker-focus' : 'custom-marker';
         return L.divIcon({
-            html: `<div style="background-color: ${color}; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
-            className: 'custom-marker',
-            iconSize: [16, 16],
-            iconAnchor: [8, 8],
+            html: `<div style="background-color: ${color}; width: ${size}px; height: ${size}px; border-radius: 50%; border: ${border}px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
+            className,
+            iconSize: [size + border * 2, size + border * 2],
+            iconAnchor: [(size + border * 2) / 2, (size + border * 2) / 2],
             popupAnchor: [0, -8]
         });
     }
 
+    const markerById = new Map();
+
     // Add markers
     markers.forEach(function(prop) {
+        const landId = Number(prop.id);
+        if (!Number.isFinite(landId)) return;
+
         const popupContent = `
             <div class="property-popup">
                 <h6>${prop.title}</h6>
@@ -243,6 +311,7 @@ document.addEventListener('DOMContentLoaded', function() {
             maxWidth: 300
         });
 
+        markerById.set(landId, { marker, score: prop.score });
         markerCluster.addLayer(marker);
     });
 
@@ -253,27 +322,37 @@ document.addEventListener('DOMContentLoaded', function() {
     const focusId = urlParams.get('focus');
 
     if (focusId) {
-        // Find the focused marker and zoom to it
-        const focusMarker = markers.find(m => m.id == focusId);
-        if (focusMarker) {
-            map.setView([focusMarker.lat, focusMarker.lon], 13);
-            // Find and open the popup for this marker
-            markerCluster.eachLayer(function(layer) {
-                if (layer.getLatLng().lat === focusMarker.lat && layer.getLatLng().lng === focusMarker.lon) {
-                    // Zoom to marker first, then open popup after a short delay
-                    setTimeout(() => {
-                        markerCluster.zoomToShowLayer(layer, function() {
-                            layer.openPopup();
-                        });
-                    }, 300);
+        const focusKey = Number(focusId);
+        const focusEntry = markerById.get(focusKey);
+        if (focusEntry && focusEntry.marker) {
+            const focusLayer = focusEntry.marker;
+            // Moderate zoom so user sees approximate area (not max zoom).
+            const latlng = focusLayer.getLatLng();
+            map.setView(latlng, 12);
+
+            setTimeout(() => {
+                const showFocused = () => {
+                    const visibleParent = markerCluster.getVisibleParent(focusLayer);
+                    if (visibleParent && visibleParent !== focusLayer && visibleParent.spiderfy) {
+                        visibleParent.spiderfy();
+                    }
+
+                    // Change the focused land marker icon to make it obvious.
+                    focusLayer.setIcon(createIcon(focusEntry.score, { isFocused: true }));
+                    focusLayer.setZIndexOffset(1000);
+                    focusLayer.openPopup();
+                };
+
+                // Ensure the marker is visible even if it's currently clustered.
+                if (typeof markerCluster.zoomToShowLayer === 'function') {
+                    markerCluster.zoomToShowLayer(focusLayer, showFocused);
+                } else {
+                    showFocused();
                 }
-            });
-        } else {
-            // Fallback to fit all markers
-            if (markers.length > 0) {
-                const bounds = L.latLngBounds(markers.map(m => [m.lat, m.lon]));
-                map.fitBounds(bounds, { padding: [20, 20] });
-            }
+            }, 300);
+        } else if (markers.length > 0) {
+            const bounds = L.latLngBounds(markers.map(m => [m.lat, m.lon]));
+            map.fitBounds(bounds, { padding: [20, 20] });
         }
     } else {
         // Fit bounds to show all markers
@@ -282,6 +361,31 @@ document.addEventListener('DOMContentLoaded', function() {
             map.fitBounds(bounds, { padding: [20, 20] });
         }
     }
+
+    // Add a close/back control on the map
+    const CloseControl = L.Control.extend({
+        options: { position: 'topleft' },
+        onAdd: function() {
+            const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control leaflet-control-closemap');
+            const link = L.DomUtil.create('a', '', container);
+            link.href = '#';
+            link.title = 'Close map';
+            link.innerHTML = '<i class="fas fa-times"></i>';
+
+            L.DomEvent.on(link, 'click', L.DomEvent.stop)
+                .on(link, 'click', function() {
+                    if (window.history.length > 1) {
+                        window.history.back();
+                    } else {
+                        window.location.href = '/lands';
+                    }
+                });
+
+            return container;
+        }
+    });
+
+    map.addControl(new CloseControl());
 });
 </script>
 {% endblock %}

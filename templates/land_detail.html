@@ -130,6 +130,11 @@
                             <i class="fas fa-home me-1"></i>{{ t('view_on_idealista') }}
                         </a>
                         {% endif %}
+                        <a href="{{ url_for('main.map_view', focus=land.id) }}"
+                           class="btn btn-sm btn-outline-secondary ms-2"
+                           title="{{ t('view_on_app_map') }}">
+                            <i class="fas fa-map me-1"></i>{{ t('view_on_app_map') }}
+                        </a>
                     </div>
                 {% elif land.municipality %}
                     <div class="mb-4">
@@ -146,6 +151,11 @@
                             <i class="fas fa-home me-1"></i>{{ t('view_on_idealista') }}
                         </a>
                         {% endif %}
+                        <a href="{{ url_for('main.map_view', focus=land.id) }}"
+                           class="btn btn-sm btn-outline-secondary ms-2"
+                           title="{{ t('view_on_app_map') }}">
+                            <i class="fas fa-map me-1"></i>{{ t('view_on_app_map') }}
+                        </a>
                     </div>
                 {% endif %}
 
@@ -1072,15 +1082,15 @@
                             <div class="mb-3">
                                 <h6 class="small fw-bold mb-2">Development Cost</h6>
                                 {% if construction.get('total_investment') %}
-                                    <div class="d-flex justify-content-between mb-1">
+                                    <div class="kv-row mb-1">
                                         <span class="small">Total Investment</span>
-                                        <span class="badge bg-primary">{{ construction.total_investment }}</span>
+                                        <span class="badge bg-primary kv-value badge-wrap text-break">{{ construction.total_investment }}</span>
                                     </div>
                                 {% endif %}
                                 {% if construction.get('value_per_m2') %}
-                                    <div class="d-flex justify-content-between mb-1">
+                                    <div class="kv-row mb-1">
                                         <span class="small">Cost per m²</span>
-                                        <span class="badge bg-secondary">€{{ construction.value_per_m2 }}/m²</span>
+                                        <span class="badge bg-secondary kv-value badge-wrap text-break">€{{ construction.value_per_m2 }}/m²</span>
                                     </div>
                                 {% endif %}
                             </div>

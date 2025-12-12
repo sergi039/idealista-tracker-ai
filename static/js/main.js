@@ -509,27 +509,82 @@ window.IdealistaApp = {
                     const lastSyncElement = document.getElementById('last-sync');
                     if (lastSyncElement) {
                         const sync = data.stats.last_sync;
-                        
-                        // Build sync stats string
+
+                        // Clear existing content safely
+                        lastSyncElement.textContent = '';
+
+                        // Normalize new lands list for linking/highlighting
+                        const newLands = Array.isArray(sync.new_lands) ? sync.new_lands : [];
+                        const newLandIds = newLands
+                            .map(l => l && l.id)
+                            .filter(id => typeof id === 'number' || typeof id === 'string')
+                            .map(id => String(id));
+
+                        // Highlight new lands (if on /lands page)
+                        document.querySelectorAll('.new-land-highlight').forEach(el => {
+                            el.classList.remove('new-land-highlight');
+                        });
+                        if (newLandIds.length > 0) {
+                            newLandIds.forEach(id => {
+                                document.querySelectorAll(
+                                    `.land-row[data-land-id="${id}"], .property-card[data-land-id="${id}"]`
+                                ).forEach(el => el.classList.add('new-land-highlight'));
+                            });
+                        }
+
+                        // Build stats DOM (safe, no innerHTML)
                         const statsParts = [];
-                        if (sync.new_properties > 0) statsParts.push(`+${sync.new_properties} new`);
-                        if (sync.price_updated > 0) statsParts.push(`${sync.price_updated} price updated`);
-                        if (sync.expired > 0) statsParts.push(`${sync.expired} expired`);
-                        const statsStr = statsParts.length > 0 ? `(${statsParts.join(', ')})` : '(no changes)';
+
+                        if (sync.new_properties > 0) {
+                            if (newLands.length > 0 && newLands[0].id) {
+                                const firstNew = newLands[0];
+                                const link = document.createElement('a');
+                                link.href = `/lands/${firstNew.id}`;
+                                link.className = 'text-decoration-underline text-white';
+                                link.textContent = `+${sync.new_properties} new: ${firstNew.title || `Land #${firstNew.id}`}`;
+                                statsParts.push(link);
+                            } else {
+                                const text = document.createTextNode(`+${sync.new_properties} new`);
+                                statsParts.push(text);
+                            }
+                        }
+
+                        if (sync.price_updated > 0) {
+                            statsParts.push(document.createTextNode(`${sync.price_updated} price updated`));
+                        }
+                        if (sync.expired > 0) {
+                            statsParts.push(document.createTextNode(`${sync.expired} expired`));
+                        }
+
+                        const statsWrapper = document.createElement('span');
+                        statsWrapper.appendChild(document.createTextNode('('));
+                        if (statsParts.length > 0) {
+                            statsParts.forEach((part, idx) => {
+                                if (idx > 0) statsWrapper.appendChild(document.createTextNode(', '));
+                                statsWrapper.appendChild(part);
+                            });
+                        } else {
+                            statsWrapper.appendChild(document.createTextNode('no changes'));
+                        }
+                        statsWrapper.appendChild(document.createTextNode(')'));
 
                         // Handle null or invalid completed_at
                         if (sync.completed_at) {
                             const date = new Date(sync.completed_at);
-                            // Check if date is valid
                             if (!isNaN(date.getTime()) && date.getFullYear() > 1970) {
                                 const dateStr = date.toLocaleDateString();
                                 const timeStr = date.toLocaleTimeString();
-                                lastSyncElement.textContent = `${dateStr} at ${timeStr} ${statsStr}`;
+                                lastSyncElement.appendChild(document.createTextNode(`${dateStr} at ${timeStr} `));
+                                lastSyncElement.appendChild(statsWrapper);
                             } else {
-                                lastSyncElement.textContent = `Sync completed ${statsStr} - time unavailable`;
+                                lastSyncElement.appendChild(document.createTextNode('Sync completed '));
+                                lastSyncElement.appendChild(statsWrapper);
+                                lastSyncElement.appendChild(document.createTextNode(' - time unavailable'));
                             }
                         } else {
-                            lastSyncElement.textContent = `Sync completed ${statsStr} - time unavailable`;
+                            lastSyncElement.appendChild(document.createTextNode('Sync completed '));
+                            lastSyncElement.appendChild(statsWrapper);
+                            lastSyncElement.appendChild(document.createTextNode(' - time unavailable'));
                         }
                     }
                 } else {

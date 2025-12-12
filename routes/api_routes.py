@@ -541,7 +541,14 @@ def get_criteria():
 def update_criteria():
     """Update scoring criteria weights"""
     try:
-        data = request.get_json()
+        from werkzeug.exceptions import BadRequest
+        try:
+            data = request.get_json()
+        except BadRequest:
+            return jsonify({
+                "success": False,
+                "error": "Invalid JSON payload"
+            }), 400
         
         if not data or 'criteria' not in data:
             return jsonify({
@@ -553,10 +560,10 @@ def update_criteria():
         
         # Validate weights
         for criteria_name, weight in weights.items():
-            if not isinstance(weight, (int, float)) or weight < 0:
+            if not isinstance(weight, (int, float)) or weight < 0 or weight > 1:
                 return jsonify({
                     "success": False,
-                    "error": f"Invalid weight for {criteria_name}: must be a positive number"
+                    "error": f"Invalid weight for {criteria_name}: must be a positive number between 0 and 1"
                 }), 400
         
         # Update weights
@@ -822,6 +829,43 @@ def get_stats():
         last_sync_info = None
         
         if last_sync:
+            # Include a small list of newly added properties for UI linking/highlighting.
+            new_lands = []
+            try:
+                new_count = int(last_sync.new_properties_added or 0)
+            except (TypeError, ValueError):
+                new_count = 0
+
+            if new_count > 0:
+                start_time = last_sync.started_at
+                end_time = last_sync.completed_at or last_sync.started_at
+
+                if start_time and end_time:
+                    if start_time > end_time:
+                        start_time, end_time = end_time, start_time
+
+                    new_lands_query = (
+                        Land.query.filter(
+                            Land.created_at >= start_time,
+                            Land.created_at <= end_time
+                        )
+                        .order_by(Land.created_at.desc())
+                        .limit(new_count)
+                    )
+                else:
+                    new_lands_query = (
+                        Land.query.order_by(Land.created_at.desc())
+                        .limit(new_count)
+                    )
+
+                new_lands = [
+                    {
+                        "id": land.id,
+                        "title": land.title or f"Land #{land.id}"
+                    }
+                    for land in new_lands_query
+                ]
+
             last_sync_info = {
                 "sync_type": last_sync.sync_type,
                 "backend": last_sync.backend,
@@ -831,7 +875,8 @@ def get_stats():
                 "total_emails": last_sync.total_emails_found,
                 "status": last_sync.status,
                 "completed_at": last_sync.completed_at.isoformat() if last_sync.completed_at else None,
-                "duration": last_sync.sync_duration
+                "duration": last_sync.sync_duration,
+                "new_lands": new_lands
             }
         
         return jsonify({
@@ -858,4 +903,3 @@ def get_stats():
             "success": False,
             "error": str(e)
         }), 500
-

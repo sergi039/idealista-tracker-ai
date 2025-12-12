@@ -43,11 +43,42 @@ class ScoringService:
         except Exception as e:
             logger.error(f"Failed to load custom weights: {str(e)}")
     
-    def calculate_score(self, land) -> float:
+    def calculate_score(self, land) -> Decimal:
         """Calculate dual scores using MCDM methodology (Multi-Criteria Decision Making)
         Computes Investment Score, Lifestyle Score, and Combined Score
         Compliant with ISO 31000 and RICS professional real estate evaluation standards"""
         try:
+            # If the land has no meaningful data, treat as unscored.
+            core_fields = [
+                land.price,
+                land.area,
+                land.municipality,
+                land.land_type,
+                land.description,
+                land.infrastructure_basic,
+                land.infrastructure_extended,
+                land.transport,
+                land.environment,
+                land.neighborhood,
+                land.services_quality,
+                land.legal_status,
+                getattr(land, 'development_potential', None),
+            ]
+            if not any(core_fields):
+                land.score_investment = Decimal('0')
+                land.score_lifestyle = Decimal('0')
+                land.score_total = Decimal('0')
+                if not land.environment:
+                    land.environment = {}
+                land.environment['scoring'] = {
+                    'individual_scores': {},
+                    'profiles': {},
+                    'combined_mix': Config.COMBINED_MIX,
+                    'combined_score': 0,
+                }
+                land.environment['score_breakdown'] = {}
+                return land.score_total
+
             # Calculate individual criterion scores once (each returns 0-100)
             individual_scores = {}
             individual_scores['investment_yield'] = self._score_investment_yield(land)
@@ -72,11 +103,12 @@ class ScoringService:
             mix = Config.COMBINED_MIX
             combined_score = (investment_score * mix['investment'] + 
                             lifestyle_score * mix['lifestyle'])
+            combined_score_rounded = round(combined_score, 2)
             
             # Update land record with all three scores
             land.score_investment = Decimal(str(round(investment_score, 2)))
             land.score_lifestyle = Decimal(str(round(lifestyle_score, 2)))
-            land.score_total = Decimal(str(round(combined_score, 2)))
+            land.score_total = Decimal(str(combined_score_rounded))
             
             # Store comprehensive MCDM breakdown for transparency
             if not land.environment:
@@ -97,30 +129,31 @@ class ScoringService:
                     }
                 },
                 'combined_mix': mix,
-                'combined_score': combined_score
+                'combined_score': combined_score_rounded
             }
+            # Backward-compatible top-level breakdown for templates/tests.
+            land.environment['score_breakdown'] = individual_scores
             
             logger.info(f"Dual MCDM scores calculated for land {land.id}: "
                        f"Investment={investment_score:.1f}, Lifestyle={lifestyle_score:.1f}, "
                        f"Combined={combined_score:.1f}")
-            return combined_score
+            return land.score_total
             
         except Exception as e:
             logger.error(f"Failed to calculate dual MCDM scores for land {land.id}: {str(e)}")
-            return 0
+            return Decimal('0')
     
     def _score_infrastructure_basic(self, land) -> Optional[float]:
         """Score basic infrastructure (electricity, water, internet, gas)"""
         try:
-            if not land.infrastructure_basic:
-                return None
-            
-            basic_infra = land.infrastructure_basic
-            score = 0
-            max_score = 4  # 4 basic utilities
-            
+            basic_infra = land.infrastructure_basic or {}
             # Check for basic utilities mentions in description
             description = (land.description or "").lower()
+            if not basic_infra and not description:
+                return None
+
+            score = 0
+            max_score = 4  # 4 basic utilities
             
             utilities = {
                 'electricity': ['electricidad', 'luz', 'eléctrico'],
@@ -159,7 +192,7 @@ class ScoringService:
                     if distance <= 1000:  # Within 1km
                         score += 25
                     elif distance <= 3000:  # Within 3km
-                        score += 15
+                        score += 20
                     elif distance <= 5000:  # Within 5km
                         score += 10
                     else:
@@ -176,33 +209,39 @@ class ScoringService:
         try:
             if not land.transport:
                 return None
-            
-            transport = land.transport
-            score = 0
-            
+
+            transport = land.transport or {}
+            score = 0.0
+            max_possible = 0.0
+
             # Score transport options
             transport_options = {
                 'train_station': 30,
                 'bus_station': 20,
                 'airport': 25,
-                'highway': 25
+                'highway': 25,
             }
-            
+
             for option, max_points in transport_options.items():
                 if transport.get(f'{option}_available'):
+                    max_possible += max_points
                     distance = transport.get(f'{option}_distance', float('inf'))
-                    
-                    # Score based on distance
+
+                    # Score based on distance (more forgiving, then normalize by available options)
                     if distance <= 2000:  # Within 2km
-                        score += max_points
+                        multiplier = 1.0
                     elif distance <= 5000:  # Within 5km
-                        score += max_points * 0.7
+                        multiplier = 0.8
                     elif distance <= 10000:  # Within 10km
-                        score += max_points * 0.4
+                        multiplier = 0.6
                     else:
-                        score += max_points * 0.2
-            
-            return min(score, 100)  # Cap at 100
+                        multiplier = 0.4
+                    score += max_points * multiplier
+
+            if max_possible == 0:
+                return None
+
+            return min((score / max_possible) * 100, 100)
             
         except Exception as e:
             logger.error(f"Failed to score transport: {str(e)}")
@@ -323,10 +362,12 @@ class ScoringService:
     def _score_location_quality(self, land) -> Optional[float]:
         """Score location quality based on neighborhood and proximity to urban centers"""
         try:
-            score = 50  # Base score
-            
             # Municipality quality check
             municipality = (land.municipality or "").lower()
+            if not municipality and not land.neighborhood:
+                return None
+
+            score = 50  # Base score
             
             # Premium locations in Spain
             premium_locations = ['madrid', 'barcelona', 'valencia', 'sevilla', 'bilbao', 
@@ -357,23 +398,25 @@ class ScoringService:
             
         except Exception as e:
             logger.error(f"Failed to score location quality: {str(e)}")
-            return 50  # Default middle score
+            return None
     
     def _score_physical_characteristics(self, land) -> Optional[float]:
         """Score physical characteristics like size, shape, topography"""
         try:
-            score = 70  # Base score
-            
             # Area scoring - ideal range 1000-5000 m²
-            if land.area:
-                if 1000 <= land.area <= 5000:
-                    score += 20  # Ideal size
-                elif 500 <= land.area < 1000:
-                    score += 10  # Small but acceptable
-                elif 5000 < land.area <= 10000:
-                    score += 15  # Large, good for development
-                elif land.area > 10000:
-                    score += 10  # Very large, may have challenges
+            if not land.area:
+                return None
+
+            score = 70  # Base score
+
+            if 1000 <= land.area <= 5000:
+                score += 20  # Ideal size
+            elif 500 <= land.area < 1000:
+                score += 10  # Small but acceptable
+            elif 5000 < land.area <= 10000:
+                score += 15  # Large, good for development
+            elif land.area > 10000:
+                score += 10  # Very large, may have challenges
             
             # Price per m² indicator (if price and area available)
             if land.price and land.area and land.area > 0:
@@ -387,23 +430,25 @@ class ScoringService:
             
         except Exception as e:
             logger.error(f"Failed to score physical characteristics: {str(e)}")
-            return 50  # Default middle score
+            return None
     
     def _score_development_potential(self, land) -> Optional[float]:
         """Score future development potential"""
         try:
+            description = (land.description or "").lower()
+            legal_status = (land.legal_status or "").lower()
+            if not description and not legal_status:
+                return None
+
             score = 50  # Base score
-            
+
             # Land type is key indicator
             land_type = (land.land_type or "").lower()
-            
+
             if land_type == 'developed':
                 score = 30  # Already developed, less potential
             elif land_type == 'buildable':
                 score = 80  # High development potential
-            
-            # Check for urbanization mentions in description
-            description = (land.description or "").lower()
             
             positive_keywords = ['urbanizable', 'desarrollo', 'proyecto aprobado', 
                                'plan parcial', 'licencia', 'permiso']
@@ -424,12 +469,15 @@ class ScoringService:
             
         except Exception as e:
             logger.error(f"Failed to score development potential: {str(e)}")
-            return 50  # Default middle score
+            return None
     
     def _score_investment_yield(self, land) -> Optional[float]:
         """Score investment yield based on rental potential and cap rate
         Uses MarketAnalysisService to calculate rental analysis metrics"""
         try:
+            if not land.price or not land.area:
+                return None
+
             from services.market_analysis_service import MarketAnalysisService
             
             market_service = MarketAnalysisService()
@@ -561,6 +609,8 @@ class ScoringService:
     
     def get_current_weights(self) -> Dict[str, float]:
         """Get current scoring weights"""
+        # Refresh from DB in case weights changed after service initialization.
+        self.load_custom_weights()
         return self.weights.copy()
     
     def _calculate_profile_score(self, individual_scores: Dict[str, float], profile: str) -> float:

@@ -11,6 +11,7 @@ from typing import Optional, Dict, Any, List
 import anthropic
 from anthropic import Anthropic
 from sqlalchemy import and_, or_, func
+from config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -21,21 +22,20 @@ except ImportError:
     MarketAnalysisService = None
     logger.warning("MarketAnalysisService not available")
 
-# IMPORTANT: Using claude_key from secrets for authentication
-# Use Claude Sonnet 4.5 for best performance
-DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+# Model selection is centralized in Config (supports legacy aliases).
+DEFAULT_MODEL = Config.ANTHROPIC_MODEL
 
 class AnthropicService:
     """Service for interacting with Anthropic Claude API"""
     
     def __init__(self):
         """Initialize Anthropic client with API key from secrets"""
-        # Get API key from environment variable (claude_key in secrets)
-        self.api_key = os.environ.get('claude_key')
+        self.api_key = Config.ANTHROPIC_API_KEY
+        self.model = DEFAULT_MODEL
         
         if not self.api_key:
-            logger.error("claude_key not found in environment variables")
-            raise ValueError("claude_key environment variable must be set in secrets")
+            logger.error("Anthropic API key not found in environment variables")
+            raise ValueError("ANTHROPIC_API_KEY (or claude_key) must be set in secrets")
         
         try:
             self.client = Anthropic(api_key=self.api_key)

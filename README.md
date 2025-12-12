@@ -148,7 +148,7 @@ export IMAP_PASSWORD="your-app-specific-password"
 
 4. **Initialize database**
 ```bash
-python -c "from app import app, db; app.app_context().push(); db.create_all()"
+python -c "from app import create_app, db; app=create_app(); app.app_context().push(); db.create_all()"
 ```
 
 5. **Run the application**

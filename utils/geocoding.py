@@ -3,13 +3,13 @@ import logging
 import requests
 import time
 from typing import Dict, Optional
+from config import Config
 
 logger = logging.getLogger(__name__)
 
 class GeocodingService:
     def __init__(self):
-        # Use existing secret names with fallback to standard names
-        self.google_maps_key = os.environ.get("Google_api") or os.environ.get("GOOGLE_MAPS_API") or os.environ.get("GOOGLE_MAPS_API_KEY")
+        self.google_maps_key = Config.GOOGLE_MAPS_API_KEY
         
     def geocode_address(self, address: str) -> Optional[Dict]:
         """Geocode an address using Google Maps Geocoding API"""

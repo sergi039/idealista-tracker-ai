@@ -25,7 +25,10 @@ class SecurityValidator:
     OPTIONAL_SECRETS = {
         'Google_api': 'Google Maps/Places API services and geocoding',
         'GOOGLE_MAPS_API': 'Google Maps API services (alternative name)',
+        'GOOGLE_MAPS_API_KEY': 'Google Maps API services (canonical name)',
+        'GOOGLE_PLACES_API_KEY': 'Google Places API services (canonical name)',
         'claude_key': 'Claude AI services (ANTHROPIC_API_KEY)',
+        'ANTHROPIC_API_KEY': 'Claude AI services (canonical name)',
         'IMAP_USER': 'Gmail IMAP access for email ingestion',
         'IMAP_PASSWORD': 'Gmail App Password for IMAP access'
     }

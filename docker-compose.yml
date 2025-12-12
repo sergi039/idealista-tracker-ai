@@ -13,6 +13,9 @@ services:
       - .env
     environment:
       - DATABASE_URL=postgresql://${DB_USER:-idealista}:${DB_PASSWORD:-idealista}@db:5432/${DB_NAME:-idealista}
+      # Development conveniences (disable in production)
+      - AUTO_CREATE_DB=true
+      - AUTO_START_SCHEDULER=true
     volumes:
       # Mount code for development (comment out for production)
       - .:/app

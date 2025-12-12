@@ -98,12 +98,12 @@ class TestAPIHealthCheck:
 class TestManualIngestion:
     """Test manual ingestion endpoint"""
     
-    @patch('services.gmail_service.GmailService')
-    def test_manual_ingestion_success(self, mock_gmail_service, client):
+    @patch('services.imap_service.IMAPService')
+    def test_manual_ingestion_success(self, mock_imap_service, client):
         """Test successful manual ingestion"""
-        # Mock Gmail service
+        # Mock IMAP service
         mock_instance = Mock()
-        mock_gmail_service.return_value = mock_instance
+        mock_imap_service.return_value = mock_instance
         mock_instance.run_ingestion.return_value = 5
         
         response = client.post('/api/ingest/email/run')
@@ -114,20 +114,20 @@ class TestManualIngestion:
         assert data['processed_count'] == 5
         assert 'Successfully processed' in data['message']
     
-    @patch('services.gmail_service.GmailService')
-    def test_manual_ingestion_failure(self, mock_gmail_service, client):
+    @patch('services.imap_service.IMAPService')
+    def test_manual_ingestion_failure(self, mock_imap_service, client):
         """Test manual ingestion failure"""
-        # Mock Gmail service to raise exception
+        # Mock IMAP service to raise exception
         mock_instance = Mock()
-        mock_gmail_service.return_value = mock_instance
-        mock_instance.run_ingestion.side_effect = Exception("Gmail API error")
+        mock_imap_service.return_value = mock_instance
+        mock_instance.run_ingestion.side_effect = Exception("IMAP error")
         
         response = client.post('/api/ingest/email/run')
         
         assert response.status_code == 500
         data = json.loads(response.data)
         assert data['success'] is False
-        assert 'Gmail API error' in data['error']
+        assert 'IMAP error' in data['error']
 
 
 class TestLandsAPI:

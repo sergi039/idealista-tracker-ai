@@ -29,11 +29,17 @@ class IMAPService:
     def _get_last_seen_uid(self) -> int:
         """Get the last processed UID from database to avoid reprocessing"""
         try:
-            # Check if we have a settings table or use a simple file
-            uid_file = ".last_seen_uid"
-            if os.path.exists(uid_file):
-                with open(uid_file, 'r') as f:
-                    return int(f.read().strip() or "0")
+            uid_file = Config.LAST_SEEN_UID_PATH
+            legacy_uid_file = os.path.join(Config.BASE_DIR, ".last_seen_uid")
+
+            for path in (uid_file, legacy_uid_file):
+                if os.path.exists(path):
+                    with open(path, 'r') as f:
+                        uid = int(f.read().strip() or "0")
+                    # Migrate legacy UID file into data dir for persistence
+                    if path == legacy_uid_file and uid > 0 and uid_file != legacy_uid_file:
+                        self._save_last_seen_uid(uid)
+                    return uid
             return 0
         except Exception:
             return 0
@@ -41,7 +47,9 @@ class IMAPService:
     def _save_last_seen_uid(self, uid: int):
         """Save the last processed UID"""
         try:
-            with open(".last_seen_uid", 'w') as f:
+            uid_file = Config.LAST_SEEN_UID_PATH
+            os.makedirs(os.path.dirname(uid_file), exist_ok=True)
+            with open(uid_file, 'w') as f:
                 f.write(str(uid))
         except Exception as e:
             logger.error(f"Failed to save last UID: {e}")

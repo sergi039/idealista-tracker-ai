@@ -1,13 +1,34 @@
 import os
 
+def _first_env(*names, default=None):
+    """Return the first non-empty environment variable among names."""
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return default
+
+def _compose_database_url():
+    """Compose DATABASE_URL from DB_* parts when provided."""
+    user = os.environ.get('DB_USER')
+    password = os.environ.get('DB_PASSWORD')
+    name = os.environ.get('DB_NAME')
+    host = os.environ.get('DB_HOST', 'localhost')
+    port = os.environ.get('DB_PORT', '5432')
+    if user and password and name:
+        return f"postgresql://{user}:{password}@{host}:{port}/{name}"
+    return None
+
 class Config:
+    DEV_MODE = os.environ.get('DEV_MODE', '').lower() == 'true'
+
     # Email backend selection
     EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "imap").lower()  # 'imap' or 'gmail'
     
     # AI Integration - Anthropic Claude
-    # Using claude_key from secrets for authentication
-    ANTHROPIC_API_KEY = os.environ.get('claude_key')
-    ANTHROPIC_MODEL = "claude-3-5-sonnet-20241022"  # Latest Claude model
+    # Using claude_key from secrets for authentication (legacy alias)
+    ANTHROPIC_API_KEY = _first_env('ANTHROPIC_API_KEY', 'claude_key')
+    ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-4-5-20250929"
     
     # IMAP settings (for Gmail with App Password)
     IMAP_HOST = os.environ.get("IMAP_HOST") or "imap.gmail.com"
@@ -27,22 +48,32 @@ class Config:
     GMAIL_LABEL = "Idealista"
     
     # Google APIs - Required for production
-    GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
-    GOOGLE_PLACES_API_KEY = os.environ.get("GOOGLE_PLACES_API_KEY")
+    GOOGLE_MAPS_API_KEY = _first_env("GOOGLE_MAPS_API_KEY", "GOOGLE_MAPS_API", "Google_api")
+    GOOGLE_PLACES_API_KEY = _first_env("GOOGLE_PLACES_API_KEY", "GOOGLE_PLACES_API", "Google_api")
     
     # Database - Required
-    DATABASE_URL = os.environ.get("DATABASE_URL")
+    DATABASE_URL = os.environ.get("DATABASE_URL") or _compose_database_url()
     
     # App settings - Required
     SECRET_KEY = os.environ.get("SECRET_KEY")
     SESSION_SECRET = os.environ.get("SESSION_SECRET")
+
+    # Feature flags
+    AUTO_CREATE_DB = os.environ.get("AUTO_CREATE_DB", "true" if DEV_MODE else "false").lower() == "true"
+    AUTO_START_SCHEDULER = os.environ.get("AUTO_START_SCHEDULER", "true" if DEV_MODE else "false").lower() == "true"
     
     # Scheduler settings
     SCHEDULER_TIMEZONE = 'Europe/Madrid'  # CET timezone
     INGESTION_TIMES = ['07:00', '19:00']  # 7 AM and 7 PM CET
+    LISTING_STATUS_CHECK_TIME = os.environ.get("LISTING_STATUS_CHECK_TIME", "10:00")
     
     # OSM Overpass API
     OSM_OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+
+    # Paths
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))
+    LAST_SEEN_UID_PATH = os.environ.get("LAST_SEEN_UID_PATH", os.path.join(DATA_DIR, ".last_seen_uid"))
     
     # Professional scoring weights based on Spanish/European standards
     # Total must equal 1.0 (100%) - Updated to include Investment Yield

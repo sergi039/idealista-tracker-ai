@@ -720,6 +720,17 @@
                             <!-- Card Footer with Actions -->
                             <div class="card-footer d-flex justify-content-between align-items-center">
                                 <div>
+                                    {% if land.location_lat and land.location_lon %}
+                                        <a href="{{ url_for('main.map_view', focus=land.id) }}"
+                                           class="btn btn-outline-info btn-sm me-2"
+                                           title="View on map">
+                                            <i class="fas fa-map"></i>
+                                        </a>
+                                    {% else %}
+                                        <span class="btn btn-outline-secondary btn-sm me-2 disabled" title="Location unknown">
+                                            <i class="fas fa-map"></i>
+                                        </span>
+                                    {% endif %}
                                     {% if land.url %}
                                         <a href="{{ land.url }}" target="_blank" 
                                            class="btn btn-success btn-sm" title="View on Idealista">

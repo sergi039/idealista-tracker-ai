@@ -117,7 +117,7 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
             # Call Claude API
             try:
                 message = self.anthropic_service.client.messages.create(
-                    model="claude-3-5-sonnet-20241022",  # Latest available model
+                    model=self.anthropic_service.model,
                     max_tokens=800,
                     temperature=0.3,
                     messages=[
