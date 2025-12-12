@@ -1,4 +1,5 @@
 import json
+import hashlib
 from typing import Any, Dict, Optional, Tuple
 
 
@@ -41,6 +42,64 @@ def extract_metrics(analysis: Any) -> Dict[str, Any]:
         "price_to_rent_ratio": rental.get("price_to_rent_ratio"),
         "payback_period_years": rental.get("payback_period_years"),
     }
+
+
+def _pick(a: Dict[str, Any], *path: str) -> Any:
+    cur: Any = a
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur
+
+
+def _truncate(value: Any, max_len: int = 120) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
+
+
+def extract_highlights(analysis: Any) -> Dict[str, Any]:
+    """Compact qualitative fields so the UI can show differences quickly."""
+    a = _as_dict(analysis)
+    if not a:
+        return {}
+
+    key_drivers = _pick(a, "investment_potential", "key_drivers")
+    if isinstance(key_drivers, list):
+        key_drivers_text = " • ".join(str(x) for x in key_drivers[:3] if x is not None)
+    else:
+        key_drivers_text = None
+
+    highlights: Dict[str, Any] = {
+        "price_verdict": _pick(a, "price_analysis", "verdict"),
+        "price_summary": _truncate(_pick(a, "price_analysis", "summary"), 140),
+        "investment_potential_rating": _pick(a, "investment_potential", "rating"),
+        "risk_level": _pick(a, "investment_potential", "risk_level"),
+        "key_drivers": _truncate(key_drivers_text, 160),
+        "best_use": _truncate(_pick(a, "development_ideas", "best_use"), 140),
+        "market_trend": _pick(a, "market_price_dynamics", "price_trend"),
+    }
+
+    sig_payload = {
+        k: highlights.get(k)
+        for k in [
+            "price_verdict",
+            "price_summary",
+            "investment_potential_rating",
+            "risk_level",
+            "key_drivers",
+            "best_use",
+            "market_trend",
+        ]
+    }
+    sig_bytes = json.dumps(sig_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    highlights["signature"] = hashlib.sha256(sig_bytes).hexdigest()[:16]
+
+    return highlights
 
 
 def schema_completeness(analysis: Any) -> Tuple[int, int]:
@@ -109,6 +168,7 @@ def evaluate(land, analysis: Any) -> Dict[str, Any]:
     fidelity = numeric_fidelity_score(metrics, expected)
     return {
         "metrics": metrics,
+        "highlights": extract_highlights(analysis),
         "schema": {"found": completeness[0], "total": completeness[1]},
         "expected": expected,
         "fidelity_score": fidelity,
@@ -125,4 +185,3 @@ def build_comparison(land, claude_analysis: Any, openai_analysis: Any) -> Dict[s
         "chatgpt": openai_eval,
         "expected": claude_eval["expected"],
     }
-

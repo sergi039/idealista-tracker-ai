@@ -2123,6 +2123,16 @@ function _appendRow(tbody, label, claudeVal, gptVal, baselineVal) {
     tbody.appendChild(tr);
 }
 
+function _appendSection(tbody, title) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 4;
+    td.className = 'text-body-secondary small fw-semibold pt-3';
+    td.textContent = title;
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+}
+
 async function refreshAiComparison() {
     const statusEl = document.getElementById('ai-compare-status');
     const tableEl = document.getElementById('ai-compare-table');
@@ -2198,6 +2208,33 @@ async function refreshAiComparison() {
             _formatMetricValue(expected.payback_period_years)
         );
 
+        const ch = claude?.highlights || {};
+        const gh = gpt?.highlights || {};
+
+        _appendSection(tbody, 'Qualitative highlights (often differ)');
+        _appendRow(
+            tbody,
+            'Price summary',
+            _formatMetricValue(ch.price_summary),
+            gpt ? _formatMetricValue(gh.price_summary) : 'Not generated',
+            '—'
+        );
+        _appendRow(
+            tbody,
+            'Key drivers',
+            _formatMetricValue(ch.key_drivers),
+            gpt ? _formatMetricValue(gh.key_drivers) : 'Not generated',
+            '—'
+        );
+        _appendRow(
+            tbody,
+            'Best use',
+            _formatMetricValue(ch.best_use),
+            gpt ? _formatMetricValue(gh.best_use) : 'Not generated',
+            '—'
+        );
+
+        _appendSection(tbody, 'Schema + baseline match');
         _appendRow(
             tbody,
             'Schema completeness',
@@ -2207,14 +2244,14 @@ async function refreshAiComparison() {
         );
         _appendRow(
             tbody,
-            'Numeric fidelity',
+            'Numeric fidelity (vs baseline)',
             _formatMetricValue(claude?.fidelity_score, '/100'),
             gpt ? _formatMetricValue(gpt?.fidelity_score, '/100') : 'Not generated',
             '—'
         );
         _appendRow(
             tbody,
-            'Overall score',
+            'Overall score (baseline)',
             _formatMetricValue(claude?.overall_score, '/100'),
             gpt ? _formatMetricValue(gpt?.overall_score, '/100') : 'Not generated',
             '—'
