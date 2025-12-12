@@ -18,7 +18,7 @@ class EnrichmentService:
         self.osm_overpass_url = Config.OSM_OVERPASS_URL
         self.geocoding_service = GeocodingService()
         
-    def enrich_land(self, land_id: int) -> bool:
+    def enrich_land(self, land_id: int, refresh_coords: bool = False) -> bool:
         """Main method to enrich a land record with external data"""
         try:
             from models import Land
@@ -31,8 +31,8 @@ class EnrichmentService:
             
             logger.info(f"Starting enrichment for land {land_id}: {land.title}")
             
-            # Step 1: Geocode the location if coordinates are missing
-            if not land.location_lat or not land.location_lon:
+            # Step 1: Geocode the location (missing coords, or refresh requested / low-accuracy coords)
+            if (not land.location_lat or not land.location_lon) or refresh_coords or self._should_refresh_coordinates(land):
                 coordinates_info = self._geocode_with_accuracy(land)
                 if coordinates_info:
                     land.location_lat = coordinates_info['lat']
@@ -74,6 +74,48 @@ class EnrichmentService:
         except Exception as e:
             logger.error(f"Failed to enrich land {land_id}: {str(e)}")
             return False
+
+    def _should_refresh_coordinates(self, land) -> bool:
+        """Heuristic: refresh coords when we likely geocoded from a too-generic / incomplete address."""
+        try:
+            if not land.location_lat or not land.location_lon:
+                return False
+            if (land.location_accuracy or "").lower() == "precise":
+                return False
+
+            parts = self._extract_location_parts_from_title(getattr(land, "title", None) or "")
+            if len(parts) < 2:
+                return False
+
+            first = (parts[0] or "").lower()
+            streetish = any(k in first for k in ["calle", "avenida", "camino", "lugar", "plaza", "carretera"])
+            return streetish
+        except Exception:
+            return False
+
+    def _extract_location_parts_from_title(self, title: str) -> List[str]:
+        """Parse 'Land in ...' titles into usable address components (drops n/a and price)."""
+        if not title:
+            return []
+        t = title.strip()
+        if t.lower().startswith("land in "):
+            t = t[8:].strip()
+
+        # Split by commas, strip, drop empty/n/a, and strip trailing price markers.
+        raw_parts = [p.strip() for p in t.split(",")]
+        parts: List[str] = []
+        for p in raw_parts:
+            if not p:
+                continue
+            low = p.lower().strip()
+            if low in {"n/a", "na", "null", "none"}:
+                continue
+            # Remove trailing " 65,000 €" / " 65000€" etc.
+            p = re.sub(r"\s*\d[\d\.,]*\s*€.*$", "", p).strip()
+            if not p:
+                continue
+            parts.append(p)
+        return parts
     
     def _extract_municipality_from_title(self, title: str) -> Optional[str]:
         """Extract municipality specifically from title like 'Land in camino Pinzalez, Porceyo - Cenero, Gijón'"""
@@ -171,12 +213,23 @@ class EnrichmentService:
         if not municipality:
             logger.warning(f"Invalid municipality data for land {land.id}: '{land.municipality}'")
             return None
-        
+
         # Normalize address format: replace " - " with ", " for better geocoding
         municipality = municipality.replace(" - ", ", ")
-            
-        # Try different address formats in order of precision
-        address_attempts = []
+
+        # Try different address formats in order of precision (title-derived first)
+        address_attempts: List[Dict[str, str]] = []
+
+        title_parts = self._extract_location_parts_from_title(land.title or "")
+        if title_parts:
+            full = ", ".join(title_parts)
+            address_attempts.append({"address": f"{full}, Asturias, Spain", "accuracy": "precise" if len(title_parts) >= 2 else "approximate"})
+            if len(title_parts) >= 2:
+                tail = ", ".join(title_parts[-2:])
+                address_attempts.append({"address": f"{tail}, Asturias, Spain", "accuracy": "approximate"})
+            if len(title_parts) >= 3:
+                tail3 = ", ".join(title_parts[-3:])
+                address_attempts.append({"address": f"{tail3}, Asturias, Spain", "accuracy": "precise"})
         
         # Try most specific first if we have detailed municipality info
         if municipality and ', ' in municipality:

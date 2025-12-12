@@ -88,8 +88,15 @@ def manual_enrichment(land_id):
         
         land = Land.query.get_or_404(land_id)
         enrichment_service = EnrichmentService()
-        
-        success = enrichment_service.enrich_land(land_id)
+
+        payload = request.get_json(silent=True) if request.is_json else {}
+        refresh_coords = False
+        if isinstance(payload, dict):
+            refresh_coords = bool(payload.get("refresh_coords"))
+        if request.args.get("refresh_coords") in ("1", "true", "yes", "on"):
+            refresh_coords = True
+
+        success = enrichment_service.enrich_land(land_id, refresh_coords=refresh_coords)
         
         if success:
             return jsonify({
