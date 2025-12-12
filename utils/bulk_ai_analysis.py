@@ -88,6 +88,7 @@ def main() -> int:
     logging.getLogger("anthropic._base_client").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("services.anthropic_service").setLevel(logging.WARNING)
 
     if not os.environ.get("ANTHROPIC_API_KEY") and not os.environ.get("claude_key"):
         print("ANTHROPIC_API_KEY is not configured; aborting.", file=sys.stderr)
@@ -104,8 +105,11 @@ def main() -> int:
         ok = 0
         failed = 0
 
-        print(f"Total lands in DB: {total}")
-        print(f"Mode: {'FORCE' if args.force else 'ONLY MISSING'}; {'ENRICH' if args.enrich else 'REPLACE'}")
+        print(f"Total lands in DB: {total}", flush=True)
+        print(
+            f"Mode: {'FORCE' if args.force else 'ONLY MISSING'}; {'ENRICH' if args.enrich else 'REPLACE'}",
+            flush=True,
+        )
 
         for land in _iter_lands(args.batch_size):
             if args.limit and processed >= args.limit:
@@ -142,22 +146,22 @@ def main() -> int:
                     except Exception:
                         rating_full = None
                     rating_short = str(rating_full).split("-")[0].strip().upper() if rating_full else "-"
-                    print(f"{prefix} OK ({rating_short})")
+                    print(f"{prefix} OK ({rating_short})", flush=True)
                 else:
                     failed += 1
                     db.session.rollback()
                     error = (result or {}).get("error") if isinstance(result, dict) else "Unknown error"
-                    print(f"{prefix} FAILED: {error}", file=sys.stderr)
+                    print(f"{prefix} FAILED: {error}", file=sys.stderr, flush=True)
 
             except Exception as e:
                 failed += 1
                 db.session.rollback()
-                print(f"{prefix} EXCEPTION: {e}", file=sys.stderr)
+                print(f"{prefix} EXCEPTION: {e}", file=sys.stderr, flush=True)
 
             if args.sleep > 0:
                 time.sleep(args.sleep)
 
-        print(f"Done. processed={processed} ok={ok} failed={failed} skipped={skipped}")
+        print(f"Done. processed={processed} ok={ok} failed={failed} skipped={skipped}", flush=True)
         return 0 if failed == 0 else 1
 
 
