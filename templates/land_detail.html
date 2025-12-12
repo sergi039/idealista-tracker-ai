@@ -303,6 +303,7 @@
                                             <i class="fas fa-wand-magic-sparkles me-1"></i>Run Claude
                                         </button>
                                     </div>
+                                    <div id="ai-claude-alerts"></div>
                                     <div class="analysis-content" id="ai-claude-analysis">
                                         <div id="ai-claude-structured-analysis"></div>
                                         <div class="text-center text-muted py-4" id="ai-claude-placeholder" style="{{ 'display: none;' if land.ai_analysis else '' }}">
@@ -320,6 +321,7 @@
                                             <i class="fas fa-wand-magic-sparkles me-1"></i>Run ChatGPT
                                         </button>
                                     </div>
+                                    <div id="ai-chatgpt-alerts"></div>
                                     <div class="analysis-content" id="ai-chatgpt-analysis">
                                         <div id="ai-chatgpt-structured-analysis"></div>
                                         <div class="text-center text-muted py-4" id="ai-chatgpt-placeholder" style="{{ 'display: none;' if openai_analysis else '' }}">
@@ -1942,6 +1944,52 @@ function renderAnalysisInto(targetId, rawData, placeholderId) {
     }
 }
 
+function showTransientAlert(containerId, type, message, autoCloseMs = 4500) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    const alertId = `${containerId}-${Date.now()}`;
+    container.innerHTML = `
+        <div class="alert alert-${type} alert-dismissible fade show" role="alert" id="${alertId}">
+            <i class="fas fa-triangle-exclamation me-2"></i>${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    `;
+
+    if (autoCloseMs && autoCloseMs > 0) {
+        setTimeout(() => {
+            const el = document.getElementById(alertId);
+            if (!el) return;
+            try {
+                bootstrap.Alert.getOrCreateInstance(el).close();
+            } catch {
+                el.remove();
+            }
+        }, autoCloseMs);
+    }
+}
+
+function cooldownButton(buttonEl, seconds) {
+    if (!buttonEl) return;
+    const original = buttonEl.innerHTML;
+    let remaining = seconds;
+    buttonEl.disabled = true;
+
+    const tick = () => {
+        if (remaining <= 0) {
+            clearInterval(timer);
+            buttonEl.disabled = false;
+            buttonEl.innerHTML = original;
+            return;
+        }
+        buttonEl.innerHTML = `<i class="fas fa-clock me-1"></i>Try again in ${remaining}s`;
+        remaining -= 1;
+    };
+
+    tick();
+    const timer = setInterval(tick, 1000);
+}
+
 function setActiveAiTab(tabName) {
     const tabId = tabName === 'chatgpt' ? 'ai-chatgpt-tab' : 'ai-claude-tab';
     const trigger = document.getElementById(tabId);
@@ -1970,10 +2018,14 @@ function runClaudeAnalysis(landId) {
     const originalContent = button ? button.innerHTML : '';
     const targetId = 'ai-claude-structured-analysis';
     const placeholderId = 'ai-claude-placeholder';
+    const alertsId = 'ai-claude-alerts';
 
     const existing = _normalizeAnalysisData(window.__EXISTING_CLAUDE_ANALYSIS__);
     const existingAnalysis = existing && !existing._raw_text ? existing : null;
     const isEnrichment = Boolean(existingAnalysis);
+
+    const target = document.getElementById(targetId);
+    const previousHtml = target ? target.innerHTML : '';
 
     if (button) {
         button.disabled = true;
@@ -1984,7 +2036,6 @@ function runClaudeAnalysis(landId) {
     const placeholder = document.getElementById(placeholderId);
     if (placeholder) placeholder.style.display = 'none';
 
-    const target = document.getElementById(targetId);
     if (target) {
         target.innerHTML = `
             <div class="text-center">
@@ -2008,14 +2059,8 @@ function runClaudeAnalysis(landId) {
     .then(r => r.json())
     .then(data => {
         if (!data.success) {
-            if (target) {
-                target.innerHTML = `
-                    <div class="alert alert-danger mb-0" role="alert">
-                        <i class="fas fa-exclamation-triangle me-2"></i>
-                        <strong>Claude failed:</strong> ${data.error || 'Unknown error'}
-                    </div>
-                `;
-            }
+            if (target) target.innerHTML = previousHtml;
+            showTransientAlert(alertsId, 'warning', `Claude is busy. Try again in 20 seconds.`, 4500);
             return;
         }
 
@@ -2040,14 +2085,8 @@ function runClaudeAnalysis(landId) {
         refreshAiComparison();
     })
     .catch(err => {
-        if (target) {
-            target.innerHTML = `
-                <div class="alert alert-danger mb-0" role="alert">
-                    <i class="fas fa-wifi me-2"></i>
-                    <strong>Network error:</strong> ${err}
-                </div>
-            `;
-        }
+        if (target) target.innerHTML = previousHtml;
+        showTransientAlert(alertsId, 'warning', `Claude request failed. Try again in 20 seconds.`, 4500);
     })
     .finally(() => {
         if (button) {
@@ -2210,10 +2249,12 @@ async function generateChatGPTAnalysis() {
         const btn = document.getElementById('ai-chatgpt-run-btn');
         const targetId = 'ai-chatgpt-structured-analysis';
         const placeholderId = 'ai-chatgpt-placeholder';
+        const alertsId = 'ai-chatgpt-alerts';
         const placeholder = document.getElementById(placeholderId);
         if (placeholder) placeholder.style.display = 'none';
 
         const target = document.getElementById(targetId);
+        const previousHtml = target ? target.innerHTML : '';
         if (target) {
             target.innerHTML = `
                 <div class="text-center">
@@ -2241,13 +2282,12 @@ async function generateChatGPTAnalysis() {
             if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
                 window.IdealistaApp.showNotification(data.error || 'Failed to generate ChatGPT analysis', 'error');
             }
-            if (target) {
-                target.innerHTML = `
-                    <div class="alert alert-danger mb-0" role="alert">
-                        <i class="fas fa-exclamation-triangle me-2"></i>
-                        <strong>ChatGPT failed:</strong> ${data.error || 'Unknown error'}
-                    </div>
-                `;
+            if (target) target.innerHTML = previousHtml;
+            if (resp.status === 429) {
+                showTransientAlert(alertsId, 'warning', `Rate limit reached. Try again in 20 seconds.`, 4500);
+                cooldownButton(btn, 20);
+            } else {
+                showTransientAlert(alertsId, 'warning', `ChatGPT failed. Try again in 20 seconds.`, 4500);
             }
             return;
         }
@@ -2272,20 +2312,14 @@ async function generateChatGPTAnalysis() {
         if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
             window.IdealistaApp.showNotification(`Failed to generate ChatGPT analysis: ${e}`, 'error');
         }
-        const target = document.getElementById('ai-chatgpt-structured-analysis');
-        if (target) {
-            target.innerHTML = `
-                <div class="alert alert-danger mb-0" role="alert">
-                    <i class="fas fa-wifi me-2"></i>
-                    <strong>Network error:</strong> ${e}
-                </div>
-            `;
-        }
+        showTransientAlert('ai-chatgpt-alerts', 'warning', `ChatGPT request failed. Try again in 20 seconds.`, 4500);
     } finally {
         const btn = document.getElementById('ai-chatgpt-run-btn');
         if (btn) {
-            btn.disabled = false;
-            btn.innerHTML = `<i class="fas fa-wand-magic-sparkles me-1"></i>Run ChatGPT`;
+            if (!btn.innerHTML.includes('Try again in')) {
+                btn.disabled = false;
+                btn.innerHTML = `<i class="fas fa-wand-magic-sparkles me-1"></i>Run ChatGPT`;
+            }
         }
     }
 }
