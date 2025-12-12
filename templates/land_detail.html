@@ -2020,17 +2020,15 @@ function runClaudeAnalysis(landId) {
     const placeholderId = 'ai-claude-placeholder';
     const alertsId = 'ai-claude-alerts';
 
-    const existing = _normalizeAnalysisData(window.__EXISTING_CLAUDE_ANALYSIS__);
-    const existingAnalysis = existing && !existing._raw_text ? existing : null;
-    const isEnrichment = Boolean(existingAnalysis);
+    // Keep behavior consistent across providers: clicking "Run" always generates a fresh analysis.
+    const isEnrichment = false;
 
     const target = document.getElementById(targetId);
     const previousHtml = target ? target.innerHTML : '';
 
     if (button) {
         button.disabled = true;
-        const loadingText = isEnrichment ? 'Enriching…' : 'Analyzing…';
-        button.innerHTML = `<i class="fas fa-spinner fa-spin me-2"></i>${loadingText}`;
+        button.innerHTML = `<i class="fas fa-spinner fa-spin me-2"></i>Analyzing…`;
     }
 
     const placeholder = document.getElementById(placeholderId);
@@ -2042,14 +2040,13 @@ function runClaudeAnalysis(landId) {
                 <div class="spinner-border text-primary mb-3" role="status">
                     <span class="visually-hidden">Loading...</span>
                 </div>
-                <p class="text-muted mb-1">${isEnrichment ? 'Claude is enriching this analysis…' : 'Claude is analyzing this property…'}</p>
+                <p class="text-muted mb-1">Claude is analyzing this property…</p>
                 <small class="text-body-secondary">This may take 10-30 seconds</small>
             </div>
         `;
     }
 
     const requestBody = {};
-    if (existingAnalysis) requestBody.existing_analysis = existingAnalysis;
 
     fetch(`/api/analyze/property/${landId}/structured`, {
         method: 'POST',
@@ -2070,7 +2067,7 @@ function runClaudeAnalysis(landId) {
             target.innerHTML = `
                 <div class="alert alert-${data.is_enrichment ? 'info' : 'success'} alert-dismissible fade show" role="alert" id="claude-success-alert">
                     <i class="fas fa-check-circle me-2"></i>
-                    ${data.is_enrichment ? 'Analysis enriched successfully!' : 'Analysis completed successfully!'}
+                    Analysis completed successfully!
                     <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
                 </div>
                 ${renderStructuredAIAnalysis(_normalizeAnalysisData(data.analysis))}
@@ -2312,7 +2309,7 @@ async function generateChatGPTAnalysis() {
         const resp = await fetch(`/api/analysis/generate/{{ land.id }}/openai`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({})
+            body: JSON.stringify({ force: true })
         });
         const data = await resp.json();
         if (!data.success) {
