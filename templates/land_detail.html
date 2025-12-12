@@ -2123,6 +2123,7 @@ async function refreshAiComparison() {
     const statusEl = document.getElementById('ai-compare-status');
     const tableEl = document.getElementById('ai-compare-table');
     const tbody = document.getElementById('ai-compare-tbody');
+    const generateBtn = document.querySelector('#ai-compare-section button[onclick="generateChatGPTAnalysis()"]');
 
     if (!statusEl || !tableEl || !tbody) return;
 
@@ -2136,6 +2137,12 @@ async function refreshAiComparison() {
         if (!data.success) {
             statusEl.textContent = data.error || 'Failed to load comparison';
             return;
+        }
+
+        const openaiConfigured = data.openai_configured === true;
+        if (generateBtn) {
+            generateBtn.disabled = !openaiConfigured;
+            generateBtn.title = openaiConfigured ? 'Generate ChatGPT analysis' : 'Set OPENAI_API_KEY in .env and restart app';
         }
 
         const claude = data.comparison?.claude;
@@ -2203,9 +2210,13 @@ async function refreshAiComparison() {
             '—'
         );
 
-        statusEl.textContent = data.has_chatgpt
-            ? `ChatGPT model: ${data.chatgpt_model || 'unknown'}`
-            : 'ChatGPT analysis not generated yet (set OPENAI_API_KEY and click “Generate ChatGPT”).';
+        if (data.has_chatgpt) {
+            statusEl.textContent = `ChatGPT model: ${data.chatgpt_model || 'unknown'}`;
+        } else if (!openaiConfigured) {
+            statusEl.textContent = 'ChatGPT is not configured (set OPENAI_API_KEY in .env, then restart the app).';
+        } else {
+            statusEl.textContent = 'ChatGPT analysis not generated yet (click “Generate ChatGPT”).';
+        }
 
         tableEl.style.display = '';
     } catch (e) {

@@ -345,6 +345,7 @@ def generate_openai_structured(land_id):
 def compare_ai_analyses(land_id):
     """Return a rubric-based comparison between stored Claude analysis and ChatGPT analysis."""
     try:
+        from config import Config
         from utils.analysis_compare import build_comparison
 
         land = Land.query.get_or_404(land_id)
@@ -363,6 +364,7 @@ def compare_ai_analyses(land_id):
             "land_id": land_id,
             "has_chatgpt": bool(openai_variant),
             "chatgpt_model": openai_variant.model if openai_variant else None,
+            "openai_configured": bool(getattr(Config, "OPENAI_API_KEY", None)),
             "comparison": comparison,
         })
     except Exception as e:
