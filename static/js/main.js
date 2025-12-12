@@ -58,8 +58,10 @@ window.IdealistaApp = {
             
             // Handle successful responses
             if (evt.detail.successful) {
+                const hxPost = target.getAttribute('hx-post') || '';
+
                 // Special handling for sync buttons - prevent JSON from showing in button
-                if (target.getAttribute('hx-post') && target.getAttribute('hx-post').includes('/api/ingest/email/run')) {
+                if (hxPost.includes('/api/ingest/email/run')) {
                     // Parse JSON response and show user-friendly message
                     try {
                         const response = JSON.parse(evt.detail.xhr.responseText);
@@ -95,6 +97,43 @@ window.IdealistaApp = {
                             target.appendChild(icon);
                             target.appendChild(document.createTextNode('Manual Sync'));
                         }
+                    }
+                } else if (hxPost.includes('/api/land/') && hxPost.includes('/enrich')) {
+                    // Enrichment endpoint returns JSON; show a toast and keep the button readable.
+                    try {
+                        const response = JSON.parse(evt.detail.xhr.responseText);
+                        const ok = response && response.success === true;
+                        const message = response && (response.message || response.error) ?
+                            (response.message || response.error) :
+                            (ok ? 'Property enriched successfully' : 'Enrichment completed');
+
+                        IdealistaApp.showNotification(message, ok ? 'success' : 'error');
+
+                        // If HTMX swapped JSON into the button (older markup), restore content.
+                        if (target instanceof HTMLElement && target.tagName === 'BUTTON' && target.textContent && target.textContent.trim().startsWith('{')) {
+                            const label = target.getAttribute('data-enrich-label') || 'Enrich with Google APIs';
+                            target.textContent = '';
+                            const icon = document.createElement('i');
+                            icon.className = `fas fa-sync me-2${ok ? ' text-white' : ''}`;
+                            target.appendChild(icon);
+                            target.appendChild(document.createTextNode(label));
+                        }
+
+                        // Promote the button to a success state so user sees enrichment applied.
+                        if (ok && target instanceof HTMLElement && target.tagName === 'BUTTON') {
+                            target.classList.remove('btn-outline-warning');
+                            target.classList.add('btn-success');
+
+                            const existingCheck = target.querySelector('.badge');
+                            if (!existingCheck) {
+                                const check = document.createElement('span');
+                                check.className = 'badge bg-light text-dark ms-1';
+                                check.textContent = '✓';
+                                target.appendChild(check);
+                            }
+                        }
+                    } catch (e) {
+                        IdealistaApp.showNotification('Property enriched successfully', 'success');
                     }
                 } else {
                     IdealistaApp.showNotification('Operation completed successfully', 'success');

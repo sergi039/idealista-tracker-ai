@@ -269,7 +269,9 @@
                     <button class="btn {{ 'btn-success' if has_enrichment else 'btn-outline-warning' }}"
                             hx-post="{{ url_for('api.manual_enrichment', land_id=land.id) }}"
                             hx-trigger="click"
-                            hx-indicator="#enrichment-spinner">
+                            hx-indicator="#enrichment-spinner"
+                            hx-swap="none"
+                            data-enrich-label="Enrich with Google APIs">
                         <i class="fas fa-sync me-2 {{ 'text-white' if has_enrichment else '' }}"></i>
                         Enrich with Google APIs
                         {% if has_enrichment %}
