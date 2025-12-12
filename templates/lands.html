@@ -28,30 +28,30 @@
 
 
         <!-- Filters -->
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5 class="card-title mb-0">
+        <div class="card mb-3 filters-card" id="filters-card">
+            <div class="card-header py-2">
+                <h6 class="card-title mb-0">
                     <i class="fas fa-filter me-2"></i>{{ t('filters_search') }}
-                </h5>
+                </h6>
             </div>
-            <div class="card-body">
+            <div class="card-body py-2">
                 <form method="GET" id="filter-form">
                     <!-- Hidden inputs to preserve state -->
                     <input type="hidden" name="mode" value="{{ current_filters.mode or 'combined' }}">
                     <input type="hidden" name="view_type" value="{{ current_filters.view_type or 'cards' }}">
-                    <div class="row">
-                        <!-- Search -->
-                        <div class="col-md-3 mb-3">
-                            <label for="search" class="form-label">{{ t('search') }}</label>
-                            <input type="text" class="form-control" id="search" name="search" 
-                                   value="{{ current_filters.search or '' }}" 
+
+                    <!-- Row 1: Primary filters -->
+                    <div class="row g-2 align-items-end">
+                        <div class="col-12 col-lg-4">
+                            <label for="search" class="form-label small text-body-secondary mb-1">{{ t('search') }}</label>
+                            <input type="text" class="form-control form-control-sm" id="search" name="search"
+                                   value="{{ current_filters.search or '' }}"
                                    placeholder="{{ t('search_properties') }}">
                         </div>
-                        
-                        <!-- Land Type -->
-                        <div class="col-md-2 mb-3">
-                            <label for="land_type" class="form-label">{{ t('land_type') }}</label>
-                            <select class="form-select" id="land_type" name="land_type">
+
+                        <div class="col-6 col-lg-2">
+                            <label for="land_type" class="form-label small text-body-secondary mb-1">{{ t('land_type') }}</label>
+                            <select class="form-select form-select-sm" id="land_type" name="land_type">
                                 <option value="">{{ t('land_type_all') }}</option>
                                 <option value="developed" {{ 'selected' if current_filters.land_type == 'developed' }}>
                                     {{ t('developed') }}
@@ -61,14 +61,13 @@
                                 </option>
                             </select>
                         </div>
-                        
-                        <!-- Municipality -->
-                        <div class="col-md-2 mb-3">
-                            <label for="municipality" class="form-label">{{ t('municipality') }}</label>
-                            <select class="form-select" id="municipality" name="municipality">
+
+                        <div class="col-6 col-lg-3">
+                            <label for="municipality" class="form-label small text-body-secondary mb-1">{{ t('municipality') }}</label>
+                            <select class="form-select form-select-sm" id="municipality" name="municipality">
                                 <option value="">{{ t('all_municipalities') }}</option>
                                 {% for municipality in municipalities %}
-                                    <option value="{{ municipality }}" 
+                                    <option value="{{ municipality }}"
                                             {{ 'selected' if current_filters.municipality == municipality }}>
                                         {{ municipality }}
                                     </option>
@@ -76,10 +75,9 @@
                             </select>
                         </div>
 
-                        <!-- Investment Metrics -->
-                        <div class="col-md-2 mb-3">
-                            <label for="inv_metr" class="form-label">Inv. Metr.</label>
-                            <select class="form-select" id="inv_metr" name="inv_metr">
+                        <div class="col-12 col-lg-3">
+                            <label for="inv_metr" class="form-label small text-body-secondary mb-1">Inv. Metr.</label>
+                            <select class="form-select form-select-sm" id="inv_metr" name="inv_metr">
                                 <option value="" {{ 'selected' if not current_filters.inv_metr }}>All</option>
                                 <option value="EXCELLENT" {{ 'selected' if current_filters.inv_metr == 'EXCELLENT' }}>Excellent</option>
                                 <option value="GOOD" {{ 'selected' if current_filters.inv_metr == 'GOOD' }}>Good</option>
@@ -87,37 +85,40 @@
                                 <option value="BELOW" {{ 'selected' if current_filters.inv_metr == 'BELOW' }}>Below</option>
                             </select>
                         </div>
-                        
-                        <!-- Sea View Filter -->
-                        <div class="col-md-2 mb-3">
-                            <label class="form-label">&nbsp;</label>
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="sea_view" name="sea_view"
-                                       {{ 'checked' if current_filters.sea_view }}>
-                                <label class="form-check-label" for="sea_view">
-                                    <i class="fas fa-water me-1"></i>{{ t('sea_view_only') }}
-                                </label>
-                            </div>
-                            <div class="form-check mt-1">
-                                <input class="form-check-input" type="checkbox" id="favorites" name="favorites"
-                                       {{ 'checked' if current_filters.favorites }}>
-                                <label class="form-check-label" for="favorites">
-                                    <i class="fas fa-star me-1 text-warning"></i>Favorites Only
-                                </label>
-                            </div>
-                            <div class="form-check mt-1">
-                                <input class="form-check-input" type="checkbox" id="hide_removed" name="hide_removed"
-                                       {{ 'checked' if current_filters.hide_removed != false }}>
-                                <label class="form-check-label" for="hide_removed">
-                                    <i class="fas fa-eye-slash me-1 text-muted"></i>Hide Removed
-                                </label>
+                    </div>
+
+                    <!-- Row 2: Options + sort + actions -->
+                    <div class="row g-2 align-items-end mt-1">
+                        <div class="col-12 col-lg-4">
+                            <label class="form-label small text-body-secondary mb-1">Options</label>
+                            <div class="d-flex flex-wrap gap-3">
+                                <div class="form-check form-check-inline m-0">
+                                    <input class="form-check-input" type="checkbox" id="sea_view" name="sea_view"
+                                           {{ 'checked' if current_filters.sea_view }}>
+                                    <label class="form-check-label small" for="sea_view">
+                                        <i class="fas fa-water me-1"></i>{{ t('sea_view_only') }}
+                                    </label>
+                                </div>
+                                <div class="form-check form-check-inline m-0">
+                                    <input class="form-check-input" type="checkbox" id="favorites" name="favorites"
+                                           {{ 'checked' if current_filters.favorites }}>
+                                    <label class="form-check-label small" for="favorites">
+                                        <i class="fas fa-star me-1 text-warning"></i>Favorites
+                                    </label>
+                                </div>
+                                <div class="form-check form-check-inline m-0">
+                                    <input class="form-check-input" type="checkbox" id="hide_removed" name="hide_removed"
+                                           {{ 'checked' if current_filters.hide_removed != false }}>
+                                    <label class="form-check-label small" for="hide_removed">
+                                        <i class="fas fa-eye-slash me-1 text-muted"></i>Hide removed
+                                    </label>
+                                </div>
                             </div>
                         </div>
 
-                        <!-- Sort -->
-                        <div class="col-md-3 mb-3">
-                            <label for="sort" class="form-label">{{ t('sort_by') }}</label>
-                            <div class="input-group">
+                        <div class="col-12 col-lg-4">
+                            <label for="sort" class="form-label small text-body-secondary mb-1">{{ t('sort_by') }}</label>
+                            <div class="input-group input-group-sm">
                                 <select class="form-select" id="sort" name="sort">
                                     <!-- Mode-based score options -->
                                     {% if current_filters.mode == 'investment' %}
@@ -174,36 +175,34 @@
                                         {{ t('date_added') }}
                                     </option>
                                 </select>
-                                <select class="form-select" name="order" style="max-width: 100px;">
+                                <select class="form-select" name="order" style="max-width: 90px;">
                                     <option value="desc" {{ 'selected' if current_filters.order == 'desc' }}>↓</option>
                                     <option value="asc" {{ 'selected' if current_filters.order == 'asc' }}>↑</option>
                                 </select>
                             </div>
                         </div>
-                        
-                        <!-- Action Buttons and View Toggle -->
-                        <div class="col-md-4 mb-3 d-flex align-items-end">
-                            <button type="submit" class="btn btn-primary me-2">
+
+                        <div class="col-12 col-lg-4 d-flex flex-wrap align-items-end justify-content-lg-end gap-2">
+                            <button type="submit" class="btn btn-primary btn-sm">
                                 <i class="fas fa-search me-1"></i>{{ t('apply') }}
                             </button>
-                            <a href="{{ url_for('main.lands') }}" class="btn btn-outline-secondary me-3">
+                            <a href="{{ url_for('main.lands') }}" class="btn btn-outline-secondary btn-sm">
                                 <i class="fas fa-times me-1"></i>{{ t('clear') }}
                             </a>
-                            
-                            <!-- View Toggle -->
-                            <div class="btn-group" role="group" aria-label="View type">
-                                <button type="button" 
-                                        class="btn btn-outline-secondary {{ 'active' if current_filters.view_type == 'list' else '' }}" 
-                                        id="view-list-btn" 
-                                        onclick="switchView('list')" 
+
+                            <div class="btn-group btn-group-sm" role="group" aria-label="View type">
+                                <button type="button"
+                                        class="btn btn-outline-secondary {{ 'active' if current_filters.view_type == 'list' else '' }}"
+                                        id="view-list-btn"
+                                        onclick="switchView('list')"
                                         title="Table view - Compact data in rows">
                                     <i class="fas fa-list"></i>
                                 </button>
-                                
-                                <button type="button" 
-                                        class="btn btn-outline-secondary {{ 'active' if current_filters.view_type == 'cards' or not current_filters.view_type else '' }}" 
-                                        id="view-cards-btn" 
-                                        onclick="switchView('cards')" 
+
+                                <button type="button"
+                                        class="btn btn-outline-secondary {{ 'active' if current_filters.view_type == 'cards' or not current_filters.view_type else '' }}"
+                                        id="view-cards-btn"
+                                        onclick="switchView('cards')"
                                         title="Card view - Visual property cards">
                                     <i class="fas fa-th-large"></i>
                                 </button>
