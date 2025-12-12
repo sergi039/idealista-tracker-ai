@@ -87,7 +87,8 @@ def lands():
             )
         
         if sea_view_filter:
-            query = query.filter(Land.environment['sea_view'].astext == 'true')
+            # SQLAlchemy 2.x: .astext removed; use JSON accessors
+            query = query.filter(Land.environment['sea_view'].as_boolean().is_(True))
 
         if favorites_filter:
             query = query.filter(Land.is_favorite == True)
@@ -533,7 +534,8 @@ def export_csv():
             )
         
         if sea_view_filter:
-            query = query.filter(Land.environment['sea_view'].astext == 'true')
+            # SQLAlchemy 2.x: .astext removed; use JSON accessors
+            query = query.filter(Land.environment['sea_view'].as_boolean().is_(True))
 
         if favorites_filter:
             query = query.filter(Land.is_favorite == True)
