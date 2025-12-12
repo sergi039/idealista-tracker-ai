@@ -225,16 +225,30 @@ class OpenAIService:
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7,
-            "max_tokens": 4000,
         }
 
         # Prefer strict JSON output when supported.
         payload["response_format"] = {"type": "json_object"}
 
         started = datetime.utcnow()
-        resp = requests.post(url, headers=headers, json=payload, timeout=600)
+        # Some newer models require `max_completion_tokens` instead of `max_tokens`.
+        # Use a retry with the alternative parameter based on API error message.
+        def _post(json_payload: Dict[str, Any]):
+            return requests.post(url, headers=headers, json=json_payload, timeout=600)
+
+        first = dict(payload)
+        first["max_completion_tokens"] = 4000
+        resp = _post(first)
         if resp.status_code >= 400:
-            raise RuntimeError(f"OpenAI API error {resp.status_code}: {resp.text[:500]}")
+            body = resp.text[:500]
+            if "Unsupported parameter" in body and "max_completion_tokens" in body:
+                fallback = dict(payload)
+                fallback["max_tokens"] = 4000
+                resp = _post(fallback)
+                if resp.status_code >= 400:
+                    raise RuntimeError(f"OpenAI API error {resp.status_code}: {resp.text[:500]}")
+            else:
+                raise RuntimeError(f"OpenAI API error {resp.status_code}: {body}")
 
         data = resp.json()
         content = (
@@ -263,4 +277,3 @@ def get_openai_service() -> OpenAIService:
     if _openai_service is None:
         _openai_service = OpenAIService()
     return _openai_service
-
