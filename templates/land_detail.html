@@ -1673,7 +1673,8 @@ function renderListItems(items, label, colorClass) {
         `<li><i class="fas fa-dot-circle text-${colorClass} me-1"></i>${item}</li>`
     ).join('');
     
-    return `<div class="mb-2"><strong>${label}</strong><ul class="list-unstyled mb-1">${listItems}</ul></div>`;
+    const header = label ? `<div class="fw-semibold mb-1">${label}</div>` : '';
+    return `<div class="analysis-list mb-2">${header}<ul class="list-unstyled mb-0">${listItems}</ul></div>`;
 }
 
 function renderSimilarProperties(similarProperties) {
@@ -1946,10 +1947,15 @@ function renderStructuredAIAnalysis(analysis) {
         
         <!-- Similar Objects - Additional Information -->
         ${analysis.similar_objects ? `
-        <div class="border rounded p-3 mt-4 bg-body-tertiary">
-            <h6><i class="fas fa-link text-primary"></i> Similar Objects</h6>
-            <p class="mb-3 small text-muted">${analysis.similar_objects.comparison_summary || 'Similar properties from our database:'}</p>
-            ${renderSimilarProperties(analysis.similar_properties_data || [])}
+        <div class="card mt-4 similar-objects-card">
+            <div class="card-body">
+                <div class="d-flex align-items-center gap-2 mb-1">
+                    <i class="fas fa-link text-primary"></i>
+                    <h6 class="mb-0">Similar Objects</h6>
+                </div>
+                <p class="mb-3 small text-body-secondary">${analysis.similar_objects.comparison_summary || 'Similar properties from our database:'}</p>
+                ${renderSimilarProperties(analysis.similar_properties_data || [])}
+            </div>
         </div>
         ` : ''}
     `;
