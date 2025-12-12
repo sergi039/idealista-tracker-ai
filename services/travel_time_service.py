@@ -79,19 +79,66 @@ class TravelTimeService:
             logger.info(f"Calculating travel times for land {land_id}")
             
             origin = f"{land.location_lat},{land.location_lon}"
-            
-            # Calculate times to Oviedo and Gijón
-            oviedo_time = self._get_travel_time(origin, self.destinations['oviedo'])
-            gijon_time = self._get_travel_time(origin, self.destinations['gijon'])
-            
-            # Find nearest beach
-            nearest_beach_data = self._find_nearest_beach(origin)
-            
-            # Calculate times and distances to key infrastructure (priority locations)
-            airport_data = self._find_nearest_facility_with_distance(origin, self.airports)
-            train_station_data = self._find_nearest_facility_with_distance(origin, self.train_stations)
-            hospital_data = self._find_nearest_facility_with_distance(origin, self.hospitals)
-            police_data = self._find_nearest_facility_with_distance(origin, self.police_stations)
+
+            # Fast-path: one Distance Matrix call for everything (22 destinations).
+            if self.google_maps_key:
+                all_destinations = (
+                    [self.destinations["oviedo"], self.destinations["gijon"]]
+                    + self.beaches
+                    + self.airports
+                    + self.train_stations
+                    + self.hospitals
+                    + self.police_stations
+                )
+                results = self._get_google_travel_times(origin, all_destinations)
+
+                oviedo_time, gijon_time = None, None
+                nearest_beach_data = None
+                airport_data = None
+                train_station_data = None
+                hospital_data = None
+                police_data = None
+
+                if results and len(results) == len(all_destinations):
+                    oviedo_time = results[0]["time"] if results[0] else None
+                    gijon_time = results[1]["time"] if results[1] else None
+
+                    beach_results = results[2 : 2 + len(self.beaches)]
+                    nearest_beach_data = self._min_by_time(beach_results, names=self.beaches, name_transform=self._beach_label)
+
+                    offset = 2 + len(self.beaches)
+                    airport_results = results[offset : offset + len(self.airports)]
+                    airport_data = self._min_by_time(airport_results)
+                    offset += len(self.airports)
+
+                    train_results = results[offset : offset + len(self.train_stations)]
+                    train_station_data = self._min_by_time(train_results)
+                    offset += len(self.train_stations)
+
+                    hospital_results = results[offset : offset + len(self.hospitals)]
+                    hospital_data = self._min_by_time(hospital_results)
+                    offset += len(self.hospitals)
+
+                    police_results = results[offset : offset + len(self.police_stations)]
+                    police_data = self._min_by_time(police_results)
+                else:
+                    logger.warning("Distance Matrix returned unexpected results for land %s", land_id)
+                    oviedo_time = self._get_travel_time(origin, self.destinations["oviedo"])
+                    gijon_time = self._get_travel_time(origin, self.destinations["gijon"])
+                    nearest_beach_data = self._find_nearest_beach(origin)
+                    airport_data = self._find_nearest_facility_with_distance(origin, self.airports)
+                    train_station_data = self._find_nearest_facility_with_distance(origin, self.train_stations)
+                    hospital_data = self._find_nearest_facility_with_distance(origin, self.hospitals)
+                    police_data = self._find_nearest_facility_with_distance(origin, self.police_stations)
+            else:
+                # Fallback to per-destination calculations (no API key)
+                oviedo_time = self._get_travel_time(origin, self.destinations["oviedo"])
+                gijon_time = self._get_travel_time(origin, self.destinations["gijon"])
+                nearest_beach_data = self._find_nearest_beach(origin)
+                airport_data = self._find_nearest_facility_with_distance(origin, self.airports)
+                train_station_data = self._find_nearest_facility_with_distance(origin, self.train_stations)
+                hospital_data = self._find_nearest_facility_with_distance(origin, self.hospitals)
+                police_data = self._find_nearest_facility_with_distance(origin, self.police_stations)
             
             # Update land record
             if oviedo_time is not None:
@@ -127,6 +174,22 @@ class TravelTimeService:
         except Exception as e:
             logger.error(f"Failed to calculate travel times for land {land_id}: {str(e)}")
             return False
+
+    def _beach_label(self, beach_full_name: str) -> str:
+        return beach_full_name.split(",")[0].replace("Playa de ", "").replace("Playa del ", "")
+
+    def _min_by_time(self, results: List[Optional[Dict]], names: Optional[List[str]] = None, name_transform=None) -> Optional[Dict]:
+        best = None
+        for idx, r in enumerate(results):
+            if not r or r.get("time") is None:
+                continue
+            if best is None or r["time"] < best["time"]:
+                best = dict(r)
+                if names and idx < len(names):
+                    label = names[idx]
+                    best["full_name"] = label
+                    best["name"] = name_transform(label) if callable(name_transform) else label
+        return best
     
     def _get_travel_time(self, origin: str, destination: str) -> Optional[int]:
         """Get travel time in minutes between origin and destination"""
@@ -180,6 +243,53 @@ class TravelTimeService:
         except Exception as e:
             logger.error(f"Google Maps API error: {str(e)}")
             return None
+
+    def _get_google_travel_times(self, origin: str, destinations: List[str]) -> List[Optional[Dict]]:
+        """Batch travel times using a single Distance Matrix call (destinations <= 25)."""
+        if not self.google_maps_key or not destinations:
+            return [None for _ in destinations]
+
+        try:
+            url = "https://maps.googleapis.com/maps/api/distancematrix/json"
+            params = {
+                "origins": origin,
+                "destinations": "|".join(destinations),
+                "mode": "driving",
+                "units": "metric",
+                "key": self.google_maps_key,
+            }
+
+            response = requests.get(url, params=params, timeout=15)
+            if response.status_code != 200:
+                return [None for _ in destinations]
+
+            data = response.json()
+            if data.get("status") != "OK" or not data.get("rows"):
+                return [None for _ in destinations]
+
+            elements = data["rows"][0].get("elements", [])
+            out: List[Optional[Dict]] = []
+            for el in elements[: len(destinations)]:
+                if el.get("status") != "OK":
+                    out.append(None)
+                    continue
+                duration = el["duration"]["value"]
+                distance = el["distance"]["value"]
+                out.append(
+                    {
+                        "time": round(duration / 60),
+                        "distance": round(distance / 1000),
+                    }
+                )
+
+            # Pad if API returned fewer elements
+            while len(out) < len(destinations):
+                out.append(None)
+
+            return out
+        except Exception as e:
+            logger.error("Distance Matrix batch error: %s", e)
+            return [None for _ in destinations]
     
     def _calculate_fallback_travel_time(self, origin: str, destination: str) -> Optional[Dict]:
         """Calculate travel time using mathematical distance estimation"""
