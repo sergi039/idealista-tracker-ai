@@ -1947,27 +1947,12 @@ function renderAnalysisInto(targetId, rawData, placeholderId) {
 }
 
 function showTransientAlert(containerId, type, message, autoCloseMs = 4500) {
-    const container = document.getElementById(containerId);
-    if (!container) return;
-
-    const alertId = `${containerId}-${Date.now()}`;
-    container.innerHTML = `
-        <div class="alert alert-${type} alert-dismissible fade show" role="alert" id="${alertId}">
-            <i class="fas fa-triangle-exclamation me-2"></i>${message}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-    `;
-
-    if (autoCloseMs && autoCloseMs > 0) {
-        setTimeout(() => {
-            const el = document.getElementById(alertId);
-            if (!el) return;
-            try {
-                bootstrap.Alert.getOrCreateInstance(el).close();
-            } catch {
-                el.remove();
-            }
-        }, autoCloseMs);
+    // Do not inject inline alerts into the page layout.
+    // Use global ephemeral notifications instead.
+    const ms = typeof autoCloseMs === 'number' ? autoCloseMs : 3000;
+    const notifType = type === 'danger' ? 'error' : (type || 'info');
+    if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
+        window.IdealistaApp.showNotification(String(message || ''), notifType, ms);
     }
 }
 
@@ -2066,20 +2051,11 @@ function runClaudeAnalysis(landId) {
         window.__EXISTING_CLAUDE_ANALYSIS__ = data.analysis;
 
         if (target) {
-            target.innerHTML = `
-                <div class="alert alert-${data.is_enrichment ? 'info' : 'success'} alert-dismissible fade show" role="alert" id="claude-success-alert">
-                    <i class="fas fa-check-circle me-2"></i>
-                    Analysis completed successfully!
-                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                </div>
-                ${renderStructuredAIAnalysis(_normalizeAnalysisData(data.analysis))}
-            `;
+            target.innerHTML = renderStructuredAIAnalysis(_normalizeAnalysisData(data.analysis));
         }
-
-        setTimeout(() => {
-            const successAlert = document.getElementById('claude-success-alert');
-            if (successAlert) bootstrap.Alert.getOrCreateInstance(successAlert).close();
-        }, 2500);
+        if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
+            window.IdealistaApp.showNotification('Claude analysis generated', 'success', 3000);
+        }
 
         refreshAiComparison();
     })
@@ -2340,14 +2316,7 @@ async function generateChatGPTAnalysis() {
         window.__EXISTING_OPENAI_ANALYSIS__ = data.analysis;
 
         if (target) {
-            target.innerHTML = `
-                <div class="alert alert-success alert-dismissible fade show" role="alert" id="chatgpt-success-alert">
-                    <i class="fas fa-check-circle me-2"></i>
-                    ChatGPT analysis generated
-                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                </div>
-                ${renderStructuredAIAnalysis(_normalizeAnalysisData(data.analysis))}
-            `;
+            target.innerHTML = renderStructuredAIAnalysis(_normalizeAnalysisData(data.analysis));
         }
         if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
             window.IdealistaApp.showNotification('ChatGPT analysis generated', 'success');

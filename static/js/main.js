@@ -684,34 +684,50 @@ window.IdealistaApp = {
             });
     },
 
-    showNotification: function(message, type = 'info') {
-        // Create notification element
-        const alertClass = type === 'error' ? 'alert-danger' : 
-                          type === 'success' ? 'alert-success' : 'alert-info';
-        
+    showNotification: function(message, type = 'info', durationMs = 3000) {
+        // Ephemeral "toast" notifications (no close button, do not take layout space).
+        const alertClass =
+            type === 'error' ? 'alert-danger' :
+            type === 'success' ? 'alert-success' :
+            'alert-info';
+
+        const containerId = 'app-notification-container';
+        let container = document.getElementById(containerId);
+        if (!container) {
+            container = document.createElement('div');
+            container.id = containerId;
+            container.style.cssText = [
+                'position:fixed',
+                'top:16px',
+                'left:50%',
+                'transform:translateX(-50%)',
+                'z-index:9999',
+                'display:flex',
+                'flex-direction:column',
+                'gap:8px',
+                'width:min(520px, calc(100vw - 32px))',
+                'pointer-events:none'
+            ].join(';');
+            document.body.appendChild(container);
+        }
+
         const notification = document.createElement('div');
-        notification.className = `alert ${alertClass} alert-dismissible fade show position-fixed`;
-        notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 400px;';
-        
+        notification.className = `alert ${alertClass} fade show shadow app-toast`;
+        notification.setAttribute('role', 'status');
+        notification.style.cssText = 'margin:0; pointer-events:none;';
+
         // Safe DOM manipulation - prevent XSS
         notification.textContent = message;
-        
-        const closeButton = document.createElement('button');
-        closeButton.type = 'button';
-        closeButton.className = 'btn-close';
-        closeButton.setAttribute('data-bs-dismiss', 'alert');
-        closeButton.setAttribute('aria-label', 'Close');
-        
-        notification.appendChild(closeButton);
-        
-        document.body.appendChild(notification);
-        
-        // Auto-remove after 5 seconds
-        setTimeout(() => {
-            if (notification.parentNode) {
-                notification.remove();
-            }
-        }, 5000);
+
+        container.appendChild(notification);
+
+        const remove = () => {
+            if (!notification.parentNode) return;
+            notification.classList.remove('show');
+            window.setTimeout(() => notification.remove(), 200);
+        };
+
+        window.setTimeout(remove, Math.max(800, durationMs));
     },
 
     // Utility functions

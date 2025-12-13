@@ -150,20 +150,6 @@
     </div>
     
 
-    <!-- Flash messages -->
-    {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-            <div class="container mt-3">
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show">
-                        {{ message }}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                    </div>
-                {% endfor %}
-            </div>
-        {% endif %}
-    {% endwith %}
-
     <!-- Main content -->
     <main class="container mt-4 pb-5">
         {% block content %}{% endblock %}
@@ -193,6 +179,26 @@
     
     <!-- Custom JS -->
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+
+    {# Flash messages -> ephemeral toasts (do not take page space) #}
+    {% set flashed = get_flashed_messages(with_categories=true) %}
+    {% if flashed %}
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            try {
+                const msgs = {{ flashed | tojson }};
+                if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
+                    for (const [category, message] of msgs) {
+                        const type = category === 'error' ? 'error' : 'success';
+                        window.IdealistaApp.showNotification(String(message || ''), type, 3000);
+                    }
+                }
+            } catch (e) {
+                // ignore
+            }
+        });
+    </script>
+    {% endif %}
     
     {% block scripts %}{% endblock %}
 </body>
