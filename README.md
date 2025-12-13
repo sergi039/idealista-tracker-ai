@@ -34,8 +34,8 @@ Next implementation batch is tracked in `PROJECT_PLAN_2025-12-12.md`.
 Prerequisite: Docker Desktop.
 
 ```bash
-git clone https://github.com/sergi039/idealista-land-tracker.git
-cd idealista-land-tracker
+git clone https://github.com/sergi039/idealista-tracker-ai.git
+cd idealista-tracker-ai
 cp .env.example .env
 docker compose up -d --build
 ```
