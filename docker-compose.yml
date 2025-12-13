@@ -12,7 +12,7 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql://${DB_USER:-idealista}:${DB_PASSWORD:-idealista}@db:5432/${DB_NAME:-idealista}
+      - DATABASE_URL=postgresql://${DB_USER:-idealista}:${DB_PASSWORD}@db:5432/${DB_NAME:-idealista}
       # Development conveniences (disable in production)
       - AUTO_CREATE_DB=true
       - AUTO_START_SCHEDULER=true
@@ -31,7 +31,7 @@ services:
     environment:
       POSTGRES_DB: ${DB_NAME:-idealista}
       POSTGRES_USER: ${DB_USER:-idealista}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-idealista}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:

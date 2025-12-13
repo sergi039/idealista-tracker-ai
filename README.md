@@ -48,6 +48,7 @@ Edit `.env` (start from `.env.example`):
 
 **Required**
 - `SESSION_SECRET`: Flask session secret
+- `DB_PASSWORD`: Postgres password (used by Docker Compose)
 - `IMAP_USER`, `IMAP_PASSWORD`: Gmail + App Password
 
 **Optional**
