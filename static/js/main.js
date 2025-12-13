@@ -1,5 +1,5 @@
 /**
- * Main JavaScript functionality for Idealista Land Watch & Rank
+ * Main JavaScript functionality for Idealista Tracker AI
  */
 
 // Global app object

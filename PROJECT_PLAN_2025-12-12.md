@@ -1,6 +1,6 @@
 # Project Plan — 2025-12-12
 
-This file captures what’s next for the Idealista Land Watch & Rank project. We’ll start implementing these items tomorrow.
+This file captures what’s next for the Idealista Tracker AI project. We’ll start implementing these items tomorrow.
 
 ## Goals (next iteration)
 
@@ -51,4 +51,3 @@ This file captures what’s next for the Idealista Land Watch & Rank project. We
   - Where `.env` lives, required/optional keys, how to run bulk scripts safely
 - CI
   - Add GitHub Actions for `pytest` (+ optionally `ruff` progressively)
-

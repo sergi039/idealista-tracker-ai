@@ -1,5 +1,5 @@
 """
-Test package for Idealista Land Watch & Rank application.
+Test package for Idealista Tracker AI application.
 """
 
 import os

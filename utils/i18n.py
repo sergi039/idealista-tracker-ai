@@ -6,7 +6,7 @@ from flask import session, request
 TRANSLATIONS = {
     'en': {
         # Navigation
-        'app_title': 'Idealista Land Watch & Rank',
+        'app_title': 'Idealista Tracker AI',
         'properties': 'Properties',
         'scoring_criteria': 'Scoring Criteria',
         'manual_sync': 'Manual Sync',
@@ -120,7 +120,7 @@ TRANSLATIONS = {
     },
     'es': {
         # Navigation
-        'app_title': 'Idealista Land Watch & Rank',
+        'app_title': 'Idealista Tracker AI',
         'properties': 'Propiedades',
         'scoring_criteria': 'Criterios de Puntuación',
         'manual_sync': 'Sincronización Manual',

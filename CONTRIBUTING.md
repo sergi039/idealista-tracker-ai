@@ -1,4 +1,4 @@
-# Contributing to Idealista Land Watch & Rank
+# Contributing to Idealista Tracker AI
 
 We're excited that you're interested in contributing! This document outlines the process and guidelines for contributing to this project.
 

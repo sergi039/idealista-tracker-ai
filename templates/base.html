@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Idealista Land Watch & Rank{% endblock %}</title>
+    <title>{% block title %}{{ t('app_title') }}{% endblock %}</title>
 
     <!-- App icon / favicons -->
     <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" sizes="any">
@@ -172,14 +172,14 @@
         <div class="container">
             <div class="row">
                 <div class="col-md-6">
-                    <h6>Idealista Land Watch & Rank</h6>
+                    <h6>{{ t('app_title') }}</h6>
                     <p class="small text-body-secondary">
-                        Automated Spanish real estate analysis with multi-criteria scoring
+                        Universal tracking + AI analysis for Idealista listings
                     </p>
                 </div>
                 <div class="col-md-6 text-md-end">
                     <small class="text-body-secondary">
-                        Automated real estate analysis platform
+                        Not affiliated with Idealista
                     </small>
                 </div>
             </div>

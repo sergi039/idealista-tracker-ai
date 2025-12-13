@@ -1,6 +1,6 @@
 {
-  "name": "Idealista Land Watch & Rank",
-  "short_name": "LandRank",
+  "name": "Idealista Tracker AI",
+  "short_name": "Idealista Tracker",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#111827",
