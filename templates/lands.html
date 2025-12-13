@@ -2,6 +2,16 @@
 
 {% block title %}Properties - {{ t('app_title') }}{% endblock %}
 
+{% block nav_primary_action %}
+<li class="nav-item me-2">
+    <a href="{{ url_for('main.export_csv', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view='on' if current_filters.sea_view else '') }}"
+       class="btn btn-outline-success btn-sm"
+       title="Download filtered data as CSV">
+        <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
+    </a>
+</li>
+{% endblock %}
+
 {% block content %}
 <div class="row">
     <div class="col-12">
@@ -20,9 +30,12 @@
             </h1>
             
             <div>
-                <a href="{{ url_for('main.export_csv', mode=current_filters.mode, sort=current_filters.sort_by, order=current_filters.order, land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view='on' if current_filters.sea_view else '') }}" class="btn btn-success">
-                    <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
-                </a>
+                <button class="btn btn-success"
+                        hx-post="{{ url_for('api.manual_ingestion') }}"
+                        hx-trigger="click"
+                        hx-indicator="#ingestion-spinner">
+                    <i class="fas fa-sync-alt me-2"></i>{{ t('manual_sync') }}
+                </button>
             </div>
         </div>
 

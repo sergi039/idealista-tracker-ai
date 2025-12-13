@@ -94,8 +94,9 @@
                 </ul>
                 
                 <ul class="navbar-nav">
+                    {% block nav_primary_action %}
                     <li class="nav-item me-2">
-                        <button class="btn btn-outline-primary btn-sm" 
+                        <button class="btn btn-outline-primary btn-sm"
                                 hx-post="{{ url_for('api.manual_ingestion') }}"
                                 hx-trigger="click"
                                 hx-indicator="#ingestion-spinner">
@@ -103,6 +104,7 @@
                             {{ t('manual_sync') }}
                         </button>
                     </li>
+                    {% endblock %}
                     <li class="nav-item me-2">
                         <button class="btn btn-outline-secondary btn-sm" id="theme-toggle" type="button" title="Toggle theme">
                             <i class="fas fa-sun me-1" id="theme-toggle-icon"></i>
