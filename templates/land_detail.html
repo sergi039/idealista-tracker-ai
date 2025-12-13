@@ -307,8 +307,9 @@
                                     <div class="analysis-content" id="ai-claude-analysis">
                                         <div id="ai-claude-structured-analysis"></div>
                                         <div class="text-center text-muted py-4" id="ai-claude-placeholder" style="{{ 'display: none;' if land.ai_analysis else '' }}">
-                                            <i class="fas fa-robot fa-3x mb-3 opacity-50"></i>
-                                            <p class="mb-0">Run Claude to generate analysis</p>
+                                            <i class="fas fa-brain fa-3x mb-3 opacity-50"></i>
+                                            <p class="mb-0">No analysis yet</p>
+                                            <small class="d-block text-body-secondary mt-1">Click “Run Claude” to generate it.</small>
                                         </div>
                                     </div>
                                 </div>
@@ -326,7 +327,8 @@
                                         <div id="ai-chatgpt-structured-analysis"></div>
                                         <div class="text-center text-muted py-4" id="ai-chatgpt-placeholder" style="{{ 'display: none;' if openai_analysis else '' }}">
                                             <i class="fas fa-robot fa-3x mb-3 opacity-50"></i>
-                                            <p class="mb-0">Run ChatGPT to generate analysis</p>
+                                            <p class="mb-0">No analysis yet</p>
+                                            <small class="d-block text-body-secondary mt-1">Click “Run ChatGPT” to generate it.</small>
                                             <small class="d-block text-body-secondary mt-1" id="ai-chatgpt-config-hint"></small>
                                         </div>
                                     </div>
@@ -2166,42 +2168,46 @@ async function refreshAiComparison() {
         const gpt = data.comparison?.chatgpt;
         const expected = data.comparison?.expected || {};
 
+        const MISSING = '—';
+        const claudeGenerated = (claude?.schema?.found || 0) > 0;
+        const gptGenerated = (gpt?.schema?.found || 0) > 0;
+
         const c = claude?.metrics || {};
         const g = gpt?.metrics || {};
 
         _appendRow(
             tbody,
             'Investment rating',
-            _formatMetricValue(c.investment_rating),
-            gpt ? _formatMetricValue(g.investment_rating) : 'Not generated',
+            claudeGenerated ? _formatMetricValue(c.investment_rating) : MISSING,
+            gptGenerated ? _formatMetricValue(g.investment_rating) : MISSING,
             _formatMetricValue(expected.investment_rating)
         );
         _appendRow(
             tbody,
             'Rental yield',
-            _formatMetricValue(c.rental_yield, '%'),
-            gpt ? _formatMetricValue(g.rental_yield, '%') : 'Not generated',
+            claudeGenerated ? _formatMetricValue(c.rental_yield, '%') : MISSING,
+            gptGenerated ? _formatMetricValue(g.rental_yield, '%') : MISSING,
             _formatMetricValue(expected.rental_yield, '%')
         );
         _appendRow(
             tbody,
             'Cap rate',
-            _formatMetricValue(c.cap_rate, '%'),
-            gpt ? _formatMetricValue(g.cap_rate, '%') : 'Not generated',
+            claudeGenerated ? _formatMetricValue(c.cap_rate, '%') : MISSING,
+            gptGenerated ? _formatMetricValue(g.cap_rate, '%') : MISSING,
             _formatMetricValue(expected.cap_rate, '%')
         );
         _appendRow(
             tbody,
             'Price / rent ratio',
-            _formatMetricValue(c.price_to_rent_ratio),
-            gpt ? _formatMetricValue(g.price_to_rent_ratio) : 'Not generated',
+            claudeGenerated ? _formatMetricValue(c.price_to_rent_ratio) : MISSING,
+            gptGenerated ? _formatMetricValue(g.price_to_rent_ratio) : MISSING,
             _formatMetricValue(expected.price_to_rent_ratio)
         );
         _appendRow(
             tbody,
             'Payback (years)',
-            _formatMetricValue(c.payback_period_years),
-            gpt ? _formatMetricValue(g.payback_period_years) : 'Not generated',
+            claudeGenerated ? _formatMetricValue(c.payback_period_years) : MISSING,
+            gptGenerated ? _formatMetricValue(g.payback_period_years) : MISSING,
             _formatMetricValue(expected.payback_period_years)
         );
 
@@ -2212,46 +2218,46 @@ async function refreshAiComparison() {
         _appendRow(
             tbody,
             'Price summary',
-            _formatMetricValue(ch.price_summary),
-            gpt ? _formatMetricValue(gh.price_summary) : 'Not generated',
-            '—'
+            claudeGenerated ? _formatMetricValue(ch.price_summary) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.price_summary) : MISSING,
+            MISSING
         );
         _appendRow(
             tbody,
             'Key drivers',
-            _formatMetricValue(ch.key_drivers),
-            gpt ? _formatMetricValue(gh.key_drivers) : 'Not generated',
-            '—'
+            claudeGenerated ? _formatMetricValue(ch.key_drivers) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.key_drivers) : MISSING,
+            MISSING
         );
         _appendRow(
             tbody,
             'Best use',
-            _formatMetricValue(ch.best_use),
-            gpt ? _formatMetricValue(gh.best_use) : 'Not generated',
-            '—'
+            claudeGenerated ? _formatMetricValue(ch.best_use) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.best_use) : MISSING,
+            MISSING
         );
 
         _appendSection(tbody, 'Schema + baseline match');
         _appendRow(
             tbody,
             'Schema completeness',
-            `${claude?.schema?.found || 0}/${claude?.schema?.total || 0}`,
-            gpt ? `${gpt?.schema?.found || 0}/${gpt?.schema?.total || 0}` : 'Not generated',
-            '—'
+            claudeGenerated ? `${claude?.schema?.found || 0}/${claude?.schema?.total || 0}` : MISSING,
+            gptGenerated ? `${gpt?.schema?.found || 0}/${gpt?.schema?.total || 0}` : MISSING,
+            MISSING
         );
         _appendRow(
             tbody,
             'Numeric fidelity (vs baseline)',
-            _formatMetricValue(claude?.fidelity_score, '/100'),
-            gpt ? _formatMetricValue(gpt?.fidelity_score, '/100') : 'Not generated',
-            '—'
+            claudeGenerated ? _formatMetricValue(claude?.fidelity_score, '/100') : MISSING,
+            gptGenerated ? _formatMetricValue(gpt?.fidelity_score, '/100') : MISSING,
+            MISSING
         );
         _appendRow(
             tbody,
             'Overall score (baseline)',
-            _formatMetricValue(claude?.overall_score, '/100'),
-            gpt ? _formatMetricValue(gpt?.overall_score, '/100') : 'Not generated',
-            '—'
+            claudeGenerated ? _formatMetricValue(claude?.overall_score, '/100') : MISSING,
+            gptGenerated ? _formatMetricValue(gpt?.overall_score, '/100') : MISSING,
+            MISSING
         );
 
         const claudeModel = data.claude_model || 'unknown';
@@ -2263,13 +2269,18 @@ async function refreshAiComparison() {
                 chatgptModelLabel.textContent = 'Powered by ChatGPT';
             }
         }
-        if (data.has_chatgpt) {
-            statusEl.textContent = `Claude: ${claudeModel} • ChatGPT: ${data.chatgpt_model || 'unknown'}`;
-        } else if (!openaiConfigured) {
-            statusEl.textContent = `Claude: ${claudeModel} • ChatGPT is not configured (set OPENAI_API_KEY in .env, then restart the app).`;
+        const statusParts = [];
+        statusParts.push(`Claude: ${claudeModel}${claudeGenerated ? '' : ' (not generated)'}`);
+
+        if (!openaiConfigured) {
+            statusParts.push('ChatGPT: not configured (set OPENAI_API_KEY in .env, then restart the app).');
+        } else if (data.has_chatgpt) {
+            statusParts.push(`ChatGPT: ${data.chatgpt_model || 'unknown'}`);
         } else {
-            statusEl.textContent = `Claude: ${claudeModel} • ChatGPT analysis not generated yet (open the ChatGPT tab and click “Run ChatGPT”).`;
+            statusParts.push('ChatGPT: not generated (open the ChatGPT tab and click “Run ChatGPT”).');
         }
+
+        statusEl.textContent = statusParts.join(' • ');
 
         tableEl.style.display = '';
     } catch (e) {
