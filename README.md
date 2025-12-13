@@ -1,15 +1,19 @@
-# Idealista Land Watch & Rank
+# Idealista Watch & Analyze
 
-Track and rank land listings from Idealista in one simple dashboard.
+Universal tracking + AI analysis for Idealista listings — what you see depends on your own Idealista subscription/emails (saved searches).
 
 - Import listings from your Gmail/IMAP folder (Idealista emails)
-- Score each property (Investment / Lifestyle / Combined) with editable criteria
-- List view, card view, and a map view with quick links (Google Maps / Idealista / Our Maps)
+- Analyze and rank properties with editable scoring (Investment / Lifestyle / Combined)
+- List view, card view, and map view with quick links (Google Maps / Idealista / Our Maps)
 - Optional enrichment via Google APIs (places, distances, travel times)
-- Optional AI analysis via Anthropic Claude
+- Optional AI analysis via Claude + ChatGPT, plus a side-by-side comparison
 - Favorites, filters, CSV export, bilingual UI (EN/ES), light/dark theme
 
 Not affiliated with Idealista.
+
+## Roadmap (queued)
+
+Next implementation batch is tracked in `PROJECT_PLAN_2025-12-12.md`.
 
 ## Quick Start (Docker)
 
@@ -33,8 +37,9 @@ Edit `.env` (start from `.env.example`):
 - `IMAP_USER`, `IMAP_PASSWORD`: Gmail + App Password
 
 **Optional**
-- `GOOGLE_API_KEY`: enables enrichment (maps/places/travel times)
-- `ANTHROPIC_API_KEY`: enables AI analysis
+- `GOOGLE_MAPS_API_KEY`, `GOOGLE_PLACES_API_KEY`: enables enrichment (maps/places/travel times)
+- `ANTHROPIC_API_KEY`: enables Claude AI analysis (`ANTHROPIC_MODEL` optional)
+- `OPENAI_API_KEY`: enables ChatGPT AI analysis (`OPENAI_MODEL` optional)
 
 Tip: set `IMAP_FOLDER=Idealista` (or any folder/label where you keep the emails).
 

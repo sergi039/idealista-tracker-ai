@@ -1,7 +1,7 @@
 [project]
 name = "repl-nix-workspace"
 version = "0.1.0"
-description = "Add your description here"
+description = "Universal Idealista tracker and AI analyzer (email-driven)"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.66.0",
