@@ -11,6 +11,20 @@ Universal tracking + AI analysis for Idealista listings — what you see depends
 
 Not affiliated with Idealista.
 
+## Security (important)
+
+This project is safe to use for **personal/private deployments** (localhost, VPN, private network).
+
+If you plan to expose it as a **public web app**, do the hardening items below first — otherwise anyone can trigger expensive actions (Google/Claude/ChatGPT) and you risk XSS/SSRF-style issues.
+
+### Hardening plan (before public hosting)
+
+- Protect write/expensive endpoints with auth (`/api/land/*/enrich`, `/api/ingest/email/run`, AI analysis endpoints).
+- Remove `DEV_MODE` admin bypass and require `ADMIN_API_TOKEN` outside tests.
+- Eliminate unsafe `innerHTML` injections in templates (sanitize/escape model output).
+- Add allowlist validation for outbound URL fetches (listing status checker).
+- Move long-running tasks to background jobs + retries/backoff.
+
 ## Roadmap (queued)
 
 Next implementation batch is tracked in `PROJECT_PLAN_2025-12-12.md`.
