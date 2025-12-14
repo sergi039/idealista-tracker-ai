@@ -83,19 +83,28 @@ def lands():
         # Apply filters
         if land_type_filter:
             query = query.filter(Land.land_type == land_type_filter)
-        
+
         if municipality_filter:
             query = query.filter(Land.municipality.ilike(f'%{municipality_filter}%'))
-        
+
         if search_query:
-            search_pattern = f'%{search_query}%'
-            query = query.filter(
-                or_(
-                    Land.title.ilike(search_pattern),
-                    Land.description.ilike(search_pattern),
-                    Land.municipality.ilike(search_pattern)
-                )
-            )
+            # Split search query into words for flexible matching
+            # Filter out common words and short terms
+            stop_words = {'for', 'in', 'the', 'a', 'an', 'of', 'to', 'and', 'or', 'sale', 'plot'}
+            words = [w.strip(',.;:!?()[]{}') for w in search_query.split()]
+            words = [w for w in words if w and len(w) > 1 and w.lower() not in stop_words]
+
+            if words:
+                # Each word must match at least one field (title, description, or municipality)
+                for word in words:
+                    word_pattern = f'%{word}%'
+                    query = query.filter(
+                        or_(
+                            Land.title.ilike(word_pattern),
+                            Land.description.ilike(word_pattern),
+                            Land.municipality.ilike(word_pattern)
+                        )
+                    )
 
         if investment_metrics_filter:
             rating_text = func.coalesce(
@@ -629,22 +638,31 @@ def export_csv():
             defer(Land.ai_analysis),
             defer(Land.enhanced_description)
         )
-        
+
         if land_type_filter:
             query = query.filter(Land.land_type == land_type_filter)
-        
+
         if municipality_filter:
             query = query.filter(Land.municipality.ilike(f'%{municipality_filter}%'))
-        
+
         if search_query:
-            search_pattern = f'%{search_query}%'
-            query = query.filter(
-                or_(
-                    Land.title.ilike(search_pattern),
-                    Land.description.ilike(search_pattern),
-                    Land.municipality.ilike(search_pattern)
-                )
-            )
+            # Split search query into words for flexible matching
+            # Filter out common words and short terms
+            stop_words = {'for', 'in', 'the', 'a', 'an', 'of', 'to', 'and', 'or', 'sale', 'plot'}
+            words = [w.strip(',.;:!?()[]{}') for w in search_query.split()]
+            words = [w for w in words if w and len(w) > 1 and w.lower() not in stop_words]
+
+            if words:
+                # Each word must match at least one field (title, description, or municipality)
+                for word in words:
+                    word_pattern = f'%{word}%'
+                    query = query.filter(
+                        or_(
+                            Land.title.ilike(word_pattern),
+                            Land.description.ilike(word_pattern),
+                            Land.municipality.ilike(word_pattern)
+                        )
+                    )
 
         if investment_metrics_filter:
             rating_text = func.coalesce(

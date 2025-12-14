@@ -565,23 +565,6 @@
             </div>
         {% endif %}
 
-        <!-- Change History Timeline (for favorites) -->
-        {% if land.is_favorite %}
-            <div class="card mb-3" style="border: 1px solid #ffc107;">
-                <div class="card-header bg-warning bg-opacity-25">
-                    <h6 class="card-title mb-0 compact-header d-flex justify-content-between align-items-center">
-                        <span><i class="fas fa-history me-1"></i>Change History</span>
-                        <span class="badge bg-warning text-dark" id="history-count">Loading...</span>
-                    </h6>
-                </div>
-                <div class="card-body p-2" id="history-timeline" style="max-height: 300px; overflow-y: auto;">
-                    <div class="text-center text-muted py-3">
-                        <i class="fas fa-spinner fa-spin me-1"></i> Loading history...
-                    </div>
-                </div>
-            </div>
-        {% endif %}
-
         <!-- Travel Times to Cities & Beaches -->
         {% if land.travel_time_oviedo or land.travel_time_gijon or land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital or land.travel_time_police or land.distance_airport or land.distance_train_station %}
             <div class="card mb-4">
@@ -1375,8 +1358,8 @@ async function toggleFavorite(landId) {
 
         const data = await response.json();
         if (data.success) {
-            // Update all favorite buttons for this land
-            const buttons = document.querySelectorAll(`.favorite-btn[data-land-id="${landId}"]`);
+            // Update all favorite buttons for this land (both .favorite-btn and .favorite-btn-header)
+            const buttons = document.querySelectorAll(`[data-land-id="${landId}"].favorite-btn, [data-land-id="${landId}"].favorite-btn-header`);
             buttons.forEach(button => {
                 const icon = button.querySelector('i.fa-star');
                 if (icon) {
@@ -1472,90 +1455,6 @@ async function checkListingStatus(landId) {
         }, 2000);
     }
 }
-
-// Load and display change history for favorites
-async function loadChangeHistory(landId) {
-    try {
-        const response = await fetch(`/api/land/${landId}/history`);
-        const data = await response.json();
-
-        const timelineEl = document.getElementById('history-timeline');
-        const countEl = document.getElementById('history-count');
-
-        if (!timelineEl) return; // Not a favorite, no timeline element
-
-        if (data.success && data.history && data.history.length > 0) {
-            countEl.textContent = data.history_count;
-
-            let html = '<div class="timeline">';
-            data.history.forEach((item, index) => {
-                const date = new Date(item.snapshot_date).toLocaleDateString('en-GB', {
-                    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
-                });
-
-                let icon = 'fa-circle';
-                let colorClass = 'text-secondary';
-                let changeText = '';
-
-                switch(item.change_type) {
-                    case 'added_to_favorites':
-                        icon = 'fa-star';
-                        colorClass = 'text-warning';
-                        changeText = `<strong>Added to favorites</strong><br><small class="text-muted">Price: €${item.price ? item.price.toLocaleString() : 'N/A'}</small>`;
-                        break;
-                    case 'price_change':
-                        icon = item.price_change_amount < 0 ? 'fa-arrow-down' : 'fa-arrow-up';
-                        colorClass = item.price_change_amount < 0 ? 'text-success' : 'text-danger';
-                        const changeAmount = item.price_change_amount ? Math.abs(item.price_change_amount).toLocaleString() : '0';
-                        const changePercent = item.price_change_percentage ? Math.abs(item.price_change_percentage).toFixed(1) : '0';
-                        const direction = item.price_change_amount < 0 ? 'dropped' : 'increased';
-                        changeText = `<strong>Price ${direction}</strong><br>
-                            <small>€${item.price_previous ? item.price_previous.toLocaleString() : 'N/A'} → €${item.price ? item.price.toLocaleString() : 'N/A'}</small><br>
-                            <small class="${colorClass}">${item.price_change_amount < 0 ? '-' : '+'}€${changeAmount} (${item.price_change_amount < 0 ? '-' : '+'}${changePercent}%)</small>`;
-                        break;
-                    case 'description_change':
-                        icon = 'fa-edit';
-                        colorClass = 'text-info';
-                        changeText = '<strong>Description updated</strong>';
-                        break;
-                    default:
-                        changeText = `<strong>${item.change_type.replace(/_/g, ' ')}</strong>`;
-                }
-
-                html += `
-                    <div class="timeline-item d-flex mb-2 ${index === 0 ? '' : 'border-top pt-2'}">
-                        <div class="timeline-icon me-2">
-                            <i class="fas ${icon} ${colorClass}"></i>
-                        </div>
-                        <div class="timeline-content flex-grow-1">
-                            <small class="text-muted d-block">${date}</small>
-                            ${changeText}
-                        </div>
-                    </div>
-                `;
-            });
-            html += '</div>';
-            timelineEl.innerHTML = html;
-        } else {
-            countEl.textContent = '0';
-            timelineEl.innerHTML = '<div class="text-center text-muted py-3"><small>No changes recorded yet.<br>Changes will appear here after price updates.</small></div>';
-        }
-    } catch (error) {
-        console.error('Error loading history:', error);
-        const timelineEl = document.getElementById('history-timeline');
-        if (timelineEl) {
-            timelineEl.innerHTML = '<div class="text-center text-danger py-3"><small>Failed to load history</small></div>';
-        }
-    }
-}
-
-// Load history on page load if favorite
-document.addEventListener('DOMContentLoaded', function() {
-    const landId = {{ land.id }};
-    {% if land.is_favorite %}
-    loadChangeHistory(landId);
-    {% endif %}
-});
 
 // Formatting functions for AI analysis
 function renderListItems(items, label, colorClass) {
