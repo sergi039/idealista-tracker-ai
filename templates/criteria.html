@@ -973,9 +973,8 @@ document.addEventListener('DOMContentLoaded', function() {
         return html;
     }
 
-    // Populate criteria for each profile
-    document.getElementById('investment-criteria').innerHTML = generateCriteriaHTML(investmentProfile, 'investment');
-    document.getElementById('lifestyle-criteria').innerHTML = generateCriteriaHTML(lifestyleProfile, 'lifestyle');
+    // Note: Criteria are now generated server-side via Jinja2 templates
+    // The generateCriteriaHTML function is kept for potential future dynamic use
 
     // Combined mix sliders synchronization
     const investmentMixSlider = document.getElementById('investment-mix-slider');
