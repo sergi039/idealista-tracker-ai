@@ -78,8 +78,8 @@ class TestMarketAnalysisService:
         assert premium['max'] == 2200
 
     def test_purchase_costs_ratio(self, market_service):
-        """Test that purchase costs ratio is 11%"""
-        assert market_service.PURCHASE_COSTS_RATIO == 0.11
+        """Test that purchase costs ratio is 10% (Asturias ITP 8% + notary/registry ~2%)"""
+        assert market_service.PURCHASE_COSTS_RATIO == 0.10
 
     def test_rental_adjustments_exist(self, market_service):
         """Test that rental adjustments are defined for all location types"""
@@ -100,8 +100,8 @@ class TestMarketAnalysisService:
             assert 'purchase_costs' in result
             assert 'land_price_with_costs' in result
 
-            # Purchase costs should be 11% of land price
-            expected_purchase_costs = float(land.price) * 0.11
+            # Purchase costs should be 10% of land price (Asturias)
+            expected_purchase_costs = float(land.price) * 0.10
             assert abs(result['purchase_costs'] - expected_purchase_costs) < 1
 
             # Land price with costs should be land + purchase costs
@@ -191,7 +191,7 @@ class TestMarketAnalysisService:
             result = market_service.calculate_construction_value(land)
 
             land_price = float(land.price)
-            purchase_costs = land_price * 0.11
+            purchase_costs = land_price * 0.10  # Asturias rate
             construction_avg = result['average_value']
 
             expected_total = land_price + purchase_costs + construction_avg

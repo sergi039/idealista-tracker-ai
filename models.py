@@ -314,8 +314,8 @@ class MarketSettings(db.Model):
     construction_premium_avg = db.Column(db.Integer, default=1800)
     construction_premium_max = db.Column(db.Integer, default=2200)
 
-    # Purchase costs ratio (e.g., 0.11 = 11%)
-    purchase_costs_ratio = db.Column(db.Numeric(4, 3), default=0.11)
+    # Purchase costs ratio - Asturias ITP 8% (<€300K) + notary/registry ~2%
+    purchase_costs_ratio = db.Column(db.Numeric(4, 3), default=0.10)
 
     # Rental adjustments - Urban
     urban_vacancy_rate = db.Column(db.Numeric(4, 3), default=0.05)
@@ -332,13 +332,13 @@ class MarketSettings(db.Model):
     rural_operating_expenses = db.Column(db.Numeric(4, 3), default=0.18)
     rural_management_fee = db.Column(db.Numeric(4, 3), default=0.10)
 
-    # Rental prices per m²/month
-    urban_rental_min = db.Column(db.Integer, default=8)
-    urban_rental_avg = db.Column(db.Integer, default=10)
+    # Rental prices per m²/month (Asturias 2025 - Idealista data)
+    urban_rental_min = db.Column(db.Integer, default=9)
+    urban_rental_avg = db.Column(db.Integer, default=11)
     urban_rental_max = db.Column(db.Integer, default=13)
-    suburban_rental_min = db.Column(db.Integer, default=6)
-    suburban_rental_avg = db.Column(db.Integer, default=8)
-    suburban_rental_max = db.Column(db.Integer, default=10)
+    suburban_rental_min = db.Column(db.Integer, default=7)
+    suburban_rental_avg = db.Column(db.Integer, default=9)
+    suburban_rental_max = db.Column(db.Integer, default=11)
     rural_rental_min = db.Column(db.Integer, default=5)
     rural_rental_avg = db.Column(db.Integer, default=7)
     rural_rental_max = db.Column(db.Integer, default=9)

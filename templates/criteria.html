@@ -510,14 +510,14 @@
                                             <label class="form-label">Purchase Costs Ratio</label>
                                             <div class="input-group">
                                                 <input type="number" class="form-control" name="purchase_costs_ratio"
-                                                       value="{{ (market_settings.purchase_costs_ratio or 0.11) * 100 }}"
+                                                       value="{{ (market_settings.purchase_costs_ratio or 0.10) * 100 }}"
                                                        min="5" max="20" step="0.5" required>
                                                 <span class="input-group-text">%</span>
                                             </div>
                                         </div>
                                         <div class="col-md-8">
                                             <p class="small text-muted mb-0 mt-2">
-                                                Includes ITP (transfer tax ~8%), notary fees, registry, and legal costs.
+                                                Asturias ITP: 8% (&lt;€300K), 9% (€300-500K), 10% (&gt;€500K) + notary ~1% + registry ~0.5%.
                                                 Total investment = Land Price × (1 + ratio) + Construction Cost
                                             </p>
                                         </div>
@@ -658,7 +658,7 @@
                                                     <div class="input-group input-group-sm">
                                                         <span class="input-group-text">€</span>
                                                         <input type="number" class="form-control" name="urban_rental_min"
-                                                               value="{{ market_settings.urban_rental_min or 8 }}" min="1" max="50" required>
+                                                               value="{{ market_settings.urban_rental_min or 9 }}" min="1" max="50" required>
                                                     </div>
                                                 </div>
                                                 <div class="col-4">
@@ -666,7 +666,7 @@
                                                     <div class="input-group input-group-sm">
                                                         <span class="input-group-text">€</span>
                                                         <input type="number" class="form-control" name="urban_rental_avg"
-                                                               value="{{ market_settings.urban_rental_avg or 10 }}" min="1" max="50" required>
+                                                               value="{{ market_settings.urban_rental_avg or 11 }}" min="1" max="50" required>
                                                     </div>
                                                 </div>
                                                 <div class="col-4">
@@ -688,7 +688,7 @@
                                                     <div class="input-group input-group-sm">
                                                         <span class="input-group-text">€</span>
                                                         <input type="number" class="form-control" name="suburban_rental_min"
-                                                               value="{{ market_settings.suburban_rental_min or 6 }}" min="1" max="50" required>
+                                                               value="{{ market_settings.suburban_rental_min or 7 }}" min="1" max="50" required>
                                                     </div>
                                                 </div>
                                                 <div class="col-4">
@@ -696,7 +696,7 @@
                                                     <div class="input-group input-group-sm">
                                                         <span class="input-group-text">€</span>
                                                         <input type="number" class="form-control" name="suburban_rental_avg"
-                                                               value="{{ market_settings.suburban_rental_avg or 8 }}" min="1" max="50" required>
+                                                               value="{{ market_settings.suburban_rental_avg or 9 }}" min="1" max="50" required>
                                                     </div>
                                                 </div>
                                                 <div class="col-4">
@@ -704,7 +704,7 @@
                                                     <div class="input-group input-group-sm">
                                                         <span class="input-group-text">€</span>
                                                         <input type="number" class="form-control" name="suburban_rental_max"
-                                                               value="{{ market_settings.suburban_rental_max or 10 }}" min="1" max="50" required>
+                                                               value="{{ market_settings.suburban_rental_max or 11 }}" min="1" max="50" required>
                                                     </div>
                                                 </div>
                                             </div>
@@ -758,6 +758,54 @@
                                 Changes will apply to new AI analyses. Existing analyses are not automatically updated.
                             </small>
                         </form>
+
+                        <!-- Data Sources -->
+                        <div class="card mt-4 border-0 bg-light">
+                            <div class="card-body">
+                                <h6 class="text-muted mb-3">
+                                    <i class="fas fa-book-open me-2"></i>Data Sources & References (Asturias)
+                                </h6>
+                                <div class="small">
+                                    <ul class="list-unstyled mb-0">
+                                        <li class="mb-2">
+                                            <a href="https://sede.tributasenasturias.es/sites/sede/default/es_ES/Que-quieres-hacer/Transmisiones-Patrimoniales-y-AJD/Guia-del-impuesto/Modalidad-Transmisiones-Patrimoniales-Onerosas" target="_blank" rel="noopener" class="text-decoration-none">
+                                                <i class="fas fa-external-link-alt me-1 text-muted"></i>
+                                                <strong>Agencia Tributaria del Principado de Asturias</strong>
+                                            </a>
+                                            <span class="text-muted ms-1">— ITP oficial: 8% (&lt;€300K), 9% (€300-500K), 10% (&gt;€500K) (2025)</span>
+                                        </li>
+                                        <li class="mb-2">
+                                            <a href="https://www.idealista.com/sala-de-prensa/informes-precio-vivienda/alquiler/asturias/asturias/gijon/" target="_blank" rel="noopener" class="text-decoration-none">
+                                                <i class="fas fa-external-link-alt me-1 text-muted"></i>
+                                                <strong>Idealista - Precio alquiler Gijón</strong>
+                                            </a>
+                                            <span class="text-muted ms-1">— €10.6/m² centro, datos mensuales actualizados (Nov 2025)</span>
+                                        </li>
+                                        <li class="mb-2">
+                                            <a href="https://www.idealista.com/sala-de-prensa/informes-precio-vivienda/alquiler/asturias/asturias/oviedo/" target="_blank" rel="noopener" class="text-decoration-none">
+                                                <i class="fas fa-external-link-alt me-1 text-muted"></i>
+                                                <strong>Idealista - Precio alquiler Oviedo</strong>
+                                            </a>
+                                            <span class="text-muted ms-1">— €10.5/m², evolución histórica por distritos (Oct 2025)</span>
+                                        </li>
+                                        <li class="mb-2">
+                                            <a href="https://en.barymont.com/blog/essentials/cost-to-build-a-house-in-spain-2025" target="_blank" rel="noopener" class="text-decoration-none">
+                                                <i class="fas fa-external-link-alt me-1 text-muted"></i>
+                                                <strong>Bárymont - Construction Costs Spain 2025</strong>
+                                            </a>
+                                            <span class="text-muted ms-1">— €1,300-2,500/m² según calidad, desglose completo (2025)</span>
+                                        </li>
+                                        <li>
+                                            <a href="https://www.globalpropertyguide.com/europe/spain/rent-yields" target="_blank" rel="noopener" class="text-decoration-none">
+                                                <i class="fas fa-external-link-alt me-1 text-muted"></i>
+                                                <strong>Global Property Guide - Spain Rental Yields</strong>
+                                            </a>
+                                            <span class="text-muted ms-1">— Metodología net vs gross yield, vacancy rates (2024)</span>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1140,7 +1188,7 @@ document.addEventListener('DOMContentLoaded', function() {
         resetMarketBtn.addEventListener('click', function() {
             if (!confirm('Reset all market settings to default 2025 values?')) return;
 
-            // Default values
+            // Default values (Asturias 2025)
             const defaults = {
                 // Construction costs
                 'construction_basic_min': 1100,
@@ -1149,8 +1197,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 'construction_premium_min': 1500,
                 'construction_premium_avg': 1800,
                 'construction_premium_max': 2200,
-                // Purchase costs (as percentage)
-                'purchase_costs_ratio': 11,
+                // Purchase costs (as percentage) - Asturias ITP 8% + notary/registry ~2%
+                'purchase_costs_ratio': 10,
                 // Urban adjustments (as percentage)
                 'urban_vacancy_rate': 5,
                 'urban_operating_expenses': 15,
@@ -1163,13 +1211,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 'rural_vacancy_rate': 20,
                 'rural_operating_expenses': 18,
                 'rural_management_fee': 10,
-                // Rental prices
-                'urban_rental_min': 8,
-                'urban_rental_avg': 10,
+                // Rental prices (Asturias 2025 - Idealista data)
+                'urban_rental_min': 9,
+                'urban_rental_avg': 11,
                 'urban_rental_max': 13,
-                'suburban_rental_min': 6,
-                'suburban_rental_avg': 8,
-                'suburban_rental_max': 10,
+                'suburban_rental_min': 7,
+                'suburban_rental_avg': 9,
+                'suburban_rental_max': 11,
                 'rural_rental_min': 5,
                 'rural_rental_avg': 7,
                 'rural_rental_max': 9

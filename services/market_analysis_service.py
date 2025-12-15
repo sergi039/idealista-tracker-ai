@@ -17,20 +17,22 @@ logger = logging.getLogger(__name__)
 class MarketAnalysisService:
     """Service for analyzing market trends and construction costs"""
 
-    # Default values (used as fallback if DB settings not available)
+    # Default values for Asturias 2025 (used as fallback if DB settings not available)
     DEFAULT_CONSTRUCTION_COSTS = {
         'basic': {'min': 1100, 'avg': 1300, 'max': 1500},
         'premium': {'min': 1500, 'avg': 1800, 'max': 2200}
     }
-    DEFAULT_PURCHASE_COSTS_RATIO = 0.11
+    # Asturias ITP: 8% (<€300K), 9% (€300-500K), 10% (>€500K) + notary/registry ~2%
+    DEFAULT_PURCHASE_COSTS_RATIO = 0.10
     DEFAULT_RENTAL_ADJUSTMENTS = {
         'urban': {'vacancy_rate': 0.05, 'operating_expenses': 0.15, 'management_fee': 0.00},
         'suburban': {'vacancy_rate': 0.08, 'operating_expenses': 0.15, 'management_fee': 0.00},
         'rural': {'vacancy_rate': 0.20, 'operating_expenses': 0.18, 'management_fee': 0.10}
     }
+    # Rental prices per m²/month - Asturias 2025 (Idealista: Gijón €10.6, Oviedo €10.5)
     DEFAULT_RENTAL_PRICES = {
-        'urban': {'min': 8, 'avg': 10, 'max': 13},
-        'suburban': {'min': 6, 'avg': 8, 'max': 10},
+        'urban': {'min': 9, 'avg': 11, 'max': 13},
+        'suburban': {'min': 7, 'avg': 9, 'max': 11},
         'rural': {'min': 5, 'avg': 7, 'max': 9}
     }
 
@@ -75,7 +77,7 @@ class MarketAnalysisService:
                 }
 
                 # Load purchase costs ratio from DB
-                self.PURCHASE_COSTS_RATIO = float(settings.purchase_costs_ratio) if settings.purchase_costs_ratio else 0.11
+                self.PURCHASE_COSTS_RATIO = float(settings.purchase_costs_ratio) if settings.purchase_costs_ratio else 0.10
 
                 # Load rental adjustments from DB
                 self.RENTAL_ADJUSTMENTS = {
@@ -96,17 +98,17 @@ class MarketAnalysisService:
                     }
                 }
 
-                # Load rental prices from DB
+                # Load rental prices from DB (Asturias 2025 defaults)
                 self.RENTAL_PRICES = {
                     'urban': {
-                        'min': settings.urban_rental_min or 8,
-                        'avg': settings.urban_rental_avg or 10,
+                        'min': settings.urban_rental_min or 9,
+                        'avg': settings.urban_rental_avg or 11,
                         'max': settings.urban_rental_max or 13
                     },
                     'suburban': {
-                        'min': settings.suburban_rental_min or 6,
-                        'avg': settings.suburban_rental_avg or 8,
-                        'max': settings.suburban_rental_max or 10
+                        'min': settings.suburban_rental_min or 7,
+                        'avg': settings.suburban_rental_avg or 9,
+                        'max': settings.suburban_rental_max or 11
                     },
                     'rural': {
                         'min': settings.rural_rental_min or 5,
