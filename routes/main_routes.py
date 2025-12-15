@@ -334,23 +334,24 @@ def criteria():
         from services.scoring_service import ScoringService
         from services.settings_service import SettingsService
         from utils.city_registry import all_city_names
-        
+        from models import MarketSettings
+
         # Load profile weights using ScoringService for consistency
         scoring_service = ScoringService()
-        
+
         # Get investment profile weights (DB first, Config fallback)
         investment_weights = scoring_service._load_profile_weights('investment')
         if not investment_weights and hasattr(Config, 'SCORING_PROFILES'):
             investment_weights = Config.SCORING_PROFILES.get('investment', {})
-        
+
         # Get lifestyle profile weights (DB first, Config fallback)
         lifestyle_weights = scoring_service._load_profile_weights('lifestyle')
         if not lifestyle_weights and hasattr(Config, 'SCORING_PROFILES'):
             lifestyle_weights = Config.SCORING_PROFILES.get('lifestyle', {})
-        
+
         # Get combined mix ratio
         combined_mix = getattr(Config, 'COMBINED_MIX', {'investment': 0.32, 'lifestyle': 0.68})
-        
+
         # Get criteria descriptions for display
         criteria_descriptions = {
             'investment_yield': 'Rental yield, cap rate, investment metrics and return potential',
@@ -367,23 +368,28 @@ def criteria():
 
         reference_cities = SettingsService.get_reference_cities()
         city_registry_names = all_city_names()
-        
-        return render_template('criteria.html', 
+
+        # Get market settings
+        market_settings = MarketSettings.get_settings()
+
+        return render_template('criteria.html',
                              investment_weights=investment_weights,
                              lifestyle_weights=lifestyle_weights,
                              combined_mix=combined_mix,
                              criteria_descriptions=criteria_descriptions,
                              reference_cities=reference_cities,
-                             city_registry_names=city_registry_names)
-        
+                             city_registry_names=city_registry_names,
+                             market_settings=market_settings)
+
     except Exception as e:
         logger.error(f"Failed to load criteria page: {str(e)}")
         flash(f"Error loading criteria: {str(e)}", 'error')
-        return render_template('criteria.html', 
+        return render_template('criteria.html',
                              investment_weights={},
                              lifestyle_weights={},
                              combined_mix={'investment': 0.32, 'lifestyle': 0.68},
-                             criteria_descriptions={})
+                             criteria_descriptions={},
+                             market_settings=None)
 
 @main_bp.route('/criteria/update', methods=['POST'])
 @admin_required
@@ -526,6 +532,64 @@ def update_reference_cities():
         flash(f"Error updating reference cities: {e}", "error")
 
     return redirect(url_for('main.criteria'))
+
+
+@main_bp.route('/criteria/update_market_settings', methods=['POST'])
+@admin_required
+def update_market_settings():
+    """Update market analysis settings used for AI property enrichment."""
+    try:
+        from models import MarketSettings
+
+        settings = MarketSettings.get_settings()
+
+        # Construction costs
+        settings.construction_basic_min = int(request.form.get('construction_basic_min', 1100))
+        settings.construction_basic_avg = int(request.form.get('construction_basic_avg', 1300))
+        settings.construction_basic_max = int(request.form.get('construction_basic_max', 1500))
+        settings.construction_premium_min = int(request.form.get('construction_premium_min', 1500))
+        settings.construction_premium_avg = int(request.form.get('construction_premium_avg', 1800))
+        settings.construction_premium_max = int(request.form.get('construction_premium_max', 2200))
+
+        # Purchase costs (convert from percentage to ratio)
+        settings.purchase_costs_ratio = float(request.form.get('purchase_costs_ratio', 11)) / 100
+
+        # Urban adjustments (convert from percentage to ratio)
+        settings.urban_vacancy_rate = float(request.form.get('urban_vacancy_rate', 5)) / 100
+        settings.urban_operating_expenses = float(request.form.get('urban_operating_expenses', 15)) / 100
+        settings.urban_management_fee = float(request.form.get('urban_management_fee', 0)) / 100
+
+        # Suburban adjustments
+        settings.suburban_vacancy_rate = float(request.form.get('suburban_vacancy_rate', 8)) / 100
+        settings.suburban_operating_expenses = float(request.form.get('suburban_operating_expenses', 15)) / 100
+        settings.suburban_management_fee = float(request.form.get('suburban_management_fee', 0)) / 100
+
+        # Rural adjustments
+        settings.rural_vacancy_rate = float(request.form.get('rural_vacancy_rate', 20)) / 100
+        settings.rural_operating_expenses = float(request.form.get('rural_operating_expenses', 18)) / 100
+        settings.rural_management_fee = float(request.form.get('rural_management_fee', 10)) / 100
+
+        # Rental prices
+        settings.urban_rental_min = int(request.form.get('urban_rental_min', 8))
+        settings.urban_rental_avg = int(request.form.get('urban_rental_avg', 10))
+        settings.urban_rental_max = int(request.form.get('urban_rental_max', 13))
+        settings.suburban_rental_min = int(request.form.get('suburban_rental_min', 6))
+        settings.suburban_rental_avg = int(request.form.get('suburban_rental_avg', 8))
+        settings.suburban_rental_max = int(request.form.get('suburban_rental_max', 10))
+        settings.rural_rental_min = int(request.form.get('rural_rental_min', 5))
+        settings.rural_rental_avg = int(request.form.get('rural_rental_avg', 7))
+        settings.rural_rental_max = int(request.form.get('rural_rental_max', 9))
+
+        db.session.commit()
+        flash("Market settings updated successfully. New AI analyses will use these values.", "success")
+
+    except Exception as e:
+        logger.error("Failed to update market settings: %s", e)
+        db.session.rollback()
+        flash(f"Error updating market settings: {e}", "error")
+
+    return redirect(url_for('main.criteria'))
+
 
 @main_bp.route('/land/<int:land_id>/edit-environment', methods=['GET', 'POST'])
 def edit_environment(land_id):

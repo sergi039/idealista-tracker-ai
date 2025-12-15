@@ -16,28 +16,24 @@ logger = logging.getLogger(__name__)
 
 class MarketAnalysisService:
     """Service for analyzing market trends and construction costs"""
-    
-    # Asturias construction costs per m² (Updated 2025 data)
-    # Source: idealista.com, barymont.com, veiranda.com - Spain 2025 construction costs
-    # Asturias coefficient ~0.85-0.90 of national average (lower labor costs)
-    CONSTRUCTION_COSTS = {
-        'basic': {
-            'min': 1100,   # €/m² - Economic construction (square volume, basic finishes)
-            'avg': 1300,   # €/m² - Standard construction
-            'max': 1500    # €/m² - Good quality construction
-        },
-        'premium': {
-            'min': 1500,   # €/m² - Premium construction
-            'avg': 1800,   # €/m² - High-end construction
-            'max': 2200    # €/m² - Luxury construction with basement
-        }
+
+    # Default values (used as fallback if DB settings not available)
+    DEFAULT_CONSTRUCTION_COSTS = {
+        'basic': {'min': 1100, 'avg': 1300, 'max': 1500},
+        'premium': {'min': 1500, 'avg': 1800, 'max': 2200}
+    }
+    DEFAULT_PURCHASE_COSTS_RATIO = 0.11
+    DEFAULT_RENTAL_ADJUSTMENTS = {
+        'urban': {'vacancy_rate': 0.05, 'operating_expenses': 0.15, 'management_fee': 0.00},
+        'suburban': {'vacancy_rate': 0.08, 'operating_expenses': 0.15, 'management_fee': 0.00},
+        'rural': {'vacancy_rate': 0.20, 'operating_expenses': 0.18, 'management_fee': 0.10}
+    }
+    DEFAULT_RENTAL_PRICES = {
+        'urban': {'min': 8, 'avg': 10, 'max': 13},
+        'suburban': {'min': 6, 'avg': 8, 'max': 10},
+        'rural': {'min': 5, 'avg': 7, 'max': 9}
     }
 
-    # Purchase costs in Asturias (transfer tax, notary, registry, legal fees)
-    # ITP (Impuesto de Transmisiones Patrimoniales) in Asturias: 8%
-    # Other costs (notary, registry, legal): ~3%
-    PURCHASE_COSTS_RATIO = 0.11  # 11% of property price
-    
     # Typical buildability ratios for different land types in Asturias
     BUILDABILITY_RATIOS = {
         'developed': 0.25,      # 25% of land area can be built
@@ -45,53 +41,96 @@ class MarketAnalysisService:
         'rural': 0.15,          # 15% for rural land
         'default': 0.20         # Default 20%
     }
-    
+
     # Rental market data for Asturias (2024-2025)
     RENTAL_YIELDS = {
-        'urban': {
-            'min': 3.5,    # % annual yield in major cities
-            'avg': 4.5,    # % average yield
-            'max': 5.5     # % maximum yield
-        },
-        'suburban': {
-            'min': 4.0,    # % annual yield in suburban areas
-            'avg': 5.0,    # % average yield  
-            'max': 6.0     # % maximum yield
-        },
-        'rural': {
-            'min': 5.0,    # % annual yield in rural areas
-            'avg': 6.0,    # % average yield
-            'max': 7.5     # % maximum yield (vacation rentals)
-        }
-    }
-    
-    # Average rental prices per m² per month in Asturias
-    RENTAL_PRICES = {
-        'urban': {'min': 8, 'avg': 10, 'max': 13},      # €/m²/month
-        'suburban': {'min': 6, 'avg': 8, 'max': 10},    # €/m²/month
-        'rural': {'min': 5, 'avg': 7, 'max': 9}         # €/m²/month
+        'urban': {'min': 3.5, 'avg': 4.5, 'max': 5.5},
+        'suburban': {'min': 4.0, 'avg': 5.0, 'max': 6.0},
+        'rural': {'min': 5.0, 'avg': 6.0, 'max': 7.5}
     }
 
-    # Realistic expense and vacancy adjustments (2025 data)
-    # Source: Spain real estate investment guides, Global Property Guide
-    RENTAL_ADJUSTMENTS = {
-        'urban': {
-            'vacancy_rate': 0.05,       # 5% vacancy for urban long-term rentals
-            'operating_expenses': 0.15,  # 15% of gross (maintenance, insurance, repairs)
-            'management_fee': 0.00       # Usually self-managed
-        },
-        'suburban': {
-            'vacancy_rate': 0.08,       # 8% vacancy
-            'operating_expenses': 0.15,
-            'management_fee': 0.00
-        },
-        'rural': {
-            'vacancy_rate': 0.20,       # 20% vacancy (seasonal vacation rentals)
-            'operating_expenses': 0.18,  # Higher maintenance for vacation properties
-            'management_fee': 0.10       # Often need property manager for vacation rentals
-        }
-    }
-    
+    def __init__(self):
+        """Initialize service and load settings from database"""
+        self._load_settings()
+
+    def _load_settings(self):
+        """Load market settings from database, fallback to defaults"""
+        try:
+            from models import MarketSettings
+            settings = MarketSettings.query.first()
+
+            if settings:
+                # Load construction costs from DB
+                self.CONSTRUCTION_COSTS = {
+                    'basic': {
+                        'min': settings.construction_basic_min or 1100,
+                        'avg': settings.construction_basic_avg or 1300,
+                        'max': settings.construction_basic_max or 1500
+                    },
+                    'premium': {
+                        'min': settings.construction_premium_min or 1500,
+                        'avg': settings.construction_premium_avg or 1800,
+                        'max': settings.construction_premium_max or 2200
+                    }
+                }
+
+                # Load purchase costs ratio from DB
+                self.PURCHASE_COSTS_RATIO = float(settings.purchase_costs_ratio) if settings.purchase_costs_ratio else 0.11
+
+                # Load rental adjustments from DB
+                self.RENTAL_ADJUSTMENTS = {
+                    'urban': {
+                        'vacancy_rate': float(settings.urban_vacancy_rate) if settings.urban_vacancy_rate else 0.05,
+                        'operating_expenses': float(settings.urban_operating_expenses) if settings.urban_operating_expenses else 0.15,
+                        'management_fee': float(settings.urban_management_fee) if settings.urban_management_fee else 0.00
+                    },
+                    'suburban': {
+                        'vacancy_rate': float(settings.suburban_vacancy_rate) if settings.suburban_vacancy_rate else 0.08,
+                        'operating_expenses': float(settings.suburban_operating_expenses) if settings.suburban_operating_expenses else 0.15,
+                        'management_fee': float(settings.suburban_management_fee) if settings.suburban_management_fee else 0.00
+                    },
+                    'rural': {
+                        'vacancy_rate': float(settings.rural_vacancy_rate) if settings.rural_vacancy_rate else 0.20,
+                        'operating_expenses': float(settings.rural_operating_expenses) if settings.rural_operating_expenses else 0.18,
+                        'management_fee': float(settings.rural_management_fee) if settings.rural_management_fee else 0.10
+                    }
+                }
+
+                # Load rental prices from DB
+                self.RENTAL_PRICES = {
+                    'urban': {
+                        'min': settings.urban_rental_min or 8,
+                        'avg': settings.urban_rental_avg or 10,
+                        'max': settings.urban_rental_max or 13
+                    },
+                    'suburban': {
+                        'min': settings.suburban_rental_min or 6,
+                        'avg': settings.suburban_rental_avg or 8,
+                        'max': settings.suburban_rental_max or 10
+                    },
+                    'rural': {
+                        'min': settings.rural_rental_min or 5,
+                        'avg': settings.rural_rental_avg or 7,
+                        'max': settings.rural_rental_max or 9
+                    }
+                }
+                logger.debug("Loaded market settings from database")
+            else:
+                # Use defaults
+                self.CONSTRUCTION_COSTS = self.DEFAULT_CONSTRUCTION_COSTS.copy()
+                self.PURCHASE_COSTS_RATIO = self.DEFAULT_PURCHASE_COSTS_RATIO
+                self.RENTAL_ADJUSTMENTS = self.DEFAULT_RENTAL_ADJUSTMENTS.copy()
+                self.RENTAL_PRICES = self.DEFAULT_RENTAL_PRICES.copy()
+                logger.debug("Using default market settings (no DB record)")
+
+        except Exception as e:
+            # Fallback to defaults on any error
+            logger.warning(f"Could not load market settings from DB: {e}, using defaults")
+            self.CONSTRUCTION_COSTS = self.DEFAULT_CONSTRUCTION_COSTS.copy()
+            self.PURCHASE_COSTS_RATIO = self.DEFAULT_PURCHASE_COSTS_RATIO
+            self.RENTAL_ADJUSTMENTS = self.DEFAULT_RENTAL_ADJUSTMENTS.copy()
+            self.RENTAL_PRICES = self.DEFAULT_RENTAL_PRICES.copy()
+
     def _evaluate_construction_quality_objective(self, land: Land) -> Dict:
         """
         Evaluate construction quality based on objective criteria (score-independent)
