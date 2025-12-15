@@ -8,6 +8,19 @@ A self-hosted tool that automatically imports your Idealista saved search emails
 
 ---
 
+## Screenshots
+
+### Properties List View
+![Properties List](docs/screenshots/properties-list.png)
+
+### Interactive Map
+![Properties Map](docs/screenshots/properties-map.png)
+
+### Scoring Configuration
+![Scoring Config](docs/screenshots/scoring-config.png)
+
+---
+
 ## Why Use This?
 
 **The Problem:** You're searching for property on Idealista. You set up email alerts, but:
