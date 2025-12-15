@@ -5,12 +5,11 @@ Uses claude_key from secrets for authentication
 
 import json
 import os
-import sys
 import logging
 from typing import Optional, Dict, Any, List
 import anthropic
 from anthropic import Anthropic
-from sqlalchemy import and_, or_, func
+from sqlalchemy import and_, or_
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -25,9 +24,54 @@ except ImportError:
 # Model selection is centralized in Config (supports legacy aliases).
 DEFAULT_MODEL = Config.ANTHROPIC_MODEL
 
+# Asturias Real Estate Market Context (Updated 2025)
+# This provides AI with current market knowledge for more accurate analysis
+MARKET_CONTEXT_2025 = """
+ASTURIAS REAL ESTATE MARKET CONTEXT (2025):
+
+MARKET OVERVIEW:
+- Housing prices: Rising 4-5% annually across Spain, Asturias slightly below national average
+- Construction costs: €1,100-1,800/m² for quality builds (updated 2025 data)
+- Purchase costs: ~11% additional (8% ITP transfer tax + 3% notary/registry/legal)
+
+KEY MARKET DRIVERS:
+- Remote work migration: Growing demand from professionals seeking quality of life
+- Gijón tech hub: Emerging technology sector attracting young professionals
+- Coastal lifestyle: "Green Spain" appeal for Northern European buyers
+- Affordable vs major cities: 40-60% cheaper than Madrid/Barcelona
+
+REGIONAL CHARACTERISTICS:
+- Urban (Gijón/Oviedo/Avilés): Rental yields 4-5%, stable demand, quick tenant turnover
+- Suburban: Family-oriented, 5-6% yields, growing demand
+- Rural/Coastal: Vacation rental potential, 6-8% gross yields but seasonal, remote work appeal
+
+INVESTMENT CONSIDERATIONS:
+- Net yields typically 1.5-2% lower than gross (maintenance, vacancy, management)
+- Vacancy rate: 5-10% for long-term rentals, 15-25% for vacation rentals (seasonal)
+- Operating expenses: ~15-20% of gross rental income
+
+RISKS:
+- Limited infrastructure in rural areas
+- Harsh winters affect some coastal properties
+- Lower liquidity compared to major Spanish cities
+- Some areas have restricted building permits (protected landscapes)
+
+OPPORTUNITIES:
+- Undervalued compared to other Spanish coastal regions
+- Strong natural tourism growth (Picos de Europa, beaches)
+- EU remote work visa attracting international buyers
+- Infrastructure improvements (A-8 highway, Gijón port expansion)
+"""
+
 class AnthropicService:
     """Service for interacting with Anthropic Claude API"""
-    
+
+    # API configuration constants
+    ANALYSIS_MAX_TOKENS = 4000
+    SUMMARY_MAX_TOKENS = 256
+    SCORE_MAX_TOKENS = 10
+    DEFAULT_TEMPERATURE = 0.7
+
     def __init__(self):
         """Initialize Anthropic client with API key from secrets"""
         self.api_key = Config.ANTHROPIC_API_KEY
@@ -39,11 +83,19 @@ class AnthropicService:
         
         try:
             self.client = Anthropic(api_key=self.api_key)
-            logger.info("Anthropic client initialized successfully")
+            logger.debug("Anthropic client initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize Anthropic client: {str(e)}")
             raise
-    
+
+    def _extract_response_text(self, message) -> str:
+        """Extract text content from Claude API response"""
+        if message.content and len(message.content) > 0:
+            content_block = message.content[0]
+            if hasattr(content_block, 'text') and content_block.text:
+                return content_block.text
+        return ""
+
     def analyze_property(self, property_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Analyze property data using Claude AI
@@ -85,12 +137,8 @@ Format your response in clear sections."""
             )
             
             # Extract response
-            response_text = ""
-            if message.content and len(message.content) > 0:
-                content_block = message.content[0]
-                if hasattr(content_block, 'text') and content_block.text:
-                    response_text = content_block.text
-            
+            response_text = self._extract_response_text(message)
+
             return {
                 'analysis': response_text,
                 'model': DEFAULT_MODEL,
@@ -133,11 +181,7 @@ Format your response in clear sections."""
                 ]
             )
             
-            if message.content and len(message.content) > 0:
-                content_block = message.content[0]
-                if hasattr(content_block, 'text'):
-                    return content_block.text
-            return None
+            return self._extract_response_text(message) or None
             
         except Exception as e:
             logger.error(f"Failed to generate summary: {str(e)}")
@@ -166,7 +210,7 @@ Format your response in clear sections."""
             current_beach_time = current_property.get('travel_time_nearest_beach')
             
             # Debug logging
-            logger.info(f"Finding similar properties for ID: {current_id} (type: {type(current_id)})")
+            logger.debug(f"Finding similar properties for ID: {current_id}")
             
             # Start with base query (exclude current property)
             query = Land.query.filter(Land.id != current_id)
@@ -230,7 +274,7 @@ Format your response in clear sections."""
                 
                 # Double-check exclusion of current property
                 if prop.id == current_id:
-                    logger.warning(f"Found current property {current_id} in similar results - skipping")
+                    logger.debug(f"Skipping current property {current_id} in similar results")
                     continue
                     
                 similarity_score = self._calculate_similarity_score(current_property, prop)
@@ -248,7 +292,7 @@ Format your response in clear sections."""
                         'similarity_score': similarity_score
                     }
                     results.append(prop_dict)
-                    logger.info(f"Added similar property ID: {prop.id} with score: {similarity_score:.2f}")
+                    logger.debug(f"Added similar property ID: {prop.id} with score: {similarity_score:.2f}")
             
             # Sort by similarity score (highest first)
             results.sort(key=lambda x: x['similarity_score'], reverse=True)
@@ -325,7 +369,7 @@ Format your response in clear sections."""
                     if land:
                         enriched_data = market_service.get_enriched_data(land)
                 except Exception as e:
-                    logger.warning(f"Could not get enriched data: {str(e)}")
+                    logger.debug(f"Could not get enriched data: {str(e)}")
             
             # Prepare comprehensive property data
             property_text = self._format_comprehensive_data(property_data)
@@ -397,8 +441,10 @@ ENRICHMENT PRIORITY: Focus especially on these sections: {', '.join(enrichment_f
 
 Provide ONLY the missing or enhanced data in this EXACT JSON format (keep all text in English). Include ALL sections but focus enrichment on priority areas:"""
             else:
-                # Fresh analysis prompt
-                prompt = f"""Analyze this Asturias real estate property and provide structured insights in ENGLISH:
+                # Fresh analysis prompt with market context
+                prompt = f"""{MARKET_CONTEXT_2025}
+
+Analyze this Asturias real estate property and provide structured insights in ENGLISH:
 
 {property_text}{similar_text}
 
@@ -487,12 +533,8 @@ Keep all responses concise and in English. Focus on practical investment insight
             )
             
             # Extract response
-            response_text = ""
-            if message.content and len(message.content) > 0:
-                content_block = message.content[0]
-                if hasattr(content_block, 'text') and content_block.text:
-                    response_text = content_block.text
-            
+            response_text = self._extract_response_text(message)
+
             # Try to parse JSON response
             try:
                 # Strip markdown code fences if present
@@ -586,9 +628,13 @@ Keep all responses concise and in English. Focus on practical investment insight
             if infra_items:
                 text_parts.append(f"INFRASTRUCTURE: {', '.join(infra_items)}")
         
-        # Description
+        # Description (increased to 1000 chars for better context)
         if property_data.get('description'):
-            text_parts.append(f"DESCRIPTION: {property_data['description'][:500]}...")
+            desc = property_data['description']
+            if len(desc) > 1000:
+                text_parts.append(f"DESCRIPTION: {desc[:1000]}...")
+            else:
+                text_parts.append(f"DESCRIPTION: {desc}")
         
         return "\n".join(text_parts)
 
@@ -623,11 +669,7 @@ Respond with ONLY a number between 0 and 100, nothing else."""
                 ]
             )
             
-            response = ""
-            if message.content and len(message.content) > 0:
-                content_block = message.content[0]
-                if hasattr(content_block, 'text'):
-                    response = content_block.text
+            response = self._extract_response_text(message)
             # Extract numeric score
             score = float(response.strip())
             return min(100, max(0, score))  # Ensure within bounds
