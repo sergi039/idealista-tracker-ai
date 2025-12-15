@@ -25,6 +25,45 @@ except ImportError:
 # Model selection is centralized in Config (supports legacy aliases).
 DEFAULT_MODEL = Config.ANTHROPIC_MODEL
 
+# Asturias Real Estate Market Context (Updated 2025)
+# This provides AI with current market knowledge for more accurate analysis
+MARKET_CONTEXT_2025 = """
+ASTURIAS REAL ESTATE MARKET CONTEXT (2025):
+
+MARKET OVERVIEW:
+- Housing prices: Rising 4-5% annually across Spain, Asturias slightly below national average
+- Construction costs: €1,100-1,800/m² for quality builds (updated 2025 data)
+- Purchase costs: ~11% additional (8% ITP transfer tax + 3% notary/registry/legal)
+
+KEY MARKET DRIVERS:
+- Remote work migration: Growing demand from professionals seeking quality of life
+- Gijón tech hub: Emerging technology sector attracting young professionals
+- Coastal lifestyle: "Green Spain" appeal for Northern European buyers
+- Affordable vs major cities: 40-60% cheaper than Madrid/Barcelona
+
+REGIONAL CHARACTERISTICS:
+- Urban (Gijón/Oviedo/Avilés): Rental yields 4-5%, stable demand, quick tenant turnover
+- Suburban: Family-oriented, 5-6% yields, growing demand
+- Rural/Coastal: Vacation rental potential, 6-8% gross yields but seasonal, remote work appeal
+
+INVESTMENT CONSIDERATIONS:
+- Net yields typically 1.5-2% lower than gross (maintenance, vacancy, management)
+- Vacancy rate: 5-10% for long-term rentals, 15-25% for vacation rentals (seasonal)
+- Operating expenses: ~15-20% of gross rental income
+
+RISKS:
+- Limited infrastructure in rural areas
+- Harsh winters affect some coastal properties
+- Lower liquidity compared to major Spanish cities
+- Some areas have restricted building permits (protected landscapes)
+
+OPPORTUNITIES:
+- Undervalued compared to other Spanish coastal regions
+- Strong natural tourism growth (Picos de Europa, beaches)
+- EU remote work visa attracting international buyers
+- Infrastructure improvements (A-8 highway, Gijón port expansion)
+"""
+
 class AnthropicService:
     """Service for interacting with Anthropic Claude API"""
     
@@ -397,8 +436,10 @@ ENRICHMENT PRIORITY: Focus especially on these sections: {', '.join(enrichment_f
 
 Provide ONLY the missing or enhanced data in this EXACT JSON format (keep all text in English). Include ALL sections but focus enrichment on priority areas:"""
             else:
-                # Fresh analysis prompt
-                prompt = f"""Analyze this Asturias real estate property and provide structured insights in ENGLISH:
+                # Fresh analysis prompt with market context
+                prompt = f"""{MARKET_CONTEXT_2025}
+
+Analyze this Asturias real estate property and provide structured insights in ENGLISH:
 
 {property_text}{similar_text}
 
@@ -586,9 +627,13 @@ Keep all responses concise and in English. Focus on practical investment insight
             if infra_items:
                 text_parts.append(f"INFRASTRUCTURE: {', '.join(infra_items)}")
         
-        # Description
+        # Description (increased to 1000 chars for better context)
         if property_data.get('description'):
-            text_parts.append(f"DESCRIPTION: {property_data['description'][:500]}...")
+            desc = property_data['description']
+            if len(desc) > 1000:
+                text_parts.append(f"DESCRIPTION: {desc[:1000]}...")
+            else:
+                text_parts.append(f"DESCRIPTION: {desc}")
         
         return "\n".join(text_parts)
 
