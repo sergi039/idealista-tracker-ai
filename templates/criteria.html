@@ -539,7 +539,7 @@
                                     <div class="row mb-3 pb-3 border-bottom">
                                         <div class="col-md-3">
                                             <h6><i class="fas fa-building me-1"></i> Urban</h6>
-                                            <small class="text-muted">Gijón, Oviedo, Avilés</small>
+                                            <small class="text-muted">{{ reference_cities[:3]|map(attribute='name')|join(', ') }}</small>
                                         </div>
                                         <div class="col-md-3">
                                             <label class="form-label small">Vacancy Rate</label>
@@ -574,7 +574,7 @@
                                     <div class="row mb-3 pb-3 border-bottom">
                                         <div class="col-md-3">
                                             <h6><i class="fas fa-home me-1"></i> Suburban</h6>
-                                            <small class="text-muted">Siero, Llanera, Villaviciosa</small>
+                                            <small class="text-muted">Surrounding municipalities</small>
                                         </div>
                                         <div class="col-md-3">
                                             <label class="form-label small">Vacancy Rate</label>
