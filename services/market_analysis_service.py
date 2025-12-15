@@ -7,7 +7,7 @@ based on real data from Asturias region
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
-from sqlalchemy import func, and_, or_
+from sqlalchemy import and_
 from models import Land
 from app import db
 
@@ -387,10 +387,11 @@ class MarketAnalysisService:
             location_type = 'rural'  # default
             if land.municipality:
                 municipality_lower = land.municipality.lower()
+                # Major Asturian cities = urban
                 if any(city in municipality_lower for city in ['gijón', 'oviedo', 'avilés']):
                     location_type = 'urban'
-                elif any(area in municipality_lower for city in ['gijón', 'oviedo', 'avilés'] for area in [city]):
-                    # Check if it's near major cities (simplified logic)
+                # Towns near major cities or coastal = suburban
+                elif any(town in municipality_lower for town in ['siero', 'llanera', 'noreña', 'villaviciosa', 'carreño', 'gozón']):
                     location_type = 'suburban'
             
             # Get rental yields and prices for location

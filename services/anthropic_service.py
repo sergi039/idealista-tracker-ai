@@ -5,12 +5,11 @@ Uses claude_key from secrets for authentication
 
 import json
 import os
-import sys
 import logging
 from typing import Optional, Dict, Any, List
 import anthropic
 from anthropic import Anthropic
-from sqlalchemy import and_, or_, func
+from sqlalchemy import and_, or_
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -66,7 +65,13 @@ OPPORTUNITIES:
 
 class AnthropicService:
     """Service for interacting with Anthropic Claude API"""
-    
+
+    # API configuration constants
+    ANALYSIS_MAX_TOKENS = 4000
+    SUMMARY_MAX_TOKENS = 256
+    SCORE_MAX_TOKENS = 10
+    DEFAULT_TEMPERATURE = 0.7
+
     def __init__(self):
         """Initialize Anthropic client with API key from secrets"""
         self.api_key = Config.ANTHROPIC_API_KEY
@@ -78,11 +83,19 @@ class AnthropicService:
         
         try:
             self.client = Anthropic(api_key=self.api_key)
-            logger.info("Anthropic client initialized successfully")
+            logger.debug("Anthropic client initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize Anthropic client: {str(e)}")
             raise
-    
+
+    def _extract_response_text(self, message) -> str:
+        """Extract text content from Claude API response"""
+        if message.content and len(message.content) > 0:
+            content_block = message.content[0]
+            if hasattr(content_block, 'text') and content_block.text:
+                return content_block.text
+        return ""
+
     def analyze_property(self, property_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Analyze property data using Claude AI
@@ -124,12 +137,8 @@ Format your response in clear sections."""
             )
             
             # Extract response
-            response_text = ""
-            if message.content and len(message.content) > 0:
-                content_block = message.content[0]
-                if hasattr(content_block, 'text') and content_block.text:
-                    response_text = content_block.text
-            
+            response_text = self._extract_response_text(message)
+
             return {
                 'analysis': response_text,
                 'model': DEFAULT_MODEL,
@@ -172,11 +181,7 @@ Format your response in clear sections."""
                 ]
             )
             
-            if message.content and len(message.content) > 0:
-                content_block = message.content[0]
-                if hasattr(content_block, 'text'):
-                    return content_block.text
-            return None
+            return self._extract_response_text(message) or None
             
         except Exception as e:
             logger.error(f"Failed to generate summary: {str(e)}")
@@ -205,7 +210,7 @@ Format your response in clear sections."""
             current_beach_time = current_property.get('travel_time_nearest_beach')
             
             # Debug logging
-            logger.info(f"Finding similar properties for ID: {current_id} (type: {type(current_id)})")
+            logger.debug(f"Finding similar properties for ID: {current_id}")
             
             # Start with base query (exclude current property)
             query = Land.query.filter(Land.id != current_id)
@@ -269,7 +274,7 @@ Format your response in clear sections."""
                 
                 # Double-check exclusion of current property
                 if prop.id == current_id:
-                    logger.warning(f"Found current property {current_id} in similar results - skipping")
+                    logger.debug(f"Skipping current property {current_id} in similar results")
                     continue
                     
                 similarity_score = self._calculate_similarity_score(current_property, prop)
@@ -287,7 +292,7 @@ Format your response in clear sections."""
                         'similarity_score': similarity_score
                     }
                     results.append(prop_dict)
-                    logger.info(f"Added similar property ID: {prop.id} with score: {similarity_score:.2f}")
+                    logger.debug(f"Added similar property ID: {prop.id} with score: {similarity_score:.2f}")
             
             # Sort by similarity score (highest first)
             results.sort(key=lambda x: x['similarity_score'], reverse=True)
@@ -364,7 +369,7 @@ Format your response in clear sections."""
                     if land:
                         enriched_data = market_service.get_enriched_data(land)
                 except Exception as e:
-                    logger.warning(f"Could not get enriched data: {str(e)}")
+                    logger.debug(f"Could not get enriched data: {str(e)}")
             
             # Prepare comprehensive property data
             property_text = self._format_comprehensive_data(property_data)
@@ -528,12 +533,8 @@ Keep all responses concise and in English. Focus on practical investment insight
             )
             
             # Extract response
-            response_text = ""
-            if message.content and len(message.content) > 0:
-                content_block = message.content[0]
-                if hasattr(content_block, 'text') and content_block.text:
-                    response_text = content_block.text
-            
+            response_text = self._extract_response_text(message)
+
             # Try to parse JSON response
             try:
                 # Strip markdown code fences if present
@@ -668,11 +669,7 @@ Respond with ONLY a number between 0 and 100, nothing else."""
                 ]
             )
             
-            response = ""
-            if message.content and len(message.content) > 0:
-                content_block = message.content[0]
-                if hasattr(content_block, 'text'):
-                    response = content_block.text
+            response = self._extract_response_text(message)
             # Extract numeric score
             score = float(response.strip())
             return min(100, max(0, score))  # Ensure within bounds
