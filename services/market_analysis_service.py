@@ -7,7 +7,7 @@ based on real data from Asturias region
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
-from sqlalchemy import func, and_, or_
+from sqlalchemy import and_
 from models import Land
 from app import db
 
@@ -16,21 +16,26 @@ logger = logging.getLogger(__name__)
 
 class MarketAnalysisService:
     """Service for analyzing market trends and construction costs"""
-    
-    # Asturias average construction costs per m² (2024-2025 data)
-    CONSTRUCTION_COSTS = {
-        'basic': {
-            'min': 800,   # €/m² - Basic construction
-            'avg': 1000,  # €/m² - Standard construction  
-            'max': 1200   # €/m² - Good quality construction
-        },
-        'premium': {
-            'min': 1200,  # €/m² - Premium construction
-            'avg': 1500,  # €/m² - High-end construction
-            'max': 2000   # €/m² - Luxury construction
-        }
+
+    # Default values for Asturias 2025 (used as fallback if DB settings not available)
+    DEFAULT_CONSTRUCTION_COSTS = {
+        'basic': {'min': 1100, 'avg': 1300, 'max': 1500},
+        'premium': {'min': 1500, 'avg': 1800, 'max': 2200}
     }
-    
+    # Asturias ITP: 8% (<€300K), 9% (€300-500K), 10% (>€500K) + notary/registry ~2%
+    DEFAULT_PURCHASE_COSTS_RATIO = 0.10
+    DEFAULT_RENTAL_ADJUSTMENTS = {
+        'urban': {'vacancy_rate': 0.05, 'operating_expenses': 0.15, 'management_fee': 0.00},
+        'suburban': {'vacancy_rate': 0.08, 'operating_expenses': 0.15, 'management_fee': 0.00},
+        'rural': {'vacancy_rate': 0.20, 'operating_expenses': 0.18, 'management_fee': 0.10}
+    }
+    # Rental prices per m²/month - Asturias 2025 (Idealista: Gijón €10.6, Oviedo €10.5)
+    DEFAULT_RENTAL_PRICES = {
+        'urban': {'min': 9, 'avg': 11, 'max': 13},
+        'suburban': {'min': 7, 'avg': 9, 'max': 11},
+        'rural': {'min': 5, 'avg': 7, 'max': 9}
+    }
+
     # Typical buildability ratios for different land types in Asturias
     BUILDABILITY_RATIOS = {
         'developed': 0.25,      # 25% of land area can be built
@@ -38,33 +43,96 @@ class MarketAnalysisService:
         'rural': 0.15,          # 15% for rural land
         'default': 0.20         # Default 20%
     }
-    
+
     # Rental market data for Asturias (2024-2025)
     RENTAL_YIELDS = {
-        'urban': {
-            'min': 3.5,    # % annual yield in major cities
-            'avg': 4.5,    # % average yield
-            'max': 5.5     # % maximum yield
-        },
-        'suburban': {
-            'min': 4.0,    # % annual yield in suburban areas
-            'avg': 5.0,    # % average yield  
-            'max': 6.0     # % maximum yield
-        },
-        'rural': {
-            'min': 5.0,    # % annual yield in rural areas
-            'avg': 6.0,    # % average yield
-            'max': 7.5     # % maximum yield (vacation rentals)
-        }
+        'urban': {'min': 3.5, 'avg': 4.5, 'max': 5.5},
+        'suburban': {'min': 4.0, 'avg': 5.0, 'max': 6.0},
+        'rural': {'min': 5.0, 'avg': 6.0, 'max': 7.5}
     }
-    
-    # Average rental prices per m² per month in Asturias
-    RENTAL_PRICES = {
-        'urban': {'min': 8, 'avg': 10, 'max': 13},      # €/m²/month
-        'suburban': {'min': 6, 'avg': 8, 'max': 10},    # €/m²/month
-        'rural': {'min': 5, 'avg': 7, 'max': 9}         # €/m²/month
-    }
-    
+
+    def __init__(self):
+        """Initialize service and load settings from database"""
+        self._load_settings()
+
+    def _load_settings(self):
+        """Load market settings from database, fallback to defaults"""
+        try:
+            from models import MarketSettings
+            settings = MarketSettings.query.first()
+
+            if settings:
+                # Load construction costs from DB
+                self.CONSTRUCTION_COSTS = {
+                    'basic': {
+                        'min': settings.construction_basic_min or 1100,
+                        'avg': settings.construction_basic_avg or 1300,
+                        'max': settings.construction_basic_max or 1500
+                    },
+                    'premium': {
+                        'min': settings.construction_premium_min or 1500,
+                        'avg': settings.construction_premium_avg or 1800,
+                        'max': settings.construction_premium_max or 2200
+                    }
+                }
+
+                # Load purchase costs ratio from DB
+                self.PURCHASE_COSTS_RATIO = float(settings.purchase_costs_ratio) if settings.purchase_costs_ratio else 0.10
+
+                # Load rental adjustments from DB
+                self.RENTAL_ADJUSTMENTS = {
+                    'urban': {
+                        'vacancy_rate': float(settings.urban_vacancy_rate) if settings.urban_vacancy_rate else 0.05,
+                        'operating_expenses': float(settings.urban_operating_expenses) if settings.urban_operating_expenses else 0.15,
+                        'management_fee': float(settings.urban_management_fee) if settings.urban_management_fee else 0.00
+                    },
+                    'suburban': {
+                        'vacancy_rate': float(settings.suburban_vacancy_rate) if settings.suburban_vacancy_rate else 0.08,
+                        'operating_expenses': float(settings.suburban_operating_expenses) if settings.suburban_operating_expenses else 0.15,
+                        'management_fee': float(settings.suburban_management_fee) if settings.suburban_management_fee else 0.00
+                    },
+                    'rural': {
+                        'vacancy_rate': float(settings.rural_vacancy_rate) if settings.rural_vacancy_rate else 0.20,
+                        'operating_expenses': float(settings.rural_operating_expenses) if settings.rural_operating_expenses else 0.18,
+                        'management_fee': float(settings.rural_management_fee) if settings.rural_management_fee else 0.10
+                    }
+                }
+
+                # Load rental prices from DB (Asturias 2025 defaults)
+                self.RENTAL_PRICES = {
+                    'urban': {
+                        'min': settings.urban_rental_min or 9,
+                        'avg': settings.urban_rental_avg or 11,
+                        'max': settings.urban_rental_max or 13
+                    },
+                    'suburban': {
+                        'min': settings.suburban_rental_min or 7,
+                        'avg': settings.suburban_rental_avg or 9,
+                        'max': settings.suburban_rental_max or 11
+                    },
+                    'rural': {
+                        'min': settings.rural_rental_min or 5,
+                        'avg': settings.rural_rental_avg or 7,
+                        'max': settings.rural_rental_max or 9
+                    }
+                }
+                logger.debug("Loaded market settings from database")
+            else:
+                # Use defaults
+                self.CONSTRUCTION_COSTS = self.DEFAULT_CONSTRUCTION_COSTS.copy()
+                self.PURCHASE_COSTS_RATIO = self.DEFAULT_PURCHASE_COSTS_RATIO
+                self.RENTAL_ADJUSTMENTS = self.DEFAULT_RENTAL_ADJUSTMENTS.copy()
+                self.RENTAL_PRICES = self.DEFAULT_RENTAL_PRICES.copy()
+                logger.debug("Using default market settings (no DB record)")
+
+        except Exception as e:
+            # Fallback to defaults on any error
+            logger.warning(f"Could not load market settings from DB: {e}, using defaults")
+            self.CONSTRUCTION_COSTS = self.DEFAULT_CONSTRUCTION_COSTS.copy()
+            self.PURCHASE_COSTS_RATIO = self.DEFAULT_PURCHASE_COSTS_RATIO
+            self.RENTAL_ADJUSTMENTS = self.DEFAULT_RENTAL_ADJUSTMENTS.copy()
+            self.RENTAL_PRICES = self.DEFAULT_RENTAL_PRICES.copy()
+
     def _evaluate_construction_quality_objective(self, land: Land) -> Dict:
         """
         Evaluate construction quality based on objective criteria (score-independent)
@@ -213,12 +281,15 @@ class MarketAnalysisService:
             avg_value = buildable_area * costs['avg']
             max_value = buildable_area * costs['max']
             
-            # Total investment including land price
+            # Total investment including land price and purchase costs
             land_price = float(land.price) if land.price else 0
-            total_investment_min = land_price + min_value
-            total_investment_avg = land_price + avg_value
-            total_investment_max = land_price + max_value
-            
+            purchase_costs = land_price * self.PURCHASE_COSTS_RATIO
+            land_price_with_costs = land_price + purchase_costs
+
+            total_investment_min = land_price_with_costs + min_value
+            total_investment_avg = land_price_with_costs + avg_value
+            total_investment_max = land_price_with_costs + max_value
+
             return {
                 'minimum_value': round(min_value),
                 'average_value': round(avg_value),
@@ -227,6 +298,10 @@ class MarketAnalysisService:
                 'construction_type': construction_type,
                 'construction_tier': construction_tier,
                 'value_per_m2': costs['avg'],
+                'land_price': round(land_price),
+                'purchase_costs': round(purchase_costs),
+                'purchase_costs_ratio': f"{self.PURCHASE_COSTS_RATIO * 100:.0f}%",
+                'land_price_with_costs': round(land_price_with_costs),
                 'total_investment_min': round(total_investment_min),
                 'total_investment_avg': round(total_investment_avg),
                 'total_investment_max': round(total_investment_max),
@@ -353,10 +428,11 @@ class MarketAnalysisService:
             location_type = 'rural'  # default
             if land.municipality:
                 municipality_lower = land.municipality.lower()
+                # Major Asturian cities = urban
                 if any(city in municipality_lower for city in ['gijón', 'oviedo', 'avilés']):
                     location_type = 'urban'
-                elif any(area in municipality_lower for city in ['gijón', 'oviedo', 'avilés'] for area in [city]):
-                    # Check if it's near major cities (simplified logic)
+                # Towns near major cities or coastal = suburban
+                elif any(town in municipality_lower for town in ['siero', 'llanera', 'noreña', 'villaviciosa', 'carreño', 'gozón']):
                     location_type = 'suburban'
             
             # Get rental yields and prices for location
@@ -385,23 +461,38 @@ class MarketAnalysisService:
             annual_rent_avg = monthly_rent_avg * 12
             annual_rent_max = monthly_rent_max * 12
             
+            # Get realistic adjustments for this location type
+            adjustments = self.RENTAL_ADJUSTMENTS.get(location_type, self.RENTAL_ADJUSTMENTS['suburban'])
+            vacancy_rate = adjustments['vacancy_rate']
+            operating_expenses = adjustments['operating_expenses']
+            management_fee = adjustments['management_fee']
+
+            # Calculate effective annual rent (after vacancy)
+            effective_annual_rent = annual_rent_avg * (1 - vacancy_rate)
+
+            # Calculate Net Operating Income (after expenses)
+            total_expense_rate = operating_expenses + management_fee
+            noi = effective_annual_rent * (1 - total_expense_rate)
+
             # Calculate investment metrics
             if total_investment > 0:
-                # Rental yield (annual rent / total investment * 100)
-                rental_yield = (annual_rent_avg / total_investment) * 100
-                
+                # Gross rental yield (annual rent / total investment * 100)
+                gross_rental_yield = (annual_rent_avg / total_investment) * 100
+
+                # Net rental yield (NOI / total investment * 100)
+                net_rental_yield = (noi / total_investment) * 100
+
                 # Price-to-rent ratio (property price / annual rent)
                 price_to_rent_ratio = total_investment / annual_rent_avg if annual_rent_avg > 0 else 0
-                
-                # Payback period in years
-                payback_period = total_investment / annual_rent_avg if annual_rent_avg > 0 else 0
-                
+
+                # Payback period in years (using net income)
+                payback_period = total_investment / noi if noi > 0 else 0
+
                 # Cap rate (Net Operating Income / Property Value)
-                # Assuming 25% expenses (maintenance, taxes, management)
-                noi = annual_rent_avg * 0.75
                 cap_rate = (noi / total_investment) * 100
             else:
-                rental_yield = yields['avg']
+                gross_rental_yield = yields['avg']
+                net_rental_yield = yields['avg'] * 0.7  # Approximate net
                 price_to_rent_ratio = 0
                 payback_period = 0
                 cap_rate = 0
@@ -435,15 +526,26 @@ class MarketAnalysisService:
                 'annual_rent_min': round(annual_rent_min),
                 'annual_rent_avg': round(annual_rent_avg),
                 'annual_rent_max': round(annual_rent_max),
-                'rental_yield': round(rental_yield, 1),
-                'expected_yield_range': f"{yields['min']}-{yields['max']}%",
+                'effective_annual_rent': round(effective_annual_rent),
+                'net_operating_income': round(noi),
+                'gross_rental_yield': round(gross_rental_yield, 1),
+                'net_rental_yield': round(net_rental_yield, 1),
+                'rental_yield': round(net_rental_yield, 1),  # Use net yield as primary
+                'expected_yield_range': f"{yields['min']}-{yields['max']}% gross",
                 'price_to_rent_ratio': round(price_to_rent_ratio, 1),
                 'payback_period_years': round(payback_period, 1),
                 'cap_rate': round(cap_rate, 1),
                 'rental_price_per_m2': f"€{rental_prices['avg']}/m²/month",
                 'demand_factors': demand_factors,
-                'investment_rating': self._get_investment_rating(rental_yield, cap_rate),
-                'market_comparison': f"Average rental yield in {location_type} Asturias: {yields['avg']}%"
+                'investment_rating': self._get_investment_rating(net_rental_yield, cap_rate),
+                'market_comparison': f"Average rental yield in {location_type} Asturias: {yields['avg']}% gross, ~{yields['avg'] * 0.7:.1f}% net",
+                # Transparency: show assumptions
+                'assumptions': {
+                    'vacancy_rate': f"{vacancy_rate * 100:.0f}%",
+                    'operating_expenses': f"{operating_expenses * 100:.0f}%",
+                    'management_fee': f"{management_fee * 100:.0f}%" if management_fee > 0 else 'Self-managed',
+                    'total_deductions': f"{(vacancy_rate + total_expense_rate * (1 - vacancy_rate)) * 100:.0f}%"
+                }
             }
             
         except Exception as e:
