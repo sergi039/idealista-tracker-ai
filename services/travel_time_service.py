@@ -1,8 +1,10 @@
 import os
 import logging
+import hashlib
 import requests
 from typing import Dict, Optional, List
 from config import Config
+from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +79,23 @@ class TravelTimeService:
                 return False
             
             logger.info(f"Calculating travel times for land {land_id}")
-            
-            origin = f"{land.location_lat},{land.location_lon}"
+
+            lat = float(land.location_lat)
+            lon = float(land.location_lon)
+            origin = f"{lat},{lon}"
+
+            cache_type = self._travel_times_cache_type()
+            cached = get_cached_enrichment_data(lat, lon, cache_type)
+            if isinstance(cached, dict):
+                for key, value in cached.items():
+                    if value is None:
+                        continue
+                    if hasattr(land, key):
+                        setattr(land, key, value)
+
+                db.session.commit()
+                logger.info("Travel times cache hit for land %s", land_id)
+                return True
 
             # Fast-path: one Distance Matrix call for everything (22 destinations).
             if self.google_maps_key:
@@ -163,6 +180,27 @@ class TravelTimeService:
                 land.travel_time_police = police_data['time']
                 land.distance_police = police_data['distance']
             
+            cache_enrichment_data(
+                lat,
+                lon,
+                cache_type,
+                {
+                    "travel_time_oviedo": land.travel_time_oviedo,
+                    "travel_time_gijon": land.travel_time_gijon,
+                    "travel_time_nearest_beach": land.travel_time_nearest_beach,
+                    "nearest_beach_name": land.nearest_beach_name,
+                    "travel_time_airport": land.travel_time_airport,
+                    "distance_airport": land.distance_airport,
+                    "travel_time_train_station": land.travel_time_train_station,
+                    "distance_train_station": land.distance_train_station,
+                    "travel_time_hospital": land.travel_time_hospital,
+                    "distance_hospital": land.distance_hospital,
+                    "travel_time_police": land.travel_time_police,
+                    "distance_police": land.distance_police,
+                },
+                timeout=60 * 60 * 24 * 7,  # 7 days
+            )
+
             db.session.commit()
             
             logger.info(f"Travel times updated for land {land_id}: "
@@ -174,6 +212,11 @@ class TravelTimeService:
         except Exception as e:
             logger.error(f"Failed to calculate travel times for land {land_id}: {str(e)}")
             return False
+
+    def _travel_times_cache_type(self) -> str:
+        ref_sig = f"{self.destinations.get('oviedo')}|{self.destinations.get('gijon')}"
+        ref_hash = hashlib.md5(ref_sig.encode()).hexdigest()[:8]
+        return f"travel_times_v2:{ref_hash}"
 
     def _beach_label(self, beach_full_name: str) -> str:
         return beach_full_name.split(",")[0].replace("Playa de ", "").replace("Playa del ", "")
@@ -222,7 +265,7 @@ class TravelTimeService:
                 'key': self.google_maps_key
             }
             
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=15)
             if response.status_code == 200:
                 data = response.json()
                 

@@ -170,11 +170,28 @@ class TestEnrichmentService:
             mock_response.status_code = 200
             mock_response.json.return_value = {
                 'rows': [{
-                    'elements': [{
-                        'status': 'OK',
-                        'distance': {'value': 25000},
-                        'duration': {'value': 1800}
-                    }]
+                    'elements': [
+                        {
+                            'status': 'OK',
+                            'distance': {'value': 25000},
+                            'duration': {'value': 1800}
+                        },
+                        {
+                            'status': 'OK',
+                            'distance': {'value': 100000},
+                            'duration': {'value': 7200}
+                        },
+                        {
+                            'status': 'OK',
+                            'distance': {'value': 350000},
+                            'duration': {'value': 14400}
+                        },
+                        {
+                            'status': 'OK',
+                            'distance': {'value': 5000},
+                            'duration': {'value': 900}
+                        },
+                    ]
                 }]
             }
             mock_get.return_value = mock_response

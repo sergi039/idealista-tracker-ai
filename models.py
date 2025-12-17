@@ -7,6 +7,7 @@ from sqlalchemy.types import JSON
 class Land(db.Model):
     __tablename__ = 'lands'
     __table_args__ = (
+        db.Index('ix_lands_idealista_property_id', 'idealista_property_id'),
         db.Index('ix_lands_land_type', 'land_type'),
         db.Index('ix_lands_municipality', 'municipality'),
         db.Index('ix_lands_listing_status', 'listing_status'),
@@ -19,6 +20,8 @@ class Land(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     source_email_id = db.Column(db.String(255), unique=True, nullable=False)
+    # Stable Idealista listing id extracted from URL (/inmueble/<id>/). Used for dedup/updates.
+    idealista_property_id = db.Column(db.BigInteger, nullable=True)
     email_subject = db.Column(db.Text)  # Original email subject line
     email_sender = db.Column(db.String(255))  # Email sender
     title = db.Column(db.Text)
@@ -92,6 +95,7 @@ class Land(db.Model):
         return {
             'id': self.id,
             'source_email_id': self.source_email_id,
+            'idealista_property_id': self.idealista_property_id,
             'title': self.title,
             'url': self.url,
             'price': float(self.price) if self.price else None,
@@ -148,7 +152,7 @@ class Land(db.Model):
         rating = rental.get('investment_rating')
         if not rating:
             return None
-        return str(rating).strip()
+        return self._humanize_rating_text(rating)
 
     @property
     def investment_metrics_rating(self):
@@ -156,8 +160,32 @@ class Land(db.Model):
         full = self.investment_metrics_rating_full
         if not full:
             return None
-        short = full.split('-')[0].strip()
-        return short.upper() if short else None
+        short = full.split('-', 1)[0].strip()
+        return short if short else None
+
+    @staticmethod
+    def _humanize_rating_text(value):
+        text = str(value or "").strip()
+        if not text:
+            return None
+
+        text = text.replace("_", " ")
+        text = " ".join(text.split())
+
+        head, sep, tail = text.partition("-")
+        head = head.strip()
+        tail = tail.strip() if sep else ""
+
+        if head and head.upper() == head:
+            head = head.title()
+
+        if not sep:
+            return head
+
+        if not tail:
+            return head
+
+        return f"{head} - {tail}"
 
     @property
     def investment_metrics_badge_class(self):

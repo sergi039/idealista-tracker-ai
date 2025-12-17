@@ -1155,22 +1155,22 @@
                         {% set investment = land.ai_analysis.investment_potential %}
                         <div class="mb-3">
                             <h6 class="small fw-bold mb-2">Investment Rating</h6>
-                            {% if investment.get('rating') %}
-                                <div class="d-flex justify-content-between mb-1">
-                                    <span class="small">Rating</span>
-                                    <span class="badge {{ 'bg-success' if investment.rating == 'HIGH' else 'bg-warning' if investment.rating == 'MEDIUM' else 'bg-secondary' }}">
-                                        {{ investment.rating }}
-                                    </span>
-                                </div>
-                            {% endif %}
-                            {% if investment.get('risk_level') %}
-                                <div class="d-flex justify-content-between mb-1">
-                                    <span class="small">Risk Level</span>
-                                    <span class="badge {{ 'bg-danger' if investment.risk_level == 'HIGH' else 'bg-warning' if investment.risk_level == 'MEDIUM' else 'bg-success' }}">
-                                        {{ investment.risk_level }}
-                                    </span>
-                                </div>
-                            {% endif %}
+	                            {% if investment.get('rating') %}
+	                                <div class="d-flex justify-content-between mb-1">
+	                                    <span class="small">Rating</span>
+	                                    <span class="badge {{ 'bg-success' if investment.rating == 'HIGH' else 'bg-warning' if investment.rating == 'MEDIUM' else 'bg-secondary' }}">
+	                                        {{ investment.rating.replace('_', ' ').title() }}
+	                                    </span>
+	                                </div>
+	                            {% endif %}
+	                            {% if investment.get('risk_level') %}
+	                                <div class="d-flex justify-content-between mb-1">
+	                                    <span class="small">Risk Level</span>
+	                                    <span class="badge {{ 'bg-danger' if investment.risk_level == 'HIGH' else 'bg-warning' if investment.risk_level == 'MEDIUM' else 'bg-success' }}">
+	                                        {{ investment.risk_level.replace('_', ' ').title() }}
+	                                    </span>
+	                                </div>
+	                            {% endif %}
                             {% if investment.get('forecast') %}
                                 <div class="mb-1">
                                     <small class="text-muted">{{ investment.forecast }}</small>
@@ -1180,18 +1180,25 @@
                     {% endif %}
 
                     <!-- Market Position -->
-                    {% if land.ai_analysis.get('comparable_analysis') %}
-                        {% set comparable = land.ai_analysis.comparable_analysis %}
-                        <div class="mb-3">
-                            <h6 class="small fw-bold mb-2">Market Position</h6>
-                            {% if comparable.get('market_position') %}
-                                <div class="mb-1">
-                                    <small class="text-info">{{ comparable.market_position }}</small>
-                                </div>
-                            {% endif %}
-                            {% if comparable.get('price_comparison') %}
-                                <div class="mb-1">
-                                    <small class="text-muted">{{ comparable.price_comparison }}</small>
+	                    {% if land.ai_analysis.get('comparable_analysis') %}
+	                        {% set comparable = land.ai_analysis.comparable_analysis %}
+	                        <div class="mb-3">
+	                            <h6 class="small fw-bold mb-2">Market Position</h6>
+	                            {% if comparable.get('market_position') %}
+	                                <div class="mb-1">
+	                                    {% set market_position = comparable.market_position %}
+	                                    <small class="text-info">
+	                                        {% if market_position and market_position|upper == market_position %}
+	                                            {{ market_position|replace('_', ' ')|title }}
+	                                        {% else %}
+	                                            {{ market_position }}
+	                                        {% endif %}
+	                                    </small>
+	                                </div>
+	                            {% endif %}
+	                            {% if comparable.get('price_comparison') %}
+	                                <div class="mb-1">
+	                                    <small class="text-muted">{{ comparable.price_comparison }}</small>
                                 </div>
                             {% endif %}
                         </div>
@@ -1461,7 +1468,7 @@ function renderListItems(items, label, colorClass) {
     if (!items || !Array.isArray(items) || items.length === 0) return '';
     
     const listItems = items.map(item => 
-        `<li><i class="fas fa-dot-circle text-${colorClass} me-1"></i>${item}</li>`
+        `<li><i class="fas fa-dot-circle text-${colorClass} me-1"></i>${humanizeEnumLabel(item) || String(item ?? '')}</li>`
     ).join('');
     
     const header = label ? `<div class="fw-semibold mb-1">${label}</div>` : '';
@@ -1541,6 +1548,31 @@ function getPriceTrendClass(trend) {
     }
 }
 
+function humanizeEnumLabel(value) {
+    if (value === null || value === undefined) return '';
+    const original = String(value).trim();
+    if (!original) return '';
+
+    const rawParts = original.split('-');
+    const rawHead = (rawParts.shift() || '').trim();
+    const rawTail = rawParts.join('-').trim();
+
+    const isEnumHead = rawHead && /^[A-Z0-9_]+$/.test(rawHead) && /[A-Z]/.test(rawHead);
+    if (!isEnumHead) return original;
+
+    const humanHead = rawHead
+        .replace(/_/g, ' ')
+        .toLowerCase()
+        .replace(/\b\w/g, ch => ch.toUpperCase())
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    if (!rawTail) return humanHead;
+
+    const humanTail = rawTail.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+    return humanTail ? `${humanHead} - ${humanTail}` : humanHead;
+}
+
 // Render structured AI analysis
 function renderStructuredAIAnalysis(analysis) {
     console.log('Rendering analysis with structure:', Object.keys(analysis || {}));
@@ -1555,14 +1587,14 @@ function renderStructuredAIAnalysis(analysis) {
             <div class="row">
                 <div class="col-md-6 mb-3">
                     <div class="border rounded p-3 h-100">
-                        <h6><i class="fas fa-euro-sign text-success"></i> Price Analysis</h6>
-                        ${analysis.price_analysis ? `
-                            <span class="badge ${getPriceVerdictClass(analysis.price_analysis.verdict)}">
-                                ${analysis.price_analysis.verdict || 'Unknown'}
-                            </span>
-                            <p class="mb-1 mt-2">${analysis.price_analysis.summary || 'No analysis available'}</p>
-                            <small class="text-muted">${analysis.price_analysis.recommendation || ''}</small>
-                        ` : `
+	                        <h6><i class="fas fa-euro-sign text-success"></i> Price Analysis</h6>
+	                        ${analysis.price_analysis ? `
+	                            <span class="badge ${getPriceVerdictClass(analysis.price_analysis.verdict)}">
+	                                ${humanizeEnumLabel(analysis.price_analysis.verdict) || 'Unknown'}
+	                            </span>
+	                            <p class="mb-1 mt-2">${analysis.price_analysis.summary || 'No analysis available'}</p>
+	                            <small class="text-muted">${analysis.price_analysis.recommendation || ''}</small>
+	                        ` : `
                             <span class="badge bg-secondary">Analysis Pending</span>
                             <p class="mb-1 mt-2 text-muted">Price analysis will be available after next AI enrichment</p>
                         `}
@@ -1571,15 +1603,15 @@ function renderStructuredAIAnalysis(analysis) {
                 
                 <div class="col-md-6 mb-3">
                     <div class="border rounded p-3 h-100">
-                        <h6><i class="fas fa-chart-line text-primary"></i> Investment Potential</h6>
-                        ${analysis.investment_potential ? `
-                            <span class="badge ${getInvestmentRatingClass(analysis.investment_potential.rating)}">
-                                ${analysis.investment_potential.rating || 'Unknown'} Growth
-                            </span>
-                            <p class="mb-1 mt-2">${analysis.investment_potential.forecast || 'No forecast available'}</p>
-                            <small class="text-muted">Risk: ${analysis.investment_potential.risk_level || 'Unknown'}</small>
-                            ${analysis.investment_potential.key_drivers ? renderListItems(analysis.investment_potential.key_drivers, 'Key Drivers:', 'info') : ''}
-                        ` : `
+	                        <h6><i class="fas fa-chart-line text-primary"></i> Investment Potential</h6>
+	                        ${analysis.investment_potential ? `
+	                            <span class="badge ${getInvestmentRatingClass(analysis.investment_potential.rating)}">
+	                                ${humanizeEnumLabel(analysis.investment_potential.rating) || 'Unknown'} Growth
+	                            </span>
+	                            <p class="mb-1 mt-2">${analysis.investment_potential.forecast || 'No forecast available'}</p>
+	                            <small class="text-muted">Risk: ${humanizeEnumLabel(analysis.investment_potential.risk_level) || 'Unknown'}</small>
+	                            ${analysis.investment_potential.key_drivers ? renderListItems(analysis.investment_potential.key_drivers, 'Key Drivers:', 'info') : ''}
+	                        ` : `
                             <span class="badge bg-secondary">Analysis Pending</span>
                             <p class="mb-1 mt-2 text-muted">Investment analysis will be available after next AI enrichment</p>
                         `}
@@ -1605,15 +1637,15 @@ function renderStructuredAIAnalysis(analysis) {
                     </div>
                 </div>
                 
-                <div class="col-md-6 mb-3">
-                    <div class="border rounded p-3 h-100">
-                        <h6><i class="fas fa-hammer text-info"></i> Development Ideas</h6>
-                        ${analysis.development_ideas ? `
-                            <p class="mb-1"><strong>${analysis.development_ideas.best_use || 'No recommendations'}</strong></p>
-                            <p class="mb-1">${analysis.development_ideas.building_size || ''}</p>
-                            <small class="text-muted">${analysis.development_ideas.estimated_cost || ''}</small>
-                            ${analysis.development_ideas.special_features ? `<div class="mt-2"><small class="text-info">${analysis.development_ideas.special_features}</small></div>` : ''}
-                        ` : `
+	                <div class="col-md-6 mb-3">
+	                    <div class="border rounded p-3 h-100">
+	                        <h6><i class="fas fa-hammer text-info"></i> Development Ideas</h6>
+	                        ${analysis.development_ideas ? `
+	                            <p class="mb-1"><strong>${humanizeEnumLabel(analysis.development_ideas.best_use) || 'No recommendations'}</strong></p>
+	                            <p class="mb-1">${analysis.development_ideas.building_size || ''}</p>
+	                            <small class="text-muted">${analysis.development_ideas.estimated_cost || ''}</small>
+	                            ${analysis.development_ideas.special_features ? `<div class="mt-2"><small class="text-info">${analysis.development_ideas.special_features}</small></div>` : ''}
+	                        ` : `
                             <p class="text-muted">Development ideas will be available after next AI enrichment</p>
                         `}
                     </div>
@@ -1621,21 +1653,21 @@ function renderStructuredAIAnalysis(analysis) {
             </div>
             
             ${analysis.comparable_analysis ? `
-            <div class="border rounded p-3 mb-3">
-                <h6><i class="fas fa-balance-scale text-secondary"></i> Market Comparison</h6>
-                <p class="mb-1">${analysis.comparable_analysis.market_position || 'No comparison data'}</p>
-                <small class="text-muted">${analysis.comparable_analysis.price_comparison || ''}</small>
-            </div>
-            ` : ''}
+	            <div class="border rounded p-3 mb-3">
+	                <h6><i class="fas fa-balance-scale text-secondary"></i> Market Comparison</h6>
+	                <p class="mb-1">${humanizeEnumLabel(analysis.comparable_analysis.market_position) || 'No comparison data'}</p>
+	                <small class="text-muted">${analysis.comparable_analysis.price_comparison || ''}</small>
+	            </div>
+	            ` : ''}
             
             ${analysis.construction_value_estimation ? `
-            <div class="border rounded p-3 mb-3">
-                <h6><i class="fas fa-calculator text-warning"></i> Construction Value Estimation</h6>
-                <div class="row">
-                    <div class="col-md-4">
-                        <small class="text-muted d-block">Construction Type</small>
-                        <strong>${analysis.construction_value_estimation.construction_type || 'Standard construction'}</strong>
-                    </div>
+	            <div class="border rounded p-3 mb-3">
+	                <h6><i class="fas fa-calculator text-warning"></i> Construction Value Estimation</h6>
+	                <div class="row">
+	                    <div class="col-md-4">
+	                        <small class="text-muted d-block">Construction Type</small>
+	                        <strong>${humanizeEnumLabel(analysis.construction_value_estimation.construction_type) || 'Standard construction'}</strong>
+	                    </div>
                     <div class="col-md-4">
                         <small class="text-muted d-block">Est. Construction Value</small>
                         <strong>€${(analysis.construction_value_estimation.minimum_value || 0).toLocaleString()} - €${(analysis.construction_value_estimation.maximum_value || 0).toLocaleString()}</strong>
@@ -1650,13 +1682,13 @@ function renderStructuredAIAnalysis(analysis) {
         
         <!-- Market Price Dynamics Section -->
         ${analysis.market_price_dynamics ? `
-        <div class="border rounded p-3 mb-3">
-            <h6><i class="fas fa-chart-line text-warning"></i> Market Price Dynamics</h6>
-            <div class="mb-2">
-                <span class="badge ${getPriceTrendClass(analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend)}">${analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend || 'Unknown'} Trend</span>
-                <span class="badge bg-info ms-1">${analysis.market_price_dynamics.annual_growth_rate || analysis.market_price_dynamics.annual_appreciation || 'N/A'}% annually</span>
-            </div>
-            <p class="mb-2">${analysis.market_price_dynamics.trend_analysis || 'No trend analysis available'}</p>
+	        <div class="border rounded p-3 mb-3">
+	            <h6><i class="fas fa-chart-line text-warning"></i> Market Price Dynamics</h6>
+	            <div class="mb-2">
+	                <span class="badge ${getPriceTrendClass(analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend)}">${humanizeEnumLabel(analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend) || 'Unknown'} Trend</span>
+	                <span class="badge bg-info ms-1">${analysis.market_price_dynamics.annual_growth_rate || analysis.market_price_dynamics.annual_appreciation || 'N/A'}% annually</span>
+	            </div>
+	            <p class="mb-2">${analysis.market_price_dynamics.trend_analysis || 'No trend analysis available'}</p>
             ${analysis.market_price_dynamics.market_factors ? renderListItems(analysis.market_price_dynamics.market_factors, 'Market Factors:', 'primary') : ''}
             <small class="text-muted">${analysis.market_price_dynamics.future_outlook || ''}</small>
         </div>
@@ -1671,7 +1703,7 @@ function renderStructuredAIAnalysis(analysis) {
                 <div class="col-md-6">
                     <div class="border rounded p-3">
                         <h6 class="text-warning"><i class="fas fa-coins"></i> Rental Income Estimates</h6>
-                        <div class="row text-center mb-2">
+	                        <div class="row text-center mb-2">
                             <div class="col-4">
                                 <small class="text-muted d-block">Min Monthly</small>
                                 <strong>€${(analysis.rental_market_analysis.monthly_rent_min || 0).toLocaleString()}</strong>
@@ -1687,10 +1719,10 @@ function renderStructuredAIAnalysis(analysis) {
                                 <strong>€${(analysis.rental_market_analysis.monthly_rent_max || 0).toLocaleString()}</strong>
                             </div>
                         </div>
-                        <p class="mb-1"><strong>Annual Income:</strong> €${(analysis.rental_market_analysis.annual_rent_avg || 0).toLocaleString()}/year</p>
-                        <p class="mb-0"><small class="text-muted">Strategy: ${analysis.rental_market_analysis.rental_strategy || 'Long-term rental'}</small></p>
-                    </div>
-                </div>
+	                        <p class="mb-1"><strong>Annual Income:</strong> €${(analysis.rental_market_analysis.annual_rent_avg || 0).toLocaleString()}/year</p>
+	                        <p class="mb-0"><small class="text-muted">Strategy: ${humanizeEnumLabel(analysis.rental_market_analysis.rental_strategy) || 'Long-term rental'}</small></p>
+	                    </div>
+	                </div>
                 
                 <div class="col-md-6">
                     <div class="border rounded p-3">
@@ -1719,12 +1751,12 @@ function renderStructuredAIAnalysis(analysis) {
                                 <small class="text-muted d-block">Payback Period</small>
                                 <strong class="${getPaybackPeriodClass(analysis.rental_market_analysis.payback_period_years)}">${analysis.rental_market_analysis.payback_period_years || 'N/A'} years</strong>
                             </div>
-                        </div>
-                        <div class="mt-2">
-                            <span class="badge ${getInvestmentRatingClass(analysis.rental_market_analysis.investment_rating)}">${analysis.rental_market_analysis.investment_rating || 'Not rated'}</span>
-                        </div>
-                    </div>
-                </div>
+	                        </div>
+	                        <div class="mt-2">
+	                            <span class="badge ${getInvestmentRatingClass(analysis.rental_market_analysis.investment_rating)}">${humanizeEnumLabel(analysis.rental_market_analysis.investment_rating) || 'Not rated'}</span>
+	                        </div>
+	                    </div>
+	                </div>
             </div>
             
             ${analysis.rental_market_analysis.demand_factors ? `
@@ -1974,6 +2006,9 @@ function _formatMetricValue(value, suffix='') {
     if (value === null || value === undefined || value === '') return '—';
     if (typeof value === 'number' && Number.isFinite(value)) {
         return `${value}${suffix}`;
+    }
+    if (typeof value === 'string') {
+        return humanizeEnumLabel(value) || '—';
     }
     return String(value);
 }

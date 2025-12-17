@@ -1,6 +1,7 @@
 import os
 import logging
 import hashlib
+import re
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Any
 from imapclient import IMAPClient
@@ -14,6 +15,8 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 class IMAPService:
+    _PROPERTY_ID_RE = re.compile(r"/inmueble/(\d+)", re.IGNORECASE)
+
     def __init__(self):
         self.host = Config.IMAP_HOST
         self.port = Config.IMAP_PORT
@@ -25,6 +28,33 @@ class IMAPService:
         self.max_emails = Config.MAX_EMAILS_PER_RUN
         self.email_parser = EmailParser()
         self.last_seen_uid = self._get_last_seen_uid()
+
+    @classmethod
+    def extract_idealista_property_id(cls, url: Optional[str]) -> Optional[int]:
+        """Extract stable Idealista listing id from a property URL."""
+        if not url:
+            return None
+        match = cls._PROPERTY_ID_RE.search(url)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _parse_email_received_at(value: Any) -> Optional[datetime]:
+        """Parse IMAP INTERNALDATE / header date into a timezone-aware datetime when possible."""
+        if not value:
+            return None
+        try:
+            import email.utils
+
+            raw = value.decode() if isinstance(value, bytes) else value
+            return email.utils.parsedate_to_datetime(raw)
+        except Exception as e:
+            logger.warning("Failed to parse email date: %s", e)
+            return None
     
     def _get_last_seen_uid(self) -> int:
         """Get the last processed UID from database to avoid reprocessing"""
@@ -163,8 +193,9 @@ class IMAPService:
                     uids = [u for u in uids if u > self.last_seen_uid]
                     logger.info(f"Filtering by last_seen_uid ({self.last_seen_uid}): {len(uids)} new emails")
                     
-                # Ограничим первую обработку 5 письмами для теста
-                uids = sorted(uids)[:5] if max_results is None else sorted(uids)[:max_results]
+                # Limit processed emails per run (defaults to config MAX_EMAILS_PER_RUN)
+                limit = self.max_emails if max_results is None else max_results
+                uids = sorted(uids)[:limit]
                 if not uids:
                     logger.info("No new emails found")
                     return []
@@ -235,11 +266,13 @@ class IMAPService:
                             email_content = {'subject': subject, 'body': body, 'message_id': f"imap_{uid}"}
                             no_longer_data = self.email_parser.parse_no_longer_listed_email(email_content)
                             if no_longer_data:
+                                property_id = self.extract_idealista_property_id(no_longer_data.get("url"))
                                 email_data.append({
                                     'source_email_id': f"imap_{uid}",
                                     'email_received_at': fetch_data[uid][b'INTERNALDATE'],
                                     'type': 'no_longer_listed',
-                                    'url': no_longer_data['url']
+                                    'url': no_longer_data['url'],
+                                    'idealista_property_id': property_id,
                                 })
                                 logger.info(f"Found 'no longer listed' email for URL: {no_longer_data['url']}")
                             continue
@@ -282,6 +315,7 @@ class IMAPService:
                                 logger.warning(f"Skipping email with invalid URL: {url[:100]}")
                                 continue
                         if parsed:
+                            parsed['idealista_property_id'] = self.extract_idealista_property_id(parsed.get('url'))
                             parsed['source_email_id'] = f"imap_{uid}"
                             parsed['email_received_at'] = fetch_data[uid][b'INTERNALDATE']
                             email_data.append(parsed)
@@ -350,140 +384,137 @@ class IMAPService:
                     if email_id in processed_email_ids:
                         continue
                     processed_email_ids.add(email_id)
-
                     # Handle "no longer listed" emails
                     if email_data.get('type') == 'no_longer_listed':
                         url = email_data.get('url')
-                        if url:
-                            import re
-                            # Extract property ID from URL to match regardless of UTM params
-                            property_id_match = re.search(r'/inmueble/(\d+)', url)
-                            existing_property = None
-                            if property_id_match:
-                                property_id = property_id_match.group(1)
-                                existing_property = Land.query.filter(
-                                    Land.url.like(f'%/inmueble/{property_id}%')
-                                ).first()
+                        property_id = email_data.get('idealista_property_id') or self.extract_idealista_property_id(url)
+                        matches = []
+                        if property_id:
+                            matches = Land.query.filter_by(idealista_property_id=property_id).all()
+                        if not matches and url:
+                            matches = Land.query.filter_by(url=url).all()
 
-                            # Fallback to exact URL match
-                            if not existing_property:
-                                existing_property = Land.query.filter_by(url=url).first()
+                        if matches:
+                            updated = 0
+                            for existing_property in matches:
+                                if property_id and existing_property.idealista_property_id is None:
+                                    existing_property.idealista_property_id = property_id
 
-                            if existing_property and existing_property.listing_status == 'active':
+                                if existing_property.listing_status != 'active':
+                                    continue
+
                                 existing_property.listing_status = 'removed'
                                 existing_property.listing_removed_date = datetime.utcnow()
 
-                                # Create history snapshot for favorites
                                 if existing_property.is_favorite:
                                     snapshot = LandHistory.create_snapshot(existing_property, 'removed_from_listing')
                                     db.session.add(snapshot)
-                                    logger.info(f"Created removal snapshot for favorite land {existing_property.id}")
+                                    logger.info("Created removal snapshot for favorite land %s", existing_property.id)
 
-                                db.session.commit()
+                                updated += 1
                                 expired_count += 1
-                                logger.info(f"Marked property as removed via email notification: {existing_property.title}")
-                            else:
-                                logger.debug(f"Property not found or already removed for URL: {url}")
+
+                            db.session.commit()
+                            logger.info(
+                                "Marked %s properties as removed via email notification (property_id=%s)",
+                                updated,
+                                property_id,
+                            )
+                        else:
+                            logger.debug("Property not found for no_longer_listed URL: %s", url)
                         continue
 
                     # Check if property already exists by property ID from URL (for price updates)
                     # URLs have different UTM params, so we extract the property ID (e.g., /inmueble/109365344/)
-                    existing_property = None
-                    if email_data.get('url'):
-                        import re
-                        # Extract property ID from URL
-                        property_id_match = re.search(r'/inmueble/(\d+)', email_data['url'])
-                        if property_id_match:
-                            property_id = property_id_match.group(1)
-                            # Search by property ID in URL (ignoring UTM parameters)
-                            existing_property = Land.query.filter(
-                                Land.url.like(f'%/inmueble/{property_id}%')
-                            ).first()
+                    url = email_data.get('url')
+                    property_id = email_data.get('idealista_property_id') or self.extract_idealista_property_id(url)
 
-                        # Fallback to exact URL match
-                        if not existing_property:
-                            existing_property = Land.query.filter_by(
-                                url=email_data['url']
-                            ).first()
+                    existing_properties = []
+                    if property_id:
+                        existing_properties = Land.query.filter_by(idealista_property_id=property_id).all()
+
+                    # Fallback to exact URL match (legacy data without property_id)
+                    if not existing_properties and url:
+                        existing_properties = Land.query.filter_by(url=url).all()
 
                     # If property exists, update price if changed
-                    if existing_property and email_data.get('price'):
+                    if existing_properties and email_data.get('price'):
                         new_price = float(email_data['price'])
-                        old_price = float(existing_property.price) if existing_property.price else None
+                        email_date_obj = self._parse_email_received_at(email_data.get('email_received_at'))
 
-                        if old_price and new_price != old_price:
-                            # Calculate price change
+                        any_updated = False
+                        for existing_property in existing_properties:
+                            if property_id and existing_property.idealista_property_id is None:
+                                existing_property.idealista_property_id = property_id
+
+                            old_price = float(existing_property.price) if existing_property.price else None
+                            if not old_price or new_price == old_price:
+                                continue
+
                             price_change = new_price - old_price
                             price_change_percentage = (price_change / old_price) * 100 if old_price > 0 else 0
 
-                            # Create history snapshot for favorites BEFORE updating the property
                             if existing_property.is_favorite:
                                 snapshot = LandHistory.create_snapshot(
                                     existing_property,
                                     'price_change',
-                                    price_previous=old_price
+                                    price_previous=old_price,
                                 )
-                                # Override with calculated values since price hasn't changed yet
                                 snapshot.price = new_price
                                 snapshot.price_change_amount = price_change
                                 snapshot.price_change_percentage = price_change_percentage
                                 db.session.add(snapshot)
-                                logger.info(f"Created price change snapshot for favorite land {existing_property.id}")
+                                logger.info("Created price change snapshot for favorite land %s", existing_property.id)
 
-                            # Update property with new price information
                             existing_property.previous_price = old_price
                             existing_property.price = new_price
                             existing_property.price_change_amount = price_change
                             existing_property.price_change_percentage = price_change_percentage
                             existing_property.price_changed_date = datetime.utcnow()
-
-                            # Parse email date if available
-                            email_date_obj = None
-                            if email_data.get('email_received_at'):
-                                try:
-                                    import email.utils
-                                    # Parse IMAP INTERNALDATE format
-                                    email_date_obj = email.utils.parsedate_to_datetime(
-                                        email_data['email_received_at'].decode()
-                                        if isinstance(email_data['email_received_at'], bytes)
-                                        else email_data['email_received_at']
-                                    )
-                                except Exception as e:
-                                    logger.warning(f"Failed to parse email date: {e}")
-
                             existing_property.email_date = email_date_obj
 
-                            # Don't update source_email_id - keep original
-                            # The source_email_id is unique and belongs to the original new property email
-
-                            db.session.commit()
+                            any_updated = True
 
                             if price_change < 0:
-                                logger.info(f"Price REDUCED for {existing_property.title}: {old_price:.0f}€ → {new_price:.0f}€ ({price_change:.0f}€, {price_change_percentage:.1f}%)")
+                                logger.info(
+                                    "Price REDUCED for %s: %s€ → %s€ (%s€, %s%%)",
+                                    (existing_property.title or "").strip()[:80],
+                                    f"{old_price:.0f}",
+                                    f"{new_price:.0f}",
+                                    f"{price_change:.0f}",
+                                    f"{price_change_percentage:.1f}",
+                                )
                             else:
-                                logger.info(f"Price INCREASED for {existing_property.title}: {old_price:.0f}€ → {new_price:.0f}€ (+{price_change:.0f}€, +{price_change_percentage:.1f}%)")
+                                logger.info(
+                                    "Price INCREASED for %s: %s€ → %s€ (+%s€, +%s%%)",
+                                    (existing_property.title or "").strip()[:80],
+                                    f"{old_price:.0f}",
+                                    f"{new_price:.0f}",
+                                    f"{price_change:.0f}",
+                                    f"{price_change_percentage:.1f}",
+                                )
 
+                        if any_updated:
+                            db.session.commit()
                             price_updated_count += 1
                             continue
 
                     # If property already exists (found above), skip creating duplicate
-                    if existing_property:
-                        logger.debug(f"Property already exists (ID: {existing_property.id}), skipping duplicate creation")
+                    if existing_properties:
+                        logger.debug(
+                            "Property already exists (property_id=%s, matches=%s), skipping duplicate creation",
+                            property_id,
+                            len(existing_properties),
+                        )
                         continue
 
                     # Create new land record
                     # Parse email date if available
-                    email_date = None
-                    if email_data.get('email_received_at'):
-                        try:
-                            import email.utils
-                            # Parse IMAP INTERNALDATE format
-                            email_date = email.utils.parsedate_to_datetime(email_data['email_received_at'].decode() if isinstance(email_data['email_received_at'], bytes) else email_data['email_received_at'])
-                        except Exception as e:
-                            logger.warning(f"Failed to parse email date: {e}")
-                    
+                    email_date = self._parse_email_received_at(email_data.get('email_received_at'))
+
                     land = Land()
                     land.source_email_id = email_data['source_email_id']
+                    land.idealista_property_id = property_id
                     land.title = email_data.get('title')
                     land.url = email_data.get('url')
                     land.price = email_data.get('price')

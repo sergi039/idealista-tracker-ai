@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+import hashlib
 import requests
 import time
 from typing import Dict, List, Optional
@@ -362,11 +363,27 @@ class EnrichmentService:
     def _enrich_with_google_places(self, land):
         """Enrich with Google Places API data"""
         try:
+            lat, lon = float(land.location_lat), float(land.location_lon)
+
+            cached = get_cached_enrichment_data(lat, lon, "google_places_v1")
+            if isinstance(cached, dict):
+                infrastructure_extended = land.infrastructure_extended or {}
+                transport = land.transport or {}
+                services_quality = land.services_quality or {}
+
+                infrastructure_extended.update(cached.get("infrastructure_extended", {}) or {})
+                transport.update(cached.get("transport", {}) or {})
+                services_quality.update(cached.get("services_quality", {}) or {})
+
+                land.infrastructure_extended = infrastructure_extended
+                land.transport = transport
+                land.services_quality = services_quality
+                logger.debug("Google Places cache hit for land %s", land.id)
+                return
+
             if not self.google_places_key:
                 logger.warning("Google Places API key not available")
                 return
-            
-            lat, lon = float(land.location_lat), float(land.location_lon)
             
             # Search for nearby amenities
             amenities = {
@@ -430,6 +447,18 @@ class EnrichmentService:
             land.infrastructure_extended = infrastructure_extended
             land.transport = transport
             land.services_quality = services_quality
+
+            cache_enrichment_data(
+                lat,
+                lon,
+                "google_places_v1",
+                {
+                    "infrastructure_extended": infrastructure_extended,
+                    "transport": transport,
+                    "services_quality": services_quality,
+                },
+                timeout=60 * 60 * 24 * 7,  # 7 days
+            )
             
         except Exception as e:
             logger.error(f"Failed to enrich with Google Places: {str(e)}")
@@ -450,7 +479,7 @@ class EnrichmentService:
                     'key': self.google_places_key
                 }
                 
-                response = requests.get(url, params=params)
+                response = requests.get(url, params=params, timeout=15)
                 if response.status_code == 200:
                     data = response.json()
                     for place in data.get('results', []):
@@ -551,7 +580,7 @@ class EnrichmentService:
             
             lat, lon = float(land.location_lat), float(land.location_lon)
             
-            # Get distance matrix to major cities/destinations
+            # Get distance matrix to major cities/destinations (single batch call)
             destinations = [
                 "Madrid, Spain",
                 "Barcelona, Spain",
@@ -560,18 +589,75 @@ class EnrichmentService:
             ]
             
             transport = land.transport or {}
-            
-            for destination in destinations:
-                distance_data = self._get_distance_matrix(lat, lon, destination)
-                if distance_data:
-                    dest_key = destination.split(',')[0].lower().replace(' ', '_')
-                    transport[f'distance_to_{dest_key}'] = distance_data.get('distance')
-                    transport[f'duration_to_{dest_key}'] = distance_data.get('duration')
-            
+
+            dest_sig = "|".join(destinations)
+            dest_hash = hashlib.md5(dest_sig.encode()).hexdigest()[:8]
+            cache_type = f"distance_matrix_v1:{dest_hash}"
+
+            cached = get_cached_enrichment_data(lat, lon, cache_type)
+            if isinstance(cached, dict):
+                transport.update(cached)
+                land.transport = transport
+                logger.debug("Distance matrix cache hit for land %s", land.id)
+                return
+
+            distance_results = self._get_distance_matrix_batch(lat, lon, destinations)
+            for destination, distance_data in zip(destinations, distance_results):
+                if not distance_data:
+                    continue
+                dest_key = destination.split(',')[0].lower().replace(' ', '_')
+                transport[f'distance_to_{dest_key}'] = distance_data.get('distance')
+                transport[f'duration_to_{dest_key}'] = distance_data.get('duration')
+
             land.transport = transport
+            cache_enrichment_data(lat, lon, cache_type, transport, timeout=60 * 60 * 24 * 7)
             
         except Exception as e:
             logger.error(f"Failed to enrich with Google Maps: {str(e)}")
+
+    def _get_distance_matrix_batch(self, lat: float, lon: float, destinations: List[str]) -> List[Optional[Dict]]:
+        """Batch distance matrix lookup (destinations <= 25)."""
+        if not destinations:
+            return []
+
+        try:
+            url = "https://maps.googleapis.com/maps/api/distancematrix/json"
+            params = {
+                "origins": f"{lat},{lon}",
+                "destinations": "|".join(destinations),
+                "mode": "driving",
+                "key": self.google_maps_key,
+            }
+
+            response = requests.get(url, params=params, timeout=15)
+            if response.status_code != 200:
+                return [None for _ in destinations]
+
+            data = response.json()
+            if not data.get("rows") or not data["rows"][0].get("elements"):
+                return [None for _ in destinations]
+
+            elements = data["rows"][0]["elements"]
+            out: List[Optional[Dict]] = []
+            for el in elements[: len(destinations)]:
+                if el.get("status") != "OK":
+                    out.append(None)
+                    continue
+                out.append(
+                    {
+                        "distance": el.get("distance", {}).get("value"),
+                        "duration": el.get("duration", {}).get("value"),
+                    }
+                )
+
+            while len(out) < len(destinations):
+                out.append(None)
+
+            return out
+
+        except Exception as e:
+            logger.error("Failed to get distance matrix batch: %s", e)
+            return [None for _ in destinations]
     
     def _get_distance_matrix(self, lat: float, lon: float, destination: str) -> Optional[Dict]:
         """Get distance and duration to destination using Google Maps Distance Matrix API"""
@@ -584,7 +670,7 @@ class EnrichmentService:
                 'key': self.google_maps_key
             }
             
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=15)
             if response.status_code == 200:
                 data = response.json()
                 if data.get('rows') and data['rows'][0].get('elements'):
@@ -605,6 +691,14 @@ class EnrichmentService:
         """Enrich with OpenStreetMap data as fallback"""
         try:
             lat, lon = float(land.location_lat), float(land.location_lon)
+
+            cached = get_cached_enrichment_data(lat, lon, "osm_amenities_v1")
+            if isinstance(cached, dict):
+                infrastructure_extended = land.infrastructure_extended or {}
+                infrastructure_extended['osm_amenities'] = cached
+                land.infrastructure_extended = infrastructure_extended
+                logger.debug("OSM amenities cache hit for land %s", land.id)
+                return
             
             # OSM Overpass query for nearby amenities
             overpass_query = f"""
@@ -620,7 +714,8 @@ class EnrichmentService:
             response = requests.post(
                 self.osm_overpass_url,
                 data=overpass_query,
-                headers={'Content-Type': 'application/x-www-form-urlencoded'}
+                headers={'Content-Type': 'application/x-www-form-urlencoded'},
+                timeout=30,
             )
             
             if response.status_code == 200:
@@ -637,6 +732,8 @@ class EnrichmentService:
                 # Store OSM fallback data
                 infrastructure_extended['osm_amenities'] = amenity_counts
                 land.infrastructure_extended = infrastructure_extended
+
+                cache_enrichment_data(lat, lon, "osm_amenities_v1", amenity_counts, timeout=60 * 60 * 24 * 7)
             
         except Exception as e:
             logger.error(f"Failed to enrich with OSM data: {str(e)}")
