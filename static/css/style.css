@@ -49,6 +49,22 @@
     display: block;
 }
 
+/* HTMX: global ingestion indicator as a non-blocking popup (avoid layout shift) */
+#ingestion-spinner {
+    position: fixed;
+    top: 4.5rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1080;
+    width: min(92vw, 760px);
+    pointer-events: none;
+}
+
+#ingestion-spinner .toast {
+    width: 100%;
+    pointer-events: none;
+}
+
 /* Score badges */
 .score-badge {
     font-weight: bold;

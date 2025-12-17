@@ -140,11 +140,11 @@
     </nav>
 
     <!-- Loading indicators -->
-    <div id="ingestion-spinner" class="htmx-indicator">
-        <div class="container mt-3">
-            <div class="alert alert-info">
-                <i class="fas fa-spinner fa-spin me-2"></i>
-                {{ t('running_gmail_ingestion') }}
+    <div id="ingestion-spinner" class="htmx-indicator" role="status" aria-live="polite" aria-atomic="true">
+        <div class="toast show shadow-lg border-0" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-body d-flex align-items-center gap-2">
+                <span class="spinner-border spinner-border-sm text-info" role="status" aria-hidden="true"></span>
+                <span class="fw-semibold">{{ t('running_gmail_ingestion') }}</span>
             </div>
         </div>
     </div>
