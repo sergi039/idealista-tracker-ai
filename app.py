@@ -47,6 +47,11 @@ def create_app(testing: bool = False):
         'AUTO_START_SCHEDULER': os.environ.get("AUTO_START_SCHEDULER", "true" if dev_mode else "false").lower() == "true",
     })
 
+    # Dev QoL: allow template changes to appear without restarting the server.
+    # This matters when running under gunicorn inside Docker with bind mounts.
+    if dev_mode and not app.config.get('TESTING', False):
+        app.config['TEMPLATES_AUTO_RELOAD'] = True
+
     # Security: Validate all required secrets before continuing.
     # In tests we allow missing required secrets.
     from utils.security import SecurityValidator

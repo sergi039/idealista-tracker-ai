@@ -16,6 +16,8 @@ services:
       # Development conveniences (disable in production)
       - AUTO_CREATE_DB=true
       - AUTO_START_SCHEDULER=true
+    command: >
+      gunicorn --bind 0.0.0.0:5001 --workers 1 --threads 4 --reload main:app
     volumes:
       # Mount code for development (comment out for production)
       - .:/app
