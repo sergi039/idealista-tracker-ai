@@ -4,6 +4,7 @@ import logging
 import hashlib
 import requests
 import time
+import unicodedata
 from typing import Dict, List, Optional
 from utils.geocoding import GeocodingService
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
@@ -102,6 +103,9 @@ class EnrichmentService:
         if t.lower().startswith("land in "):
             t = t[8:].strip()
 
+        # Remove trailing price once before splitting by commas (price often contains commas).
+        t = re.sub(r"\s*\d[\d\.,]*\s*€.*$", "", t).strip()
+
         # Split by commas, strip, drop empty/n/a, and strip trailing price markers.
         raw_parts = [p.strip() for p in t.split(",")]
         parts: List[str] = []
@@ -125,27 +129,59 @@ class EnrichmentService:
             return None
             
         logger.debug(f"Extracting municipality from title: '{title}'")
-        
-        # Pattern for "Land in [path], [municipality], [province]" 
-        # Examples: "Land in camino Pinzalez, Porceyo - Cenero, Gijón"
-        municipality_patterns = [
-            # Pattern: "Land in [location], [municipality], [province]"  
+
+        # Pattern: "Land in [location], [municipality], [province]"
+        match = re.search(
             r'Land in\s+[^,]+,\s*([^,]+(?:\s*-\s*[^,]+)*),\s*[^,\d€]+',
-            # Pattern: "Land in [municipality], [details]"
+            title,
+            re.IGNORECASE,
+        )
+        if match:
+            municipality = re.sub(r'\s+', ' ', match.group(1).strip())
+            if self._is_valid_municipality(municipality):
+                logger.debug(f"Extracted municipality from title pattern: '{municipality}'")
+                return municipality.title()
+
+        # Prefer the last meaningful comma-separated part (street/hamlet first, municipality last).
+        # Example: "Land in La Faza, 280, Caldones, Gijón 85,000 €" -> "Gijón"
+        parts = self._extract_location_parts_from_title(title)
+        if len(parts) >= 2:
+            generic = {'cantabria', 'asturias', 'spain', 'españa'}
+            for part in reversed(parts):
+                candidate = (part or "").strip()
+                if not candidate:
+                    continue
+                if re.fullmatch(r"\d+", candidate):
+                    continue
+                if self._normalize_search_text(candidate) in generic:
+                    continue
+                if self._is_valid_municipality(candidate):
+                    logger.debug(f"Extracted municipality from title parts: '{candidate}'")
+                    return candidate.title()
+
+        # Pattern: "Land in [municipality], [details]" (only if the title isn't already split into many parts)
+        match = re.search(
             r'Land in\s+([A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]+(?:\s+de\s+[A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]*)*),',
-            # Pattern: "Land in [municipality]" (single location)
-            r'Land in\s+([A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]+(?:\s+de\s+[A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]*)*)\s+\d'
-        ]
-        
-        for pattern in municipality_patterns:
-            match = re.search(pattern, title, re.IGNORECASE)
-            if match:
-                municipality = match.group(1).strip()
-                # Clean and validate
-                municipality = re.sub(r'\s+', ' ', municipality)
-                if self._is_valid_municipality(municipality):
-                    logger.debug(f"Extracted municipality from title pattern: '{municipality}'")
-                    return municipality.title()
+            title,
+            re.IGNORECASE,
+        )
+        if match:
+            municipality = re.sub(r'\s+', ' ', match.group(1).strip())
+            if self._is_valid_municipality(municipality):
+                logger.debug(f"Extracted municipality from title pattern: '{municipality}'")
+                return municipality.title()
+
+        # Pattern: "Land in [municipality]" (single location)
+        match = re.search(
+            r'Land in\s+([A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]+(?:\s+de\s+[A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]*)*)\s+\d',
+            title,
+            re.IGNORECASE,
+        )
+        if match:
+            municipality = re.sub(r'\s+', ' ', match.group(1).strip())
+            if self._is_valid_municipality(municipality):
+                logger.debug(f"Extracted municipality from title pattern: '{municipality}'")
+                return municipality.title()
         
         # Fallback: try to extract last meaningful part before number/price
         # "Land in San Martin de Huerces, 49, La Pedrera" -> "San Martin de Huerces"
@@ -156,7 +192,7 @@ class EnrichmentService:
             if self._is_valid_municipality(municipality):
                 logger.debug(f"Extracted municipality from title fallback: '{municipality}'")
                 return municipality.title()
-        
+
         logger.debug("No municipality found in title")
         return None
     
@@ -171,10 +207,12 @@ class EnrichmentService:
         
         # Define stopwords (common Spanish/English words that aren't locations)
         stopwords = {'and', 'en', 'de', 'del', 'la', 'el', 'por', 'con', 'y', 'e', 'with', 'for', 'in', 'of', 'the', 'your', 'search'}
-        
-        # Check if first word is a stopword
-        first_word = municipality.split()[0].lower()
-        if first_word in stopwords:
+
+        # Require at least one meaningful token (many Spanish locations start with articles like "La"/"El")
+        tokens = [t.strip(".,;:()[]{}\"'").lower() for t in municipality.split()]
+        tokens = [t for t in tokens if t]
+        meaningful = [t for t in tokens if t not in stopwords and t.isalpha() and len(t) > 1]
+        if not meaningful:
             return False
         
         # Require either:
@@ -193,73 +231,83 @@ class EnrichmentService:
             return True
         
         return False
+
+    @staticmethod
+    def _normalize_search_text(text: str) -> str:
+        raw = str(text or "")
+        normalized = unicodedata.normalize("NFKD", raw)
+        normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+        return normalized.lower()
     
     def _geocode_with_accuracy(self, land) -> Optional[Dict]:
         """Geocode a land with accuracy determination"""
-        if not land.municipality:
-            # Try to re-extract municipality from title if missing
-            municipality = self._extract_municipality_from_title(land.title)
-            if municipality:
-                logger.info(f"Re-extracted municipality from title for land {land.id}: '{municipality}'")
-                land.municipality = municipality
-                # Commit immediately so we have the municipality for geocoding
+        if not getattr(land, "municipality", None):
+            # Try to re-extract municipality from title if missing (used for filters and better geocoding),
+            # but do not bail out if we can't - titles often contain enough address info already.
+            extracted = self._extract_municipality_from_title(getattr(land, "title", None) or "")
+            if extracted:
+                logger.info(f"Re-extracted municipality from title for land {land.id}: '{extracted}'")
+                land.municipality = extracted
                 from app import db
                 db.session.commit()
             else:
-                logger.warning(f"No municipality found in title for land {land.id}: '{land.title}'")
-                return None
-            
-        # Clean and validate municipality data first
-        municipality = self._clean_municipality(land.municipality)
-        if not municipality:
-            logger.warning(f"Invalid municipality data for land {land.id}: '{land.municipality}'")
-            return None
+                logger.warning(f"No municipality found in title for land {land.id}: '{getattr(land, 'title', '')}'")
 
-        # Normalize address format: replace " - " with ", " for better geocoding
-        municipality = municipality.replace(" - ", ", ")
+        municipality = self._clean_municipality(getattr(land, "municipality", None)) if getattr(land, "municipality", None) else None
+        if municipality:
+            municipality = municipality.replace(" - ", ", ")
 
-        # Try different address formats in order of precision (title-derived first)
+        # Try different address formats in order of precision (title-derived first).
         address_attempts: List[Dict[str, str]] = []
+        seen_addresses: set[str] = set()
 
-        title_parts = self._extract_location_parts_from_title(land.title or "")
+        def add_attempt(address: str, accuracy: str) -> None:
+            candidate = (address or "").strip()
+            if not candidate or candidate in seen_addresses:
+                return
+            seen_addresses.add(candidate)
+            address_attempts.append({"address": candidate, "accuracy": accuracy})
+
+        title_parts = self._extract_location_parts_from_title(getattr(land, "title", None) or "")
         if title_parts:
             full = ", ".join(title_parts)
-            address_attempts.append({"address": f"{full}, Asturias, Spain", "accuracy": "precise" if len(title_parts) >= 2 else "approximate"})
+            base_accuracy = "precise" if len(title_parts) >= 2 else "approximate"
+            add_attempt(f"{full}, Asturias, Spain", base_accuracy)
             if len(title_parts) >= 2:
                 tail = ", ".join(title_parts[-2:])
-                address_attempts.append({"address": f"{tail}, Asturias, Spain", "accuracy": "approximate"})
+                add_attempt(f"{tail}, Asturias, Spain", "approximate")
             if len(title_parts) >= 3:
                 tail3 = ", ".join(title_parts[-3:])
-                address_attempts.append({"address": f"{tail3}, Asturias, Spain", "accuracy": "precise"})
-        
-        # Try most specific first if we have detailed municipality info
-        if municipality and ', ' in municipality:
-            # For addresses like "Caserio Cuesta Ayones, 22, San Claudio-Trubia-Las Caldas, Oviedo"
-            address_attempts.append({
-                'address': f"{municipality}, Spain",
-                'accuracy': 'precise'
-            })
-        elif municipality and any(keyword in municipality.lower() for keyword in ['calle', 'carretera', 'lugar', 'avenida', 'plaza']):
-            # For addresses with street indicators
-            address_attempts.append({
-                'address': f"{municipality}, Spain", 
-                'accuracy': 'precise'
-            })
-        
-        # Always try the municipality as-is (if not too generic)
-        if municipality and not self._is_too_generic(municipality):
-            address_attempts.append({
-                'address': f"{municipality}, Spain",
-                'accuracy': 'approximate'
-            })
-        
-        # Try more specific regional fallbacks instead of just "Cantabria, Spain"
-        regional_fallbacks = self._get_regional_fallbacks(municipality)
+                add_attempt(f"{tail3}, Asturias, Spain", "precise")
+
+        if municipality:
+            # Try most specific first if we have detailed municipality info.
+            if ', ' in municipality:
+                add_attempt(f"{municipality}, Spain", "precise")
+            elif any(keyword in municipality.lower() for keyword in ['calle', 'carretera', 'lugar', 'avenida', 'plaza']):
+                add_attempt(f"{municipality}, Spain", "precise")
+
+            # Always try the municipality as-is (if not too generic).
+            if not self._is_too_generic(municipality):
+                add_attempt(f"{municipality}, Spain", "approximate")
+
+        # Regional fallbacks: derive from any available hints (title/description/municipality).
+        hint_text = " ".join(
+            part
+            for part in [
+                getattr(land, "title", None) or "",
+                getattr(land, "municipality", None) or "",
+                getattr(land, "description", None) or "",
+                getattr(land, "email_subject", None) or "",
+            ]
+            if part
+        )
+        regional_fallbacks = self._get_regional_fallbacks(hint_text or (municipality or ""))
         for fallback in regional_fallbacks:
-            address_attempts.append({
-                'address': fallback,
-                'accuracy': 'regional'
-            })
+            add_attempt(fallback, "regional")
+
+        if not address_attempts:
+            return None
         
         for attempt in address_attempts:
             coordinates = self.geocoding_service.geocode_address(attempt['address'])
@@ -306,8 +354,8 @@ class EnrichmentService:
     
     def _is_too_generic(self, municipality: str) -> bool:
         """Check if municipality is too generic to geocode uniquely"""
-        generic_terms = ['cantabria', 'asturias', 'spain', 'españa']
-        return municipality.lower().strip() in generic_terms
+        generic_terms = {'cantabria', 'asturias', 'spain', 'espana'}
+        return self._normalize_search_text(municipality).strip() in generic_terms
     
     def _get_regional_fallbacks(self, municipality: str) -> List[str]:
         """Get more specific regional fallbacks instead of just 'Cantabria, Spain'"""
@@ -328,7 +376,7 @@ class EnrichmentService:
                 'comillas': 'Comillas, Cantabria, Spain'
             }
             
-            municipality_lower = municipality.lower()
+            municipality_lower = self._normalize_search_text(municipality)
             for location, full_address in known_locations.items():
                 if location in municipality_lower:
                     fallbacks.append(full_address)

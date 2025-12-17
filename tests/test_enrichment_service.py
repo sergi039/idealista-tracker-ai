@@ -112,6 +112,38 @@ class TestEnrichmentService:
             mock_osm.assert_called_once()
             mock_analyze.assert_called_once()
             mock_scoring_instance.calculate_score.assert_called_once()
+
+    def test_extract_municipality_from_title_handles_numbers(self, enrichment_service):
+        title = "Land in La Faza, 280, Caldones, Gijón 85,000 €"
+        municipality = enrichment_service._extract_municipality_from_title(title)
+        assert municipality is not None
+        assert municipality.lower().startswith("gij")
+
+    def test_geocode_with_accuracy_uses_title_parts_without_municipality(self, app, enrichment_service):
+        """If municipality is missing/unparseable, geocoding should still try title-derived address parts."""
+        with app.app_context():
+            land = Land(
+                source_email_id='no_muni_title_parts',
+                title="Land in La Faza, 280, Caldones, Gijón 85,000 €",
+                municipality=None,
+            )
+            db.session.add(land)
+            db.session.commit()
+
+            called = []
+
+            def fake_geocode(address: str):
+                called.append(address)
+                if "La Faza" in address:
+                    return {"lat": 43.5, "lng": -5.65}
+                return None
+
+            with patch.object(enrichment_service, "_extract_municipality_from_title", return_value=None):
+                with patch.object(enrichment_service.geocoding_service, "geocode_address", side_effect=fake_geocode):
+                    result = enrichment_service._geocode_with_accuracy(land)
+
+            assert result is not None
+            assert any("La Faza" in addr for addr in called)
     
     @patch('services.enrichment_service.requests.get')
     def test_enrich_with_google_places_success(self, mock_get, app, enrichment_service, test_land):
