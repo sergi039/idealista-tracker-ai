@@ -954,25 +954,6 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
-// HTMX event listeners
-document.addEventListener('htmx:responseError', function(evt) {
-    alert('Error: ' + evt.detail.xhr.responseText);
-});
-
-document.addEventListener('htmx:afterRequest', function(evt) {
-    if (evt.detail.successful) {
-        // Reload page after successful ingestion
-        if (evt.detail.xhr.response) {
-            const response = JSON.parse(evt.detail.xhr.response);
-            if (response.success) {
-                setTimeout(() => {
-                    window.location.reload();
-                }, 2000);
-            }
-        }
-    }
-});
-
 // AI Analysis Management
 // Legacy function - no longer used in new UI 
 // Cards view now uses generateAIAnalysisOnly() and viewAIAnalysis() like table view

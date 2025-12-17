@@ -71,6 +71,35 @@ window.IdealistaApp = {
     },
 
     setupHTMX: function() {
+        const setIngestionIndicatorState = (state, message) => {
+            const indicator = document.getElementById('ingestion-spinner');
+            if (!indicator) return;
+
+            const alertEl = indicator.querySelector('.alert');
+            const iconEl = document.getElementById('ingestion-spinner-icon');
+            const textEl = document.getElementById('ingestion-spinner-text');
+            if (!alertEl || !iconEl || !textEl) return;
+
+            if (!textEl.dataset.defaultText) {
+                textEl.dataset.defaultText = textEl.textContent || '';
+            }
+
+            const normalizedState = state === 'success' ? 'success' : state === 'error' ? 'error' : 'running';
+            alertEl.classList.remove('alert-info', 'alert-success', 'alert-danger');
+            alertEl.classList.add(normalizedState === 'success' ? 'alert-success' : normalizedState === 'error' ? 'alert-danger' : 'alert-info');
+
+            iconEl.className =
+                normalizedState === 'success' ? 'fas fa-check-circle' :
+                normalizedState === 'error' ? 'fas fa-exclamation-triangle' :
+                'fas fa-spinner fa-spin';
+
+            if (message) {
+                textEl.textContent = message;
+            } else if (normalizedState === 'running') {
+                textEl.textContent = textEl.dataset.defaultText || '';
+            }
+        };
+
         // HTMX event listeners
         document.addEventListener('htmx:beforeRequest', function(evt) {
             const target = evt.target;
@@ -79,28 +108,37 @@ window.IdealistaApp = {
             target.classList.add('loading');
             
             // Show loading spinner if indicator exists
-            const indicator = document.querySelector(target.getAttribute('hx-indicator'));
-            if (indicator) {
-                indicator.style.display = 'block';
+            const hxPost = target.getAttribute('hx-post') || '';
+            const indicatorSelector = target.getAttribute('hx-indicator');
+            if (indicatorSelector) {
+                const indicator = document.querySelector(indicatorSelector);
+                if (indicator) {
+                    indicator.style.display = 'block';
+                }
+            }
+
+            if (hxPost.includes('/api/ingest/email/run')) {
+                setIngestionIndicatorState('running');
             }
         });
 
         document.addEventListener('htmx:afterRequest', function(evt) {
             const target = evt.target;
+            const hxPost = target.getAttribute('hx-post') || '';
             
             // Remove loading state
             target.classList.remove('loading');
             
             // Hide loading spinner
-            const indicator = document.querySelector(target.getAttribute('hx-indicator'));
-            if (indicator) {
+            const indicatorSelector = target.getAttribute('hx-indicator');
+            const indicator = indicatorSelector ? document.querySelector(indicatorSelector) : null;
+            const isIngestion = hxPost.includes('/api/ingest/email/run');
+            if (indicator && !isIngestion) {
                 indicator.style.display = 'none';
             }
             
             // Handle successful responses
             if (evt.detail.successful) {
-                const hxPost = target.getAttribute('hx-post') || '';
-
                 // Special handling for sync buttons - prevent JSON from showing in button
                 if (hxPost.includes('/api/ingest/email/run')) {
                     // Parse JSON response and show user-friendly message
@@ -115,8 +153,8 @@ window.IdealistaApp = {
                                 message = `Sync completed - ${response.processed_count} new ${response.processed_count === 1 ? 'property' : 'properties'} added`;
                             }
                         }
-                        
-                        IdealistaApp.showNotification(message, 'success');
+
+                        setIngestionIndicatorState('success', message);
                         
                         // Restore button content (prevent JSON replacement)
                         if (target.textContent.startsWith('{')) {
@@ -127,8 +165,19 @@ window.IdealistaApp = {
                             target.appendChild(icon);
                             target.appendChild(document.createTextNode('Manual Sync'));
                         }
+
+                        const shouldReload = window.location && window.location.pathname === '/lands';
+                        if (shouldReload) {
+                            window.setTimeout(() => window.location.reload(), 2000);
+                        } else if (indicator) {
+                            window.setTimeout(() => {
+                                indicator.style.display = 'none';
+                                setIngestionIndicatorState('running');
+                            }, 2500);
+                        }
                     } catch (e) {
-                        IdealistaApp.showNotification('Sync completed successfully', 'success');
+                        setIngestionIndicatorState('success', 'Sync completed successfully');
+
                         // Restore button content
                         if (target.textContent.startsWith('{')) {
                             // Safe DOM manipulation - prevent XSS
@@ -137,6 +186,16 @@ window.IdealistaApp = {
                             icon.className = 'fas fa-sync-alt me-1';
                             target.appendChild(icon);
                             target.appendChild(document.createTextNode('Manual Sync'));
+                        }
+
+                        const shouldReload = window.location && window.location.pathname === '/lands';
+                        if (shouldReload) {
+                            window.setTimeout(() => window.location.reload(), 2000);
+                        } else if (indicator) {
+                            window.setTimeout(() => {
+                                indicator.style.display = 'none';
+                                setIngestionIndicatorState('running');
+                            }, 2500);
                         }
                     }
                 } else if (hxPost.includes('/api/land/') && hxPost.includes('/enrich')) {
@@ -188,6 +247,8 @@ window.IdealistaApp = {
         });
 
         document.addEventListener('htmx:responseError', function(evt) {
+            const target = evt.target;
+            const hxPost = target.getAttribute('hx-post') || '';
             let errorMessage = 'An error occurred';
             
             try {
@@ -196,7 +257,20 @@ window.IdealistaApp = {
             } catch (e) {
                 errorMessage = `HTTP ${evt.detail.xhr.status}: ${evt.detail.xhr.statusText}`;
             }
-            
+
+            if (hxPost.includes('/api/ingest/email/run')) {
+                setIngestionIndicatorState('error', errorMessage);
+                const indicatorSelector = target.getAttribute('hx-indicator');
+                const indicator = indicatorSelector ? document.querySelector(indicatorSelector) : null;
+                if (indicator) {
+                    window.setTimeout(() => {
+                        indicator.style.display = 'none';
+                        setIngestionIndicatorState('running');
+                    }, 3500);
+                }
+                return;
+            }
+
             IdealistaApp.showNotification(errorMessage, 'error');
         });
     },
@@ -696,28 +770,27 @@ window.IdealistaApp = {
         if (!container) {
             container = document.createElement('div');
             container.id = containerId;
-            container.style.cssText = [
-                'position:fixed',
-                'top:16px',
-                'left:50%',
-                'transform:translateX(-50%)',
-                'z-index:9999',
-                'display:flex',
-                'flex-direction:column',
-                'gap:8px',
-                'width:min(520px, calc(100vw - 32px))',
-                'pointer-events:none'
-            ].join(';');
+            container.className = 'app-notification-container';
+            container.setAttribute('aria-live', 'polite');
+            container.setAttribute('aria-atomic', 'true');
             document.body.appendChild(container);
         }
 
         const notification = document.createElement('div');
-        notification.className = `alert ${alertClass} fade show shadow app-toast`;
+        notification.className = `alert ${alertClass} fade show shadow mb-0 d-flex align-items-center gap-2`;
         notification.setAttribute('role', 'status');
-        notification.style.cssText = 'margin:0; pointer-events:none;';
+        notification.style.cssText = 'pointer-events:none;';
 
-        // Safe DOM manipulation - prevent XSS
-        notification.textContent = message;
+        const icon = document.createElement('i');
+        icon.className =
+            type === 'error' ? 'fas fa-exclamation-triangle' :
+            type === 'success' ? 'fas fa-check-circle' :
+            'fas fa-info-circle';
+        const text = document.createElement('span');
+        text.textContent = message;
+
+        notification.appendChild(icon);
+        notification.appendChild(text);
 
         container.appendChild(notification);
 

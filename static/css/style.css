@@ -49,8 +49,8 @@
     display: block;
 }
 
-/* HTMX: global ingestion indicator as a non-blocking popup (avoid layout shift) */
-#ingestion-spinner {
+/* Global notifications (non-blocking popup; avoid layout shift) */
+.app-notification-container {
     position: fixed;
     top: 4.5rem;
     left: 50%;
@@ -58,10 +58,13 @@
     z-index: 1080;
     width: min(92vw, 760px);
     pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 
-#ingestion-spinner .toast {
-    width: 100%;
+.app-notification-container .alert {
+    margin: 0;
     pointer-events: none;
 }
 
