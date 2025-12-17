@@ -1,5 +1,6 @@
 import re
 import logging
+import unicodedata
 from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -226,12 +227,12 @@ class EmailParser:
             logger.debug(f"Found 'Land in' match: '{location}'")
             # Skip if it contains "your search"
             if 'your search' not in location.lower():
-                # Clean up the location - remove trailing commas/numbers
-                location = re.sub(r'[,\s]*(\d{1,3}(?:[.,]\d{3})*)$', '', location)
                 location = re.sub(r'\s+', ' ', location).strip()
                 if location and len(location) > 2:
-                    logger.debug(f"Extracted municipality from 'Land in': '{location}'")
-                    return location
+                    municipality = self._extract_municipality_from_title(f"Land in {location}")
+                    if municipality:
+                        logger.debug(f"Extracted municipality from 'Land in': '{municipality}'")
+                        return municipality
         
         # PRIORITY 3: Try fallback patterns (with strict validation)
         for i, pattern in enumerate(self.patterns['municipality']):
@@ -256,40 +257,56 @@ class EmailParser:
             return None
             
         logger.debug(f"Extracting municipality from title: '{title}'")
-        
-        # Pattern for "Land in [path], [municipality], [province]" 
-        # Examples: "Land in camino Pinzalez, Porceyo - Cenero, Gijón"
-        municipality_patterns = [
-            # Pattern: "Land in [location], [municipality], [province]"  
+
+        # Remove common prefixes (EN/ES) and trailing price (price often includes commas).
+        raw = title.strip()
+        prefix_match = re.match(r"^(land in|terreno en|parcela en|solar en)\s+", raw, re.IGNORECASE)
+        if prefix_match:
+            raw = raw[prefix_match.end():].strip()
+
+        raw = re.sub(r"\s*\d[\d\.,]*\s*(?:€|eur|&euro;|â‚¬).*$", "", raw, flags=re.IGNORECASE).strip()
+
+        # Prefer the last meaningful comma-separated part (street/hamlet first, municipality last).
+        # Example: "Land in La Faza, 280, Caldones, Gijón 85,000 €" -> "Gijón"
+        parts = [p.strip() for p in raw.split(",") if p and p.strip()]
+        if parts:
+            generic = {"cantabria", "asturias", "spain", "españa"}
+            for part in reversed(parts):
+                candidate = (part or "").strip()
+                if not candidate:
+                    continue
+                if re.fullmatch(r"\d+", candidate):
+                    continue
+                if self._normalize_search_text(candidate) in generic:
+                    continue
+                # Avoid returning a street-only token when that's all we have.
+                if len(parts) == 1 and any(k in candidate.lower() for k in ("calle", "avenida", "camino", "lugar", "plaza", "carretera")):
+                    continue
+                if self._is_valid_municipality(candidate):
+                    logger.debug(f"Extracted municipality from title parts: '{candidate}'")
+                    return candidate.title()
+
+        # Pattern: "Land in [location], [municipality], [province]"
+        match = re.search(
             r'Land in\s+[^,]+,\s*([^,]+(?:\s*-\s*[^,]+)*),\s*[^,\d€]+',
-            # Pattern: "Land in [municipality], [details]"
-            r'Land in\s+([A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]+(?:\s+de\s+[A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]*)*),',
-            # Pattern: "Land in [municipality]" (single location)
-            r'Land in\s+([A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]+(?:\s+de\s+[A-Za-záéíóúñÁÉÍÓÚÑ][A-Za-záéíóúñ\s]*)*)\s+\d'
-        ]
-        
-        for pattern in municipality_patterns:
-            match = re.search(pattern, title, re.IGNORECASE)
-            if match:
-                municipality = match.group(1).strip()
-                # Clean and validate
-                municipality = re.sub(r'\s+', ' ', municipality)
-                if self._is_valid_municipality(municipality):
-                    logger.debug(f"Extracted municipality from title pattern: '{municipality}'")
-                    return municipality.title()
-        
-        # Fallback: try to extract last meaningful part before number/price
-        # "Land in San Martin de Huerces, 49, La Pedrera" -> "San Martin de Huerces"
-        simple_match = re.search(r'Land in\s+([A-Za-záéíóúñÁÉÍÓÚÑ][^,\d€]+?)(?:[,\d€]|$)', title, re.IGNORECASE)
-        if simple_match:
-            municipality = simple_match.group(1).strip()
-            municipality = re.sub(r'\s+', ' ', municipality)
+            title,
+            re.IGNORECASE,
+        )
+        if match:
+            municipality = re.sub(r'\s+', ' ', match.group(1).strip())
             if self._is_valid_municipality(municipality):
-                logger.debug(f"Extracted municipality from title fallback: '{municipality}'")
+                logger.debug(f"Extracted municipality from title pattern: '{municipality}'")
                 return municipality.title()
-        
+
         logger.debug("No municipality found in title")
         return None
+
+    @staticmethod
+    def _normalize_search_text(text: str) -> str:
+        raw = str(text or "")
+        normalized = unicodedata.normalize("NFKD", raw)
+        normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+        return normalized.lower()
     
     def _normalize_email_text(self, text: str) -> str:
         """Normalize email text by fixing common encoding issues"""
@@ -317,11 +334,13 @@ class EmailParser:
             return False
         
         # Define stopwords (common Spanish/English words that aren't locations)
-        stopwords = {'and', 'en', 'de', 'del', 'la', 'el', 'por', 'con', 'y', 'e', 'with', 'for', 'in', 'of', 'the'}
-        
-        # Check if first word is a stopword
-        first_word = municipality.split()[0].lower()
-        if first_word in stopwords:
+        stopwords = {'and', 'en', 'de', 'del', 'la', 'el', 'por', 'con', 'y', 'e', 'with', 'for', 'in', 'of', 'the', 'your', 'search'}
+
+        # Require at least one meaningful token (many Spanish locations start with articles like "La"/"El")
+        tokens = [t.strip(".,;:()[]{}\"'").lower() for t in municipality.split()]
+        tokens = [t for t in tokens if t]
+        meaningful = [t for t in tokens if t not in stopwords and t.isalpha() and len(t) > 1]
+        if not meaningful:
             return False
         
         # Require either:

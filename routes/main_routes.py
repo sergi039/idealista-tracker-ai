@@ -226,6 +226,15 @@ def land_detail(land_id):
     """Detailed view of a specific land"""
     try:
         land = Land.query.get_or_404(land_id)
+
+        # Backfill missing municipality from the title (common case when the email parser can't extract it).
+        if not land.municipality and land.title:
+            from utils.email_parser import EmailParser
+
+            derived = EmailParser()._extract_municipality_from_title(land.title)
+            if derived:
+                land.municipality = derived
+                db.session.commit()
         
         # Normalize property_details to dict format for template compatibility
         from utils.property_data import normalize_property_details
