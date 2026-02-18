@@ -29,6 +29,22 @@ class IMAPService:
         self.email_parser = EmailParser()
         self.last_seen_uid = self._get_last_seen_uid()
 
+    @staticmethod
+    def _gmail_label_query(label: Optional[str]) -> Optional[str]:
+        """Return a Gmail X-GM-RAW label query part or None.
+
+        For Gmail we select "[Gmail]/All Mail" and rely on X-GM-RAW `label:` filtering,
+        so different builds can use different labels without mixing emails.
+        """
+        raw = str(label or "").strip()
+        if not raw:
+            return None
+
+        safe = raw.replace('"', '\\"')
+        if any(ch.isspace() for ch in safe) or '"' in raw:
+            return f'label:"{safe}"'
+        return f"label:{safe}"
+
     @classmethod
     def extract_idealista_property_id(cls, url: Optional[str]) -> Optional[int]:
         """Extract stable Idealista listing id from a property URL."""
@@ -177,6 +193,9 @@ class IMAPService:
                         logger.info("Fallback to INBOX")
                     # Упрощенный поиск - только по отправителю
                     gm_query = 'from:noresponder@idealista.com'
+                    label_part = self._gmail_label_query(self.folder)
+                    if label_part:
+                        gm_query = f"{gm_query} {label_part}"
                     try:
                         uids = client.search(['X-GM-RAW', gm_query])
                         logger.info(f"Gmail X-GM-RAW search found {len(uids)} emails")
@@ -215,6 +234,7 @@ class IMAPService:
                             continue
 
                         subject = self._decode_header_value(msg.get('Subject', ''))
+                        email_sender = msg.get("From")
                         logger.info(f"Processing email UID {uid}: {subject[:50]}...")
                         
                         # Skip non-property emails (explicit blacklist)
@@ -318,6 +338,9 @@ class IMAPService:
                             parsed['idealista_property_id'] = self.extract_idealista_property_id(parsed.get('url'))
                             parsed['source_email_id'] = f"imap_{uid}"
                             parsed['email_received_at'] = fetch_data[uid][b'INTERNALDATE']
+                            parsed['type'] = 'price_change' if is_price_change else 'listing'
+                            parsed['email_subject'] = subject
+                            parsed['email_sender'] = email_sender
                             email_data.append(parsed)
                             logger.info(f"Successfully parsed email UID {uid}")
                         else:
@@ -505,6 +528,27 @@ class IMAPService:
                             "Property already exists (property_id=%s, matches=%s), skipping duplicate creation",
                             property_id,
                             len(existing_properties),
+                        )
+                        continue
+
+                    # Safety: do NOT create new Land rows from a price-change email.
+                    # Those emails are not land-specific and can cause housing listings to be ingested as lands
+                    # when running multiple Idealista searches.
+                    if email_data.get('type') == 'price_change':
+                        logger.info(
+                            "Skipping price change email for unknown listing (property_id=%s, url=%s)",
+                            property_id,
+                            url,
+                        )
+                        continue
+
+                    # Extra guard (legacy app is land-only): do not create Land rows from non-land listing emails.
+                    # Listing subjects should explicitly mention plots/land; otherwise skip to avoid cross-ingestion.
+                    subject_text = str(email_data.get("email_subject") or "")
+                    if not re.search(r"\b(plot\s+of\s+land|terreno|parcela|finca|suelo|solar)\b", subject_text, re.IGNORECASE):
+                        logger.info(
+                            "Skipping non-land listing email subject for unknown listing (property_id=%s)",
+                            property_id,
                         )
                         continue
 

@@ -151,11 +151,42 @@ class EmailParser:
     
     def _extract_price(self, text: str) -> Optional[float]:
         """Extract price from text"""
+        if not text:
+            return None
+
+        # Work on cleaned text so HTML formatting (strikethrough/bold) doesn't affect parsing.
+        cleaned = self._clean_html(text) if "<" in text else text
+
+        # Price-change emails often contain both old and new prices; prefer the new one.
+        change_patterns = [
+            r'\bfrom\s+(\d{1,3}(?:[.,]\d{3})*)\s*€\s+to\s+(\d{1,3}(?:[.,]\d{3})*)\s*€',
+            r'\bde\s+(\d{1,3}(?:[.,]\d{3})*)\s*€\s+a\s+(\d{1,3}(?:[.,]\d{3})*)\s*€',
+        ]
+        for pattern in change_patterns:
+            match = re.search(pattern, cleaned, re.IGNORECASE)
+            if match:
+                new_price_str = match.group(2)
+                new_price_str = new_price_str.replace(',', '').replace('.', '')
+                try:
+                    return float(new_price_str)
+                except ValueError:
+                    break
+
+        # Fallback: collect all price occurrences and take the last one.
+        # (Idealista may include both old+new prices; the new one usually appears last.)
+        all_prices = re.findall(r'(\d{1,3}(?:[.,]\d{3})*)\s*€', cleaned, re.IGNORECASE)
+        if all_prices:
+            price_str = all_prices[-1].replace(',', '').replace('.', '')
+            try:
+                return float(price_str)
+            except ValueError:
+                return None
+
+        # Legacy fallback: first match across known patterns.
         for pattern in self.patterns['price']:
-            match = re.search(pattern, text, re.IGNORECASE)
+            match = re.search(pattern, cleaned, re.IGNORECASE)
             if match:
                 price_str = match.group(1)
-                # Remove both dots and commas used as thousand separators
                 price_str = price_str.replace(',', '').replace('.', '')
                 try:
                     return float(price_str)
