@@ -9,7 +9,6 @@ from typing import Dict, List, Optional
 from utils.geocoding import GeocodingService
 from utils.http import request_with_retries
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
-from utils.http_retry import request_with_retry
 from config import Config
 from services.scoring_service import ScoringService
 

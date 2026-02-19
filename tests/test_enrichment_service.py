@@ -146,7 +146,7 @@ class TestEnrichmentService:
             assert result is not None
             assert any("La Faza" in addr for addr in called)
     
-    @patch('utils.http_retry.requests.request')
+    @patch('services.enrichment_service.request_with_retries')
     def test_enrich_with_google_places_success(self, mock_get, app, enrichment_service, test_land):
         """Test Google Places enrichment"""
         with app.app_context():
@@ -194,7 +194,7 @@ class TestEnrichmentService:
             # Should not change anything without API key
             assert land.infrastructure_extended == original_infrastructure
     
-    @patch('utils.http_retry.requests.request')
+    @patch('services.enrichment_service.request_with_retries')
     def test_enrich_with_google_maps_success(self, mock_get, app, enrichment_service, test_land):
         """Test Google Maps enrichment"""
         with app.app_context():
@@ -239,7 +239,7 @@ class TestEnrichmentService:
             assert land.transport is not None
             assert any('distance_to_' in key for key in land.transport.keys())
     
-    @patch('utils.http_retry.requests.request')
+    @patch('services.enrichment_service.request_with_retries')
     def test_enrich_with_osm_data_success(self, mock_post, app, enrichment_service, test_land):
         """Test OSM data enrichment"""
         with app.app_context():
@@ -329,7 +329,7 @@ class TestEnrichmentService:
         
         assert distance == 0.0
     
-    @patch('utils.http_retry.requests.request')
+    @patch('services.enrichment_service.request_with_retries')
     def test_search_nearby_places_success(self, mock_get, enrichment_service):
         """Test successful nearby places search"""
         # Mock successful response
@@ -365,7 +365,7 @@ class TestEnrichmentService:
         assert places[0]['rating'] == 4.5
         assert 'distance' in places[0]
     
-    @patch('utils.http_retry.requests.request')
+    @patch('services.enrichment_service.request_with_retries')
     def test_get_distance_matrix_success(self, mock_get, enrichment_service):
         """Test successful distance matrix request"""
         mock_response = Mock()
@@ -392,7 +392,7 @@ class TestEnrichmentService:
         assert result['distance'] == 15000
         assert result['duration'] == 1200
     
-    @patch('utils.http_retry.requests.request')
+    @patch('services.enrichment_service.request_with_retries')
     def test_get_distance_matrix_failure(self, mock_get, enrichment_service):
         """Test distance matrix request failure"""
         mock_response = Mock()
