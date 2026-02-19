@@ -244,8 +244,10 @@ class OpenAIService:
         payload: Dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7,
         }
+        # gpt-5 models enforce default temperature handling server-side.
+        if not str(self.model).lower().startswith("gpt-5"):
+            payload["temperature"] = 0.7
 
         # Prefer strict JSON output when supported.
         payload["response_format"] = {"type": "json_object"}
@@ -263,19 +265,66 @@ class OpenAIService:
                 logger=logger,
             )
 
-        first = dict(payload)
-        first["max_completion_tokens"] = 4000
-        resp = _post(first)
-        if resp.status_code >= 400:
-            body = resp.text[:500]
-            if "Unsupported parameter" in body and "max_completion_tokens" in body:
-                fallback = dict(payload)
-                fallback["max_tokens"] = 4000
-                resp = _post(fallback)
-                if resp.status_code >= 400:
-                    raise RuntimeError(f"OpenAI API error {resp.status_code}: {resp.text[:500]}")
+        def _is_unsupported(body: str, parameter: str) -> bool:
+            body_l = (body or "").lower()
+            return (
+                parameter.lower() in body_l
+                and (
+                    "unsupported parameter" in body_l
+                    or "unsupported value" in body_l
+                    or "does not support" in body_l
+                )
+            )
+
+        attempts = [{
+            "use_max_completion_tokens": True,
+            "include_temperature": "temperature" in payload,
+            "include_response_format": True,
+        }]
+        seen = set()
+        resp = None
+        last_error = ""
+
+        while attempts:
+            cfg = attempts.pop(0)
+            cfg_key = (
+                cfg["use_max_completion_tokens"],
+                cfg["include_temperature"],
+                cfg["include_response_format"],
+            )
+            if cfg_key in seen:
+                continue
+            seen.add(cfg_key)
+
+            current_payload = dict(payload)
+            if not cfg["include_temperature"]:
+                current_payload.pop("temperature", None)
+            if not cfg["include_response_format"]:
+                current_payload.pop("response_format", None)
+
+            if cfg["use_max_completion_tokens"]:
+                current_payload["max_completion_tokens"] = 4000
             else:
-                raise RuntimeError(f"OpenAI API error {resp.status_code}: {body}")
+                current_payload["max_tokens"] = 4000
+
+            resp = _post(current_payload)
+            if resp.status_code < 400:
+                break
+
+            body = resp.text[:500]
+            last_error = body
+
+            if cfg["include_temperature"] and _is_unsupported(body, "temperature"):
+                attempts.insert(0, {**cfg, "include_temperature": False})
+            if cfg["use_max_completion_tokens"] and _is_unsupported(body, "max_completion_tokens"):
+                attempts.insert(0, {**cfg, "use_max_completion_tokens": False})
+            if cfg["include_response_format"] and _is_unsupported(body, "response_format"):
+                attempts.insert(0, {**cfg, "include_response_format": False})
+
+        if resp is None or resp.status_code >= 400:
+            raise RuntimeError(
+                f"OpenAI API error {resp.status_code if resp is not None else 'unknown'}: {last_error}"
+            )
 
         data = resp.json()
         content = (
