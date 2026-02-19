@@ -7,6 +7,7 @@ import time
 import unicodedata
 from typing import Dict, List, Optional
 from utils.geocoding import GeocodingService
+from utils.http import request_with_retries
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 from config import Config
 from services.scoring_service import ScoringService
@@ -26,7 +27,7 @@ class EnrichmentService:
             from models import Land
             from app import db
             
-            land = Land.query.get(land_id)
+            land = db.session.get(Land, land_id)
             if not land:
                 logger.error(f"Land with ID {land_id} not found")
                 return False
@@ -74,7 +75,7 @@ class EnrichmentService:
             return True
             
         except Exception as e:
-            logger.error(f"Failed to enrich land {land_id}: {str(e)}")
+            logger.error("Failed to enrich land %s", land_id, exc_info=True)
             return False
 
     def _should_refresh_coordinates(self, land) -> bool:
@@ -217,10 +218,10 @@ class EnrichmentService:
         
         # Require either:
         # a) Contains a comma (e.g., 'Corias, Pravia')
-        # b) Ends with known region
+        # b) Mentions country
         # c) Contains at least two meaningful tokens
         if (',' in municipality or 
-            re.search(r'\b(?:Asturias|Cantabria|Spain)\b', municipality, re.IGNORECASE) or
+            re.search(r'\b(?:Spain|España)\b', municipality, re.IGNORECASE) or
             len(municipality.split()) >= 2):
             return True
         
@@ -272,13 +273,13 @@ class EnrichmentService:
         if title_parts:
             full = ", ".join(title_parts)
             base_accuracy = "precise" if len(title_parts) >= 2 else "approximate"
-            add_attempt(f"{full}, Asturias, Spain", base_accuracy)
+            add_attempt(f"{full}, Spain", base_accuracy)
             if len(title_parts) >= 2:
                 tail = ", ".join(title_parts[-2:])
-                add_attempt(f"{tail}, Asturias, Spain", "approximate")
+                add_attempt(f"{tail}, Spain", "approximate")
             if len(title_parts) >= 3:
                 tail3 = ", ".join(title_parts[-3:])
-                add_attempt(f"{tail3}, Asturias, Spain", "precise")
+                add_attempt(f"{tail3}, Spain", "precise")
 
         if municipality:
             # Try most specific first if we have detailed municipality info.
@@ -354,41 +355,32 @@ class EnrichmentService:
     
     def _is_too_generic(self, municipality: str) -> bool:
         """Check if municipality is too generic to geocode uniquely"""
-        generic_terms = {'cantabria', 'asturias', 'spain', 'espana'}
+        generic_terms = {'spain', 'españa', 'espana'}
         return self._normalize_search_text(municipality).strip() in generic_terms
     
-    def _get_regional_fallbacks(self, municipality: str) -> List[str]:
-        """Get more specific regional fallbacks instead of just 'Cantabria, Spain'"""
-        fallbacks = []
-        
-        # Try to extract more specific location info
-        if municipality:
-            # Look for known cities/towns in the municipality string
-            known_locations = {
-                'oviedo': 'Oviedo, Asturias, Spain',
-                'gijon': 'Gijón, Asturias, Spain', 
-                'santander': 'Santander, Cantabria, Spain',
-                'cudillero': 'Cudillero, Asturias, Spain',
-                'ribadedeva': 'Ribadedeva, Asturias, Spain',
-                'siero': 'Siero, Asturias, Spain',
-                'piloña': 'Piloña, Asturias, Spain',
-                'llanes': 'Llanes, Asturias, Spain',
-                'comillas': 'Comillas, Cantabria, Spain'
-            }
-            
-            municipality_lower = self._normalize_search_text(municipality)
-            for location, full_address in known_locations.items():
-                if location in municipality_lower:
-                    fallbacks.append(full_address)
+    def _get_regional_fallbacks(self, hint_text: str) -> List[str]:
+        """Return fallback location contexts to help geocoding when the address is incomplete."""
+        fallbacks: List[str] = []
+        norm = self._normalize_search_text(hint_text or "")
+
+        # If reference cities are configured and mentioned, use them as a soft hint.
+        try:
+            from services.settings_service import SettingsService
+
+            for city in SettingsService.get_reference_cities():
+                name = str((city or {}).get("name") or "").strip()
+                if not name:
+                    continue
+                if self._normalize_search_text(name) in norm:
+                    fallbacks.append(f"{name}, Spain")
                     break
-        
-        # Default regional fallbacks - more specific than just "Cantabria, Spain"
+        except Exception:
+            pass
+
+        # Last resort: country only.
         if not fallbacks:
-            fallbacks.extend([
-                'Asturias, Spain',  # Try Asturias first as many properties seem to be there
-                'Cantabria, Spain'  # Final fallback
-            ])
-        
+            fallbacks.append("Spain")
+
         return fallbacks
     
     def _is_duplicate_coordinates(self, lat: float, lng: float, current_land_id: int) -> bool:
@@ -509,7 +501,7 @@ class EnrichmentService:
             )
             
         except Exception as e:
-            logger.error(f"Failed to enrich with Google Places: {str(e)}")
+            logger.error("Failed to enrich with Google Places", exc_info=True)
             # Create fallback enrichment data when Google APIs fail
             self._create_fallback_amenities_data(land)
     
@@ -527,7 +519,7 @@ class EnrichmentService:
                     'key': self.google_places_key
                 }
                 
-                response = requests.get(url, params=params, timeout=15)
+                response = request_with_retries(requests.get, url, params=params, timeout=15, logger=logger)
                 if response.status_code == 200:
                     data = response.json()
                     for place in data.get('results', []):
@@ -551,7 +543,7 @@ class EnrichmentService:
             return places
             
         except Exception as e:
-            logger.error(f"Failed to search nearby places: {str(e)}")
+            logger.error("Failed to search nearby places", exc_info=True)
             return []
     
     def _create_fallback_amenities_data(self, land):
@@ -566,8 +558,17 @@ class EnrichmentService:
             municipality = (land.municipality or '').lower()
             
             # Determine area type (urban/rural) for realistic distances
-            is_urban = any(city in municipality for city in ['oviedo', 'gijón', 'gijon', 'santander', 'avilés', 'aviles'])
-            is_coastal = 'cudillero' in municipality or any(coastal in municipality for coastal in ['llanes', 'ribadesella', 'comillas', 'castro urdiales'])
+            is_urban = False
+            try:
+                from services.settings_service import SettingsService
+
+                ref_names = [str((c or {}).get("name") or "").strip() for c in SettingsService.get_reference_cities()]
+                norm = self._normalize_search_text(municipality)
+                is_urban = any(self._normalize_search_text(n) in norm for n in ref_names if n)
+            except Exception:
+                is_urban = False
+
+            is_coastal = self._is_coastal_location(land)
             
             # Create realistic fallback data based on location type
             if is_urban:
@@ -617,7 +618,7 @@ class EnrichmentService:
             logger.info(f"Created fallback amenities data for land {land.id} ({'urban' if is_urban else 'coastal' if is_coastal else 'rural'} area)")
             
         except Exception as e:
-            logger.error(f"Failed to create fallback amenities data: {str(e)}")
+            logger.error("Failed to create fallback amenities data", exc_info=True)
     
     def _enrich_with_google_maps(self, land):
         """Enrich with Google Maps data (distances, travel times)"""
@@ -661,7 +662,7 @@ class EnrichmentService:
             cache_enrichment_data(lat, lon, cache_type, transport, timeout=60 * 60 * 24 * 7)
             
         except Exception as e:
-            logger.error(f"Failed to enrich with Google Maps: {str(e)}")
+            logger.error("Failed to enrich with Google Maps", exc_info=True)
 
     def _get_distance_matrix_batch(self, lat: float, lon: float, destinations: List[str]) -> List[Optional[Dict]]:
         """Batch distance matrix lookup (destinations <= 25)."""
@@ -677,7 +678,7 @@ class EnrichmentService:
                 "key": self.google_maps_key,
             }
 
-            response = requests.get(url, params=params, timeout=15)
+            response = request_with_retries(requests.get, url, params=params, timeout=15, logger=logger)
             if response.status_code != 200:
                 return [None for _ in destinations]
 
@@ -718,7 +719,7 @@ class EnrichmentService:
                 'key': self.google_maps_key
             }
             
-            response = requests.get(url, params=params, timeout=15)
+            response = request_with_retries(requests.get, url, params=params, timeout=15, logger=logger)
             if response.status_code == 200:
                 data = response.json()
                 if data.get('rows') and data['rows'][0].get('elements'):
@@ -732,7 +733,7 @@ class EnrichmentService:
             return None
             
         except Exception as e:
-            logger.error(f"Failed to get distance matrix: {str(e)}")
+            logger.error("Failed to get distance matrix", exc_info=True)
             return None
     
     def _enrich_with_osm_data(self, land):
@@ -759,11 +760,13 @@ class EnrichmentService:
             out center;
             """
             
-            response = requests.post(
+            response = request_with_retries(
+                requests.post,
                 self.osm_overpass_url,
                 data=overpass_query,
                 headers={'Content-Type': 'application/x-www-form-urlencoded'},
                 timeout=30,
+                logger=logger,
             )
             
             if response.status_code == 200:
@@ -784,7 +787,7 @@ class EnrichmentService:
                 cache_enrichment_data(lat, lon, "osm_amenities_v1", amenity_counts, timeout=60 * 60 * 24 * 7)
             
         except Exception as e:
-            logger.error(f"Failed to enrich with OSM data: {str(e)}")
+            logger.error("Failed to enrich with OSM data", exc_info=True)
     
     def _analyze_environment(self, land):
         """Analyze environment features like views and orientation"""
@@ -843,30 +846,15 @@ class EnrichmentService:
             land.environment = environment
 
         except Exception as e:
-            logger.error(f"Failed to analyze environment: {str(e)}")
+            logger.error("Failed to analyze environment", exc_info=True)
     
     def _is_coastal_location(self, land):
         """Check if location is in a known coastal area based on coordinates"""
         try:
-            if not land.location_lat or not land.location_lon:
-                return False
-            
-            lat, lon = float(land.location_lat), float(land.location_lon)
-            
-            # Define coastal regions of northern Spain (Asturias, Cantabria)
-            # Expanded coordinates to cover more coastal areas
-            coastal_regions = [
-                # Asturias coast (expanded)
-                {'min_lat': 43.1, 'max_lat': 43.8, 'min_lon': -7.5, 'max_lon': -4.0},
-                # Cantabria coast (expanded)
-                {'min_lat': 43.0, 'max_lat': 43.7, 'min_lon': -5.0, 'max_lon': -3.0},
-            ]
-            
-            for region in coastal_regions:
-                if (region['min_lat'] <= lat <= region['max_lat'] and 
-                    region['min_lon'] <= lon <= region['max_lon']):
-                    return True
-            
+            if land.environment and land.environment.get("sea_view"):
+                return True
+            if land.travel_time_nearest_beach and land.travel_time_nearest_beach <= 20:
+                return True
             return False
         except Exception:
             return False

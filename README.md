@@ -64,6 +64,8 @@ A self-hosted tool that automatically imports your Idealista saved search emails
 
 ### Installation (5 minutes)
 
+> **Ports rule:** legacy app stays on `http://localhost:5001/`, this universal build stays on `http://localhost:5050/` (see `docs/DEV_RULES.md`).
+
 ```bash
 # 1. Clone the repository
 git clone https://github.com/sergi039/idealista-tracker-ai.git
@@ -74,12 +76,50 @@ cp .env.example .env
 
 # 3. Edit .env with your settings (see Configuration below)
 
-# 4. Start the app
-docker compose up -d --build
+# 4. Start the app (local dev)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+
+# Production (no bind mounts / no exposed DB ports)
+# docker compose up -d --build
 
 # 5. Open in browser
-open http://localhost:5001
+open http://localhost:5050
 ```
+
+## Running Legacy + Universal Together (recommended)
+
+This repo is the **universal build** (properties). The legacy land tracker remains a separate repo and must stay isolated.
+
+- Legacy: `http://localhost:5001/` (`IdealistaRank`)
+- Universal: `http://localhost:5050/` (`IdealistaRank-properties-universal`)
+
+Run both stacks in two terminals:
+
+```bash
+# Terminal 1 (legacy)
+cd /path/to/IdealistaRank
+docker compose up -d --build
+
+# Terminal 2 (universal)
+cd /path/to/IdealistaRank-properties-universal
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+```
+
+Email isolation (pick one). Default recommendation:
+
+- Production: **separate Gmail labels**
+- Local dev: shared label + `EXCLUDED_PROPERTY_CATEGORIES=land` is OK
+
+1) **Separate Gmail labels (safest)**:
+   - Legacy `.env`: `IMAP_FOLDER=IdealistaLand` (example)
+   - Universal `.env`: `IMAP_FOLDER=IdealistaProperties` (example)
+
+2) **Shared Gmail label + category filtering** (acceptable):
+   - Both apps use the same `IMAP_FOLDER`
+   - Universal `.env` must keep: `EXCLUDED_PROPERTY_CATEGORIES=land`
+
+Current state/backlog: `docs/STATE.md`, `TODO.md`.
+Supported sale types (defaults): `docs/PROPERTY_TYPES.md`.
 
 ---
 
@@ -114,6 +154,8 @@ Edit the `.env` file. Here's what you need:
 | `GOOGLE_MAPS_API_KEY` | Interactive maps, travel time calculations |
 | `GOOGLE_PLACES_API_KEY` | Nearby places (metro, supermarkets, etc.) |
 
+Use the `*_KEY` names above in your `.env` (legacy aliases like `GOOGLE_MAPS_API` / `GOOGLE_PLACES_API` are still accepted).
+
 **How to get:** [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → Create credentials → API Key → Enable Maps JavaScript API, Places API, Distance Matrix API.
 
 #### AI Analysis (Claude and/or ChatGPT)
@@ -128,6 +170,12 @@ Edit the `.env` file. Here's what you need:
 - OpenAI: [platform.openai.com](https://platform.openai.com/api-keys) → API Keys
 
 > **Tip:** You can use one or both AI providers. Having both enables side-by-side comparison.
+
+#### Admin access (required for settings + admin endpoints)
+
+| Setting | What it enables |
+|---------|----------------|
+| `ADMIN_API_TOKEN` | Access to admin-only endpoints and settings UI (send as `Authorization: Bearer <token>`) |
 
 ### Example `.env` file
 
@@ -146,15 +194,21 @@ GOOGLE_PLACES_API_KEY=AIza...
 ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
 
+# Optional - Admin
+ADMIN_API_TOKEN=your-random-admin-token
+
 # Email folder containing Idealista alerts (default: Idealista)
-IMAP_FOLDER=Idealista
+IMAP_FOLDER=IdealistaProperties
 ```
 
 ---
 
 ## Usage Tips
 
-1. **Create a Gmail label/folder** called "Idealista" and set up a filter to automatically move Idealista emails there
+1. **Create Gmail labels/folders**:
+   - Legacy app: `Idealista` (example)
+   - Universal app: `IdealistaProperties` (default in this repo’s `.env.example`)
+   And set up filters to route Idealista emails accordingly.
 2. **First sync** may take a few minutes if you have many emails
 3. **Scoring weights** can be customized in Settings
 4. **AI analysis** costs money per API call — use it on shortlisted properties
@@ -163,7 +217,7 @@ IMAP_FOLDER=Idealista
 
 ## Data Storage
 
-Your data is stored locally in a Docker volume (`idealista-pgdata`). Nothing is sent to external servers except:
+Your data is stored locally in a Docker volume (`idealista-universal-pgdata`). Nothing is sent to external servers except:
 - Google APIs (if configured) — for maps/places
 - AI APIs (if configured) — for property analysis
 

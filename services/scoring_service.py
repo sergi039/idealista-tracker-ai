@@ -41,7 +41,7 @@ class ScoringService:
             self._validate_profiles()
             
         except Exception as e:
-            logger.error(f"Failed to load custom weights: {str(e)}")
+            logger.error("Failed to load custom weights", exc_info=True)
     
     def calculate_score(self, land) -> Decimal:
         """Calculate dual scores using MCDM methodology (Multi-Criteria Decision Making)
@@ -140,7 +140,7 @@ class ScoringService:
             return land.score_total
             
         except Exception as e:
-            logger.error(f"Failed to calculate dual MCDM scores for land {land.id}: {str(e)}")
+            logger.error("Failed to calculate dual MCDM scores for land %s", land.id, exc_info=True)
             return Decimal('0')
     
     def _score_infrastructure_basic(self, land) -> Optional[float]:
@@ -169,7 +169,7 @@ class ScoringService:
             return (score / max_score) * 100
             
         except Exception as e:
-            logger.error(f"Failed to score basic infrastructure: {str(e)}")
+            logger.error("Failed to score basic infrastructure", exc_info=True)
             return None
     
     def _score_infrastructure_extended(self, land) -> Optional[float]:
@@ -201,7 +201,7 @@ class ScoringService:
             return min(score, 100)  # Cap at 100
             
         except Exception as e:
-            logger.error(f"Failed to score extended infrastructure: {str(e)}")
+            logger.error("Failed to score extended infrastructure", exc_info=True)
             return None
     
     def _score_transport(self, land) -> Optional[float]:
@@ -244,7 +244,7 @@ class ScoringService:
             return min((score / max_possible) * 100, 100)
             
         except Exception as e:
-            logger.error(f"Failed to score transport: {str(e)}")
+            logger.error("Failed to score transport", exc_info=True)
             return None
     
     def _score_environment(self, land) -> Optional[float]:
@@ -276,7 +276,7 @@ class ScoringService:
             return min(score, 100)  # Cap at 100
             
         except Exception as e:
-            logger.error(f"Failed to score environment: {str(e)}")
+            logger.error("Failed to score environment", exc_info=True)
             return None
     
     def _score_neighborhood(self, land) -> Optional[float]:
@@ -309,7 +309,7 @@ class ScoringService:
             return min(max(score, 0), 100)  # Keep between 0-100
             
         except Exception as e:
-            logger.error(f"Failed to score neighborhood: {str(e)}")
+            logger.error("Failed to score neighborhood", exc_info=True)
             return None
     
     def _score_services_quality(self, land) -> Optional[float]:
@@ -338,7 +338,7 @@ class ScoringService:
                 return None
             
         except Exception as e:
-            logger.error(f"Failed to score services quality: {str(e)}")
+            logger.error("Failed to score services quality", exc_info=True)
             return None
     
     def _score_legal_status(self, land) -> Optional[float]:
@@ -356,7 +356,7 @@ class ScoringService:
                 return 0    # Rustic or other (not suitable)
             
         except Exception as e:
-            logger.error(f"Failed to score legal status: {str(e)}")
+            logger.error("Failed to score legal status", exc_info=True)
             return None
     
     def _score_location_quality(self, land) -> Optional[float]:
@@ -397,7 +397,7 @@ class ScoringService:
             return min(100, score)
             
         except Exception as e:
-            logger.error(f"Failed to score location quality: {str(e)}")
+            logger.error("Failed to score location quality", exc_info=True)
             return None
     
     def _score_physical_characteristics(self, land) -> Optional[float]:
@@ -429,7 +429,7 @@ class ScoringService:
             return min(100, score)
             
         except Exception as e:
-            logger.error(f"Failed to score physical characteristics: {str(e)}")
+            logger.error("Failed to score physical characteristics", exc_info=True)
             return None
     
     def _score_development_potential(self, land) -> Optional[float]:
@@ -468,7 +468,7 @@ class ScoringService:
             return min(100, max(0, score))
             
         except Exception as e:
-            logger.error(f"Failed to score development potential: {str(e)}")
+            logger.error("Failed to score development potential", exc_info=True)
             return None
     
     def _score_investment_yield(self, land) -> Optional[float]:
@@ -547,7 +547,7 @@ class ScoringService:
                 return None
             
         except Exception as e:
-            logger.error(f"Failed to score investment yield for land {land.id}: {str(e)}")
+            logger.error("Failed to score investment yield for land %s", land.id, exc_info=True)
             return None
     
     def update_weights(self, new_weights: Dict[str, float], profile: str = 'combined') -> bool:
@@ -604,7 +604,7 @@ class ScoringService:
             return True
             
         except Exception as e:
-            logger.error(f"Failed to update weights for profile {profile}: {str(e)}")
+            logger.error("Failed to update weights for profile %s", profile, exc_info=True)
             return False
     
     def get_current_weights(self) -> Dict[str, float]:
@@ -655,7 +655,7 @@ class ScoringService:
             return final_score
             
         except Exception as e:
-            logger.error(f"Failed to calculate profile score for '{profile}': {str(e)}")
+            logger.error("Failed to calculate profile score for '%s'", profile, exc_info=True)
             return 0
     
     def _get_profile_weights_used(self, individual_scores: Dict[str, float], profile: str) -> Dict[str, float]:
@@ -677,7 +677,7 @@ class ScoringService:
             return weights_used
             
         except Exception as e:
-            logger.error(f"Failed to get profile weights used for '{profile}': {str(e)}")
+            logger.error("Failed to get profile weights used for '%s'", profile, exc_info=True)
             return {}
     
     def _get_profile_breakdown(self, individual_scores: Dict[str, float], profile: str) -> Dict[str, float]:
@@ -698,7 +698,7 @@ class ScoringService:
             return breakdown
             
         except Exception as e:
-            logger.error(f"Failed to get profile breakdown for '{profile}': {str(e)}")
+            logger.error("Failed to get profile breakdown for '%s'", profile, exc_info=True)
             return {}
     
     def _load_profile_weights(self, profile: str) -> Dict[str, float]:
@@ -735,7 +735,7 @@ class ScoringService:
             return {}
             
         except Exception as e:
-            logger.error(f"Failed to load profile weights for '{profile}': {str(e)}")
+            logger.error("Failed to load profile weights for '%s'", profile, exc_info=True)
             return {}
 
     def _validate_profiles(self):
@@ -785,4 +785,4 @@ class ScoringService:
             logger.info("Profile validation completed successfully")
             
         except Exception as e:
-            logger.error(f"Failed to validate profiles: {str(e)}")
+            logger.error("Failed to validate profiles", exc_info=True)

@@ -1,0 +1,363 @@
+import html
+import re
+from typing import Any, Dict, List, Optional, Tuple
+
+
+_PROPERTY_ID_RE = re.compile(r"/inmueble/(\d+)", re.IGNORECASE)
+
+# Price patterns (supports Spanish/English thousand separators)
+_PRICE_PATTERNS = [
+    r'(\d{1,3}(?:,\d{3})*)\s*€',
+    r'(\d{1,3}(?:\.\d{3})*)\s*€',
+    r'Price:?\s*(\d{1,3}(?:,\d{3})*)\s*€',
+    r'Precio:?\s*(\d{1,3}(?:\.\d{3})*)\s*€',
+]
+
+# Price change patterns: extract (old, new) from "from X€ to Y€" / "de X€ a Y€".
+_PRICE_CHANGE_PATTERNS = [
+    r'\bfrom\s+(\d{1,3}(?:[.,]\d{3})*)\s*€\s+to\s+(\d{1,3}(?:[.,]\d{3})*)\s*€',
+    r'\bde\s+(\d{1,3}(?:[.,]\d{3})*)\s*€\s+a\s+(\d{1,3}(?:[.,]\d{3})*)\s*€',
+]
+
+# Area patterns (m² / m2; no minimum threshold)
+_AREA_PATTERNS = [
+    r'(\d{1,3}(?:,\d{3})*)\s*m[²2]',
+    r'(\d{1,3}(?:\.\d{3})*)\s*m[²2]',
+    r'(\d+)\s*m[²2]',
+    r'Superficie:?\s*(\d+(?:,\d+)?)\s*m[²2]',
+]
+
+_ANCHOR_RE = re.compile(
+    r'<a\b[^>]*href=["\'](?P<href>[^"\']+)["\'][^>]*>(?P<text>.*?)</a>',
+    re.IGNORECASE | re.DOTALL,
+)
+
+_CTA_TEXT_RE = re.compile(
+    r"^\s*(?:"
+    r"see\s+\d+\s+photos|ver\s+\d+\s+fotos|"
+    r"contact|contactar|"
+    r"see\s+all\s+listings.*|ver\s+todos\s+los\s+anuncios.*|"
+    r"download\s+the\s+idealista\s+app|descarga\s+la\s+app\s+de\s+idealista|"
+    r"stop\s+receiving.*|dejar\s+de\s+recibir.*"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+_TITLE_HINT_RE = re.compile(
+    r"\b("
+    # Housing
+    r"piso|apartamento|apartament|apartment|flat|estudio|studio|loft|"
+    r"ático|atico|penthouse|"
+    r"dúplex|duplex|"
+    r"casa|chalet|vivienda|house|villa|adosado|pareado|bungalow|"
+    r"detached|semi[-\s]?detached|terraced|townhouse|"
+    # Garage / storage
+    r"garaje|garage|trastero|storage|parking|plaza\s+de\s+garaje|"
+    # Commercial
+    r"oficina|office|despacho|"
+    r"local\s+comercial|commercial\s+premises|shop|retail|"
+    r"nave|warehouse|industrial|almac[eé]n|almacen|"
+    # Land
+    r"terreno|parcela|plot|land|"
+    r"suelo\s+(?:en\s+venta|urbanizable|rústico|rustico)|"
+    r"solar\s+(?:urbano|en\s+venta)|"
+    r"finca\s+(?:rústica|rustica|en\s+venta)|"
+    # Building / developments
+    r"edificio|building|bloque|"
+    r"obra\s+nueva|promoción|promocion|new\s+development"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def extract_idealista_property_id(url: Optional[str]) -> Optional[int]:
+    if not url:
+        return None
+    match = _PROPERTY_ID_RE.search(url)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def extract_url(text: str) -> Optional[str]:
+    """Extract Idealista URL from text (prefer listing URL over logo/homepage)."""
+    if not text:
+        return None
+
+    # Prefer property-specific URL (with /inmueble/<id>/)
+    property_pattern = r'https?://www\.idealista\.com(?:/[a-z]{2})?/inmueble/\d+[^"\s]*'
+    match = re.search(property_pattern, text, re.IGNORECASE)
+    if match:
+        return match.group(0).strip().rstrip('"\'')
+
+    # Fallback: first idealista URL (skip logo links)
+    generic_pattern = r'https?://www\.idealista\.com/[^\s]+'
+    match = re.search(generic_pattern, text, re.IGNORECASE)
+    if not match:
+        return None
+
+    url = match.group(0).strip().rstrip('"\'')
+    if 'logo' in url:
+        return None
+    if not url.startswith('http'):
+        return None
+    return url
+
+
+def _parse_price_number(value: str) -> Optional[float]:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    raw = raw.replace(",", "").replace(".", "")
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def extract_price(text: str) -> Optional[float]:
+    if not text:
+        return None
+
+    # Prefer the "new" price when this is a price-change email.
+    old_price, new_price = extract_price_change(text)
+    if new_price is not None:
+        return new_price
+
+    plain = _strip_html(text)
+    matches: list[tuple[int, float]] = []
+    seen: set[tuple[int, float]] = set()
+    for pattern in _PRICE_PATTERNS:
+        for m in re.finditer(pattern, plain, re.IGNORECASE):
+            parsed = _parse_price_number(m.group(1))
+            if parsed is None:
+                continue
+            key = (m.start(), parsed)
+            if key in seen:
+                continue
+            seen.add(key)
+            matches.append(key)
+
+    if not matches:
+        return None
+
+    matches.sort(key=lambda x: x[0])
+    # Price-change emails may include both old+new prices; returning the last match is safer.
+    return matches[-1][1]
+
+
+def extract_price_change(text: str) -> Tuple[Optional[float], Optional[float]]:
+    """Extract (old_price, new_price) from price-change emails."""
+    if not text:
+        return None, None
+
+    # HTML formatting fallback: old price is struck through, new price follows.
+    try:
+        strike_re = re.compile(
+            r"(?is)(?:<s[^>]*>|<del[^>]*>|text-decoration\s*:\s*line-through[^>]*>)\s*(\d{1,3}(?:[.,]\d{3})*)\s*€",
+        )
+        strike_match = strike_re.search(text)
+        if strike_match:
+            old_price = _parse_price_number(strike_match.group(1))
+            tail_plain = _strip_html(text[strike_match.end() :])
+            m = re.search(r"(\d{1,3}(?:[.,]\d{3})*)\s*€", tail_plain)
+            if m:
+                new_price = _parse_price_number(m.group(1))
+                if old_price is not None and new_price is not None:
+                    return old_price, new_price
+    except Exception:
+        pass
+
+    plain = _strip_html(text)
+    for pattern in _PRICE_CHANGE_PATTERNS:
+        match = re.search(pattern, plain, re.IGNORECASE)
+        if not match:
+            continue
+        old_price = _parse_price_number(match.group(1))
+        new_price = _parse_price_number(match.group(2))
+        if old_price is not None and new_price is not None:
+            return old_price, new_price
+
+    all_prices: list[tuple[int, float]] = []
+    for m in re.finditer(r"(\d{1,3}(?:[.,]\d{3})*)\s*€", plain):
+        parsed = _parse_price_number(m.group(1))
+        if parsed is None:
+            continue
+        all_prices.append((m.start(), parsed))
+
+    if len(all_prices) >= 2:
+        all_prices.sort(key=lambda x: x[0])
+        return all_prices[0][1], all_prices[-1][1]
+
+    return None, None
+
+
+def extract_area_m2(text: str) -> Optional[float]:
+    if not text:
+        return None
+    text = _strip_html(text)
+    for pattern in _AREA_PATTERNS:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            continue
+        area_str = match.group(1)
+        area_str = area_str.replace(',', '').replace('.', '')
+        try:
+            return float(area_str)
+        except ValueError:
+            continue
+    return None
+
+
+def _strip_html(value: str) -> str:
+    """Best-effort HTML-to-text for small snippets."""
+    if not value:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", value)
+    text = html.unescape(text)
+    text = text.replace("\xa0", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _rank_title_candidate(text: str) -> Tuple[int, int]:
+    """Return a stable score tuple for sorting title candidates."""
+    t = (text or "").strip()
+    if not t:
+        return (0, 0)
+    score = 0
+    if "," in t:
+        score += 10
+    if re.search(r"\b(in|en)\b", t, re.IGNORECASE):
+        score += 6
+    if _TITLE_HINT_RE.search(t):
+        score += 5
+    score += min(len(t), 120) // 4
+    return (score, len(t))
+
+
+def extract_listing_title(text: str, idealista_property_id: Optional[int] = None) -> Optional[str]:
+    """Extract listing title (card headline) from an Idealista email body."""
+    if not text:
+        return None
+
+    candidates: List[str] = []
+
+    id_value = idealista_property_id
+    if id_value is None:
+        id_match = _PROPERTY_ID_RE.search(text)
+        if id_match:
+            try:
+                id_value = int(id_match.group(1))
+            except ValueError:
+                id_value = None
+
+    for match in _ANCHOR_RE.finditer(text):
+        href = (match.group("href") or "").strip()
+        raw_text = match.group("text") or ""
+        if "/inmueble/" not in href:
+            continue
+        if id_value is not None and f"/inmueble/{id_value}" not in href:
+            continue
+
+        cleaned = _strip_html(raw_text)
+        if not cleaned:
+            continue
+        if _CTA_TEXT_RE.match(cleaned):
+            continue
+        candidates.append(cleaned)
+
+    # Fallback: title may appear in plain text without anchors (text/plain part).
+    if not candidates:
+        re_text = re.compile(
+            r"(?:^|\n|\r)\s*(?P<title>[^<>\n\r]{10,160}?)\s*(?:€|m[²2]|$)",
+            re.IGNORECASE,
+        )
+        for m in re_text.finditer(text):
+            cleaned = _strip_html(m.group("title") or "")
+            if not cleaned:
+                continue
+            if _CTA_TEXT_RE.match(cleaned):
+                continue
+            if _TITLE_HINT_RE.search(cleaned):
+                candidates.append(cleaned)
+
+    if not candidates:
+        return None
+
+    candidates = [c[:160] for c in candidates if c]
+    candidates.sort(key=_rank_title_candidate, reverse=True)
+    return candidates[0] if candidates else None
+
+
+def extract_municipality_from_title(title: Optional[str]) -> Optional[str]:
+    if not title:
+        return None
+
+    cleaned = " ".join(str(title).replace("\xa0", " ").split()).strip()
+    if not cleaned:
+        return None
+
+    cleaned = re.sub(r"\s+\d[\d.,]*\s*€.*$", "", cleaned).strip()
+    cleaned = re.sub(r"\s+\d[\d.,]*\s*m[²2].*$", "", cleaned).strip()
+
+    parts = [p.strip() for p in cleaned.split(",") if p.strip()]
+    if len(parts) >= 2:
+        candidate = parts[-1]
+    else:
+        m = re.search(r"\b(?:in|en)\s+(.+)$", cleaned, re.IGNORECASE)
+        candidate = (m.group(1).strip() if m else cleaned).strip()
+
+    if len(candidate) > 80:
+        return None
+    return candidate or None
+
+
+def extract_bedrooms(text: str) -> Optional[int]:
+    if not text:
+        return None
+    patterns = [
+        r"\b(\d{1,2})\s*(?:bed|beds|bedroom|bedrooms)\b",
+        r"\b(\d{1,2})\s*(?:hab|habitaci[oó]n|habitaciones|dormitorio|dormitorios)\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            continue
+        try:
+            return int(match.group(1))
+        except ValueError:
+            continue
+    return None
+
+
+def extract_bathrooms(text: str) -> Optional[int]:
+    if not text:
+        return None
+    patterns = [
+        r"\b(\d{1,2})\s*(?:bath|baths|bathroom|bathrooms)\b",
+        r"\b(\d{1,2})\s*(?:baño|baños)\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            continue
+        try:
+            return int(match.group(1))
+        except ValueError:
+            continue
+    return None
+
+
+def extract_property_attributes(text: str) -> Dict[str, Any]:
+    attrs: Dict[str, Any] = {}
+    beds = extract_bedrooms(text)
+    baths = extract_bathrooms(text)
+    if beds is not None:
+        attrs["bedrooms"] = beds
+    if baths is not None:
+        attrs["bathrooms"] = baths
+    return attrs

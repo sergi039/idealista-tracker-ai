@@ -173,7 +173,7 @@ class TestEnrichmentService:
             # Set API key for test
             enrichment_service.google_places_key = 'test_places_key'
             
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             enrichment_service._enrich_with_google_places(land)
             
             # Check that infrastructure_extended was updated
@@ -185,7 +185,7 @@ class TestEnrichmentService:
         with app.app_context():
             enrichment_service.google_places_key = ""
             
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             original_infrastructure = land.infrastructure_extended
             
             enrichment_service._enrich_with_google_places(land)
@@ -231,7 +231,7 @@ class TestEnrichmentService:
             # Set API key for test
             enrichment_service.google_maps_key = 'test_maps_key'
             
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             enrichment_service._enrich_with_google_maps(land)
             
             # Check that transport data was updated
@@ -263,7 +263,7 @@ class TestEnrichmentService:
             }
             mock_post.return_value = mock_response
             
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             enrichment_service._enrich_with_osm_data(land)
             
             # Check that OSM data was stored
@@ -275,7 +275,7 @@ class TestEnrichmentService:
     def test_analyze_environment_sea_view(self, app, enrichment_service, test_land):
         """Test environment analysis for sea view detection"""
         with app.app_context():
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             land.description = "Parcela con vistas al mar y orientación sur"
             
             enrichment_service._analyze_environment(land)
@@ -287,7 +287,7 @@ class TestEnrichmentService:
     def test_analyze_environment_mountain_view(self, app, enrichment_service, test_land):
         """Test environment analysis for mountain view detection"""
         with app.app_context():
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             land.description = "Terreno con vista a la montaña y orientación norte"
             
             enrichment_service._analyze_environment(land)
@@ -299,7 +299,7 @@ class TestEnrichmentService:
     def test_analyze_environment_forest_view(self, app, enrichment_service, test_land):
         """Test environment analysis for forest view detection"""
         with app.app_context():
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             land.description = "Parcela rodeada de bosque con mucho verde"
             
             enrichment_service._analyze_environment(land)
@@ -418,7 +418,7 @@ class TestEnrichmentService:
         with app.app_context():
             # Cause an exception by making geocoding service None
             enrichment_service.geocoding_service = None
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             land.location_lat = None
             land.location_lon = None
             db.session.commit()

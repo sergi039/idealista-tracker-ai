@@ -127,7 +127,7 @@ class TestScoringService:
     def test_calculate_score_success(self, app, scoring_service, test_land, scoring_criteria):
         """Test successful score calculation"""
         with app.app_context():
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             
             score = scoring_service.calculate_score(land)
             
@@ -139,7 +139,7 @@ class TestScoringService:
     def test_score_infrastructure_basic(self, app, scoring_service, test_land):
         """Test basic infrastructure scoring"""
         with app.app_context():
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             
             score = scoring_service._score_infrastructure_basic(land)
             
@@ -175,7 +175,7 @@ class TestScoringService:
     def test_score_infrastructure_extended(self, app, scoring_service, test_land):
         """Test extended infrastructure scoring"""
         with app.app_context():
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             
             score = scoring_service._score_infrastructure_extended(land)
             
@@ -186,7 +186,7 @@ class TestScoringService:
     def test_score_transport(self, app, scoring_service, test_land):
         """Test transport scoring"""
         with app.app_context():
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             
             score = scoring_service._score_transport(land)
             
@@ -197,7 +197,7 @@ class TestScoringService:
     def test_score_environment_sea_view(self, app, scoring_service, test_land):
         """Test environment scoring with sea view"""
         with app.app_context():
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             
             score = scoring_service._score_environment(land)
             
@@ -225,7 +225,7 @@ class TestScoringService:
     def test_score_neighborhood_default(self, app, scoring_service, test_land):
         """Test neighborhood scoring with default neutral score"""
         with app.app_context():
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             land.neighborhood = None
             
             score = scoring_service._score_neighborhood(land)
@@ -252,7 +252,7 @@ class TestScoringService:
     def test_score_services_quality(self, app, scoring_service, test_land):
         """Test services quality scoring"""
         with app.app_context():
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             
             score = scoring_service._score_services_quality(land)
             
@@ -275,7 +275,7 @@ class TestScoringService:
     def test_score_legal_status_developed(self, app, scoring_service, test_land):
         """Test legal status scoring for developed land"""
         with app.app_context():
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             
             score = scoring_service._score_legal_status(land)
             
@@ -413,7 +413,7 @@ class TestScoringService:
     def test_score_storage_in_environment(self, app, scoring_service, test_land, scoring_criteria):
         """Test that score breakdown is stored in environment field"""
         with app.app_context():
-            land = Land.query.get(test_land)
+            land = db.session.get(Land, test_land)
             
             scoring_service.calculate_score(land)
             

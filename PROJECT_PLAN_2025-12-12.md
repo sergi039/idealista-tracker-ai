@@ -2,6 +2,15 @@
 
 This file captures what’s next for the Idealista Tracker AI project. We’ll start implementing these items tomorrow.
 
+## Update — 2025-12-20 (dual-build split)
+
+We now run two isolated builds side-by-side:
+
+- Legacy (lands): `http://localhost:5001/`
+- Universal (properties): `http://localhost:5050/`
+
+Current state is tracked in `docs/STATE.md`. The active backlog is in `TODO.md`.
+
 ## Goals (next iteration)
 
 - Make production setup safer (secrets, admin access, scheduler, DB exposure)

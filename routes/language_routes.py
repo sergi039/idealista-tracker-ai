@@ -28,9 +28,9 @@ def set_user_language():
                 "error": "Invalid language code"
             }), 400
             
-    except Exception as e:
-        logger.error(f"Failed to set language: {str(e)}")
+    except Exception:
+        logger.error("Failed to set language", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500

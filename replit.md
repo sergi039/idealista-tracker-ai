@@ -84,7 +84,7 @@ Preferred communication style: Simple, everyday language.
 - **Price Analysis**: Extracts and highlights price reductions and special offers
 - **Interactive UI**: Toggle between enhanced English and original Spanish descriptions
 - **Cost Optimization**: Only processes descriptions when requested to minimize API usage
-- **Location-Based Analysis**: Different rental rates for urban, suburban, and rural areas in Asturias
+- **Location-Based Analysis**: Different rental rates for urban, suburban, and rural areas (configurable)
 - **Market Comparison**: Shows expected yield ranges and investment ratings (Excellent/Good/Moderate/Below Average)
 - **Demand Factors**: Identifies rental demand drivers specific to property location
 - **Real Estate Investment Analysis**: Comprehensive ROI calculations including NOI and capitalization rates

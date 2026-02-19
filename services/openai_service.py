@@ -1,11 +1,12 @@
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import requests
 
 from config import Config
+from utils.http import request_with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -105,8 +106,17 @@ class OpenAIService:
         if price and area and area > 0:
             price_per_m2 = price / area
 
+        try:
+            from services.settings_service import SettingsService
+
+            market_context = SettingsService.get_ai_market_context()
+        except Exception:
+            market_context = ""
+
         lines = [
-            "Analyze this Asturias real estate property and provide structured insights in ENGLISH:",
+            market_context,
+            "",
+            "Analyze this real estate listing and provide structured insights in ENGLISH:",
             "",
             f"PROPERTY: {title}",
             f"PRICE: €{price:,.0f}" if price is not None else "PRICE: N/A",
@@ -120,10 +130,20 @@ class OpenAIService:
         if land.travel_time_nearest_beach:
             beach_name = land.nearest_beach_name or "nearest beach"
             lines.append(f"BEACH ACCESS: {land.travel_time_nearest_beach} min to {beach_name}")
+        try:
+            from services.settings_service import SettingsService
+
+            reference_cities = SettingsService.get_reference_cities()
+        except Exception:
+            reference_cities = []
+
+        city_a = (reference_cities[0].get("name") if len(reference_cities) > 0 else None) or "City A"
+        city_b = (reference_cities[1].get("name") if len(reference_cities) > 1 else None) or "City B"
+
         if land.travel_time_oviedo:
-            lines.append(f"OVIEDO: {land.travel_time_oviedo} min")
+            lines.append(f"{city_a}: {land.travel_time_oviedo} min")
         if land.travel_time_gijon:
-            lines.append(f"GIJÓN: {land.travel_time_gijon} min")
+            lines.append(f"{city_b}: {land.travel_time_gijon} min")
         if land.travel_time_airport:
             lines.append(f"AIRPORT: {land.travel_time_airport} min")
 
@@ -137,7 +157,7 @@ class OpenAIService:
         if construction:
             lines += [
                 "",
-                "CONSTRUCTION ESTIMATES (Asturias 2024-2025):",
+                "CONSTRUCTION ESTIMATES (configured assumptions):",
                 f"Buildable area: {construction.get('buildable_area', 'N/A')}m² ({construction.get('buildability_ratio', 'N/A')} of land)",
                 f"Construction cost per m²: €{construction.get('value_per_m2', 1000)}",
                 f"Estimated construction: €{construction.get('minimum_value', 0):,.0f} - €{construction.get('maximum_value', 0):,.0f}",
@@ -181,7 +201,7 @@ class OpenAIService:
             STRUCTURED_JSON_SCHEMA,
             "",
             "IMPORTANT: Use the provided CONSTRUCTION ESTIMATES and MARKET DATA in your analysis.",
-            "Keep all responses concise and focused on practical investment insights for Asturias real estate market.",
+            "Keep all responses concise and focused on practical investment insights.",
         ]
 
         return "\n".join(lines)
@@ -230,11 +250,18 @@ class OpenAIService:
         # Prefer strict JSON output when supported.
         payload["response_format"] = {"type": "json_object"}
 
-        started = datetime.utcnow()
+        started = datetime.now(timezone.utc)
         # Some newer models require `max_completion_tokens` instead of `max_tokens`.
         # Use a retry with the alternative parameter based on API error message.
         def _post(json_payload: Dict[str, Any]):
-            return requests.post(url, headers=headers, json=json_payload, timeout=600)
+            return request_with_retries(
+                requests.post,
+                url,
+                headers=headers,
+                json=json_payload,
+                timeout=600,
+                logger=logger,
+            )
 
         first = dict(payload)
         first["max_completion_tokens"] = 4000

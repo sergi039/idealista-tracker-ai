@@ -24,44 +24,16 @@ except ImportError:
 # Model selection is centralized in Config (supports legacy aliases).
 DEFAULT_MODEL = Config.ANTHROPIC_MODEL
 
-# Asturias Real Estate Market Context (Updated 2025)
-# This provides AI with current market knowledge for more accurate analysis
+# Real Estate Market Context (Updated 2025)
+# Default is configurable via SettingsService / SearchProfile.ai_config.market_context.
 MARKET_CONTEXT_2025 = """
-ASTURIAS REAL ESTATE MARKET CONTEXT (2025):
+REAL ESTATE MARKET CONTEXT (2025, generic):
 
-MARKET OVERVIEW:
-- Housing prices: Rising 4-5% annually across Spain, Asturias slightly below national average
-- Construction costs: €1,100-1,800/m² for quality builds (updated 2025 data)
-- Purchase costs: ~11% additional (8% ITP transfer tax + 3% notary/registry/legal)
-
-KEY MARKET DRIVERS:
-- Remote work migration: Growing demand from professionals seeking quality of life
-- Gijón tech hub: Emerging technology sector attracting young professionals
-- Coastal lifestyle: "Green Spain" appeal for Northern European buyers
-- Affordable vs major cities: 40-60% cheaper than Madrid/Barcelona
-
-REGIONAL CHARACTERISTICS:
-- Urban (Gijón/Oviedo/Avilés): Rental yields 4-5%, stable demand, quick tenant turnover
-- Suburban: Family-oriented, 5-6% yields, growing demand
-- Rural/Coastal: Vacation rental potential, 6-8% gross yields but seasonal, remote work appeal
-
-INVESTMENT CONSIDERATIONS:
-- Net yields typically 1.5-2% lower than gross (maintenance, vacancy, management)
-- Vacancy rate: 5-10% for long-term rentals, 15-25% for vacation rentals (seasonal)
-- Operating expenses: ~15-20% of gross rental income
-
-RISKS:
-- Limited infrastructure in rural areas
-- Harsh winters affect some coastal properties
-- Lower liquidity compared to major Spanish cities
-- Some areas have restricted building permits (protected landscapes)
-
-OPPORTUNITIES:
-- Undervalued compared to other Spanish coastal regions
-- Strong natural tourism growth (Picos de Europa, beaches)
-- EU remote work visa attracting international buyers
-- Infrastructure improvements (A-8 highway, Gijón port expansion)
-"""
+- Geography: Spain (sale listings).
+- Taxes/fees vary by autonomous community and deal specifics; prefer configured assumptions when available.
+- Prefer provided MARKET DATA / CONSTRUCTION ESTIMATES; if missing, state uncertainty instead of inventing numbers.
+- Write in English, be concise, and focus on actionable investment and risk insights.
+""".strip()
 
 class AnthropicService:
     """Service for interacting with Anthropic Claude API"""
@@ -85,7 +57,7 @@ class AnthropicService:
             self.client = Anthropic(api_key=self.api_key)
             logger.debug("Anthropic client initialized successfully")
         except Exception as e:
-            logger.error(f"Failed to initialize Anthropic client: {str(e)}")
+            logger.error("Failed to initialize Anthropic client", exc_info=True)
             raise
 
     def _extract_response_text(self, message) -> str:
@@ -146,10 +118,10 @@ Format your response in clear sections."""
             }
             
         except Exception as e:
-            logger.error(f"Failed to analyze property with Claude: {str(e)}")
+            logger.error("Failed to analyze property with Claude", exc_info=True)
             return {
                 'analysis': None,
-                'error': str(e),
+                'error': 'AI analysis failed',
                 'status': 'failed'
             }
     
@@ -184,7 +156,7 @@ Format your response in clear sections."""
             return self._extract_response_text(message) or None
             
         except Exception as e:
-            logger.error(f"Failed to generate summary: {str(e)}")
+            logger.error("Failed to generate summary", exc_info=True)
             return None
     
     def find_similar_properties(self, current_property: Dict[str, Any], limit: int = 3) -> List[Dict[str, Any]]:
@@ -300,7 +272,7 @@ Format your response in clear sections."""
             return results[:limit]
             
         except Exception as e:
-            logger.error(f"Failed to find similar properties: {str(e)}")
+            logger.error("Failed to find similar properties", exc_info=True)
             return []
     
     def _calculate_similarity_score(self, current: Dict[str, Any], other) -> float:
@@ -369,7 +341,7 @@ Format your response in clear sections."""
                     if land:
                         enriched_data = market_service.get_enriched_data(land)
                 except Exception as e:
-                    logger.debug(f"Could not get enriched data: {str(e)}")
+                    logger.debug("Could not get enriched data", exc_info=True)
             
             # Prepare comprehensive property data
             property_text = self._format_comprehensive_data(property_data)
@@ -377,7 +349,7 @@ Format your response in clear sections."""
             # Add construction and market data to the context
             if enriched_data.get('construction_value_estimation'):
                 construction = enriched_data['construction_value_estimation']
-                property_text += f"\n\nCONSTRUCTION ESTIMATES (Asturias 2024-2025):"
+                property_text += f"\n\nCONSTRUCTION ESTIMATES (configured assumptions):"
                 property_text += f"\nBuildable area: {construction.get('buildable_area', 'N/A')}m² ({construction.get('buildability_ratio', 'N/A')} of land)"
                 property_text += f"\nConstruction cost per m²: €{construction.get('value_per_m2', 1000)}"
                 property_text += f"\nEstimated construction: €{construction.get('minimum_value', 0):,.0f} - €{construction.get('maximum_value', 0):,.0f}"
@@ -442,9 +414,21 @@ ENRICHMENT PRIORITY: Focus especially on these sections: {', '.join(enrichment_f
 Provide ONLY the missing or enhanced data in this EXACT JSON format (keep all text in English). Include ALL sections but focus enrichment on priority areas:"""
             else:
                 # Fresh analysis prompt with market context
-                prompt = f"""{MARKET_CONTEXT_2025}
+                try:
+                    from app import db
+                    from models import SearchProfile
+                    from services.search_profile_service import SearchProfileService
 
-Analyze this Asturias real estate property and provide structured insights in ENGLISH:
+                    profile_id = property_data.get("search_profile_id") or property_data.get("profile_id")
+                    profile_id = int(profile_id) if profile_id is not None else None
+                    profile = db.session.get(SearchProfile, profile_id) if profile_id else None
+                    market_context = SearchProfileService.get_ai_market_context(profile)
+                except Exception:
+                    market_context = MARKET_CONTEXT_2025
+
+                prompt = f"""{market_context}
+
+Analyze this real estate listing and provide structured insights in ENGLISH:
 
 {property_text}{similar_text}
 
@@ -517,7 +501,7 @@ Provide analysis in this EXACT JSON format (keep all text in English):
 
 IMPORTANT: Use the provided CONSTRUCTION ESTIMATES and MARKET DATA in your analysis. Base your construction_value_estimation and market_price_dynamics on the real data provided above, not on general estimates.
 
-Keep all responses concise and in English. Focus on practical investment insights for Asturias real estate market."""
+Keep all responses concise and in English. Focus on practical investment insights."""
             
             # Call Claude API
             message = self.client.messages.create(
@@ -569,10 +553,10 @@ Keep all responses concise and in English. Focus on practical investment insight
                 }
             
         except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Failed to analyze property structure with Claude: {error_msg}")
-            
+            logger.error("Failed to analyze property structure with Claude", exc_info=True)
+
             # Parse specific API errors for better user messages
+            error_msg = str(e)
             if "529" in error_msg or "overloaded" in error_msg.lower():
                 user_msg = "Claude AI service is temporarily overloaded. Please try again in a few minutes."
             elif "401" in error_msg or "unauthorized" in error_msg.lower():
@@ -583,10 +567,9 @@ Keep all responses concise and in English. Focus on practical investment insight
                 user_msg = "Request timed out. Please try again."
             else:
                 user_msg = "AI analysis service is temporarily unavailable. Please try again later."
-            
+
             return {
                 'error': user_msg,
-                'technical_error': error_msg,
                 'status': 'failed'
             }
     
@@ -611,10 +594,20 @@ Keep all responses concise and in English. Focus on practical investment insight
         # Travel times
         if property_data.get('travel_time_nearest_beach'):
             text_parts.append(f"BEACH ACCESS: {property_data['travel_time_nearest_beach']} min to {property_data.get('nearest_beach_name', 'beach')}")
+        try:
+            from services.settings_service import SettingsService
+
+            reference_cities = SettingsService.get_reference_cities()
+        except Exception:
+            reference_cities = []
+
+        city_a = (reference_cities[0].get("name") if len(reference_cities) > 0 else None) or "City A"
+        city_b = (reference_cities[1].get("name") if len(reference_cities) > 1 else None) or "City B"
+
         if property_data.get('travel_time_oviedo'):
-            text_parts.append(f"OVIEDO: {property_data['travel_time_oviedo']} min")
+            text_parts.append(f"{city_a}: {property_data['travel_time_oviedo']} min")
         if property_data.get('travel_time_gijon'):
-            text_parts.append(f"GIJÓN: {property_data['travel_time_gijon']} min")
+            text_parts.append(f"{city_b}: {property_data['travel_time_gijon']} min")
         if property_data.get('travel_time_airport'):
             text_parts.append(f"AIRPORT: {property_data['travel_time_airport']} min")
         
@@ -675,7 +668,7 @@ Respond with ONLY a number between 0 and 100, nothing else."""
             return min(100, max(0, score))  # Ensure within bounds
             
         except Exception as e:
-            logger.error(f"Failed to score property: {str(e)}")
+            logger.error("Failed to score property", exc_info=True)
             return None
     
     def _format_property_data(self, property_data: Dict[str, Any]) -> str:

@@ -6,14 +6,25 @@
 <div class="row">
     <div class="col-12">
         <div class="d-flex justify-content-between align-items-center mb-3">
-            <h1>
+            <h1 class="mb-0">
                 <i class="fas fa-map me-2"></i>
                 Properties Map
                 <span class="badge bg-secondary">{{ markers|length }}</span>
             </h1>
-            <a href="{{ url_for('main.lands') }}" class="btn btn-outline-secondary">
-                <i class="fas fa-list me-1"></i>List View
-            </a>
+            <div class="d-flex align-items-center gap-2">
+                {% if profiles %}
+                <form method="GET" class="d-flex align-items-center gap-2">
+                    <select name="profile_id" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
+                        {% for p in profiles %}
+                            <option value="{{ p.id }}" {% if selected_profile_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+                        {% endfor %}
+                    </select>
+                </form>
+                {% endif %}
+                <a href="{{ url_for('main.properties', profile_id=selected_profile_id) }}" class="btn btn-outline-secondary btn-sm">
+                    <i class="fas fa-list me-1"></i>{{ t('properties') }}
+                </a>
+            </div>
         </div>
 
         <div class="card">
@@ -189,9 +200,10 @@
 document.addEventListener('DOMContentLoaded', function() {
     // Property markers data from Flask
     const markers = {{ markers | tojson | safe }};
+    const travelDisplayTargets = {{ (travel_display_targets or []) | tojson | safe }};
 
-    // Initialize map centered on Asturias
-    const map = L.map('map').setView([43.36, -5.85], 9);
+    // Initialize map centered on Spain (fitBounds will override when we have markers).
+    const map = L.map('map').setView([40.4168, -3.7038], 6);
 
     // Base layers
     const streetMap = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -246,11 +258,43 @@ document.addEventListener('DOMContentLoaded', function() {
         return `<span class="score-badge ${scoreClass}">${score.toFixed(1)}</span>`;
     }
 
-    // Helper function to get type badge
-    function getTypeBadge(landType) {
-        if (!landType) return '';
-        const typeClass = landType === 'developed' ? 'type-developed' : 'type-buildable';
-        return `<span class="type-badge ${typeClass}">${landType.charAt(0).toUpperCase() + landType.slice(1)}</span>`;
+    function escapeHtml(text) {
+        const str = String(text || '');
+        return str
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#39;');
+    }
+
+    function renderTravelBadges(travel) {
+        if (!travel || typeof travel !== 'object') return '';
+        const targets = travel.targets && typeof travel.targets === 'object' ? travel.targets : {};
+        if (!travelDisplayTargets.length) return '';
+
+        const chunks = [];
+        for (const tt of travelDisplayTargets) {
+            const tdata = targets[tt.key];
+            const minutes = tdata && typeof tdata === 'object' ? tdata.duration_min : null;
+            if (!minutes) continue;
+            const mode = tdata && typeof tdata === 'object' && tdata.mode ? tdata.mode : 'driving';
+            const placeName = tdata && tdata.place && tdata.place.name ? tdata.place.name : null;
+            const distKm = tdata && tdata.distance_km ? tdata.distance_km : null;
+
+            const title =
+                `${tt.label} (${mode})` +
+                (placeName ? `: ${placeName}` : '') +
+                (distKm ? ` (${Number(distKm).toFixed(1)} km)` : '');
+
+            chunks.push(
+                `<span class="badge bg-info me-1" title="${escapeHtml(title)}">` +
+                `<i class="fas ${escapeHtml(tt.icon || 'fa-route')} me-1"></i>${escapeHtml(minutes)}m</span>`
+            );
+        }
+
+        if (!chunks.length) return '';
+        return `<div class="mt-2">${chunks.join('')}</div>`;
     }
 
     // Create custom icon
@@ -274,15 +318,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Add markers
     markers.forEach(function(prop) {
-        const landId = Number(prop.id);
-        if (!Number.isFinite(landId)) return;
+        const propertyId = Number(prop.id);
+        if (!Number.isFinite(propertyId)) return;
+
+        const typeLabel = [prop.category, prop.subtype].filter(Boolean).join(' / ');
+        const travelBlock = renderTravelBadges(prop.travel);
 
         const popupContent = `
             <div class="property-popup">
-                <h6>${prop.title}</h6>
+                <h6>${escapeHtml(prop.title)}</h6>
                 <div class="d-flex gap-2 mb-2">
                     ${getScoreBadge(prop.score)}
-                    ${getTypeBadge(prop.land_type)}
+                    ${typeLabel ? `<span class="type-badge type-buildable">${escapeHtml(typeLabel)}</span>` : ''}
                 </div>
                 <div class="info-row">
                     <span class="info-label">Price:</span>
@@ -295,11 +342,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 ${prop.municipality ? `
                 <div class="info-row">
                     <span class="info-label">Municipality:</span>
-                    <span class="info-value">${prop.municipality}</span>
+                    <span class="info-value">${escapeHtml(prop.municipality)}</span>
                 </div>
                 ` : ''}
+                ${travelBlock}
                 <div class="links">
-                    <a href="/lands/${prop.id}" class="btn btn-primary btn-sm">
+                    <a href="/properties/${prop.id}" class="btn btn-primary btn-sm">
                         <i class="fas fa-eye me-1"></i>Details
                     </a>
                     ${prop.url ? `
@@ -320,7 +368,7 @@ document.addEventListener('DOMContentLoaded', function() {
             maxWidth: 300
         });
 
-        markerById.set(landId, { marker, score: prop.score });
+        markerById.set(propertyId, { marker, score: prop.score });
         markerCluster.addLayer(marker);
     });
 
@@ -386,7 +434,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (window.history.length > 1) {
                         window.history.back();
                     } else {
-                        window.location.href = '/lands';
+                        window.location.href = '/properties';
                     }
                 });
 

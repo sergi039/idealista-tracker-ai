@@ -1,0 +1,308 @@
+{% extends "base.html" %}
+
+{% block title %}Property Settings{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <div>
+        <h2 class="mb-1">Property settings</h2>
+        <div class="text-body-secondary small">Global defaults for the universal build (profiles can override)</div>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('main.profiles') }}">
+            <i class="fas fa-layer-group me-1"></i>Profiles
+        </a>
+    </div>
+</div>
+
+{% if not is_admin %}
+<div class="alert alert-warning">
+    <div class="d-flex flex-wrap align-items-center gap-2">
+        <div class="flex-grow-1">
+            Admin authentication is required to save changes. Configure <code>ADMIN_API_TOKEN</code>.
+        </div>
+        <div class="input-group input-group-sm" style="max-width: 420px;">
+            <span class="input-group-text">Admin token</span>
+            <input type="password" class="form-control" id="admin-token-input" placeholder="Paste ADMIN_API_TOKEN">
+            <button type="button" class="btn btn-outline-dark" id="admin-token-save">Unlock</button>
+            <button type="button" class="btn btn-outline-secondary" id="admin-token-clear" title="Clear token">Clear</button>
+        </div>
+    </div>
+    <div class="form-text mt-2">Token is stored in a browser cookie for this host only.</div>
+</div>
+{% endif %}
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <h5 class="mb-0">Ingestion settings</h5>
+            <div class="text-body-secondary small">Applies to new imports</div>
+        </div>
+
+        <form method="POST" class="row g-2">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <input type="hidden" name="action" value="save_ingestion_settings">
+
+            <div class="col-12 col-md-6">
+                <div class="form-check mt-1">
+                    <input class="form-check-input"
+                           type="checkbox"
+                           id="sale_only"
+                           name="sale_only"
+                           {% if sale_only %}checked{% endif %}>
+                    <label class="form-check-label" for="sale_only">Sale-only (skip rentals)</label>
+                </div>
+                <div class="form-text">
+                    If enabled, emails detected as rentals won’t be imported.
+                </div>
+            </div>
+
+            <div class="col-12 col-md-6">
+                <label class="form-label small mb-1" for="excluded_categories">Excluded categories</label>
+                <input class="form-control form-control-sm"
+                       id="excluded_categories"
+                       name="excluded_categories"
+                       placeholder="land, commercial, ..."
+                       value="{{ excluded_categories_csv or '' }}">
+                <div class="form-text">
+                    Comma-separated. Useful to keep legacy land tracker separate (example: <code>land</code>).
+                </div>
+            </div>
+
+            <div class="col-12 mt-1">
+                <button class="btn btn-primary btn-sm" type="submit" {% if not is_admin %}disabled{% endif %}>Save ingestion settings</button>
+                {% if not is_admin %}
+                    <span class="text-body-secondary small ms-2">Admin authentication required to save.</span>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <h5 class="mb-0">Reference cities</h5>
+            <div class="text-body-secondary small">Used for travel-time scoring/labels and market analysis hints</div>
+        </div>
+
+        <div class="alert alert-info py-2 mb-2">
+            Pick at least <strong>2</strong> cities (from the list). First two are treated as “City A / City B”.
+        </div>
+
+        <form method="POST" class="row g-2" id="reference-cities-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <input type="hidden" name="action" value="save_reference_cities">
+
+            <div class="col-12">
+                <div id="reference-cities-rows" class="vstack gap-2">
+                    {% for city in (reference_cities or []) %}
+                        <div class="d-flex gap-2 align-items-center reference-city-row">
+                            <input class="form-control"
+                                   name="reference_city_name"
+                                   value="{{ city.name }}"
+                                   list="city-registry"
+                                   placeholder="Start typing a city..."
+                                   required>
+                            <button type="button" class="btn btn-outline-danger btn-sm remove-city">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    {% endfor %}
+                </div>
+
+                <datalist id="city-registry">
+                    {% for city_name in (city_registry_names or []) %}
+                        <option value="{{ city_name }}"></option>
+                    {% endfor %}
+                </datalist>
+            </div>
+
+            <div class="col-12 d-flex justify-content-between align-items-center mt-2">
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="add-reference-city">
+                    <i class="fas fa-plus me-1"></i>Add City
+                </button>
+                <button class="btn btn-primary btn-sm" type="submit" {% if not is_admin %}disabled{% endif %}>
+                    <i class="fas fa-save me-1"></i>Save reference cities
+                </button>
+            </div>
+            {% if not is_admin %}
+                <div class="col-12">
+                    <span class="text-body-secondary small">Admin authentication required to save.</span>
+                </div>
+            {% endif %}
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <h5 class="mb-0">Ingestion maintenance</h5>
+            <div class="text-body-secondary small">
+                Cursor UID: {{ last_seen_uid if last_seen_uid is not none else '—' }}
+                {% if property_count is not none %}· Properties: {{ property_count }}{% endif %}
+            </div>
+        </div>
+
+        <div class="alert alert-info py-2 mb-2">
+            Use this if the database is empty but the ingestion cursor already advanced (no emails imported on incremental sync).
+        </div>
+
+        <button class="btn btn-outline-danger btn-sm"
+                hx-post="{{ url_for('api.manual_ingestion') }}"
+                hx-vals='{"sync_type":"full"}'
+                hx-trigger="click"
+                hx-indicator="#ingestion-spinner"
+                hx-swap="none"
+                {% if not is_admin %}disabled{% endif %}>
+            <i class="fas fa-sync-alt me-1"></i>Full Sync (reprocess all emails)
+        </button>
+        {% if not is_admin %}
+            <span class="text-body-secondary small ms-2">Admin authentication required.</span>
+        {% endif %}
+
+        <div class="form-text mt-2">
+            Full sync resets the last-seen UID to 0 and scans the entire Gmail label configured via <code>IMAP_FOLDER</code>.
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const tokenInput = document.getElementById('admin-token-input');
+    const saveToken = document.getElementById('admin-token-save');
+    const clearToken = document.getElementById('admin-token-clear');
+
+    const setCookie = (value, maxAgeSeconds) => {
+        let cookie = `admin_token=${encodeURIComponent(value || '')}; Path=/; SameSite=Lax`;
+        if (maxAgeSeconds !== undefined) {
+            cookie += `; Max-Age=${maxAgeSeconds}`;
+        }
+        document.cookie = cookie;
+    };
+
+    if (saveToken && tokenInput) {
+        saveToken.addEventListener('click', () => {
+            const token = (tokenInput.value || '').trim();
+            if (!token) return;
+            setCookie(token, 60 * 60 * 24 * 7);
+            window.location.reload();
+        });
+    }
+
+    if (clearToken) {
+        clearToken.addEventListener('click', () => {
+            setCookie('', 0);
+            window.location.reload();
+        });
+    }
+
+    const refForm = document.getElementById('reference-cities-form');
+    const rows = document.getElementById('reference-cities-rows');
+    const addBtn = document.getElementById('add-reference-city');
+    if (!refForm || !rows || !addBtn) return;
+
+    const updateRemoveState = () => {
+        const allRows = rows.querySelectorAll('.reference-city-row');
+        allRows.forEach((row) => {
+            const removeBtn = row.querySelector('.remove-city');
+            if (!removeBtn) return;
+            removeBtn.disabled = allRows.length <= 2;
+            removeBtn.title = allRows.length <= 2 ? 'At least 2 cities required' : 'Remove';
+        });
+    };
+
+    rows.addEventListener('click', (e) => {
+        const btn = e.target.closest('.remove-city');
+        if (!btn) return;
+        if (rows.querySelectorAll('.reference-city-row').length <= 2) return;
+        const row = btn.closest('.reference-city-row');
+        if (row) row.remove();
+        updateRemoveState();
+    });
+
+    addBtn.addEventListener('click', () => {
+        const row = document.createElement('div');
+        row.className = 'd-flex gap-2 align-items-center reference-city-row';
+
+        const input = document.createElement('input');
+        input.className = 'form-control';
+        input.name = 'reference_city_name';
+        input.placeholder = 'Start typing a city...';
+        input.setAttribute('list', 'city-registry');
+        input.required = true;
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'btn btn-outline-danger btn-sm remove-city';
+        remove.innerHTML = '<i class="fas fa-trash"></i>';
+
+        row.appendChild(input);
+        row.appendChild(remove);
+        rows.appendChild(row);
+        updateRemoveState();
+        input.focus();
+    });
+
+    updateRemoveState();
+});
+</script>
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <h5 class="mb-0">Global AI market context</h5>
+            <div class="text-body-secondary small">Used when a profile has no override</div>
+        </div>
+
+        <form method="POST" class="row g-2">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <input type="hidden" name="action" value="save_ai_context">
+            <div class="col-12">
+                <textarea class="form-control form-control-sm"
+                          name="ai_market_context"
+                          rows="7"
+                          placeholder="Describe your market assumptions...">{{ ai_market_context or '' }}</textarea>
+                <div class="form-text">
+                    To reset: clear and save (defaults will be restored).
+                </div>
+            </div>
+            <div class="col-12 d-flex gap-2 align-items-center">
+                <button class="btn btn-primary btn-sm" type="submit" {% if not is_admin %}disabled{% endif %}>Save AI context</button>
+                <details class="ms-2">
+                    <summary class="small text-body-secondary">Show built-in default</summary>
+                    <pre class="small mb-0 mt-2" style="white-space: pre-wrap;">{{ default_ai_market_context or '' }}</pre>
+                </details>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <h5 class="mb-0">Global classification rules</h5>
+            <div class="text-body-secondary small">Ordered by priority (higher wins)</div>
+        </div>
+
+        <form method="POST" class="row g-2">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <input type="hidden" name="action" value="save_classification_rules">
+            <div class="col-12">
+                <textarea class="form-control form-control-sm"
+                          name="classification_rules_json"
+                          rows="14"
+                          placeholder="JSON array of rules...">{{ classification_rules_json or '' }}</textarea>
+                <div class="form-text">
+                    Each rule: <code>{"category":"housing","subtype":"apartment","pattern":"...","priority":80}</code>
+                </div>
+            </div>
+            <div class="col-12 d-flex gap-2 align-items-center">
+                <button class="btn btn-primary btn-sm" type="submit" {% if not is_admin %}disabled{% endif %}>Save rules</button>
+                <span class="text-body-secondary small">To reset: clear JSON and save.</span>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

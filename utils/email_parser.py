@@ -29,7 +29,6 @@ class EmailParser:
                 # Use hardened patterns that avoid capturing "Your Search"
                 r'(?:en|in)\s+(?!And\b|Y\b|E\b|Your\s+Search)([A-ZÁÉÍÓÚÑ][a-záéíóúñ\s,\-]+(?:[A-ZÁÉÍÓÚÑ][a-záéíóúñ\s,\-]*)*)',
                 r'Municipio:?\s*([A-ZÁÉÍÓÚÑ][a-záéíóúñ\s,\-]+)',
-                r'([A-ZÁÉÍÓÚÑ][a-záéíóúñ\s,\-]+),\s*(?:Asturias|Cantabria)'
             ]
         }
         
@@ -120,7 +119,7 @@ class EmailParser:
         
         # If no specific property title found, create a descriptive one from available info
         # Try to extract location info
-        location_match = re.search(r'([A-ZÁÉÍÓÚ][a-záéíóúñ\s-]+)\s*,\s*(?:Cantabria|Asturias)', text, re.IGNORECASE)
+        location_match = re.search(r'([A-ZÁÉÍÓÚ][a-záéíóúñ\s-]+)\s*,\s*([A-ZÁÉÍÓÚ][a-záéíóúñ\s-]+)', text, re.IGNORECASE)
         if location_match:
             location = location_match.group(1).strip()
             return f"Terreno en {location}"
@@ -132,7 +131,7 @@ class EmailParser:
             return f"Terreno de {area} m²"
         
         # Last resort: generic but better than email subject
-        return "Terreno en Cantabria"
+        return "Terreno"
     
     def _clean_html(self, text: str) -> str:
         """Remove HTML tags and clean up the text"""
@@ -345,10 +344,10 @@ class EmailParser:
         
         # Require either:
         # a) Contains a comma (e.g., 'Corias, Pravia')
-        # b) Ends with known region
+        # b) Mentions country
         # c) Contains at least two meaningful tokens
         if (',' in municipality or 
-            re.search(r'\b(?:Asturias|Cantabria|Spain)\b', municipality, re.IGNORECASE) or
+            re.search(r'\b(?:Spain|España)\b', municipality, re.IGNORECASE) or
             len(municipality.split()) >= 2):
             return True
         

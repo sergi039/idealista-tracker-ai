@@ -96,7 +96,7 @@ class IMAPService:
                 logger.info(f"IMAP authentication successful for {self.user}")
                 return True
         except Exception as e:
-            logger.error(f"IMAP authentication failed: {str(e)}")
+            logger.error("IMAP authentication failed", exc_info=True)
             return False
     
     def _decode_header_value(self, value: str) -> str:
@@ -341,7 +341,7 @@ class IMAPService:
     
     def run_ingestion(self, sync_type: str = "incremental") -> int:
         """Main method to run email ingestion via IMAP"""
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         
         # Create sync history record
         sync_history = SyncHistory(
@@ -363,8 +363,8 @@ class IMAPService:
                 logger.warning("No emails found for ingestion")
                 sync_history.new_properties_added = 0
                 sync_history.status = 'completed'
-                sync_history.completed_at = datetime.utcnow()
-                sync_history.sync_duration = int((datetime.utcnow() - start_time).total_seconds())
+                sync_history.completed_at = datetime.now(timezone.utc)
+                sync_history.sync_duration = int((datetime.now(timezone.utc) - start_time).total_seconds())
                 db.session.commit()
                 return 0
             
@@ -404,7 +404,7 @@ class IMAPService:
                                     continue
 
                                 existing_property.listing_status = 'removed'
-                                existing_property.listing_removed_date = datetime.utcnow()
+                                existing_property.listing_removed_date = datetime.now(timezone.utc)
 
                                 if existing_property.is_favorite:
                                     snapshot = LandHistory.create_snapshot(existing_property, 'removed_from_listing')
@@ -470,7 +470,7 @@ class IMAPService:
                             existing_property.price = new_price
                             existing_property.price_change_amount = price_change
                             existing_property.price_change_percentage = price_change_percentage
-                            existing_property.price_changed_date = datetime.utcnow()
+                            existing_property.price_changed_date = datetime.now(timezone.utc)
                             existing_property.email_date = email_date_obj
 
                             any_updated = True
@@ -559,13 +559,13 @@ class IMAPService:
                                 db.session.commit()
                                 logger.info(f"Enhanced description for land {land.id}")
                     except Exception as e:
-                        logger.warning(f"Description enhancement failed for land {land.id}: {str(e)}")
+                        logger.warning("Description enhancement failed for land %s", land.id, exc_info=True)
                     
                     processed_count += 1
                     logger.info(f"Processed new land: {land.title}")
                     
                 except Exception as e:
-                    logger.error(f"Failed to process email {email_data.get('source_email_id')}: {str(e)}")
+                    logger.error("Failed to process email %s", email_data.get('source_email_id'), exc_info=True)
                     db.session.rollback()
                     continue
             
@@ -574,21 +574,21 @@ class IMAPService:
             sync_history.price_updated_count = price_updated_count
             sync_history.expired_count = expired_count
             sync_history.status = 'completed'
-            sync_history.completed_at = datetime.utcnow()
-            sync_history.sync_duration = int((datetime.utcnow() - start_time).total_seconds())
+            sync_history.completed_at = datetime.now(timezone.utc)
+            sync_history.sync_duration = int((datetime.now(timezone.utc) - start_time).total_seconds())
             db.session.commit()
             
             logger.info(f"IMAP ingestion completed. Processed {processed_count} new properties")
             return processed_count
             
         except Exception as e:
-            logger.error(f"IMAP ingestion failed: {str(e)}")
-            
+            logger.error("IMAP ingestion failed", exc_info=True)
+
             # Update sync history with error
             sync_history.status = 'failed'
-            sync_history.error_message = str(e)
-            sync_history.completed_at = datetime.utcnow()
-            sync_history.sync_duration = int((datetime.utcnow() - start_time).total_seconds())
+            sync_history.error_message = 'IMAP ingestion failed'
+            sync_history.completed_at = datetime.now(timezone.utc)
+            sync_history.sync_duration = int((datetime.now(timezone.utc) - start_time).total_seconds())
             db.session.commit()
             
             return 0

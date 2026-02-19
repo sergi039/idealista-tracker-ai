@@ -1,0 +1,427 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Profile — {{ profile.name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <div>
+        <h2 class="mb-1">{{ profile.name }}</h2>
+        <div class="text-body-secondary small">Profile-specific configuration (travel presets + custom targets)</div>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('main.profiles') }}">
+            <i class="fas fa-arrow-left me-1"></i>Back
+        </a>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <h5 class="mb-0">Profile settings</h5>
+            {% if profile.is_default %}
+                <span class="badge bg-primary">Default</span>
+            {% endif %}
+        </div>
+
+        <form method="POST" class="row g-2">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <input type="hidden" name="action" value="save_profile_settings">
+
+            <div class="col-12 col-md-6">
+                <label class="form-label small mb-1">Name</label>
+                <input class="form-control form-control-sm" value="{{ profile.name }}" disabled>
+                <div class="form-text">
+                    Used for email routing by saved-search name. To change routing, create a new profile or use email matchers.
+                </div>
+            </div>
+
+            <div class="col-12">
+                <label class="form-label small mb-1">Description</label>
+                <textarea class="form-control form-control-sm"
+                          name="description"
+                          rows="3"
+                          placeholder="Optional notes...">{{ profile.description or '' }}</textarea>
+            </div>
+
+            <div class="col-12 d-flex gap-4 flex-wrap">
+                <div class="form-check">
+                    <input class="form-check-input"
+                           type="checkbox"
+                           id="profile_active"
+                           name="is_active"
+                           {% if profile.is_active %}checked{% endif %}>
+                    <label class="form-check-label" for="profile_active">Active</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input"
+                           type="checkbox"
+                           id="profile_default"
+                           name="is_default"
+                           {% if profile.is_default %}checked{% endif %}>
+                    <label class="form-check-label" for="profile_default">Make default</label>
+                </div>
+            </div>
+
+            <div class="col-12 mt-2">
+                <button class="btn btn-primary btn-sm" type="submit" {% if not is_admin %}disabled{% endif %}>Save settings</button>
+                {% if not is_admin %}
+                    <span class="text-body-secondary small ms-2">Admin authentication required to save.</span>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <h5 class="mb-2">Travel presets</h5>
+        <form method="POST" class="row g-2">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <input type="hidden" name="action" value="save_presets">
+            <div class="col-12">
+                <div class="row g-2">
+                    {% for preset in travel_presets %}
+                        <div class="col-12 col-md-6">
+                            <div class="d-flex align-items-center gap-2">
+                                <div class="form-check mb-0">
+                                    <input class="form-check-input"
+                                           type="checkbox"
+                                           id="preset_{{ preset.key }}"
+                                           name="preset_{{ preset.key }}"
+                                           {% if preset.enabled %}checked{% endif %}>
+                                    <label class="form-check-label" for="preset_{{ preset.key }}">
+                                        {{ preset.label }}
+                                    </label>
+                                </div>
+                                <select name="preset_mode_{{ preset.key }}" class="form-select form-select-sm" style="width:auto">
+                                    {% set current_mode = (preset.mode or 'driving')|lower %}
+                                    <option value="driving" {% if current_mode == 'driving' %}selected{% endif %}>driving</option>
+                                    <option value="walking" {% if current_mode == 'walking' %}selected{% endif %}>walking</option>
+                                    <option value="transit" {% if current_mode == 'transit' %}selected{% endif %}>transit</option>
+                                    <option value="bicycling" {% if current_mode == 'bicycling' %}selected{% endif %}>bicycling</option>
+                                </select>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="col-12 mt-2">
+                <button class="btn btn-primary btn-sm" type="submit">Save presets</button>
+                <span class="text-body-secondary small ms-2">Default mode: driving</span>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <h5 class="mb-0">AI market context</h5>
+            <div class="text-body-secondary small">Optional per-profile override</div>
+        </div>
+
+        <form method="POST" class="row g-2">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <input type="hidden" name="action" value="save_ai_context">
+            <div class="col-12">
+                <textarea class="form-control form-control-sm"
+                          name="ai_market_context"
+                          rows="6"
+                          placeholder="Leave empty to use the global default context...">{{ ai_market_context or '' }}</textarea>
+                <div class="form-text">
+                    If empty, the global default context will be used.
+                </div>
+            </div>
+            <div class="col-12 d-flex gap-2 align-items-center">
+                <button class="btn btn-primary btn-sm" type="submit">Save AI context</button>
+                <details class="ms-2">
+                    <summary class="small text-body-secondary">Show global default</summary>
+                    <pre class="small mb-0 mt-2" style="white-space: pre-wrap;">{{ global_ai_market_context or '' }}</pre>
+                </details>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if is_admin %}
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <h5 class="mb-0">Recalculate travel</h5>
+            <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('main.properties', profile_id=profile.id) }}">
+                <i class="fas fa-list me-1"></i>View properties
+            </a>
+        </div>
+
+        <form method="POST" action="{{ url_for('main.recalculate_profile_travel', profile_id=profile.id) }}" class="row g-2 align-items-end">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <div class="col-6 col-md-3">
+                <label class="form-label small mb-1">Scope</label>
+                <select name="mode" class="form-select form-select-sm">
+                    <option value="missing">Missing only</option>
+                    <option value="all" selected>All (costly)</option>
+                </select>
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label small mb-1">Limit</label>
+                <input class="form-control form-control-sm" name="limit" type="number" min="1" max="500" value="100">
+            </div>
+            <div class="col-12 col-md-6 d-grid">
+                <button class="btn btn-outline-primary btn-sm" type="submit">
+                    <i class="fas fa-route me-1"></i>Recalculate travel for this profile
+                </button>
+            </div>
+            <div class="col-12">
+                <div class="form-text">
+                    Runs Google Places + Distance Matrix calls and updates travel metrics for active properties in this profile.
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <h5 class="mb-0">Reclassify properties</h5>
+            <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('main.property_settings') }}">
+                <i class="fas fa-gear me-1"></i>Global rules
+            </a>
+        </div>
+
+        <form method="POST" action="{{ url_for('main.recalculate_profile_classification', profile_id=profile.id) }}" class="row g-2 align-items-end">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <div class="col-6 col-md-3">
+                <label class="form-label small mb-1">Mode</label>
+                <select class="form-select form-select-sm" name="mode">
+                    <option value="all" selected>active (all)</option>
+                    <option value="missing">missing classification only</option>
+                </select>
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label small mb-1">Limit</label>
+                <input class="form-control form-control-sm" name="limit" type="number" min="1" max="1000" value="200">
+            </div>
+            <div class="col-12 col-md-3">
+                <div class="form-check mt-4">
+                    <input class="form-check-input" type="checkbox" id="reclassify_recalc_scoring" name="recalc_scoring" checked>
+                    <label class="form-check-label" for="reclassify_recalc_scoring">Recalculate scoring</label>
+                </div>
+            </div>
+            <div class="col-12 col-md-3 d-grid">
+                <button class="btn btn-outline-primary btn-sm" type="submit">
+                    <i class="fas fa-tags me-1"></i>Reclassify
+                </button>
+            </div>
+            <div class="col-12">
+                <div class="form-text">
+                    Applies this profile’s classification rules (or global defaults) to title/subject/description for active properties.
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <h5 class="mb-0">Recalculate scoring</h5>
+            <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('main.properties', profile_id=profile.id, sort='score_total', order='desc') }}">
+                <i class="fas fa-list me-1"></i>View ranked
+            </a>
+        </div>
+
+        <form method="POST" action="{{ url_for('main.recalculate_profile_scoring', profile_id=profile.id) }}" class="row g-2 align-items-end">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <div class="col-6 col-md-3">
+                <label class="form-label small mb-1">Mode</label>
+                <select class="form-select form-select-sm" name="mode">
+                    <option value="all" selected>active (all)</option>
+                    <option value="missing">missing scores only</option>
+                </select>
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label small mb-1">Limit</label>
+                <input class="form-control form-control-sm" name="limit" type="number" min="1" max="500" value="200">
+            </div>
+            <div class="col-12 col-md-6 d-grid">
+                <button class="btn btn-outline-primary btn-sm" type="submit">
+                    <i class="fas fa-calculator me-1"></i>Recalculate scoring for this profile
+                </button>
+            </div>
+            <div class="col-12">
+                <div class="form-text">
+                    Recomputes profile/category-aware scores using local data (no external API calls).
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <h5 class="mb-0">Scoring config (advanced)</h5>
+            <div class="text-body-secondary small">Optional per-profile override (JSON)</div>
+        </div>
+
+        <form method="POST" class="row g-2">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <input type="hidden" name="action" value="save_scoring_config">
+            <div class="col-12">
+                <textarea class="form-control form-control-sm"
+                          name="scoring_config_json"
+                          rows="10"
+                          placeholder="Leave empty to use defaults...">{{ scoring_config_json or '' }}</textarea>
+                <div class="form-text">
+                    Expected shape (example):<br>
+                    <code>{"categories":{"housing":{"investment":{"value_score":0.7,"travel_score":0.3},"lifestyle":{"travel_score":0.6,"size_score":0.4},"travel_minutes":{"best":10,"worst":60}}}}</code>
+                </div>
+            </div>
+            <div class="col-12 d-flex gap-2 align-items-center">
+                <button class="btn btn-primary btn-sm" type="submit">Save scoring config</button>
+                <span class="text-body-secondary small">To clear: empty the JSON and save.</span>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <h5 class="mb-0">Classification rules (advanced)</h5>
+            <div class="text-body-secondary small">Optional per-profile override (JSON)</div>
+        </div>
+
+        <form method="POST" class="row g-2">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <input type="hidden" name="action" value="save_classification_rules">
+            <div class="col-12">
+                <textarea class="form-control form-control-sm"
+                          name="classification_rules_json"
+                          rows="10"
+                          placeholder="Leave empty to use global defaults...">{{ classification_rules_json or '' }}</textarea>
+                <div class="form-text">
+                    Expected shape: list of objects like <code>{"category":"housing","subtype":"apartment","pattern":"...","priority":80}</code>.
+                </div>
+            </div>
+            <div class="col-12">
+                <button class="btn btn-primary btn-sm" type="submit">Save classification rules</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <h5 class="mb-0">Email matchers (advanced)</h5>
+            <div class="text-body-secondary small">Optional per-profile routing rules (JSON)</div>
+        </div>
+
+        <form method="POST" class="row g-2">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <input type="hidden" name="action" value="save_email_matchers">
+            <div class="col-12">
+                <textarea class="form-control form-control-sm"
+                          name="email_matchers_json"
+                          rows="8"
+                          placeholder="Leave empty to rely on saved-search name extraction...">{{ email_matchers_json or '' }}</textarea>
+                <div class="form-text">
+                    Expected shape: array of regex strings or objects like <code>{"pattern":"...","priority":10}</code>.
+                </div>
+            </div>
+            <div class="col-12">
+                <button class="btn btn-primary btn-sm" type="submit">Save email matchers</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <h5 class="mb-0">Custom targets</h5>
+            <div class="text-body-secondary small">Add by coordinates or address</div>
+        </div>
+
+        <form method="POST" class="row g-2 mb-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <input type="hidden" name="action" value="add_custom">
+            <div class="col-12 col-md-3">
+                <label class="form-label small mb-1">Name</label>
+                <input class="form-control form-control-sm" name="target_name" placeholder="Home / Work / ..." required>
+            </div>
+            <div class="col-12 col-md-3">
+                <label class="form-label small mb-1">Address (optional)</label>
+                <input class="form-control form-control-sm" name="target_address" placeholder="Madrid, Calle ...">
+            </div>
+            <div class="col-12 col-md-2">
+                <label class="form-label small mb-1">Mode</label>
+                <select name="target_mode" class="form-select form-select-sm">
+                    <option value="driving" selected>driving</option>
+                    <option value="walking">walking</option>
+                    <option value="transit">transit</option>
+                    <option value="bicycling">bicycling</option>
+                </select>
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label small mb-1">Lat</label>
+                <input class="form-control form-control-sm" name="target_lat" placeholder="40.4168">
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label small mb-1">Lon</label>
+                <div class="input-group input-group-sm">
+                    <input class="form-control form-control-sm" name="target_lon" placeholder="-3.7038">
+                    <button class="btn btn-outline-primary" type="submit">Add</button>
+                </div>
+            </div>
+            <div class="col-12">
+                <div class="form-text">
+                    If lat/lon are provided, address will be ignored. Otherwise address will be geocoded.
+                </div>
+            </div>
+        </form>
+
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Name</th>
+                        <th style="width:120px;">Mode</th>
+                        <th style="width:220px;">Coordinates</th>
+                        <th>Address</th>
+                        <th style="width:110px;"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if custom_targets %}
+                        {% for t in custom_targets %}
+                            <tr>
+                                <td class="fw-semibold">{{ t.name }}</td>
+                                <td class="small text-body-secondary">{{ t.mode or 'driving' }}</td>
+                                <td class="small text-body-secondary">{{ '%.6f'|format(t.lat) }}, {{ '%.6f'|format(t.lon) }}</td>
+                                <td class="small text-body-secondary">{{ t.formatted_address or t.address or '—' }}</td>
+                                <td class="text-end">
+                                    <form method="POST" class="d-inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                        <input type="hidden" name="action" value="remove_custom">
+                                        <input type="hidden" name="target_id" value="{{ t.id }}">
+                                        <button class="btn btn-outline-danger btn-sm" type="submit">Remove</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="5" class="text-center text-body-secondary py-3">No custom targets</td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

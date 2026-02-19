@@ -5,17 +5,26 @@ import requests
 from typing import Dict, Optional, List
 from config import Config
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
+from utils.http import request_with_retries
 
 logger = logging.getLogger(__name__)
 
 class TravelTimeService:
     def __init__(self):
         self.google_maps_key = Config.GOOGLE_MAPS_API_KEY
+        self.google_places_key = Config.GOOGLE_PLACES_API_KEY
 
-        # Key destinations (configurable via Scoring Criteria -> Reference Cities)
+        # Key destinations: 2 reference cities (configurable via Scoring Criteria -> Reference Cities).
+        # Internal keys remain for legacy column compatibility:
+        # - travel_time_oviedo = reference city A
+        # - travel_time_gijon  = reference city B
         self.destinations = {
-            'oviedo': 'Oviedo, Asturias, Spain',
-            'gijon': 'Gijón, Asturias, Spain'
+            "oviedo": "40.4168,-3.7038",  # Madrid (fallback)
+            "gijon": "41.3851,2.1734",    # Barcelona (fallback)
+        }
+        self.destination_labels = {
+            "oviedo": "City A",
+            "gijon": "City B",
         }
         try:
             from services.settings_service import SettingsService
@@ -26,46 +35,22 @@ class TravelTimeService:
                     'oviedo': f"{cities[0]['lat']},{cities[0]['lon']}",
                     'gijon': f"{cities[1]['lat']},{cities[1]['lon']}"
                 }
+                self.destination_labels = {
+                    "oviedo": cities[0].get("name") or "City A",
+                    "gijon": cities[1].get("name") or "City B",
+                }
         except Exception:
             # Safe fallback to defaults
             pass
-        
-        # Popular beaches in Asturias and Cantabria
-        self.beaches = [
-            'Playa de San Lorenzo, Gijón, Spain',
-            'Playa de Rodiles, Villaviciosa, Spain',
-            'Playa de Gulpiyuri, Llanes, Spain',
-            'Playa del Sardinero, Santander, Spain',
-            'Playa de Comillas, Cantabria, Spain',
-            'Playa de Oyambre, Comillas, Spain',
-            'Playa de la Concha de Artedo, Cudillero, Spain',
-            'Playa de Ribadesella, Asturias, Spain'
-        ]
-        
-        # Key infrastructure locations
-        self.airports = [
-            'Santander Airport, Santander, Spain',
-            'Asturias Airport, Santiago del Monte, Spain',
-            'Bilbao Airport, Loiu, Spain'
-        ]
-        
-        self.train_stations = [
-            'Santander Railway Station, Santander, Spain',
-            'Oviedo Railway Station, Oviedo, Spain',
-            'Gijón Railway Station, Gijón, Spain'
-        ]
-        
-        self.hospitals = [
-            'Hospital Universitario Marqués de Valdecilla, Santander, Spain',
-            'Hospital Universitario Central de Asturias, Oviedo, Spain',
-            'Hospital Cabueñes, Gijón, Spain'
-        ]
-        
-        self.police_stations = [
-            'Policía Nacional Santander, Spain',
-            'Policía Nacional Oviedo, Spain', 
-            'Policía Nacional Gijón, Spain'
-        ]
+
+        # Dynamic "nearest" targets (resolved via Places when available).
+        self._nearest_place_defs = {
+            "beach": {"type": "tourist_attraction", "keyword": "playa"},
+            "airport": {"type": "airport"},
+            "train_station": {"type": "train_station"},
+            "hospital": {"type": "hospital"},
+            "police": {"type": "police"},
+        }
     
     def calculate_travel_times(self, land_id: int) -> bool:
         """Calculate travel times for a land property"""
@@ -73,7 +58,7 @@ class TravelTimeService:
             from models import Land
             from app import db
             
-            land = Land.query.get(land_id)
+            land = db.session.get(Land, land_id)
             if not land or not land.location_lat or not land.location_lon:
                 logger.warning(f"Land {land_id} has no coordinates")
                 return False
@@ -97,65 +82,70 @@ class TravelTimeService:
                 logger.info("Travel times cache hit for land %s", land_id)
                 return True
 
-            # Fast-path: one Distance Matrix call for everything (22 destinations).
-            if self.google_maps_key:
-                all_destinations = (
-                    [self.destinations["oviedo"], self.destinations["gijon"]]
-                    + self.beaches
-                    + self.airports
-                    + self.train_stations
-                    + self.hospitals
-                    + self.police_stations
-                )
-                results = self._get_google_travel_times(origin, all_destinations)
+            # Resolve nearest places (Places API) then compute travel (Distance Matrix or fallback).
+            nearest_places: Dict[str, Optional[Dict]] = {}
+            for key, spec in self._nearest_place_defs.items():
+                nearest_places[key] = self._nearest_place(lat, lon, place_type=spec.get("type"), keyword=spec.get("keyword"))
 
-                oviedo_time, gijon_time = None, None
-                nearest_beach_data = None
-                airport_data = None
-                train_station_data = None
-                hospital_data = None
-                police_data = None
+            # If beach not found, try a second strategy.
+            if not nearest_places.get("beach"):
+                nearest_places["beach"] = self._nearest_place(lat, lon, place_type="natural_feature", keyword="beach")
 
-                if results and len(results) == len(all_destinations):
-                    oviedo_time = results[0]["time"] if results[0] else None
-                    gijon_time = results[1]["time"] if results[1] else None
+            # Build destination list for a batch call.
+            dest_map: Dict[str, str] = {
+                "oviedo": self.destinations["oviedo"],
+                "gijon": self.destinations["gijon"],
+            }
+            for k, place in nearest_places.items():
+                if not place:
+                    continue
+                try:
+                    dest_map[k] = f"{float(place['lat'])},{float(place['lon'])}"
+                except Exception:
+                    continue
 
-                    beach_results = results[2 : 2 + len(self.beaches)]
-                    nearest_beach_data = self._min_by_time(beach_results, names=self.beaches, name_transform=self._beach_label)
+            dest_keys = list(dest_map.keys())
+            dest_values = [dest_map[k] for k in dest_keys]
 
-                    offset = 2 + len(self.beaches)
-                    airport_results = results[offset : offset + len(self.airports)]
-                    airport_data = self._min_by_time(airport_results)
-                    offset += len(self.airports)
+            results = self._get_google_travel_times(origin, dest_values) if self.google_maps_key else [None for _ in dest_values]
 
-                    train_results = results[offset : offset + len(self.train_stations)]
-                    train_station_data = self._min_by_time(train_results)
-                    offset += len(self.train_stations)
+            def _res_for(key: str) -> Optional[Dict]:
+                try:
+                    idx = dest_keys.index(key)
+                except ValueError:
+                    return None
+                res = results[idx] if idx < len(results) else None
+                if res:
+                    return res
+                return self._calculate_fallback_travel_time(origin, dest_map.get(key, ""))
 
-                    hospital_results = results[offset : offset + len(self.hospitals)]
-                    hospital_data = self._min_by_time(hospital_results)
-                    offset += len(self.hospitals)
+            oviedo_time = (_res_for("oviedo") or {}).get("time")
+            gijon_time = (_res_for("gijon") or {}).get("time")
 
-                    police_results = results[offset : offset + len(self.police_stations)]
-                    police_data = self._min_by_time(police_results)
-                else:
-                    logger.warning("Distance Matrix returned unexpected results for land %s", land_id)
-                    oviedo_time = self._get_travel_time(origin, self.destinations["oviedo"])
-                    gijon_time = self._get_travel_time(origin, self.destinations["gijon"])
-                    nearest_beach_data = self._find_nearest_beach(origin)
-                    airport_data = self._find_nearest_facility_with_distance(origin, self.airports)
-                    train_station_data = self._find_nearest_facility_with_distance(origin, self.train_stations)
-                    hospital_data = self._find_nearest_facility_with_distance(origin, self.hospitals)
-                    police_data = self._find_nearest_facility_with_distance(origin, self.police_stations)
-            else:
-                # Fallback to per-destination calculations (no API key)
-                oviedo_time = self._get_travel_time(origin, self.destinations["oviedo"])
-                gijon_time = self._get_travel_time(origin, self.destinations["gijon"])
-                nearest_beach_data = self._find_nearest_beach(origin)
-                airport_data = self._find_nearest_facility_with_distance(origin, self.airports)
-                train_station_data = self._find_nearest_facility_with_distance(origin, self.train_stations)
-                hospital_data = self._find_nearest_facility_with_distance(origin, self.hospitals)
-                police_data = self._find_nearest_facility_with_distance(origin, self.police_stations)
+            nearest_beach_data = None
+            beach_res = _res_for("beach")
+            if beach_res and nearest_places.get("beach"):
+                nearest_beach_data = {
+                    "name": nearest_places["beach"].get("name"),
+                    "time": beach_res.get("time"),
+                    "distance": beach_res.get("distance"),
+                }
+
+            def _facility_data(key: str) -> Optional[Dict]:
+                place = nearest_places.get(key)
+                res = _res_for(key)
+                if not place or not res:
+                    return None
+                return {
+                    "name": place.get("name"),
+                    "time": res.get("time"),
+                    "distance": res.get("distance"),
+                }
+
+            airport_data = _facility_data("airport")
+            train_station_data = _facility_data("train_station")
+            hospital_data = _facility_data("hospital")
+            police_data = _facility_data("police")
             
             # Update land record
             if oviedo_time is not None:
@@ -203,20 +193,71 @@ class TravelTimeService:
 
             db.session.commit()
             
-            logger.info(f"Travel times updated for land {land_id}: "
-                       f"Oviedo: {oviedo_time}min, Gijón: {gijon_time}min, "
-                       f"Beach: {nearest_beach_data['time'] if nearest_beach_data else 'N/A'}min")
+            logger.info(
+                "Travel times updated for land %s: %s=%smin, %s=%smin, Beach=%smin",
+                land_id,
+                self.destination_labels.get("oviedo", "City A"),
+                oviedo_time,
+                self.destination_labels.get("gijon", "City B"),
+                gijon_time,
+                nearest_beach_data["time"] if nearest_beach_data else None,
+            )
             
             return True
             
         except Exception as e:
-            logger.error(f"Failed to calculate travel times for land {land_id}: {str(e)}")
+            logger.error("Failed to calculate travel times for land %s", land_id, exc_info=True)
             return False
 
     def _travel_times_cache_type(self) -> str:
         ref_sig = f"{self.destinations.get('oviedo')}|{self.destinations.get('gijon')}"
         ref_hash = hashlib.md5(ref_sig.encode()).hexdigest()[:8]
         return f"travel_times_v2:{ref_hash}"
+
+    def _nearest_place(self, lat: float, lon: float, place_type: Optional[str] = None, keyword: Optional[str] = None) -> Optional[Dict]:
+        """Find nearest place using Google Places Nearby Search (best-effort)."""
+        if not self.google_places_key:
+            return None
+
+        try:
+            url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+            params: Dict[str, str] = {
+                "key": self.google_places_key,
+                "location": f"{lat},{lon}",
+                "rankby": "distance",
+            }
+            if place_type:
+                params["type"] = str(place_type)
+            if keyword:
+                params["keyword"] = str(keyword)
+
+            resp = request_with_retries(requests.get, url, params=params, timeout=15, logger=logger)
+            if resp.status_code != 200:
+                return None
+            data = resp.json() or {}
+            if data.get("status") != "OK":
+                return None
+            results = data.get("results") or []
+            if not results:
+                return None
+
+            top = results[0] or {}
+            geo = (top.get("geometry") or {}).get("location") or {}
+            plat = geo.get("lat")
+            plon = geo.get("lng")
+            if plat is None or plon is None:
+                return None
+
+            return {
+                "name": top.get("name"),
+                "place_id": top.get("place_id"),
+                "lat": plat,
+                "lon": plon,
+                "types": top.get("types") or [],
+            }
+        except Exception as e:
+            logger.warning("Nearest place lookup failed (type=%s keyword=%s): %s", place_type, keyword, e)
+            return None
 
     def _beach_label(self, beach_full_name: str) -> str:
         return beach_full_name.split(",")[0].replace("Playa de ", "").replace("Playa del ", "")
@@ -250,8 +291,6 @@ class TravelTimeService:
         # Fallback to mathematical estimation
         logger.info("Using fallback travel time calculation")
         return self._calculate_fallback_travel_time(origin, destination)
-        
-        return self._calculate_fallback_travel_time(origin, destination)
     
     def _get_google_travel_time(self, origin: str, destination: str) -> Optional[Dict]:
         """Get travel time using Google Maps API"""
@@ -265,26 +304,29 @@ class TravelTimeService:
                 'key': self.google_maps_key
             }
             
-            response = requests.get(url, params=params, timeout=15)
+            response = request_with_retries(requests.get, url, params=params, timeout=15, logger=logger)
             if response.status_code == 200:
                 data = response.json()
                 
                 if data.get('status') == 'OK' and data.get('rows'):
                     elements = data['rows'][0].get('elements', [])
                     if elements and elements[0].get('status') == 'OK':
-                        duration = elements[0]['duration']['value']  # seconds
-                        distance = elements[0]['distance']['value']  # meters
-                        
+                        el = elements[0]
+                        dur = el.get('duration')
+                        dist = el.get('distance')
+                        if not dur or not dist:
+                            return None
+
                         return {
-                            'time': round(duration / 60),  # convert to minutes
-                            'distance': round(distance / 1000)  # convert to kilometers
+                            'time': round(dur['value'] / 60),  # convert to minutes
+                            'distance': round(dist['value'] / 1000)  # convert to kilometers
                         }
             
             logger.warning(f"Google API failed for {origin} to {destination}: {data.get('status') if 'data' in locals() else 'No response'}")
             return None
             
         except Exception as e:
-            logger.error(f"Google Maps API error: {str(e)}")
+            logger.error("Google Maps API error", exc_info=True)
             return None
 
     def _get_google_travel_times(self, origin: str, destinations: List[str]) -> List[Optional[Dict]]:
@@ -302,7 +344,7 @@ class TravelTimeService:
                 "key": self.google_maps_key,
             }
 
-            response = requests.get(url, params=params, timeout=15)
+            response = request_with_retries(requests.get, url, params=params, timeout=15, logger=logger)
             if response.status_code != 200:
                 return [None for _ in destinations]
 
@@ -316,12 +358,15 @@ class TravelTimeService:
                 if el.get("status") != "OK":
                     out.append(None)
                     continue
-                duration = el["duration"]["value"]
-                distance = el["distance"]["value"]
+                dur = el.get("duration")
+                dist = el.get("distance")
+                if not dur or not dist:
+                    out.append(None)
+                    continue
                 out.append(
                     {
-                        "time": round(duration / 60),
-                        "distance": round(distance / 1000),
+                        "time": round(dur["value"] / 60),
+                        "distance": round(dist["value"] / 1000),
                     }
                 )
 
@@ -378,7 +423,7 @@ class TravelTimeService:
             }
             
         except Exception as e:
-            logger.error(f"Fallback travel time calculation failed: {str(e)}")
+            logger.error("Fallback travel time calculation failed", exc_info=True)
             return None
     
     def _haversine_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -411,45 +456,7 @@ class TravelTimeService:
                     return (lat, lon)
         except Exception:
             pass
-
-        # Predefined coordinates for major destinations
-        coords_map = {
-            'Oviedo, Asturias, Spain': (43.3614, -5.8593),
-            'Gijón, Asturias, Spain': (43.5322, -5.6611),
-            'Santander, Cantabria, Spain': (43.4623, -3.8099),
-            
-            # Beaches
-            'Playa de San Lorenzo, Gijón, Spain': (43.5390, -5.6531),
-            'Playa de Rodiles, Villaviciosa, Spain': (43.4844, -5.3869),
-            'Playa de Gulpiyuri, Llanes, Spain': (43.4222, -4.7558),
-            'Playa del Sardinero, Santander, Spain': (43.4816, -3.7886),
-            'Playa de Comillas, Cantabria, Spain': (43.3878, -4.2894),
-            'Playa de Oyambre, Comillas, Spain': (43.3756, -4.2736),
-            'Playa de la Concha de Artedo, Cudillero, Spain': (43.5667, -6.1500),
-            'Playa de Ribadesella, Asturias, Spain': (43.4628, -5.0589),
-            
-            # Airports
-            'Santander Airport, Santander, Spain': (43.4270, -3.8201),
-            'Asturias Airport, Santiago del Monte, Spain': (43.5637, -6.0346),
-            'Bilbao Airport, Loiu, Spain': (43.3011, -2.9106),
-            
-            # Train stations
-            'Santander Railway Station, Santander, Spain': (43.4616, -3.8048),
-            'Oviedo Railway Station, Oviedo, Spain': (43.3656, -5.8515),
-            'Gijón Railway Station, Gijón, Spain': (43.5406, -5.6606),
-            
-            # Hospitals
-            'Hospital Universitario Marqués de Valdecilla, Santander, Spain': (43.4559, -3.8049),
-            'Hospital Universitario Central de Asturias, Oviedo, Spain': (43.3378, -5.8515),
-            'Hospital Cabueñes, Gijón, Spain': (43.5211, -5.6069),
-            
-            # Police stations (approximate city center locations)
-            'Policía Nacional Santander, Spain': (43.4623, -3.8099),
-            'Policía Nacional Oviedo, Spain': (43.3614, -5.8593),
-            'Policía Nacional Gijón, Spain': (43.5322, -5.6611)
-        }
-        
-        return coords_map.get(destination)
+        return None
     
     def _find_nearest_beach(self, origin: str) -> Optional[Dict]:
         """Find nearest beach and travel time"""
@@ -477,7 +484,7 @@ class TravelTimeService:
             return None
             
         except Exception as e:
-            logger.error(f"Error finding nearest beach: {str(e)}")
+            logger.error("Error finding nearest beach", exc_info=True)
             return None
     
     def _find_nearest_facility(self, origin: str, facilities: List[str]) -> Optional[int]:
@@ -508,7 +515,7 @@ class TravelTimeService:
             return None
             
         except Exception as e:
-            logger.error(f"Error finding nearest facility: {str(e)}")
+            logger.error("Error finding nearest facility", exc_info=True)
             return None
     
     def generate_google_maps_route_url(self, origin_lat: float, origin_lon: float, 

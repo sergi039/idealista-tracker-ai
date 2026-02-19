@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}Search Profiles{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <div>
+        <h2 class="mb-1">Search Profiles</h2>
+        <div class="text-body-secondary small">Separate configuration per saved search (no mixing)</div>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-primary btn-sm" href="{{ url_for('main.create_profile') }}">
+            <i class="fas fa-plus me-1"></i>New profile
+        </a>
+    </div>
+</div>
+
+<div class="card shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th style="width: 80px;">ID</th>
+                    <th>Name</th>
+                    <th style="width: 120px;">Properties</th>
+                    <th style="width: 120px;">Default</th>
+                    <th style="width: 120px;">Active</th>
+                    <th style="width: 180px;">Updated</th>
+                    <th style="width: 120px;"></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if profiles %}
+                    {% for p in profiles %}
+                        <tr>
+                            <td>{{ p.id }}</td>
+                            <td>
+                                <div class="fw-semibold">{{ p.name }}</div>
+                                {% if p.description %}
+                                    <div class="text-body-secondary small">{{ p.description }}</div>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a class="small text-decoration-none" href="{{ url_for('main.properties', profile_id=p.id) }}">
+                                    {{ property_counts.get(p.id, 0) }}
+                                </a>
+                            </td>
+                            <td>
+                                {% if p.is_default %}
+                                    <span class="badge bg-primary">Yes</span>
+                                {% else %}
+                                    <span class="text-body-secondary">—</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if p.is_active %}
+                                    <span class="badge bg-success">Yes</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">No</span>
+                                {% endif %}
+                            </td>
+                            <td class="small text-body-secondary">
+                                {% if p.updated_at %}{{ p.updated_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}
+                            </td>
+                            <td class="text-end">
+                                <a class="btn btn-outline-primary btn-sm" href="{{ url_for('main.edit_profile', profile_id=p.id) }}">Edit</a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="7" class="text-center text-body-secondary py-5">
+                            No profiles yet.
+                        </td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="alert alert-info mt-3 mb-0">
+    Idealista emails are routed into profiles by saved-search name (or optional regex matchers). Unknown emails fall back to the default profile.
+</div>
+{% endblock %}

@@ -1,19 +1,71 @@
 import logging
 import os
-from datetime import datetime
-from flask import Blueprint, jsonify, request, send_from_directory
+from datetime import datetime, timezone
+from flask import Blueprint, current_app, jsonify, request, send_from_directory
 from models import Land, LandHistory, ScoringCriteria, SyncHistory, AiAnalysisVariant
 from app import db
-from utils.auth import admin_required, rate_limit
+from app import limiter
+from utils.auth import admin_required
 
 logger = logging.getLogger(__name__)
 
 api_bp = Blueprint('api', __name__)
 
+
+def _should_run_sync() -> bool:
+    try:
+        if current_app and current_app.config.get("TESTING"):
+            return True
+    except Exception:
+        pass
+    return request.args.get("sync") in ("1", "true", "yes", "on")
+
+
+def _enqueue(job_fn, *, job_type: str, meta=None) -> str:
+    from services.background_jobs import enqueue_job
+
+    app_obj = current_app._get_current_object()
+    return enqueue_job(job_fn, job_type=job_type, meta=meta or {}, app=app_obj)
+
+
+@api_bp.route('/jobs/<job_id>', methods=['GET'])
+def get_job_status(job_id: str):
+    """Fetch status/result for a background job."""
+    from services.background_jobs import get_job, serialize_job
+
+    job = get_job(job_id)
+    if not job:
+        return jsonify({"success": False, "error": "Job not found"}), 404
+    return jsonify({"success": True, "job": serialize_job(job)})
+
 @api_bp.route('/healthz')
 def health_check():
-    """API health check"""
-    return jsonify({"ok": True})
+    """Health check with dependency status.
+
+    Returns 200 when the app is running; individual dependency statuses
+    are reported in the JSON body so orchestration/monitoring can react.
+    """
+    checks = {}
+
+    # Database connectivity
+    try:
+        db.session.execute(db.text('SELECT 1'))
+        checks['database'] = 'ok'
+    except Exception as exc:
+        logger.warning("Healthz: DB ping failed: %s", exc)
+        checks['database'] = 'unavailable'
+
+    # Scheduler status
+    try:
+        from services.scheduler_service import get_scheduler_status
+        sched = get_scheduler_status()
+        checks['scheduler'] = sched.get('status', 'unknown')
+    except Exception:
+        checks['scheduler'] = 'unknown'
+
+    all_ok = checks.get('database') == 'ok'
+    status_code = 200 if all_ok else 503
+    return jsonify({"ok": all_ok, "checks": checks}), status_code
 
 @api_bp.route('/download/project')
 def download_project():
@@ -29,65 +81,79 @@ def download_project():
             return jsonify({"error": "Project archive not found"}), 404
         
         return send_from_directory(static_dir, filename, as_attachment=True)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 404
+    except Exception:
+        logger.error("Failed to serve project archive", exc_info=True)
+        return jsonify({"error": "Project archive not found"}), 404
 
 @api_bp.route('/lands/enrich-all', methods=['POST'])
 @admin_required
-@rate_limit(max_requests=2, window_seconds=300)  # 2 requests per 5 minutes
+@limiter.limit("2 per 5 minutes")
 def bulk_enrichment():
     """Enrich all properties that are missing extended infrastructure or environment data"""
     try:
         from services.enrichment_service import EnrichmentService
+
+        def _run():
+            lands_to_enrich = Land.query.filter(
+                (Land.infrastructure_extended.is_(None))
+                | (Land.environment.is_(None))
+                | (Land.transport.is_(None))
+                | (Land.services_quality.is_(None))
+                | (Land.infrastructure_extended == {})
+                | (Land.environment == {})
+                | (Land.transport == {})
+                | (Land.services_quality == {})
+            ).all()
+
+            enrichment_service = EnrichmentService()
+            success_count = 0
+            total_count = len(lands_to_enrich)
+
+            for land in lands_to_enrich:
+                try:
+                    if enrichment_service.enrich_land(land.id):
+                        success_count += 1
+                        logger.info("Enriched land %s: %s", land.id, (land.title or "")[:50])
+                except Exception as e:
+                    logger.error("Failed to enrich land %s: %s", land.id, e)
+                    continue
+
+            return {
+                "success": True,
+                "message": f"Successfully enriched {success_count} out of {total_count} properties",
+                "enriched_count": success_count,
+                "total_found": total_count,
+            }
+
+        if _should_run_sync():
+            return jsonify(_run())
+
+        job_id = _enqueue(_run, job_type="lands_enrich_all")
+        return jsonify(
+            {
+                "success": True,
+                "status": "queued",
+                "job_id": job_id,
+                "message": "Bulk enrichment queued",
+            }
+        ), 202
         
-        # Find properties missing enrichment data
-        lands_to_enrich = Land.query.filter(
-            (Land.infrastructure_extended.is_(None)) |
-            (Land.environment.is_(None)) |
-            (Land.transport.is_(None)) |
-            (Land.services_quality.is_(None)) |
-            (Land.infrastructure_extended == {}) |
-            (Land.environment == {}) |
-            (Land.transport == {}) |
-            (Land.services_quality == {})
-        ).all()
-        
-        enrichment_service = EnrichmentService()
-        success_count = 0
-        total_count = len(lands_to_enrich)
-        
-        for land in lands_to_enrich:
-            try:
-                if enrichment_service.enrich_land(land.id):
-                    success_count += 1
-                    logger.info(f"Enriched land {land.id}: {land.title[:50]}...")
-            except Exception as e:
-                logger.error(f"Failed to enrich land {land.id}: {str(e)}")
-                continue
-        
-        return jsonify({
-            "success": True,
-            "message": f"Successfully enriched {success_count} out of {total_count} properties",
-            "enriched_count": success_count,
-            "total_found": total_count
-        })
-        
-    except Exception as e:
-        logger.error(f"Bulk enrichment failed: {str(e)}")
+    except Exception:
+        logger.error("Bulk enrichment failed", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/land/<int:land_id>/enrich', methods=['POST'])
-@rate_limit(max_requests=10, window_seconds=60)  # Protect from abuse
+@admin_required
+@limiter.limit("10 per minute")
 def manual_enrichment(land_id):
     """Manually trigger data enrichment for a specific property"""
     try:
         from services.enrichment_service import EnrichmentService
         
-        land = Land.query.get_or_404(land_id)
-        enrichment_service = EnrichmentService()
+        land = db.get_or_404(Land, land_id)
 
         payload = request.get_json(silent=True) if request.is_json else {}
         refresh_coords = False
@@ -96,24 +162,39 @@ def manual_enrichment(land_id):
         if request.args.get("refresh_coords") in ("1", "true", "yes", "on"):
             refresh_coords = True
 
-        success = enrichment_service.enrich_land(land_id, refresh_coords=refresh_coords)
-        
-        if success:
-            return jsonify({
-                "success": True,
-                "message": f"Property enriched successfully with Google API data"
-            })
-        else:
-            return jsonify({
+        def _run():
+            enrichment_service = EnrichmentService()
+            success = enrichment_service.enrich_land(land_id, refresh_coords=refresh_coords)
+            if success:
+                return {
+                    "success": True,
+                    "message": "Property enriched successfully with Google API data",
+                }
+            return {
                 "success": False,
-                "error": "Geocoding failed; enrichment skipped. Check that the property has a valid address."
-            }), 200
+                "error": "Geocoding failed; enrichment skipped. Check that the property has a valid address.",
+            }
+
+        if _should_run_sync():
+            result = _run()
+            status_code = 200 if result.get("success") else 200
+            return jsonify(result), status_code
+
+        job_id = _enqueue(_run, job_type="land_enrich", meta={"land_id": land.id, "refresh_coords": refresh_coords})
+        return jsonify(
+            {
+                "success": True,
+                "status": "queued",
+                "job_id": job_id,
+                "message": "Enrichment queued",
+            }
+        ), 202
             
-    except Exception as e:
-        logger.error(f"Manual enrichment failed for land {land_id}: {str(e)}")
+    except Exception:
+        logger.error("Manual enrichment failed for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/lands/reanalyze-environment', methods=['POST'])
@@ -124,51 +205,66 @@ def reanalyze_environment():
         from services.enrichment_service import EnrichmentService
         from sqlalchemy.orm.attributes import flag_modified
 
-        enrichment_service = EnrichmentService()
-        lands = Land.query.all()
+        def _run():
+            enrichment_service = EnrichmentService()
+            lands = Land.query.all()
 
-        updated_count = 0
-        sea_view_removed = 0
+            updated_count = 0
+            sea_view_removed = 0
 
-        for land in lands:
-            old_environment = dict(land.environment) if land.environment else {}
-            old_sea_view = old_environment.get('sea_view', False)
+            for land in lands:
+                old_environment = dict(land.environment) if land.environment else {}
+                old_sea_view = old_environment.get('sea_view', False)
 
-            # Re-analyze environment with new strict logic
-            enrichment_service._analyze_environment(land)
+                # Re-analyze environment with new strict logic
+                enrichment_service._analyze_environment(land)
 
-            new_sea_view = land.environment.get('sea_view', False)
+                new_sea_view = land.environment.get('sea_view', False)
 
-            # Mark JSONB field as modified for SQLAlchemy to detect changes
-            flag_modified(land, 'environment')
+                # Mark JSONB field as modified for SQLAlchemy to detect changes
+                flag_modified(land, 'environment')
 
-            # Track changes
-            if old_sea_view != new_sea_view:
-                updated_count += 1
-                if old_sea_view and not new_sea_view:
-                    sea_view_removed += 1
-                    logger.info(f"Removed false sea_view from land {land.id}: {land.title[:50]}")
+                # Track changes
+                if old_sea_view != new_sea_view:
+                    updated_count += 1
+                    if old_sea_view and not new_sea_view:
+                        sea_view_removed += 1
+                        logger.info("Removed false sea_view from land %s: %s", land.id, (land.title or "")[:50])
 
-        db.session.commit()
+            db.session.commit()
 
-        return jsonify({
-            "success": True,
-            "total_lands": len(lands),
-            "updated": updated_count,
-            "sea_view_removed": sea_view_removed,
-            "message": f"Re-analyzed {len(lands)} lands. {sea_view_removed} false sea_view flags removed."
-        })
+            return {
+                "success": True,
+                "total_lands": len(lands),
+                "updated": updated_count,
+                "sea_view_removed": sea_view_removed,
+                "message": f"Re-analyzed {len(lands)} lands. {sea_view_removed} false sea_view flags removed.",
+            }
 
-    except Exception as e:
-        logger.error(f"Environment re-analysis failed: {str(e)}")
+        if _should_run_sync():
+            return jsonify(_run())
+
+        job_id = _enqueue(_run, job_type="lands_reanalyze_environment")
+        return jsonify(
+            {
+                "success": True,
+                "status": "queued",
+                "job_id": job_id,
+                "message": "Environment re-analysis queued",
+            }
+        ), 202
+
+    except Exception:
+        logger.error("Environment re-analysis failed", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 
 @api_bp.route('/ingest/email/run', methods=['POST'])
-@rate_limit(max_requests=5, window_seconds=60)  # 5 requests per minute
+@admin_required
+@limiter.limit("5 per minute")
 def manual_ingestion():
     """Manually trigger email ingestion"""
     try:
@@ -178,13 +274,33 @@ def manual_ingestion():
         else:
             data = request.form.to_dict() or {}
         sync_type = data.get('sync_type', 'incremental')
+
+        # Full sync is potentially expensive; require admin auth.
+        if sync_type == "full":
+            from utils.auth import check_admin_auth
+
+            if not check_admin_auth():
+                return jsonify(
+                    {
+                        "success": False,
+                        "error": "Unauthorized. Admin authentication required for full sync.",
+                    }
+                ), 401
         
         from config import Config
-        
-        # Use IMAP service (Gmail API service has been deprecated)
-        from services.imap_service import IMAPService
-        service = IMAPService()
-        backend_name = "IMAP"
+
+        target = getattr(Config, "INGESTION_TARGET", "properties")
+
+        if target == "lands":
+            from services.imap_service import IMAPService
+
+            service = IMAPService()
+            backend_name = "IMAP (lands)"
+        else:
+            from services.property_imap_service import PropertyIMAPService
+
+            service = PropertyIMAPService()
+            backend_name = "IMAP (properties)"
         
         # Choose appropriate method based on sync type
         if sync_type == 'full' and hasattr(service, 'run_full_sync'):
@@ -201,124 +317,266 @@ def manual_ingestion():
             "message": f"Successfully processed {processed_count} new properties via {backend_name} ({sync_type} sync)"
         })
         
-    except Exception as e:
-        logger.error(f"Manual ingestion failed: {str(e)}")
+    except Exception:
+        logger.error("Manual ingestion failed", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
+
+@api_bp.route('/migrate/lands-to-properties', methods=['POST'])
+@admin_required
+@limiter.limit("2 per 5 minutes")
+def migrate_lands_to_properties():
+    """Migrate legacy Land records into universal Property records (one-way helper)."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        dry_run = bool(payload.get("dry_run", True))
+        limit = payload.get("limit")
+        profile_name = payload.get("profile_name")
+
+        from services.land_to_property_migration_service import LandToPropertyMigrationService
+
+        svc = LandToPropertyMigrationService(profile_name=profile_name)
+        result = svc.migrate(dry_run=dry_run, limit=limit)
+
+        return jsonify({"success": True, "result": result})
+
+    except Exception:
+        logger.error("Land→Property migration failed", exc_info=True)
+        return jsonify({"success": False, "error": "An internal error occurred. Check server logs for details."}), 500
+
 @api_bp.route('/analyze/property/<int:land_id>/structured', methods=['POST'])
+@admin_required
+@limiter.limit("5 per 5 minutes")
 def analyze_property_structured(land_id):
     """Analyze property using Anthropic Claude AI with structured 5-block format"""
     try:
-        land = Land.query.get_or_404(land_id)
+        land = db.get_or_404(Land, land_id)
         
         # Get existing analysis from request for enrichment
         request_data = request.get_json() if request.is_json else {}
         existing_analysis = request_data.get('existing_analysis')
         is_enrichment = existing_analysis is not None
         
-        # Import Anthropic service
-        from services.anthropic_service import get_anthropic_service
-        anthropic_service = get_anthropic_service()
-        
-        # Prepare comprehensive property data
-        property_data = {
-            'id': land.id,
-            'title': land.title,
-            'price': float(land.price) if land.price else None,
-            'area': float(land.area) if land.area else None,
-            'municipality': land.municipality,
-            'land_type': land.land_type,
-            'score_total': float(land.score_total) if land.score_total else None,
-            'description': land.description,
-            'travel_time_nearest_beach': land.travel_time_nearest_beach,
-            'nearest_beach_name': land.nearest_beach_name,
-            'travel_time_oviedo': land.travel_time_oviedo,
-            'travel_time_gijon': land.travel_time_gijon,
-            'travel_time_airport': land.travel_time_airport,
-            'infrastructure_basic': land.infrastructure_basic or {},
-            'existing_analysis': existing_analysis  # Pass existing analysis for enrichment
-        }
-        
-        # Get structured AI analysis (with optional enrichment)
-        result = anthropic_service.analyze_property_structured(property_data)
-        
-        if result and result.get('status') == 'success':
-            new_analysis = result.get('structured_analysis')
-            model_used = result.get('model')
-            
-            # If enrichment, merge with existing analysis, otherwise replace
-            if is_enrichment and existing_analysis and new_analysis:
-                # Merge analyses - new data enriches existing
-                merged_analysis = dict(existing_analysis)
-                merged_analysis.update(new_analysis)
-                land.ai_analysis = merged_analysis
-                final_analysis = merged_analysis
-            else:
-                # New analysis or no existing data
-                land.ai_analysis = new_analysis
-                final_analysis = new_analysis
-                
-            db.session.commit()
+        def _run():
+            from services.anthropic_service import get_anthropic_service
 
-            # Store a Claude variant for later comparison (best-effort).
-            try:
-                existing_variant = (
-                    AiAnalysisVariant.query.filter_by(land_id=land_id, provider='claude')
-                    .order_by(AiAnalysisVariant.created_at.desc())
-                    .first()
-                )
-                if existing_variant:
-                    existing_variant.analysis = final_analysis
-                    existing_variant.model = model_used
-                    existing_variant.created_at = datetime.utcnow()
+            anthropic_service = get_anthropic_service()
+
+            property_data = {
+                'id': land.id,
+                'title': land.title,
+                'price': float(land.price) if land.price else None,
+                'area': float(land.area) if land.area else None,
+                'municipality': land.municipality,
+                'land_type': land.land_type,
+                'score_total': float(land.score_total) if land.score_total else None,
+                'description': land.description,
+                'travel_time_nearest_beach': land.travel_time_nearest_beach,
+                'nearest_beach_name': land.nearest_beach_name,
+                'travel_time_oviedo': land.travel_time_oviedo,
+                'travel_time_gijon': land.travel_time_gijon,
+                'travel_time_airport': land.travel_time_airport,
+                'infrastructure_basic': land.infrastructure_basic or {},
+                'existing_analysis': existing_analysis,
+            }
+
+            result = anthropic_service.analyze_property_structured(property_data)
+
+            if result and result.get('status') == 'success':
+                new_analysis = result.get('structured_analysis')
+                model_used = result.get('model')
+
+                if is_enrichment and existing_analysis and new_analysis:
+                    merged_analysis = dict(existing_analysis)
+                    merged_analysis.update(new_analysis)
+                    land.ai_analysis = merged_analysis
+                    final_analysis = merged_analysis
                 else:
-                    db.session.add(
-                        AiAnalysisVariant(
-                            land_id=land_id,
-                            provider='claude',
-                            model=model_used,
-                            analysis=final_analysis,
-                        )
-                    )
+                    land.ai_analysis = new_analysis
+                    final_analysis = new_analysis
+
                 db.session.commit()
-            except Exception as e:
-                logger.warning("Failed to store Claude analysis variant for land %s: %s", land_id, e)
-            
-            return jsonify({
-                "success": True,
-                "analysis": final_analysis,
-                "model": result.get('model'),
-                "is_enrichment": is_enrichment
-            })
-        else:
+
+                try:
+                    existing_variant = (
+                        AiAnalysisVariant.query.filter_by(land_id=land_id, provider='claude')
+                        .order_by(AiAnalysisVariant.created_at.desc())
+                        .first()
+                    )
+                    if existing_variant:
+                        existing_variant.analysis = final_analysis
+                        existing_variant.model = model_used
+                        existing_variant.created_at = datetime.now(timezone.utc)
+                    else:
+                        db.session.add(
+                            AiAnalysisVariant(
+                                land_id=land_id,
+                                provider='claude',
+                                model=model_used,
+                                analysis=final_analysis,
+                            )
+                        )
+                    db.session.commit()
+                except Exception as e:
+                    logger.warning("Failed to store Claude analysis variant for land %s: %s", land_id, e)
+
+                return {
+                    "success": True,
+                    "analysis": final_analysis,
+                    "model": result.get('model'),
+                    "is_enrichment": is_enrichment,
+                }
+
             error_msg = result.get('error', 'Analysis failed') if result else 'Analysis service unavailable'
-            status_code = 503 if 'overloaded' in error_msg.lower() or 'temporarily' in error_msg.lower() else 500
-            
-            return jsonify({
+            return {
                 "success": False,
                 "error": error_msg,
-                "raw_analysis": result.get('raw_analysis') if result else None
-            }), status_code
+                "raw_analysis": result.get('raw_analysis') if result else None,
+            }
+
+        if _should_run_sync():
+            result = _run()
+            if result.get("success"):
+                return jsonify(result)
+            error_msg = result.get("error", "Analysis failed")
+            status_code = 503 if "overloaded" in error_msg.lower() or "temporarily" in error_msg.lower() else 500
+            return jsonify(result), status_code
+
+        job_id = _enqueue(_run, job_type="land_ai_analysis", meta={"land_id": land.id, "is_enrichment": is_enrichment})
+        return jsonify(
+            {
+                "success": True,
+                "status": "queued",
+                "job_id": job_id,
+                "message": "AI analysis queued",
+            }
+        ), 202
             
-    except Exception as e:
-        logger.error(f"Structured AI analysis failed for land {land_id}: {str(e)}")
+    except Exception:
+        logger.error("Structured AI analysis failed for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 
+@api_bp.route('/property/<int:property_id>/analyze/structured', methods=['POST'])
+@admin_required
+@limiter.limit("3 per 5 minutes")
+def analyze_universal_property_structured(property_id: int):
+    """Analyze a universal Property with a category-aware structured JSON schema."""
+    try:
+        from datetime import datetime
+
+        from models import Property, PropertyAiAnalysisVariant
+        from services.property_ai_service import PropertyAIService
+
+        prop = db.get_or_404(Property, property_id)
+
+        request_data = request.get_json() if request.is_json else {}
+        provider = (request_data.get("provider") or request.args.get("provider") or "claude").strip().lower()
+        if provider in {"chatgpt", "gpt", "openai"}:
+            provider = "openai"
+        else:
+            provider = "claude"
+        existing_analysis = request_data.get("existing_analysis")
+        is_enrichment = existing_analysis is not None
+
+        def _run():
+            prop_local = db.session.get(Property, property_id)
+            if not prop_local:
+                return {"success": False, "error": "Property not found"}
+
+            service = PropertyAIService()
+            result = service.analyze_property_structured(prop_local, provider=provider)
+
+            if not result or result.get("status") != "success":
+                return {
+                    "success": False,
+                    "error": (result.get("error") if isinstance(result, dict) else None) or "Analysis failed",
+                }
+
+            new_analysis = result.get("structured_analysis") or {}
+
+            final = new_analysis
+            if is_enrichment and isinstance(existing_analysis, dict) and isinstance(new_analysis, dict):
+                merged = dict(existing_analysis)
+                merged.update(new_analysis)
+                final = merged
+
+            # Claude remains the primary analysis stored on the Property record itself (legacy parity).
+            if provider == "claude":
+                prop_local.ai_analysis = final
+
+            # Store per-provider analysis for side-by-side comparison in the UI.
+            try:
+                variant = PropertyAiAnalysisVariant.query.filter_by(
+                    property_id=property_id, provider=provider
+                ).first()
+                if variant:
+                    variant.analysis = final
+                    variant.model = result.get("model")
+                    variant.created_at = datetime.now(timezone.utc)
+                else:
+                    db.session.add(
+                        PropertyAiAnalysisVariant(
+                            property_id=property_id,
+                            provider=provider,
+                            model=result.get("model"),
+                            analysis=final,
+                        )
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Failed to store AI analysis variant for property %s (%s): %s",
+                    property_id,
+                    provider,
+                    e,
+                )
+
+            db.session.commit()
+
+            return {
+                "success": True,
+                "analysis": final,
+                "provider": provider,
+                "model": result.get("model"),
+                "is_enrichment": is_enrichment,
+            }
+
+        if _should_run_sync():
+            result = _run()
+            if result.get("success"):
+                return jsonify(result)
+            return jsonify(result), 500
+
+        job_id = _enqueue(_run, job_type="property_ai_analysis", meta={"property_id": prop.id, "provider": provider})
+        return jsonify(
+            {
+                "success": True,
+                "status": "queued",
+                "job_id": job_id,
+                "message": "AI analysis queued",
+            }
+        ), 202
+
+    except Exception:
+        logger.error("Structured AI analysis failed for property %s", property_id, exc_info=True)
+        return jsonify({"success": False, "error": "An internal error occurred. Check server logs for details."}), 500
+
+
 @api_bp.route('/analysis/generate/<int:land_id>/openai', methods=['POST'])
-@rate_limit(max_requests=3, window_seconds=300)
+@admin_required
+@limiter.limit("3 per 5 minutes")
 def generate_openai_structured(land_id):
     """Generate structured AI analysis with OpenAI (ChatGPT) and store it for comparison."""
     try:
         from services.openai_service import get_openai_service
 
-        land = Land.query.get_or_404(land_id)
+        land = db.get_or_404(Land, land_id)
 
         # Optional: allow overwrite
         request_data = request.get_json() if request.is_json else {}
@@ -337,40 +595,67 @@ def generate_openai_structured(land_id):
                 "model": existing.model,
             })
 
-        service = get_openai_service()
-        result = service.analyze_property_structured(land)
+        def _run():
+            land_local = db.session.get(Land, land_id)
+            if not land_local:
+                return {"success": False, "error": "Land not found"}
 
-        if not result or result.get("status") != "success":
-            return jsonify({"success": False, "error": "OpenAI analysis failed"}), 500
+            service = get_openai_service()
+            result = service.analyze_property_structured(land_local)
 
-        analysis = result.get("structured_analysis") or {}
-        model = result.get("model")
+            if not result or result.get("status") != "success":
+                return {"success": False, "error": "OpenAI analysis failed"}
 
-        if existing:
-            existing.analysis = analysis
-            existing.model = model
-            existing.created_at = datetime.utcnow()
-            variant = existing
-        else:
-            variant = AiAnalysisVariant(
-                land_id=land_id,
-                provider="openai",
-                model=model,
-                analysis=analysis,
+            analysis = result.get("structured_analysis") or {}
+            model = result.get("model")
+
+            existing_local = (
+                AiAnalysisVariant.query.filter_by(land_id=land_id, provider='openai')
+                .order_by(AiAnalysisVariant.created_at.desc())
+                .first()
             )
-            db.session.add(variant)
 
-        db.session.commit()
+            if existing_local:
+                existing_local.analysis = analysis
+                existing_local.model = model
+                existing_local.created_at = datetime.now(timezone.utc)
+                variant = existing_local
+            else:
+                variant = AiAnalysisVariant(
+                    land_id=land_id,
+                    provider="openai",
+                    model=model,
+                    analysis=analysis,
+                )
+                db.session.add(variant)
 
-        return jsonify({
-            "success": True,
-            "analysis": variant.analysis,
-            "model": variant.model,
-        })
+            db.session.commit()
 
-    except Exception as e:
-        logger.error("OpenAI structured analysis failed for land %s: %s", land_id, e)
-        return jsonify({"success": False, "error": str(e)}), 500
+            return {
+                "success": True,
+                "analysis": variant.analysis,
+                "model": variant.model,
+            }
+
+        if _should_run_sync():
+            result = _run()
+            if result.get("success"):
+                return jsonify(result)
+            return jsonify(result), 500
+
+        job_id = _enqueue(_run, job_type="land_openai_analysis", meta={"land_id": land.id, "force": force})
+        return jsonify(
+            {
+                "success": True,
+                "status": "queued",
+                "job_id": job_id,
+                "message": "ChatGPT analysis queued",
+            }
+        ), 202
+
+    except Exception:
+        logger.error("OpenAI structured analysis failed for land %s", land_id, exc_info=True)
+        return jsonify({"success": False, "error": "An internal error occurred. Check server logs for details."}), 500
 
 
 @api_bp.route('/analysis/compare/<int:land_id>', methods=['GET'])
@@ -380,7 +665,7 @@ def compare_ai_analyses(land_id):
         from config import Config
         from utils.analysis_compare import build_comparison
 
-        land = Land.query.get_or_404(land_id)
+        land = db.get_or_404(Land, land_id)
         claude_analysis = land.ai_analysis
 
         claude_variant = (
@@ -406,15 +691,92 @@ def compare_ai_analyses(land_id):
             "claude_model": (claude_variant.model if claude_variant else getattr(Config, "ANTHROPIC_MODEL", None)),
             "comparison": comparison,
         })
-    except Exception as e:
-        logger.error("AI comparison failed for land %s: %s", land_id, e)
-        return jsonify({"success": False, "error": str(e)}), 500
+    except Exception:
+        logger.error("AI comparison failed for land %s", land_id, exc_info=True)
+        return jsonify({"success": False, "error": "An internal error occurred. Check server logs for details."}), 500
+
+
+@api_bp.route('/property/<int:property_id>/analysis/compare', methods=['GET'])
+def compare_property_ai_analyses(property_id: int):
+    """Return a rubric-based comparison between stored Claude analysis and ChatGPT analysis for a Property."""
+    try:
+        from config import Config
+        from models import Property, PropertyAiAnalysisVariant
+        from utils.analysis_compare import (
+            extract_highlights,
+            extract_metrics,
+            numeric_fidelity_score,
+            overall_score,
+            schema_completeness,
+        )
+
+        prop = db.get_or_404(Property, property_id)
+        claude_analysis = prop.ai_analysis
+
+        claude_variant = (
+            PropertyAiAnalysisVariant.query.filter_by(property_id=property_id, provider='claude')
+            .order_by(PropertyAiAnalysisVariant.created_at.desc())
+            .first()
+        )
+
+        openai_variant = (
+            PropertyAiAnalysisVariant.query.filter_by(property_id=property_id, provider='openai')
+            .order_by(PropertyAiAnalysisVariant.created_at.desc())
+            .first()
+        )
+
+        # Universal baseline is intentionally light-weight for now (no market model for all property types yet).
+        expected = {
+            "investment_rating": "BELOW AVERAGE - Consider other options",
+            "rental_yield": 0,
+            "cap_rate": 0,
+            "price_to_rent_ratio": 0,
+            "payback_period_years": 0,
+        }
+
+        def _evaluate(analysis):
+            metrics = extract_metrics(analysis)
+            completeness = schema_completeness(analysis)
+            fidelity = numeric_fidelity_score(metrics, expected)
+            return {
+                "metrics": metrics,
+                "highlights": extract_highlights(analysis),
+                "schema": {"found": completeness[0], "total": completeness[1]},
+                "expected": expected,
+                "fidelity_score": fidelity,
+                "overall_score": overall_score(completeness, fidelity),
+            }
+
+        comparison = {
+            "claude": _evaluate(claude_analysis),
+            "chatgpt": _evaluate(openai_variant.analysis) if openai_variant else None,
+            "expected": expected,
+        }
+
+        return jsonify(
+            {
+                "success": True,
+                "property_id": property_id,
+                "has_chatgpt": bool(openai_variant),
+                "chatgpt_model": openai_variant.model if openai_variant else None,
+                "openai_configured": bool(getattr(Config, "OPENAI_API_KEY", None)),
+                "claude_model": (
+                    claude_variant.model if claude_variant else getattr(Config, "ANTHROPIC_MODEL", None)
+                ),
+                "comparison": comparison,
+            }
+        )
+    except Exception:
+        logger.error("AI comparison failed for property %s", property_id, exc_info=True)
+        return jsonify({"success": False, "error": "An internal error occurred. Check server logs for details."}), 500
 
 @api_bp.route('/enhance/description/<int:land_id>', methods=['POST'])
+@admin_required
+@limiter.limit("5 per 5 minutes")
 def enhance_description(land_id):
     """Enhance property description using AI"""
     try:
-        land = Land.query.get_or_404(land_id)
+        land = db.get_or_404(Land, land_id)
         
         # Import description service
         from services.description_service import DescriptionService
@@ -452,11 +814,11 @@ def enhance_description(land_id):
                 "original_description": land.description
             }), 500
             
-    except Exception as e:
-        logger.error(f"Description enhancement failed for land {land_id}: {str(e)}")
+    except Exception:
+        logger.error("Description enhancement failed for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/description/variants/<int:land_id>', methods=['GET'])
@@ -479,18 +841,19 @@ def get_description_variants(land_id):
             **variants
         })
         
-    except Exception as e:
-        logger.error(f"Failed to get description variants for land {land_id}: {str(e)}")
+    except Exception:
+        logger.error("Failed to get description variants for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/land/<int:land_id>/environment', methods=['POST'])
+@admin_required
 def update_environment(land_id):
     """Update environment data for a land property"""
     try:
-        land = Land.query.get_or_404(land_id)
+        land = db.get_or_404(Land, land_id)
         data = request.get_json()
         
         # Update environment data
@@ -515,18 +878,60 @@ def update_environment(land_id):
             "environment": environment
         })
         
-    except Exception as e:
-        logger.error(f"Failed to update environment for land {land_id}: {str(e)}")
+    except Exception:
+        logger.error("Failed to update environment for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
+        }), 500
+
+
+@api_bp.route('/property/<int:property_id>/environment', methods=['POST'])
+@admin_required
+def update_property_environment(property_id):
+    """Update environment data for a universal property."""
+    try:
+        from models import Property
+
+        prop = db.get_or_404(Property, property_id)
+        data = request.get_json() or {}
+
+        environment = {
+            'sea_view': bool(data.get('sea_view', False)),
+            'mountain_view': bool(data.get('mountain_view', False)),
+            'forest_view': bool(data.get('forest_view', False)),
+            'orientation': data.get('orientation', ''),
+            'buildable_floors': data.get('buildable_floors', ''),
+            'access_type': data.get('access_type', ''),
+            'certified_for': data.get('certified_for', '')
+        }
+
+        enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
+        enrichment['environment'] = environment
+        prop.enrichment = enrichment
+        db.session.commit()
+
+        logger.info("Updated environment data for property %s", property_id)
+
+        return jsonify({
+            "success": True,
+            "message": "Environment data updated successfully",
+            "environment": environment
+        })
+    except Exception:
+        logger.error("Failed to update environment for property %s", property_id, exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/analyze/property/<int:land_id>', methods=['POST'])
+@admin_required
+@limiter.limit("5 per 5 minutes")
 def analyze_property_ai(land_id):
     """Analyze property using Anthropic Claude AI"""
     try:
-        land = Land.query.get_or_404(land_id)
+        land = db.get_or_404(Land, land_id)
         
         # Import Anthropic service
         from services.anthropic_service import get_anthropic_service
@@ -565,11 +970,11 @@ def analyze_property_ai(land_id):
                 "error": error_msg
             }), 500
             
-    except Exception as e:
-        logger.error(f"AI analysis failed for land {land_id}: {str(e)}")
+    except Exception:
+        logger.error("AI analysis failed for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/lands')
@@ -610,18 +1015,18 @@ def get_lands():
             "lands": lands_data
         })
         
-    except Exception as e:
-        logger.error(f"Failed to get lands: {str(e)}")
+    except Exception:
+        logger.error("Failed to get lands", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/lands/<int:land_id>')
 def get_land_detail(land_id):
     """Get detailed information about a specific land"""
     try:
-        land = Land.query.get(land_id)
+        land = db.session.get(Land, land_id)
         
         if not land:
             return jsonify({
@@ -640,12 +1045,149 @@ def get_land_detail(land_id):
             "land": land_data
         })
         
-    except Exception as e:
-        logger.error(f"Failed to get land detail {land_id}: {str(e)}")
+    except Exception:
+        logger.error("Failed to get land detail %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
+
+
+@api_bp.route('/properties')
+def get_properties():
+    """Get universal Properties with filtering and sorting (defaults to the default SearchProfile)."""
+    try:
+        from models import Property
+        from services.search_profile_service import SearchProfileService
+
+        # Query params
+        profile_id = request.args.get("profile_id", type=int)
+        category_filter = (request.args.get("category") or "").strip()
+        subtype_filter = (request.args.get("subtype") or "").strip()
+        municipality_filter = (request.args.get("municipality") or "").strip()
+        search_query = (request.args.get("search") or "").strip()
+        favorites_only = (request.args.get("favorites") or "").strip().lower() in ("1", "true", "on", "yes")
+
+        hide_removed_raw = (request.args.get("hide_removed") or "").strip().lower()
+        hide_removed = hide_removed_raw not in ("0", "false", "off", "no")
+
+        sort_by = (request.args.get("sort") or "created_at").strip()
+        sort_order = (request.args.get("order") or "desc").strip().lower()
+        limit = request.args.get("limit", 100, type=int)
+        offset = request.args.get("offset", 0, type=int)
+        full = (request.args.get("full") or "").strip().lower() in ("1", "true", "on", "yes")
+
+        limit = min(max(limit, 1), 200)
+        offset = max(offset, 0)
+
+        # Default to the default profile to avoid mixing unrelated searches.
+        if not profile_id:
+            default_profile = SearchProfileService.get_default_profile(create=True)
+            profile_id = default_profile.id if default_profile else None
+
+        query = Property.query
+        if profile_id is not None:
+            query = query.filter(Property.search_profile_id == profile_id)
+
+        if category_filter:
+            if category_filter == "__none__":
+                query = query.filter((Property.property_category.is_(None)) | (Property.property_category == ""))
+            else:
+                query = query.filter(Property.property_category == category_filter)
+        if subtype_filter:
+            if subtype_filter == "__none__":
+                query = query.filter((Property.property_subtype.is_(None)) | (Property.property_subtype == ""))
+            else:
+                query = query.filter(Property.property_subtype == subtype_filter)
+        if municipality_filter:
+            query = query.filter(Property.municipality.ilike(f"%{municipality_filter}%"))
+        if search_query:
+            pattern = f"%{search_query}%"
+            query = query.filter(
+                (Property.title.ilike(pattern))
+                | (Property.description.ilike(pattern))
+                | (Property.municipality.ilike(pattern))
+            )
+
+        if favorites_only:
+            query = query.filter(Property.is_favorite.is_(True))
+
+        if hide_removed:
+            query = query.filter(Property.listing_status.notin_(["removed", "sold"]))
+
+        # Sorting allow-list
+        sort_columns = {
+            "created_at": Property.created_at,
+            "updated_at": Property.updated_at,
+            "price": Property.price,
+            "area": Property.area,
+            "score_total": Property.score_total,
+            "score_investment": Property.score_investment,
+            "score_lifestyle": Property.score_lifestyle,
+        }
+        sort_column = sort_columns.get(sort_by, Property.created_at)
+        if sort_order == "asc":
+            query = query.order_by(sort_column.asc().nullslast())
+        else:
+            query = query.order_by(sort_column.desc().nullslast())
+
+        props = query.offset(offset).limit(limit).all()
+
+        if full:
+            properties_data = [p.to_dict() for p in props]
+        else:
+            properties_data = []
+            for p in props:
+                properties_data.append(
+                    {
+                        "id": p.id,
+                        "search_profile_id": p.search_profile_id,
+                        "title": p.title,
+                        "url": p.url,
+                        "price": float(p.price) if p.price else None,
+                        "area": float(p.area) if p.area else None,
+                        "municipality": p.municipality,
+                        "property_category": p.property_category,
+                        "property_subtype": p.property_subtype,
+                        "score_total": float(p.score_total) if p.score_total else None,
+                        "score_investment": float(p.score_investment) if p.score_investment else None,
+                        "score_lifestyle": float(p.score_lifestyle) if p.score_lifestyle else None,
+                        "is_favorite": bool(p.is_favorite),
+                        "listing_status": p.listing_status or "active",
+                        "created_at": p.created_at.isoformat() if p.created_at else None,
+                        "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+                    }
+                )
+
+        return jsonify(
+            {
+                "success": True,
+                "count": len(properties_data),
+                "selected_profile_id": profile_id,
+                "properties": properties_data,
+            }
+        )
+
+    except Exception:
+        logger.error("Failed to get properties", exc_info=True)
+        return jsonify({"success": False, "error": "An internal error occurred. Check server logs for details."}), 500
+
+
+@api_bp.route('/properties/<int:property_id>')
+def get_property_detail(property_id: int):
+    """Get detailed information about a specific universal Property."""
+    try:
+        from models import Property
+
+        prop = db.session.get(Property, property_id)
+        if not prop:
+            return jsonify({"success": False, "error": "Property not found"}), 404
+
+        return jsonify({"success": True, "property": prop.to_dict()})
+
+    except Exception:
+        logger.error("Failed to get property detail %s", property_id, exc_info=True)
+        return jsonify({"success": False, "error": "An internal error occurred. Check server logs for details."}), 500
 
 @api_bp.route('/criteria')
 def get_criteria():
@@ -661,16 +1203,16 @@ def get_criteria():
             "criteria": weights
         })
         
-    except Exception as e:
-        logger.error(f"Failed to get criteria: {str(e)}")
+    except Exception:
+        logger.error("Failed to get criteria", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/criteria', methods=['PUT'])
 @admin_required
-@rate_limit(max_requests=10, window_seconds=60)  # 10 requests per minute
+@limiter.limit("10 per minute")
 def update_criteria():
     """Update scoring criteria weights"""
     try:
@@ -714,11 +1256,11 @@ def update_criteria():
                 "error": "Failed to update criteria"
             }), 500
         
-    except Exception as e:
-        logger.error(f"Failed to update criteria: {str(e)}")
+    except Exception:
+        logger.error("Failed to update criteria", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/scheduler/status')
@@ -734,18 +1276,19 @@ def scheduler_status():
             "scheduler": status
         })
         
-    except Exception as e:
-        logger.error(f"Failed to get scheduler status: {str(e)}")
+    except Exception:
+        logger.error("Failed to get scheduler status", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/land/<int:land_id>/favorite', methods=['POST'])
+@admin_required
 def toggle_favorite(land_id):
     """Toggle favorite status for a land property"""
     try:
-        land = Land.query.get_or_404(land_id)
+        land = db.get_or_404(Land, land_id)
 
         # Toggle the favorite status
         was_favorite = land.is_favorite
@@ -767,20 +1310,105 @@ def toggle_favorite(land_id):
             "message": f"Property {'added to' if land.is_favorite else 'removed from'} favorites"
         })
 
-    except Exception as e:
-        logger.error(f"Failed to toggle favorite for land {land_id}: {str(e)}")
+    except Exception:
+        logger.error("Failed to toggle favorite for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
+
+@api_bp.route('/property/<int:property_id>/favorite', methods=['POST'])
+@admin_required
+def toggle_property_favorite(property_id):
+    """Toggle favorite status for a universal Property."""
+    try:
+        from models import Property
+
+        prop = db.get_or_404(Property, property_id)
+        prop.is_favorite = not bool(prop.is_favorite)
+        db.session.commit()
+
+        return jsonify(
+            {
+                "success": True,
+                "is_favorite": prop.is_favorite,
+                "message": f"Property {'added to' if prop.is_favorite else 'removed from'} favorites",
+            }
+        )
+    except Exception:
+        logger.error("Failed to toggle favorite for property %s", property_id, exc_info=True)
+        return jsonify({"success": False, "error": "An internal error occurred. Check server logs for details."}), 500
+
+
+@api_bp.route('/property/<int:property_id>/enrich', methods=['POST'])
+@admin_required
+@limiter.limit("10 per minute")
+def manual_property_enrichment(property_id: int):
+    """Manually trigger Google enrichment for a universal Property."""
+    try:
+        from models import Property
+        from services.property_enrichment_service import PropertyEnrichmentService
+
+        prop = db.get_or_404(Property, property_id)
+
+        payload = request.get_json(silent=True) if request.is_json else {}
+        refresh_coords = False
+        if isinstance(payload, dict):
+            refresh_coords = bool(payload.get("refresh_coords"))
+        if request.args.get("refresh_coords") in ("1", "true", "yes", "on"):
+            refresh_coords = True
+
+        def _run():
+            prop_local = db.session.get(Property, property_id)
+            if not prop_local:
+                return {"success": False, "error": "Property not found"}
+
+            ok = PropertyEnrichmentService().enrich_property(
+                prop_local,
+                refresh_coords=refresh_coords,
+                recalc_scoring=True,
+            )
+            if ok:
+                return {
+                    "success": True,
+                    "message": "Property enriched successfully with Google API data",
+                }
+
+            return {
+                "success": False,
+                "error": "Geocoding failed; enrichment skipped. Check that the property has a valid location.",
+            }
+
+        if _should_run_sync():
+            result = _run()
+            return jsonify(result), 200
+
+        job_id = _enqueue(
+            _run,
+            job_type="property_enrich",
+            meta={"property_id": prop.id, "refresh_coords": refresh_coords},
+        )
+        return jsonify(
+            {
+                "success": True,
+                "status": "queued",
+                "job_id": job_id,
+                "message": "Enrichment queued",
+            }
+        ), 202
+    except Exception:
+        logger.error("Manual property enrichment failed for property %s", property_id, exc_info=True)
+        return jsonify({"success": False, "error": "An internal error occurred. Check server logs for details."}), 500
+
 @api_bp.route('/land/<int:land_id>/set-status', methods=['POST'])
+@admin_required
 def set_land_status(land_id):
     """Manually set the listing status (for when automatic check fails due to captcha)"""
     try:
         from datetime import datetime
 
-        land = Land.query.get_or_404(land_id)
+        land = db.get_or_404(Land, land_id)
         data = request.get_json() or {}
 
         new_status = data.get('status', 'removed')
@@ -792,10 +1420,10 @@ def set_land_status(land_id):
 
         old_status = land.listing_status
         land.listing_status = new_status
-        land.listing_last_checked = datetime.utcnow()
+        land.listing_last_checked = datetime.now(timezone.utc)
 
         if new_status in ('removed', 'sold') and old_status == 'active':
-            land.listing_removed_date = datetime.utcnow()
+            land.listing_removed_date = datetime.now(timezone.utc)
 
             # Create history record for favorites
             if land.is_favorite:
@@ -814,21 +1442,66 @@ def set_land_status(land_id):
             "previous_status": old_status
         })
 
-    except Exception as e:
-        logger.error(f"Failed to set status for land {land_id}: {str(e)}")
+    except Exception:
+        logger.error("Failed to set status for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 
+@api_bp.route('/property/<int:property_id>/set-status', methods=['POST'])
+@admin_required
+def set_property_status(property_id):
+    """Manually set listing status for a universal Property."""
+    try:
+        from datetime import datetime
+        from models import Property
+
+        prop = db.get_or_404(Property, property_id)
+        data = request.get_json() or {}
+
+        new_status = data.get('status', 'removed')
+        if new_status not in ('active', 'removed', 'sold'):
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Invalid status. Must be 'active', 'removed', or 'sold'",
+                }
+            ), 400
+
+        old_status = prop.listing_status or 'active'
+        prop.listing_status = new_status
+        prop.listing_last_checked = datetime.now(timezone.utc)
+
+        if new_status in ('removed', 'sold') and old_status == 'active':
+            prop.listing_removed_date = datetime.now(timezone.utc)
+        elif new_status == 'active' and old_status in ('removed', 'sold'):
+            prop.listing_removed_date = None
+
+        db.session.commit()
+
+        return jsonify(
+            {
+                "success": True,
+                "property_id": property_id,
+                "status": prop.listing_status,
+            }
+        )
+
+    except Exception:
+        logger.error("Failed to set status for property %s", property_id, exc_info=True)
+        return jsonify({"success": False, "error": "An internal error occurred. Check server logs for details."}), 500
+
+
 @api_bp.route('/land/<int:land_id>/check-status', methods=['POST'])
+@admin_required
 def check_land_status(land_id):
     """Check if a listing is still active on Idealista"""
     try:
         from services.listing_status_service import ListingStatusService
 
-        land = Land.query.get_or_404(land_id)
+        land = db.get_or_404(Land, land_id)
 
         if not land.url:
             return jsonify({
@@ -836,24 +1509,42 @@ def check_land_status(land_id):
                 "error": "No URL available for this listing"
             }), 400
 
-        service = ListingStatusService()
-        result = service.check_land_status(land)
+        def _run():
+            land_local = db.session.get(Land, land_id)
+            if not land_local or not land_local.url:
+                return {"success": False, "error": "No URL available for this listing"}
 
-        return jsonify({
-            "success": True,
-            "land_id": land_id,
-            "status": land.listing_status,
-            "previous_status": result.get('previous_status'),
-            "changed": result.get('changed', False),
-            "last_checked": land.listing_last_checked.isoformat() if land.listing_last_checked else None,
-            "removed_date": land.listing_removed_date.isoformat() if land.listing_removed_date else None
-        })
+            service = ListingStatusService()
+            result = service.check_land_status(land_local)
 
-    except Exception as e:
-        logger.error(f"Failed to check status for land {land_id}: {str(e)}")
+            return {
+                "success": True,
+                "land_id": land_id,
+                "status": land_local.listing_status,
+                "previous_status": result.get('previous_status'),
+                "changed": result.get('changed', False),
+                "last_checked": land_local.listing_last_checked.isoformat() if land_local.listing_last_checked else None,
+                "removed_date": land_local.listing_removed_date.isoformat() if land_local.listing_removed_date else None,
+            }
+
+        if _should_run_sync():
+            return jsonify(_run())
+
+        job_id = _enqueue(_run, job_type="land_check_status", meta={"land_id": land.id})
+        return jsonify(
+            {
+                "success": True,
+                "status": "queued",
+                "job_id": job_id,
+                "message": "Listing status check queued",
+            }
+        ), 202
+
+    except Exception:
+        logger.error("Failed to check status for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 
@@ -865,19 +1556,29 @@ def check_favorites_status():
         from services.listing_status_service import ListingStatusService
 
         limit = request.args.get('limit', 50, type=int)
-        service = ListingStatusService()
-        results = service.check_favorites_status(limit=limit)
+        def _run():
+            service = ListingStatusService()
+            results = service.check_favorites_status(limit=limit)
+            return {"success": True, **results}
 
-        return jsonify({
-            "success": True,
-            **results
-        })
+        if _should_run_sync():
+            return jsonify(_run())
 
-    except Exception as e:
-        logger.error(f"Failed to check favorites status: {str(e)}")
+        job_id = _enqueue(_run, job_type="listings_check_favorites", meta={"limit": limit})
+        return jsonify(
+            {
+                "success": True,
+                "status": "queued",
+                "job_id": job_id,
+                "message": "Favorites status check queued",
+            }
+        ), 202
+
+    except Exception:
+        logger.error("Failed to check favorites status", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 
@@ -890,19 +1591,33 @@ def check_all_listings_status():
 
         limit = request.args.get('limit', 50, type=int)
         days = request.args.get('days', 7, type=int)
-        service = ListingStatusService()
-        results = service.check_all_active_listings(limit=limit, days_since_check=days)
+        def _run():
+            service = ListingStatusService()
+            results = service.check_all_active_listings(limit=limit, days_since_check=days)
+            return {"success": True, **results}
 
-        return jsonify({
-            "success": True,
-            **results
-        })
+        if _should_run_sync():
+            return jsonify(_run())
 
-    except Exception as e:
-        logger.error(f"Failed to check all listings status: {str(e)}")
+        job_id = _enqueue(
+            _run,
+            job_type="listings_check_all",
+            meta={"limit": limit, "days": days},
+        )
+        return jsonify(
+            {
+                "success": True,
+                "status": "queued",
+                "job_id": job_id,
+                "message": "Listings status check queued",
+            }
+        ), 202
+
+    except Exception:
+        logger.error("Failed to check all listings status", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 
@@ -910,7 +1625,7 @@ def check_all_listings_status():
 def get_land_history(land_id):
     """Get change history for a land property"""
     try:
-        land = Land.query.get_or_404(land_id)
+        land = db.get_or_404(Land, land_id)
 
         # Get all history records for this land, ordered by date desc
         history = LandHistory.query.filter_by(land_id=land_id).order_by(
@@ -925,11 +1640,11 @@ def get_land_history(land_id):
             "history": [h.to_dict() for h in history]
         })
 
-    except Exception as e:
-        logger.error(f"Failed to get history for land {land_id}: {str(e)}")
+    except Exception:
+        logger.error("Failed to get history for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 
@@ -1030,9 +1745,9 @@ def get_stats():
             }
         })
         
-    except Exception as e:
-        logger.error(f"Failed to get stats: {str(e)}")
+    except Exception:
+        logger.error("Failed to get stats", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500

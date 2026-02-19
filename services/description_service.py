@@ -195,7 +195,7 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
                     'error': 'AI response parsing failed'
                 }
             except Exception as e:
-                logger.error(f"AI enhancement failed: {e}")
+                logger.error("AI enhancement failed", exc_info=True)
                 fallback_desc = self._create_fallback_description(raw_description, extracted_data)
                 return {
                     'enhanced_description': fallback_desc,
@@ -204,11 +204,11 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
                     'enhanced_es': fallback_desc,  # SAME content for both languages
                     'original_description': raw_description,
                     'processing_status': 'fallback',
-                    'error': str(e)
+                    'error': 'AI enhancement failed'
                 }
                 
         except Exception as e:
-            logger.error(f"Description enhancement failed: {e}")
+            logger.error("Description enhancement failed", exc_info=True)
             return {
                 'enhanced_description': raw_description,
                 'enhanced': raw_description,
@@ -216,7 +216,7 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
                 'enhanced_es': raw_description,
                 'original_description': raw_description,
                 'processing_status': 'failed',
-                'error': str(e)
+                'error': 'Description enhancement failed'
             }
     
     def _create_fallback_description(self, raw_description: str, extracted_data: Dict) -> str:
@@ -285,5 +285,5 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
             }
             
         except Exception as e:
-            logger.error(f"Failed to get description variants for land {land_id}: {e}")
-            return {'error': str(e)}
+            logger.error("Failed to get description variants for land %s", land_id, exc_info=True)
+            return {'error': 'Failed to retrieve description variants'}
