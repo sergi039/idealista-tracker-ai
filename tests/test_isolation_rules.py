@@ -1,18 +1,15 @@
 from pathlib import Path
 
 
-def test_universal_docker_compose_is_isolated_and_uses_5050():
+def test_docker_compose_uses_production_port_5001():
     root = Path(__file__).parent.parent
     compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
 
-    # Hard rule: universal app is exposed on host port 5050 (legacy stays on 5001).
-    assert "5050:5001" in compose
-    assert "5001:5001" not in compose
-
-    # Hard rule: universal build uses unique docker resources.
-    assert "container_name: idealista-universal-app" in compose
-    assert "container_name: idealista-universal-db" in compose
-    assert "idealista-universal-network" in compose
+    # Post-cutover: Universal is the primary deployment on port 5001.
+    assert "5001:5001" in compose
+    assert "container_name: idealista-app" in compose
+    assert "container_name: idealista-db" in compose
+    assert "idealista-network" in compose
     assert "idealista-universal-pgdata" in compose
 
 
@@ -24,10 +21,10 @@ def test_env_example_uses_separate_db_name():
     assert "SESSION_COOKIE_NAME=idealista_universal_session" in env_example
 
 
-def test_local_dev_entrypoint_defaults_to_5050():
+def test_local_dev_entrypoint_defaults_to_5001():
     root = Path(__file__).parent.parent
     main_py = (root / "main.py").read_text(encoding="utf-8")
-    assert "5050" in main_py
+    assert "5001" in main_py
 
 
 def test_universal_config_uses_separate_session_cookie_name():
