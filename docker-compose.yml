@@ -3,10 +3,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: idealista-universal-app
+    container_name: idealista-app
     ports:
-      # Use a different host port to avoid clobbering the legacy app
-      - "5050:5001"
+      - "5001:5001"
     depends_on:
       db:
         condition: service_healthy
@@ -21,11 +20,13 @@ services:
       - ./data:/app/data
     restart: unless-stopped
     networks:
-      - idealista-universal-network
+      - idealista-network
 
   db:
     image: postgres:15-alpine
-    container_name: idealista-universal-db
+    container_name: idealista-db
+    ports:
+      - "5433:5432"
     environment:
       POSTGRES_DB: ${DB_NAME:-idealista_universal}
       POSTGRES_USER: ${DB_USER:-idealista}
@@ -39,12 +40,12 @@ services:
       retries: 5
     restart: unless-stopped
     networks:
-      - idealista-universal-network
+      - idealista-network
 
 volumes:
   pgdata_universal:
     name: idealista-universal-pgdata
 
 networks:
-  idealista-universal-network:
-    name: idealista-universal-network
+  idealista-network:
+    name: idealista-network
