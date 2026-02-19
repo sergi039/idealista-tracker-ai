@@ -170,6 +170,7 @@ def properties():
 
         # Sorting (safe allow-list)
         sort_columns = {
+            'title': Property.title,
             'created_at': Property.created_at,
             'price': Property.price,
             'area': Property.area,
@@ -202,7 +203,6 @@ def properties():
                 "police": "fa-shield-halved",
                 "supermarket": "fa-cart-shopping",
                 "school": "fa-school",
-                "subway_station": "fa-subway",
             }
 
             for preset in preset_defs:
@@ -531,7 +531,6 @@ def property_detail(property_id):
                 "police": "fa-shield-halved",
                 "supermarket": "fa-cart-shopping",
                 "school": "fa-school",
-                "subway_station": "fa-subway",
             }
 
             for preset in preset_defs:
@@ -1541,7 +1540,6 @@ def map_view():
                 "police": "fa-shield-halved",
                 "supermarket": "fa-cart-shopping",
                 "school": "fa-school",
-                "subway_station": "fa-subway",
             }
 
             for preset in preset_defs:

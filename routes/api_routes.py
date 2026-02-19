@@ -1284,7 +1284,8 @@ def scheduler_status():
         }), 500
 
 @api_bp.route('/land/<int:land_id>/favorite', methods=['POST'])
-@admin_required
+# Favorites are user-facing UI actions and should work without admin auth.
+@limiter.limit("60 per minute")
 def toggle_favorite(land_id):
     """Toggle favorite status for a land property"""
     try:
@@ -1319,7 +1320,8 @@ def toggle_favorite(land_id):
 
 
 @api_bp.route('/property/<int:property_id>/favorite', methods=['POST'])
-@admin_required
+# Favorites are user-facing UI actions and should work without admin auth.
+@limiter.limit("60 per minute")
 def toggle_property_favorite(property_id):
     """Toggle favorite status for a universal Property."""
     try:

@@ -64,7 +64,7 @@ A self-hosted tool that automatically imports your Idealista saved search emails
 
 ### Installation (5 minutes)
 
-> **Ports rule:** legacy app stays on `http://localhost:5001/`, this universal build stays on `http://localhost:5050/` (see `docs/DEV_RULES.md`).
+> Primary app URL: `http://localhost:5001/`
 
 ```bash
 # 1. Clone the repository
@@ -76,50 +76,22 @@ cp .env.example .env
 
 # 3. Edit .env with your settings (see Configuration below)
 
-# 4. Start the app (local dev)
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
-
-# Production (no bind mounts / no exposed DB ports)
-# docker compose up -d --build
-
-# 5. Open in browser
-open http://localhost:5050
-```
-
-## Running Legacy + Universal Together (recommended)
-
-This repo is the **universal build** (properties). The legacy land tracker remains a separate repo and must stay isolated.
-
-- Legacy: `http://localhost:5001/` (`IdealistaRank`)
-- Universal: `http://localhost:5050/` (`IdealistaRank-properties-universal`)
-
-Run both stacks in two terminals:
-
-```bash
-# Terminal 1 (legacy)
-cd /path/to/IdealistaRank
+# 4. Start the app
 docker compose up -d --build
 
-# Terminal 2 (universal)
-cd /path/to/IdealistaRank-properties-universal
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# Optional local dev mode (bind mount + --reload)
+# docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+
+# 5. Open in browser
+open http://localhost:5001
 ```
 
-Email isolation (pick one). Default recommendation:
+## Legacy Status
 
-- Production: **separate Gmail labels**
-- Local dev: shared label + `EXCLUDED_PROPERTY_CATEGORIES=land` is OK
+This repository is the current **mainline universal tracker** (all property categories).
+The old land-only flow is kept only for migration/troubleshooting and is no longer the primary workflow.
 
-1) **Separate Gmail labels (safest)**:
-   - Legacy `.env`: `IMAP_FOLDER=IdealistaLand` (example)
-   - Universal `.env`: `IMAP_FOLDER=IdealistaProperties` (example)
-
-2) **Shared Gmail label + category filtering** (acceptable):
-   - Both apps use the same `IMAP_FOLDER`
-   - Universal `.env` must keep: `EXCLUDED_PROPERTY_CATEGORIES=land`
-
-Current state/backlog: `docs/STATE.md`, `TODO.md`.
-Supported sale types (defaults): `docs/PROPERTY_TYPES.md`.
+Current state/backlog: `PROJECT_STATUS.md`, `MIGRATION_RUNBOOK.md`.
 
 ---
 
@@ -152,7 +124,7 @@ Edit the `.env` file. Here's what you need:
 | Setting | What it enables |
 |---------|----------------|
 | `GOOGLE_MAPS_API_KEY` | Interactive maps, travel time calculations |
-| `GOOGLE_PLACES_API_KEY` | Nearby places (metro, supermarkets, etc.) |
+| `GOOGLE_PLACES_API_KEY` | Nearby places (train stations, supermarkets, etc.) |
 
 Use the `*_KEY` names above in your `.env` (legacy aliases like `GOOGLE_MAPS_API` / `GOOGLE_PLACES_API` are still accepted).
 
@@ -197,18 +169,15 @@ OPENAI_API_KEY=sk-...
 # Optional - Admin
 ADMIN_API_TOKEN=your-random-admin-token
 
-# Email folder containing Idealista alerts (default: Idealista)
-IMAP_FOLDER=IdealistaProperties
+# Email folder containing Idealista alerts
+IMAP_FOLDER=Idealista
 ```
 
 ---
 
 ## Usage Tips
 
-1. **Create Gmail labels/folders**:
-   - Legacy app: `Idealista` (example)
-   - Universal app: `IdealistaProperties` (default in this repo’s `.env.example`)
-   And set up filters to route Idealista emails accordingly.
+1. **Create one Gmail label/folder** (e.g. `Idealista`) and route Idealista alerts into it.
 2. **First sync** may take a few minutes if you have many emails
 3. **Scoring weights** can be customized in Settings
 4. **AI analysis** costs money per API call — use it on shortlisted properties

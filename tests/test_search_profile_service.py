@@ -1,7 +1,11 @@
 import pytest
 
 from app import create_app, db
-from services.search_profile_service import SearchProfileService, extract_search_name
+from services.search_profile_service import (
+    SearchProfileService,
+    extract_search_name,
+    normalize_travel_targets_config,
+)
 from tests import setup_test_environment
 
 
@@ -71,3 +75,28 @@ def test_resolve_profile_creates_by_search_name_from_subject_without_quotes(app)
         )
         assert profile is not None
         assert profile.name == "Homes in San Juan de Alicante"
+
+
+def test_travel_preset_defs_use_train_station_not_subway():
+    defs = SearchProfileService.get_travel_preset_defs()
+    keys = {d["key"] for d in defs}
+
+    assert "train_station" in keys
+    assert "subway_station" not in keys
+
+
+def test_normalize_drops_legacy_subway_preset():
+    cfg = normalize_travel_targets_config(
+        {
+            "presets": {
+                "airport": {"enabled": True, "mode": "driving"},
+                "train_station": {"enabled": True, "mode": "driving"},
+                "subway_station": {"enabled": True, "mode": "transit"},
+            },
+            "custom": [],
+        }
+    )
+
+    presets = cfg.get("presets") or {}
+    assert "train_station" in presets
+    assert "subway_station" not in presets

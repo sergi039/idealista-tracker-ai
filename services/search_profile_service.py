@@ -18,8 +18,6 @@ TRAVEL_PRESET_DEFS: Dict[str, Dict[str, Any]] = {
     "police": {"label": "Nearest police station", "place_types": ["police"]},
     "supermarket": {"label": "Nearest supermarket", "place_types": ["supermarket"]},
     "school": {"label": "Nearest school", "place_types": ["school"]},
-    # Metro/underground. Some places return under transit_station; keep both.
-    "subway_station": {"label": "Nearest metro/subway station", "place_types": ["subway_station", "transit_station"]},
 }
 
 

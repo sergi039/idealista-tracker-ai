@@ -147,7 +147,7 @@ def auth_disabled_test_property(auth_disabled_app):
 # Security: unauthorized POST → 401
 # ---------------------------------------------------------------------------
 class TestUnauthorizedAccess:
-    """Every mutating API endpoint must return 401 for anonymous requests."""
+    """Admin-only endpoints must return 401 for anonymous requests."""
 
     PROTECTED_POST_ENDPOINTS = [
         '/api/ingest/email/run',
@@ -164,7 +164,6 @@ class TestUnauthorizedAccess:
             f'/api/enhance/description/{lid}',
             f'/api/land/{lid}/environment',
             f'/api/analyze/property/{lid}',
-            f'/api/land/{lid}/favorite',
             f'/api/land/{lid}/set-status',
             f'/api/land/{lid}/check-status',
         ]
@@ -184,7 +183,6 @@ class TestUnauthorizedAccess:
         pid = auth_disabled_test_property
         property_endpoints = [
             f'/api/property/{pid}/enrich',
-            f'/api/property/{pid}/favorite',
             f'/api/property/{pid}/set-status',
             f'/api/property/{pid}/analyze/structured',
             f'/api/property/{pid}/environment',
@@ -195,6 +193,25 @@ class TestUnauthorizedAccess:
             assert resp.status_code == 401, (
                 f"{endpoint} returned {resp.status_code}, expected 401"
             )
+
+    def test_anonymous_favorite_toggle_is_allowed(
+        self, auth_disabled_client, auth_disabled_test_land, auth_disabled_test_property
+    ):
+        """Favorites are user-facing actions and should work without admin auth."""
+        lid = auth_disabled_test_land
+        pid = auth_disabled_test_property
+
+        land_resp = auth_disabled_client.post(f'/api/land/{lid}/favorite')
+        assert land_resp.status_code == 200
+        land_data = json.loads(land_resp.data)
+        assert land_data['success'] is True
+        assert land_data['is_favorite'] is True
+
+        property_resp = auth_disabled_client.post(f'/api/property/{pid}/favorite')
+        assert property_resp.status_code == 200
+        property_data = json.loads(property_resp.data)
+        assert property_data['success'] is True
+        assert property_data['is_favorite'] is True
 
     def test_anonymous_put_returns_401(self, auth_disabled_client):
         """PUT /api/criteria must reject anonymous requests."""

@@ -173,6 +173,44 @@
     width: 100%;
 }
 
+.properties-list-table {
+    table-layout: auto;
+}
+
+.properties-list-table .title-cell {
+    min-width: 300px;
+}
+
+.properties-list-table .title-stack {
+    min-width: 0;
+}
+
+.properties-list-table .property-table-title {
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.25;
+    max-width: 100%;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    white-space: normal;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.properties-list-table .properties-travel-badges {
+    max-width: 220px;
+}
+
+.properties-list-table .properties-actions .btn {
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
 .property-table-title {
     display: block;
     max-width: 100%;
