@@ -83,7 +83,7 @@ class EmailParser:
                 return None
                 
         except Exception as e:
-            logger.error(f"Failed to parse email: {str(e)}")
+            logger.error("Failed to parse email", exc_info=True)
             return None
     
     def _extract_title(self, text: str) -> str:
@@ -529,5 +529,5 @@ class EmailParser:
             }
 
         except Exception as e:
-            logger.error(f"Failed to parse 'no longer listed' email: {str(e)}")
+            logger.error("Failed to parse 'no longer listed' email", exc_info=True)
             return None

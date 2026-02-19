@@ -8,6 +8,7 @@ import unicodedata
 from typing import Dict, List, Optional
 from utils.geocoding import GeocodingService
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
+from utils.http_retry import request_with_retry
 from config import Config
 from services.scoring_service import ScoringService
 
@@ -26,9 +27,9 @@ class EnrichmentService:
             from models import Land
             from app import db
             
-            land = Land.query.get(land_id)
+            land = db.session.get(Land, land_id)
             if not land:
-                logger.error(f"Land with ID {land_id} not found")
+                logger.error("Land with ID %s not found", land_id)
                 return False
             
             logger.info(f"Starting enrichment for land {land_id}: {land.title}")
@@ -74,7 +75,7 @@ class EnrichmentService:
             return True
             
         except Exception as e:
-            logger.error(f"Failed to enrich land {land_id}: {str(e)}")
+            logger.error("Failed to enrich land %s", land_id, exc_info=True)
             return False
 
     def _should_refresh_coordinates(self, land) -> bool:
@@ -509,7 +510,7 @@ class EnrichmentService:
             )
             
         except Exception as e:
-            logger.error(f"Failed to enrich with Google Places: {str(e)}")
+            logger.error("Failed to enrich with Google Places", exc_info=True)
             # Create fallback enrichment data when Google APIs fail
             self._create_fallback_amenities_data(land)
     
@@ -527,8 +528,8 @@ class EnrichmentService:
                     'key': self.google_places_key
                 }
                 
-                response = requests.get(url, params=params, timeout=15)
-                if response.status_code == 200:
+                response = request_with_retry('get', url, params=params, timeout=15)
+                if response and response.status_code == 200:
                     data = response.json()
                     for place in data.get('results', []):
                         place_info = {
@@ -551,7 +552,7 @@ class EnrichmentService:
             return places
             
         except Exception as e:
-            logger.error(f"Failed to search nearby places: {str(e)}")
+            logger.error("Failed to search nearby places", exc_info=True)
             return []
     
     def _create_fallback_amenities_data(self, land):
@@ -617,7 +618,7 @@ class EnrichmentService:
             logger.info(f"Created fallback amenities data for land {land.id} ({'urban' if is_urban else 'coastal' if is_coastal else 'rural'} area)")
             
         except Exception as e:
-            logger.error(f"Failed to create fallback amenities data: {str(e)}")
+            logger.error("Failed to create fallback amenities data", exc_info=True)
     
     def _enrich_with_google_maps(self, land):
         """Enrich with Google Maps data (distances, travel times)"""
@@ -661,7 +662,7 @@ class EnrichmentService:
             cache_enrichment_data(lat, lon, cache_type, transport, timeout=60 * 60 * 24 * 7)
             
         except Exception as e:
-            logger.error(f"Failed to enrich with Google Maps: {str(e)}")
+            logger.error("Failed to enrich with Google Maps", exc_info=True)
 
     def _get_distance_matrix_batch(self, lat: float, lon: float, destinations: List[str]) -> List[Optional[Dict]]:
         """Batch distance matrix lookup (destinations <= 25)."""
@@ -677,8 +678,8 @@ class EnrichmentService:
                 "key": self.google_maps_key,
             }
 
-            response = requests.get(url, params=params, timeout=15)
-            if response.status_code != 200:
+            response = request_with_retry('get', url, params=params, timeout=20)
+            if not response or response.status_code != 200:
                 return [None for _ in destinations]
 
             data = response.json()
@@ -718,8 +719,8 @@ class EnrichmentService:
                 'key': self.google_maps_key
             }
             
-            response = requests.get(url, params=params, timeout=15)
-            if response.status_code == 200:
+            response = request_with_retry('get', url, params=params, timeout=15)
+            if response and response.status_code == 200:
                 data = response.json()
                 if data.get('rows') and data['rows'][0].get('elements'):
                     element = data['rows'][0]['elements'][0]
@@ -732,7 +733,7 @@ class EnrichmentService:
             return None
             
         except Exception as e:
-            logger.error(f"Failed to get distance matrix: {str(e)}")
+            logger.error("Failed to get distance matrix", exc_info=True)
             return None
     
     def _enrich_with_osm_data(self, land):
@@ -759,14 +760,15 @@ class EnrichmentService:
             out center;
             """
             
-            response = requests.post(
+            response = request_with_retry(
+                'post',
                 self.osm_overpass_url,
                 data=overpass_query,
                 headers={'Content-Type': 'application/x-www-form-urlencoded'},
                 timeout=30,
             )
             
-            if response.status_code == 200:
+            if response and response.status_code == 200:
                 osm_data = response.json()
                 infrastructure_extended = land.infrastructure_extended or {}
                 
@@ -784,7 +786,7 @@ class EnrichmentService:
                 cache_enrichment_data(lat, lon, "osm_amenities_v1", amenity_counts, timeout=60 * 60 * 24 * 7)
             
         except Exception as e:
-            logger.error(f"Failed to enrich with OSM data: {str(e)}")
+            logger.error("Failed to enrich with OSM data", exc_info=True)
     
     def _analyze_environment(self, land):
         """Analyze environment features like views and orientation"""
@@ -843,7 +845,7 @@ class EnrichmentService:
             land.environment = environment
 
         except Exception as e:
-            logger.error(f"Failed to analyze environment: {str(e)}")
+            logger.error("Failed to analyze environment", exc_info=True)
     
     def _is_coastal_location(self, land):
         """Check if location is in a known coastal area based on coordinates"""

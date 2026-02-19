@@ -41,7 +41,7 @@ class ScoringService:
             self._validate_profiles()
             
         except Exception as e:
-            logger.error(f"Failed to load custom weights: {str(e)}")
+            logger.error("Failed to load custom weights", exc_info=True)
     
     def calculate_score(self, land) -> Decimal:
         """Calculate dual scores using MCDM methodology (Multi-Criteria Decision Making)
@@ -73,24 +73,30 @@ class ScoringService:
                 land.environment['scoring'] = {
                     'individual_scores': {},
                     'profiles': {},
-                    'combined_mix': Config.COMBINED_MIX,
+                    'combined_mix': self._load_combined_mix(),
                     'combined_score': 0,
                 }
                 land.environment['score_breakdown'] = {}
                 return land.score_total
 
-            # Calculate individual criterion scores once (each returns 0-100)
-            individual_scores = {}
-            individual_scores['investment_yield'] = self._score_investment_yield(land)
-            individual_scores['location_quality'] = self._score_location_quality(land)
-            individual_scores['transport'] = self._score_transport(land)
-            individual_scores['infrastructure_basic'] = self._score_infrastructure_basic(land)
-            individual_scores['infrastructure_extended'] = self._score_infrastructure_extended(land)
-            individual_scores['environment'] = self._score_environment(land)
-            individual_scores['physical_characteristics'] = self._score_physical_characteristics(land)
-            individual_scores['services_quality'] = self._score_services_quality(land)
-            individual_scores['legal_status'] = self._score_legal_status(land)
-            individual_scores['development_potential'] = self._score_development_potential(land)
+            # Calculate individual criterion scores once (each returns 0-100 or None)
+            raw_scores = {
+                'investment_yield': self._score_investment_yield(land),
+                'location_quality': self._score_location_quality(land),
+                'transport': self._score_transport(land),
+                'infrastructure_basic': self._score_infrastructure_basic(land),
+                'infrastructure_extended': self._score_infrastructure_extended(land),
+                'environment': self._score_environment(land),
+                'physical_characteristics': self._score_physical_characteristics(land),
+                'services_quality': self._score_services_quality(land),
+                'legal_status': self._score_legal_status(land),
+                'development_potential': self._score_development_potential(land),
+            }
+            # Clamp all non-None scores to [0, 100] before aggregation
+            individual_scores = {
+                k: min(100, max(0, v)) if v is not None else None
+                for k, v in raw_scores.items()
+            }
             
             # Calculate Investment Score using Investment Profile
             investment_score = self._calculate_profile_score(individual_scores, 'investment')
@@ -98,10 +104,9 @@ class ScoringService:
             # Calculate Lifestyle Score using Lifestyle Profile
             lifestyle_score = self._calculate_profile_score(individual_scores, 'lifestyle')
             
-            # Calculate Combined Score using COMBINED_MIX
-            from config import Config
-            mix = Config.COMBINED_MIX
-            combined_score = (investment_score * mix['investment'] + 
+            # Calculate Combined Score using COMBINED_MIX (DB first, Config fallback)
+            mix = self._load_combined_mix()
+            combined_score = (investment_score * mix['investment'] +
                             lifestyle_score * mix['lifestyle'])
             combined_score_rounded = round(combined_score, 2)
             
@@ -140,7 +145,7 @@ class ScoringService:
             return land.score_total
             
         except Exception as e:
-            logger.error(f"Failed to calculate dual MCDM scores for land {land.id}: {str(e)}")
+            logger.error("Failed to calculate dual MCDM scores for land %s", land.id, exc_info=True)
             return Decimal('0')
     
     def _score_infrastructure_basic(self, land) -> Optional[float]:
@@ -169,7 +174,7 @@ class ScoringService:
             return (score / max_score) * 100
             
         except Exception as e:
-            logger.error(f"Failed to score basic infrastructure: {str(e)}")
+            logger.error("Failed to score basic infrastructure", exc_info=True)
             return None
     
     def _score_infrastructure_extended(self, land) -> Optional[float]:
@@ -201,7 +206,7 @@ class ScoringService:
             return min(score, 100)  # Cap at 100
             
         except Exception as e:
-            logger.error(f"Failed to score extended infrastructure: {str(e)}")
+            logger.error("Failed to score extended infrastructure", exc_info=True)
             return None
     
     def _score_transport(self, land) -> Optional[float]:
@@ -244,7 +249,7 @@ class ScoringService:
             return min((score / max_possible) * 100, 100)
             
         except Exception as e:
-            logger.error(f"Failed to score transport: {str(e)}")
+            logger.error("Failed to score transport", exc_info=True)
             return None
     
     def _score_environment(self, land) -> Optional[float]:
@@ -276,7 +281,7 @@ class ScoringService:
             return min(score, 100)  # Cap at 100
             
         except Exception as e:
-            logger.error(f"Failed to score environment: {str(e)}")
+            logger.error("Failed to score environment", exc_info=True)
             return None
     
     def _score_neighborhood(self, land) -> Optional[float]:
@@ -309,7 +314,7 @@ class ScoringService:
             return min(max(score, 0), 100)  # Keep between 0-100
             
         except Exception as e:
-            logger.error(f"Failed to score neighborhood: {str(e)}")
+            logger.error("Failed to score neighborhood", exc_info=True)
             return None
     
     def _score_services_quality(self, land) -> Optional[float]:
@@ -338,7 +343,7 @@ class ScoringService:
                 return None
             
         except Exception as e:
-            logger.error(f"Failed to score services quality: {str(e)}")
+            logger.error("Failed to score services quality", exc_info=True)
             return None
     
     def _score_legal_status(self, land) -> Optional[float]:
@@ -356,7 +361,7 @@ class ScoringService:
                 return 0    # Rustic or other (not suitable)
             
         except Exception as e:
-            logger.error(f"Failed to score legal status: {str(e)}")
+            logger.error("Failed to score legal status", exc_info=True)
             return None
     
     def _score_location_quality(self, land) -> Optional[float]:
@@ -397,7 +402,7 @@ class ScoringService:
             return min(100, score)
             
         except Exception as e:
-            logger.error(f"Failed to score location quality: {str(e)}")
+            logger.error("Failed to score location quality", exc_info=True)
             return None
     
     def _score_physical_characteristics(self, land) -> Optional[float]:
@@ -429,7 +434,7 @@ class ScoringService:
             return min(100, score)
             
         except Exception as e:
-            logger.error(f"Failed to score physical characteristics: {str(e)}")
+            logger.error("Failed to score physical characteristics", exc_info=True)
             return None
     
     def _score_development_potential(self, land) -> Optional[float]:
@@ -468,7 +473,7 @@ class ScoringService:
             return min(100, max(0, score))
             
         except Exception as e:
-            logger.error(f"Failed to score development potential: {str(e)}")
+            logger.error("Failed to score development potential", exc_info=True)
             return None
     
     def _score_investment_yield(self, land) -> Optional[float]:
@@ -547,7 +552,7 @@ class ScoringService:
                 return None
             
         except Exception as e:
-            logger.error(f"Failed to score investment yield for land {land.id}: {str(e)}")
+            logger.error("Failed to score investment yield for land %s", land.id, exc_info=True)
             return None
     
     def update_weights(self, new_weights: Dict[str, float], profile: str = 'combined') -> bool:
@@ -604,7 +609,7 @@ class ScoringService:
             return True
             
         except Exception as e:
-            logger.error(f"Failed to update weights for profile {profile}: {str(e)}")
+            logger.error("Failed to update weights for profile %s", profile, exc_info=True)
             return False
     
     def get_current_weights(self) -> Dict[str, float]:
@@ -616,13 +621,11 @@ class ScoringService:
     def _calculate_profile_score(self, individual_scores: Dict[str, float], profile: str) -> float:
         """Calculate MCDM score for a specific profile (investment or lifestyle)"""
         try:
-            from config import Config
-            
-            if profile not in Config.SCORING_PROFILES:
-                logger.error(f"Unknown scoring profile: {profile}")
+            profile_weights = self._load_profile_weights(profile)
+
+            if not profile_weights:
+                logger.error(f"No weights found for scoring profile: {profile}")
                 return 0
-            
-            profile_weights = Config.SCORING_PROFILES[profile]
             
             # Ensure profile weights are normalized (MCDM requirement)
             total_weight = sum(profile_weights.values())
@@ -655,7 +658,7 @@ class ScoringService:
             return final_score
             
         except Exception as e:
-            logger.error(f"Failed to calculate profile score for '{profile}': {str(e)}")
+            logger.error("Failed to calculate profile score for '%s'", profile, exc_info=True)
             return 0
     
     def _get_profile_weights_used(self, individual_scores: Dict[str, float], profile: str) -> Dict[str, float]:
@@ -677,28 +680,27 @@ class ScoringService:
             return weights_used
             
         except Exception as e:
-            logger.error(f"Failed to get profile weights used for '{profile}': {str(e)}")
+            logger.error("Failed to get profile weights used for '%s'", profile, exc_info=True)
             return {}
     
     def _get_profile_breakdown(self, individual_scores: Dict[str, float], profile: str) -> Dict[str, float]:
         """Get score breakdown for a profile (only criteria with non-None scores)"""
         try:
-            from config import Config
-            
-            if profile not in Config.SCORING_PROFILES:
+            profile_weights = self._load_profile_weights(profile)
+
+            if not profile_weights:
                 return {}
-            
-            profile_weights = Config.SCORING_PROFILES[profile]
+
             breakdown = {}
-            
+
             for criterion, weight in profile_weights.items():
                 if criterion in individual_scores and individual_scores[criterion] is not None:
                     breakdown[criterion] = individual_scores[criterion]
-            
+
             return breakdown
-            
+
         except Exception as e:
-            logger.error(f"Failed to get profile breakdown for '{profile}': {str(e)}")
+            logger.error("Failed to get profile breakdown for '%s'", profile, exc_info=True)
             return {}
     
     def _load_profile_weights(self, profile: str) -> Dict[str, float]:
@@ -735,8 +737,38 @@ class ScoringService:
             return {}
             
         except Exception as e:
-            logger.error(f"Failed to load profile weights for '{profile}': {str(e)}")
+            logger.error("Failed to load profile weights for '%s'", profile, exc_info=True)
             return {}
+
+    def _load_combined_mix(self) -> Dict[str, float]:
+        """Load combined mix (investment/lifestyle ratio) from DB, fallback to Config."""
+        try:
+            from models import ScoringCriteria
+            from config import Config
+
+            criteria = ScoringCriteria.query.filter_by(
+                active=True,
+                profile='combined'
+            ).all()
+
+            if criteria:
+                db_mix = {}
+                for criterion in criteria:
+                    db_mix[criterion.criteria_name] = float(criterion.weight)
+                if 'investment' in db_mix and 'lifestyle' in db_mix:
+                    total = db_mix['investment'] + db_mix['lifestyle']
+                    if total > 0:
+                        normalized = {k: v / total for k, v in db_mix.items()}
+                        return normalized
+
+            if hasattr(Config, 'COMBINED_MIX'):
+                return Config.COMBINED_MIX.copy()
+
+            return {'investment': 0.32, 'lifestyle': 0.68}
+
+        except Exception as e:
+            logger.error("Failed to load combined mix", exc_info=True)
+            return {'investment': 0.32, 'lifestyle': 0.68}
 
     def _validate_profiles(self):
         """Validate that SCORING_PROFILES and COMBINED_MIX are properly configured
@@ -785,4 +817,4 @@ class ScoringService:
             logger.info("Profile validation completed successfully")
             
         except Exception as e:
-            logger.error(f"Failed to validate profiles: {str(e)}")
+            logger.error("Failed to validate profiles", exc_info=True)

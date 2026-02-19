@@ -31,5 +31,5 @@ def setup_test_environment():
         'GOOGLE_MAPS_API_KEY': TEST_GOOGLE_MAPS_API_KEY,
         'GOOGLE_PLACES_API_KEY': TEST_GOOGLE_PLACES_API_KEY,
         'SECRET_KEY': 'test-secret-key',
-        'SESSION_SECRET': 'test-session-secret'
+        'SESSION_SECRET': 'test-session-secret',
     })

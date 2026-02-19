@@ -17,6 +17,7 @@ def app():
     setup_test_environment()
     app = create_app()
     app.config['TESTING'] = True
+    app.config['WTF_CSRF_ENABLED'] = False
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
     
     with app.app_context():
@@ -127,7 +128,7 @@ class TestManualIngestion:
         assert response.status_code == 500
         data = json.loads(response.data)
         assert data['success'] is False
-        assert 'IMAP error' in data['error']
+        assert 'error' in data  # Generic safe error message, no internal details leaked
 
 
 class TestLandsAPI:
@@ -386,7 +387,7 @@ class TestSchedulerStatus:
         assert response.status_code == 500
         data = json.loads(response.data)
         assert data['success'] is False
-        assert 'Scheduler error' in data['error']
+        assert 'error' in data  # Generic safe error message, no internal details leaked
 
 
 class TestStatsAPI:

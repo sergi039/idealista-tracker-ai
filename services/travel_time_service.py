@@ -5,6 +5,7 @@ import requests
 from typing import Dict, Optional, List
 from config import Config
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
+from utils.http_retry import request_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +74,9 @@ class TravelTimeService:
             from models import Land
             from app import db
             
-            land = Land.query.get(land_id)
+            land = db.session.get(Land, land_id)
             if not land or not land.location_lat or not land.location_lon:
-                logger.warning(f"Land {land_id} has no coordinates")
+                logger.warning("Land %s has no coordinates", land_id)
                 return False
             
             logger.info(f"Calculating travel times for land {land_id}")
@@ -210,7 +211,7 @@ class TravelTimeService:
             return True
             
         except Exception as e:
-            logger.error(f"Failed to calculate travel times for land {land_id}: {str(e)}")
+            logger.error("Failed to calculate travel times for land %s", land_id, exc_info=True)
             return False
 
     def _travel_times_cache_type(self) -> str:
@@ -250,8 +251,6 @@ class TravelTimeService:
         # Fallback to mathematical estimation
         logger.info("Using fallback travel time calculation")
         return self._calculate_fallback_travel_time(origin, destination)
-        
-        return self._calculate_fallback_travel_time(origin, destination)
     
     def _get_google_travel_time(self, origin: str, destination: str) -> Optional[Dict]:
         """Get travel time using Google Maps API"""
@@ -265,26 +264,26 @@ class TravelTimeService:
                 'key': self.google_maps_key
             }
             
-            response = requests.get(url, params=params, timeout=15)
-            if response.status_code == 200:
+            response = request_with_retry('get', url, params=params, timeout=20)
+            if response and response.status_code == 200:
                 data = response.json()
-                
+
                 if data.get('status') == 'OK' and data.get('rows'):
                     elements = data['rows'][0].get('elements', [])
                     if elements and elements[0].get('status') == 'OK':
-                        duration = elements[0]['duration']['value']  # seconds
-                        distance = elements[0]['distance']['value']  # meters
-                        
-                        return {
-                            'time': round(duration / 60),  # convert to minutes
-                            'distance': round(distance / 1000)  # convert to kilometers
-                        }
+                        dur = elements[0].get('duration', {}).get('value')
+                        dist = elements[0].get('distance', {}).get('value')
+                        if dur is not None and dist is not None:
+                            return {
+                                'time': round(dur / 60),  # convert to minutes
+                                'distance': round(dist / 1000)  # convert to kilometers
+                            }
             
             logger.warning(f"Google API failed for {origin} to {destination}: {data.get('status') if 'data' in locals() else 'No response'}")
             return None
             
         except Exception as e:
-            logger.error(f"Google Maps API error: {str(e)}")
+            logger.error("Google Maps API error", exc_info=True)
             return None
 
     def _get_google_travel_times(self, origin: str, destinations: List[str]) -> List[Optional[Dict]]:
@@ -302,8 +301,8 @@ class TravelTimeService:
                 "key": self.google_maps_key,
             }
 
-            response = requests.get(url, params=params, timeout=15)
-            if response.status_code != 200:
+            response = request_with_retry('get', url, params=params, timeout=20)
+            if not response or response.status_code != 200:
                 return [None for _ in destinations]
 
             data = response.json()
@@ -316,12 +315,15 @@ class TravelTimeService:
                 if el.get("status") != "OK":
                     out.append(None)
                     continue
-                duration = el["duration"]["value"]
-                distance = el["distance"]["value"]
+                dur = el.get("duration", {}).get("value")
+                dist = el.get("distance", {}).get("value")
+                if dur is None or dist is None:
+                    out.append(None)
+                    continue
                 out.append(
                     {
-                        "time": round(duration / 60),
-                        "distance": round(distance / 1000),
+                        "time": round(dur / 60),
+                        "distance": round(dist / 1000),
                     }
                 )
 
@@ -378,7 +380,7 @@ class TravelTimeService:
             }
             
         except Exception as e:
-            logger.error(f"Fallback travel time calculation failed: {str(e)}")
+            logger.error("Fallback travel time calculation failed", exc_info=True)
             return None
     
     def _haversine_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -477,7 +479,7 @@ class TravelTimeService:
             return None
             
         except Exception as e:
-            logger.error(f"Error finding nearest beach: {str(e)}")
+            logger.error("Error finding nearest beach", exc_info=True)
             return None
     
     def _find_nearest_facility(self, origin: str, facilities: List[str]) -> Optional[int]:
@@ -508,7 +510,7 @@ class TravelTimeService:
             return None
             
         except Exception as e:
-            logger.error(f"Error finding nearest facility: {str(e)}")
+            logger.error("Error finding nearest facility", exc_info=True)
             return None
     
     def generate_google_maps_route_url(self, origin_lat: float, origin_lon: float, 

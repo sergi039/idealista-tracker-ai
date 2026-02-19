@@ -1,7 +1,11 @@
 import logging
 import os
+from datetime import timedelta
 from flask import Flask
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from flask_sqlalchemy import SQLAlchemy
+from flask_wtf.csrf import CSRFProtect
 from sqlalchemy.orm import DeclarativeBase
 from werkzeug.middleware.proxy_fix import ProxyFix
 from config import Config
@@ -15,6 +19,65 @@ class Base(DeclarativeBase):
     pass
 
 db = SQLAlchemy(model_class=Base)
+csrf = CSRFProtect()
+limiter = Limiter(
+    key_func=get_remote_address,
+    storage_uri=os.environ.get("REDIS_URL", "memory://"),
+    default_limits=[],  # No global default; limits applied per-endpoint
+)
+
+def _validate_config(app_config):
+    """Fail-fast validation of critical configuration at startup.
+
+    Raises ValueError with a clear message listing every problem found.
+    Skipped when TESTING is True.
+    """
+    if app_config.get('TESTING'):
+        return
+
+    errors = []
+
+    # DATABASE_URL must be set and look like a valid URI
+    db_url = app_config.get('DATABASE_URL') or app_config.get('SQLALCHEMY_DATABASE_URI')
+    if not db_url:
+        errors.append("DATABASE_URL is not configured (set DATABASE_URL or DB_USER/DB_PASSWORD/DB_NAME)")
+    elif not db_url.startswith(('postgresql://', 'sqlite://', 'postgres://')):
+        errors.append(f"DATABASE_URL has unexpected scheme: {db_url.split('://')[0] if '://' in db_url else db_url[:20]}")
+
+    # Scheduler timezone validation
+    tz = getattr(Config, 'SCHEDULER_TIMEZONE', None)
+    if tz:
+        try:
+            import zoneinfo
+            zoneinfo.ZoneInfo(tz)
+        except (KeyError, Exception):
+            errors.append(f"SCHEDULER_TIMEZONE '{tz}' is not a valid IANA timezone")
+
+    # Ingestion times format (HH:MM)
+    for t_str in getattr(Config, 'INGESTION_TIMES', []):
+        parts = t_str.split(':')
+        if len(parts) != 2:
+            errors.append(f"INGESTION_TIMES entry '{t_str}' is not HH:MM format")
+            continue
+        try:
+            h, m = int(parts[0]), int(parts[1])
+            if not (0 <= h <= 23 and 0 <= m <= 59):
+                errors.append(f"INGESTION_TIMES entry '{t_str}' has out-of-range hour/minute")
+        except ValueError:
+            errors.append(f"INGESTION_TIMES entry '{t_str}' is not numeric")
+
+    # Scoring profile weights should sum to ~1.0
+    for profile_name in ('investment', 'lifestyle'):
+        weights = getattr(Config, 'SCORING_PROFILES', {}).get(profile_name, {})
+        if weights:
+            total = sum(weights.values())
+            if abs(total - 1.0) > 0.01:
+                errors.append(f"SCORING_PROFILES['{profile_name}'] weights sum to {total:.3f}, expected ~1.0")
+
+    if errors:
+        msg = "Configuration validation failed:\n  - " + "\n  - ".join(errors)
+        raise ValueError(msg)
+
 
 def create_app(testing: bool = False):
     """Application factory.
@@ -25,6 +88,7 @@ def create_app(testing: bool = False):
     app.config.from_object(Config)
     if testing:
         app.config['TESTING'] = True
+        app.config['WTF_CSRF_ENABLED'] = False
 
     # Refresh env-dependent config at runtime.
     dev_mode = os.environ.get('DEV_MODE', '').lower() == 'true'
@@ -52,6 +116,9 @@ def create_app(testing: bool = False):
     if dev_mode and not app.config.get('TESTING', False):
         app.config['TEMPLATES_AUTO_RELOAD'] = True
 
+    # Fail-fast: validate critical configuration before anything else.
+    _validate_config(app.config)
+
     # Security: Validate all required secrets before continuing.
     # In tests we allow missing required secrets.
     from utils.security import SecurityValidator
@@ -64,7 +131,11 @@ def create_app(testing: bool = False):
         security_results['total_optional'],
     )
 
-    app.secret_key = app.config.get("SESSION_SECRET")
+    secret = app.config.get("SESSION_SECRET")
+    if not secret and not app.config.get('TESTING'):
+        raise ValueError("SESSION_SECRET must be configured for session security")
+    app.secret_key = secret or 'testing-secret-key'
+    app.permanent_session_lifetime = timedelta(days=30)
     app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
     # Configure the database
@@ -78,6 +149,12 @@ def create_app(testing: bool = False):
     # Initialize the app with the extension
     db.init_app(app)
 
+    # CSRF protection for form-based POST requests
+    csrf.init_app(app)
+
+    # Rate limiting (Redis when REDIS_URL set, in-memory fallback)
+    limiter.init_app(app)
+
     # Import and register routes
     from routes.main_routes import main_bp
     from routes.api_routes import api_bp
@@ -86,6 +163,10 @@ def create_app(testing: bool = False):
     app.register_blueprint(main_bp)
     app.register_blueprint(api_bp, url_prefix='/api')
     app.register_blueprint(language_bp, url_prefix='/api')
+
+    # Exempt JSON API blueprints from CSRF (they use token/session auth, not form submissions)
+    csrf.exempt(api_bp)
+    csrf.exempt(language_bp)
 
     # Initialize caching
     from utils.cache import init_cache
@@ -113,4 +194,4 @@ def create_app(testing: bool = False):
 
     return app
 
-__all__ = ["create_app", "db"]
+__all__ = ["create_app", "db", "csrf", "limiter"]

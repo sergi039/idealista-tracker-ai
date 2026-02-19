@@ -85,7 +85,7 @@ class AnthropicService:
             self.client = Anthropic(api_key=self.api_key)
             logger.debug("Anthropic client initialized successfully")
         except Exception as e:
-            logger.error(f"Failed to initialize Anthropic client: {str(e)}")
+            logger.error("Failed to initialize Anthropic client", exc_info=True)
             raise
 
     def _extract_response_text(self, message) -> str:
@@ -146,10 +146,10 @@ Format your response in clear sections."""
             }
             
         except Exception as e:
-            logger.error(f"Failed to analyze property with Claude: {str(e)}")
+            logger.error("Failed to analyze property with Claude", exc_info=True)
             return {
                 'analysis': None,
-                'error': str(e),
+                'error': 'AI analysis failed. Check server logs for details.',
                 'status': 'failed'
             }
     
@@ -184,7 +184,7 @@ Format your response in clear sections."""
             return self._extract_response_text(message) or None
             
         except Exception as e:
-            logger.error(f"Failed to generate summary: {str(e)}")
+            logger.error("Failed to generate summary", exc_info=True)
             return None
     
     def find_similar_properties(self, current_property: Dict[str, Any], limit: int = 3) -> List[Dict[str, Any]]:
@@ -300,7 +300,7 @@ Format your response in clear sections."""
             return results[:limit]
             
         except Exception as e:
-            logger.error(f"Failed to find similar properties: {str(e)}")
+            logger.error("Failed to find similar properties", exc_info=True)
             return []
     
     def _calculate_similarity_score(self, current: Dict[str, Any], other) -> float:
@@ -570,7 +570,7 @@ Keep all responses concise and in English. Focus on practical investment insight
             
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Failed to analyze property structure with Claude: {error_msg}")
+            logger.error("Failed to analyze property structure with Claude", exc_info=True)
             
             # Parse specific API errors for better user messages
             if "529" in error_msg or "overloaded" in error_msg.lower():
@@ -675,7 +675,7 @@ Respond with ONLY a number between 0 and 100, nothing else."""
             return min(100, max(0, score))  # Ensure within bounds
             
         except Exception as e:
-            logger.error(f"Failed to score property: {str(e)}")
+            logger.error("Failed to score property", exc_info=True)
             return None
     
     def _format_property_data(self, property_data: Dict[str, Any]) -> str:

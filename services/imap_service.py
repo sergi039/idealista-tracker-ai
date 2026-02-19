@@ -98,7 +98,7 @@ class IMAPService:
             with open(uid_file, 'w') as f:
                 f.write(str(uid))
         except Exception as e:
-            logger.error(f"Failed to save last UID: {e}")
+            logger.error("Failed to save last UID", exc_info=True)
     
     def authenticate(self) -> bool:
         """Test IMAP connection and authentication"""
@@ -112,7 +112,7 @@ class IMAPService:
                 logger.info(f"IMAP authentication successful for {self.user}")
                 return True
         except Exception as e:
-            logger.error(f"IMAP authentication failed: {str(e)}")
+            logger.error("IMAP authentication failed", exc_info=True)
             return False
     
     def _decode_header_value(self, value: str) -> str:
@@ -183,15 +183,25 @@ class IMAPService:
                 client.login(self.user, self.password)
                 logger.info(f"Connected to IMAP server as {self.user}")
 
-                # Gmail: работаем из All Mail, ярлык — через X-GM-RAW
-                if 'gmail' in self.host.lower():
+                # Gmail: prefer direct folder selection for completeness,
+                # fall back to All Mail + X-GM-RAW if folder unavailable.
+                folder_selected = False
+                if self.folder and 'gmail' in self.host.lower():
+                    try:
+                        client.select_folder(self.folder, readonly=True)
+                        uids = client.search(['ALL'])
+                        logger.info(f"Selected folder '{self.folder}': {len(uids)} emails")
+                        folder_selected = True
+                    except Exception:
+                        logger.info(f"Folder '{self.folder}' not selectable, trying All Mail")
+
+                if not folder_selected and 'gmail' in self.host.lower():
                     try:
                         client.select_folder('[Gmail]/All Mail', readonly=True)
                         logger.info("Selected [Gmail]/All Mail")
                     except Exception:
                         client.select_folder('INBOX', readonly=True)
                         logger.info("Fallback to INBOX")
-                    # Упрощенный поиск - только по отправителю
                     gm_query = 'from:noresponder@idealista.com'
                     label_part = self._gmail_label_query(self.folder)
                     if label_part:
@@ -202,7 +212,7 @@ class IMAPService:
                     except Exception as e:
                         logger.warning(f"X-GM-RAW not available: {e}, falling back to ALL")
                         uids = client.search(['ALL'])
-                else:
+                elif not folder_selected:
                     client.select_folder(self.folder or "INBOX", readonly=True)
                     uids = client.search(['ALL'])
 
@@ -346,7 +356,7 @@ class IMAPService:
                         else:
                             logger.warning(f"Could not parse Idealista data from email UID {uid}")
                     except Exception as e:
-                        logger.error(f"Failed to process UID {uid}: {e}")
+                        logger.error("Failed to process UID %s", uid, exc_info=True)
                         continue
 
                 # Persist last seen
@@ -358,13 +368,13 @@ class IMAPService:
                 logger.info(f"Successfully processed {len(email_data)} Idealista emails")
 
         except Exception as e:
-            logger.error(f"Failed to fetch via IMAP: {e}")
+            logger.error("Failed to fetch via IMAP", exc_info=True)
 
         return email_data
     
     def run_ingestion(self, sync_type: str = "incremental") -> int:
         """Main method to run email ingestion via IMAP"""
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         
         # Create sync history record
         sync_history = SyncHistory(
@@ -386,8 +396,8 @@ class IMAPService:
                 logger.warning("No emails found for ingestion")
                 sync_history.new_properties_added = 0
                 sync_history.status = 'completed'
-                sync_history.completed_at = datetime.utcnow()
-                sync_history.sync_duration = int((datetime.utcnow() - start_time).total_seconds())
+                sync_history.completed_at = datetime.now(timezone.utc)
+                sync_history.sync_duration = int((datetime.now(timezone.utc) - start_time).total_seconds())
                 db.session.commit()
                 return 0
             
@@ -427,7 +437,7 @@ class IMAPService:
                                     continue
 
                                 existing_property.listing_status = 'removed'
-                                existing_property.listing_removed_date = datetime.utcnow()
+                                existing_property.listing_removed_date = datetime.now(timezone.utc)
 
                                 if existing_property.is_favorite:
                                     snapshot = LandHistory.create_snapshot(existing_property, 'removed_from_listing')
@@ -461,8 +471,16 @@ class IMAPService:
                         existing_properties = Land.query.filter_by(url=url).all()
 
                     # If property exists, update price if changed
+                    new_price = None
                     if existing_properties and email_data.get('price'):
-                        new_price = float(email_data['price'])
+                        try:
+                            new_price = float(email_data['price'])
+                            if new_price <= 0:
+                                new_price = None
+                        except (ValueError, TypeError):
+                            logger.warning("Invalid price value: %r", email_data['price'])
+
+                    if existing_properties and new_price is not None:
                         email_date_obj = self._parse_email_received_at(email_data.get('email_received_at'))
 
                         any_updated = False
@@ -493,7 +511,7 @@ class IMAPService:
                             existing_property.price = new_price
                             existing_property.price_change_amount = price_change
                             existing_property.price_change_percentage = price_change_percentage
-                            existing_property.price_changed_date = datetime.utcnow()
+                            existing_property.price_changed_date = datetime.now(timezone.utc)
                             existing_property.email_date = email_date_obj
 
                             any_updated = True
@@ -568,9 +586,11 @@ class IMAPService:
                     land.description = email_data.get('description')
                     land.legal_status = email_data.get('legal_status')
                     land.email_date = email_date
-                    
+
+                    # Use savepoint so a constraint violation only rolls back this email
+                    db.session.begin_nested()
                     db.session.add(land)
-                    db.session.commit()
+                    db.session.commit()  # commits the savepoint
                     
                     # Try enrichment but continue if it fails
                     try:
@@ -603,13 +623,13 @@ class IMAPService:
                                 db.session.commit()
                                 logger.info(f"Enhanced description for land {land.id}")
                     except Exception as e:
-                        logger.warning(f"Description enhancement failed for land {land.id}: {str(e)}")
+                        logger.warning("Description enhancement failed for land %s", land.id, exc_info=True)
                     
                     processed_count += 1
                     logger.info(f"Processed new land: {land.title}")
                     
                 except Exception as e:
-                    logger.error(f"Failed to process email {email_data.get('source_email_id')}: {str(e)}")
+                    logger.error("Failed to process email %s", email_data.get('source_email_id'), exc_info=True)
                     db.session.rollback()
                     continue
             
@@ -618,21 +638,21 @@ class IMAPService:
             sync_history.price_updated_count = price_updated_count
             sync_history.expired_count = expired_count
             sync_history.status = 'completed'
-            sync_history.completed_at = datetime.utcnow()
-            sync_history.sync_duration = int((datetime.utcnow() - start_time).total_seconds())
+            sync_history.completed_at = datetime.now(timezone.utc)
+            sync_history.sync_duration = int((datetime.now(timezone.utc) - start_time).total_seconds())
             db.session.commit()
             
             logger.info(f"IMAP ingestion completed. Processed {processed_count} new properties")
             return processed_count
             
         except Exception as e:
-            logger.error(f"IMAP ingestion failed: {str(e)}")
+            logger.error("IMAP ingestion failed", exc_info=True)
             
             # Update sync history with error
             sync_history.status = 'failed'
             sync_history.error_message = str(e)
-            sync_history.completed_at = datetime.utcnow()
-            sync_history.sync_duration = int((datetime.utcnow() - start_time).total_seconds())
+            sync_history.completed_at = datetime.now(timezone.utc)
+            sync_history.sync_duration = int((datetime.now(timezone.utc) - start_time).total_seconds())
             db.session.commit()
             
             return 0

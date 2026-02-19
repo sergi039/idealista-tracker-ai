@@ -21,6 +21,7 @@
         </div>
 
         <form method="POST" action="{{ url_for('main.edit_environment', land_id=land.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <!-- Environment Characteristics -->
             <div class="card mb-4">
                 <div class="card-header">

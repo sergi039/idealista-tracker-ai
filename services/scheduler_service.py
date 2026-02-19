@@ -36,9 +36,40 @@ def init_scheduler(app):
         scheduler_lock_file.flush()
         logger.info(f"Acquired scheduler lock (PID: {os.getpid()})")
     except IOError:
+        # Lock held by another instance — close file handle before returning
+        if scheduler_lock_file:
+            scheduler_lock_file.close()
+            scheduler_lock_file = None
         logger.info("Another scheduler instance is already running, skipping initialization")
         return None
-    
+    except Exception:
+        # Unexpected error during lock — close handle to prevent leak
+        if scheduler_lock_file:
+            scheduler_lock_file.close()
+            scheduler_lock_file = None
+        raise
+
+    # Register cleanup IMMEDIATELY after lock acquisition so the handle is
+    # always released on process exit, even if scheduler init below fails.
+    def cleanup():
+        global scheduler, scheduler_lock_file
+        if scheduler:
+            try:
+                scheduler.shutdown()
+            except Exception:
+                pass
+            scheduler = None
+        if scheduler_lock_file:
+            try:
+                fcntl.flock(scheduler_lock_file.fileno(), fcntl.LOCK_UN)
+                scheduler_lock_file.close()
+                os.remove(lock_path)
+            except Exception:
+                pass
+            scheduler_lock_file = None
+
+    atexit.register(cleanup)
+
     try:
         scheduler = BackgroundScheduler()
 
@@ -87,21 +118,6 @@ def init_scheduler(app):
         )
 
         scheduler.start()
-        
-        # Shut down the scheduler and release lock when exiting the app
-        def cleanup():
-            global scheduler_lock_file
-            if scheduler:
-                scheduler.shutdown()
-            if scheduler_lock_file:
-                try:
-                    fcntl.flock(scheduler_lock_file.fileno(), fcntl.LOCK_UN)
-                    scheduler_lock_file.close()
-                    os.remove(scheduler_lock_file.name)
-                except Exception:
-                    pass
-        
-        atexit.register(cleanup)
 
         logger.info(
             "Scheduler initialized. Ingestion times=%s, listing_status_time=%s, timezone=%s",
@@ -110,9 +126,11 @@ def init_scheduler(app):
             timezone,
         )
         return scheduler
-        
+
     except Exception as e:
-        logger.error(f"Failed to initialize scheduler: {str(e)}")
+        logger.error("Failed to initialize scheduler", exc_info=True)
+        # Release lock so other instances can try
+        cleanup()
         return None
 
 def run_scheduled_ingestion():
@@ -129,7 +147,7 @@ def run_scheduled_ingestion():
         logger.info(f"Scheduled ingestion completed. Processed {processed_count} properties")
         
     except Exception as e:
-        logger.error(f"Scheduled ingestion failed: {str(e)}")
+        logger.error("Scheduled ingestion failed", exc_info=True)
 
 def run_listing_status_check():
     """Run the scheduled listing status check job"""
@@ -151,7 +169,7 @@ def run_listing_status_check():
                            f"{detail['old_status']} -> {detail['new_status']}")
 
     except Exception as e:
-        logger.error(f"Listing status check failed: {str(e)}")
+        logger.error("Listing status check failed", exc_info=True)
 
 
 def get_scheduler_status():

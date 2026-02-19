@@ -1,10 +1,11 @@
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Blueprint, jsonify, request, send_from_directory
 from models import Land, LandHistory, ScoringCriteria, SyncHistory, AiAnalysisVariant
 from app import db
-from utils.auth import admin_required, rate_limit
+from app import limiter
+from utils.auth import admin_required
 
 logger = logging.getLogger(__name__)
 
@@ -12,8 +13,32 @@ api_bp = Blueprint('api', __name__)
 
 @api_bp.route('/healthz')
 def health_check():
-    """API health check"""
-    return jsonify({"ok": True})
+    """Health check with dependency status.
+
+    Returns 200 when the app is running; individual dependency statuses
+    are reported in the JSON body so orchestration/monitoring can react.
+    """
+    checks = {}
+
+    # Database connectivity
+    try:
+        db.session.execute(db.text('SELECT 1'))
+        checks['database'] = 'ok'
+    except Exception as exc:
+        logger.warning("Healthz: DB ping failed: %s", exc)
+        checks['database'] = 'unavailable'
+
+    # Scheduler status
+    try:
+        from services.scheduler_service import get_scheduler_status
+        sched = get_scheduler_status()
+        checks['scheduler'] = sched.get('status', 'unknown')
+    except Exception:
+        checks['scheduler'] = 'unknown'
+
+    all_ok = checks.get('database') == 'ok'
+    status_code = 200 if all_ok else 503
+    return jsonify({"ok": all_ok, "checks": checks}), status_code
 
 @api_bp.route('/download/project')
 def download_project():
@@ -30,11 +55,11 @@ def download_project():
         
         return send_from_directory(static_dir, filename, as_attachment=True)
     except Exception as e:
-        return jsonify({"error": str(e)}), 404
+        return jsonify({"error": "An internal error occurred. Check server logs for details."}), 404
 
 @api_bp.route('/lands/enrich-all', methods=['POST'])
 @admin_required
-@rate_limit(max_requests=2, window_seconds=300)  # 2 requests per 5 minutes
+@limiter.limit("2 per 5 minutes")
 def bulk_enrichment():
     """Enrich all properties that are missing extended infrastructure or environment data"""
     try:
@@ -62,7 +87,7 @@ def bulk_enrichment():
                     success_count += 1
                     logger.info(f"Enriched land {land.id}: {land.title[:50]}...")
             except Exception as e:
-                logger.error(f"Failed to enrich land {land.id}: {str(e)}")
+                logger.error("Failed to enrich land %s", land.id, exc_info=True)
                 continue
         
         return jsonify({
@@ -73,14 +98,15 @@ def bulk_enrichment():
         })
         
     except Exception as e:
-        logger.error(f"Bulk enrichment failed: {str(e)}")
+        logger.error("Bulk enrichment failed", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/land/<int:land_id>/enrich', methods=['POST'])
-@rate_limit(max_requests=10, window_seconds=60)  # Protect from abuse
+@admin_required
+@limiter.limit("10 per minute")
 def manual_enrichment(land_id):
     """Manually trigger data enrichment for a specific property"""
     try:
@@ -110,10 +136,10 @@ def manual_enrichment(land_id):
             }), 200
             
     except Exception as e:
-        logger.error(f"Manual enrichment failed for land {land_id}: {str(e)}")
+        logger.error("Manual enrichment failed for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/lands/reanalyze-environment', methods=['POST'])
@@ -160,15 +186,16 @@ def reanalyze_environment():
         })
 
     except Exception as e:
-        logger.error(f"Environment re-analysis failed: {str(e)}")
+        logger.error("Environment re-analysis failed", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 
 @api_bp.route('/ingest/email/run', methods=['POST'])
-@rate_limit(max_requests=5, window_seconds=60)  # 5 requests per minute
+@admin_required
+@limiter.limit("5 per minute")
 def manual_ingestion():
     """Manually trigger email ingestion"""
     try:
@@ -202,13 +229,15 @@ def manual_ingestion():
         })
         
     except Exception as e:
-        logger.error(f"Manual ingestion failed: {str(e)}")
+        logger.error("Manual ingestion failed", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/analyze/property/<int:land_id>/structured', methods=['POST'])
+@admin_required
+@limiter.limit("5 per 5 minutes")
 def analyze_property_structured(land_id):
     """Analyze property using Anthropic Claude AI with structured 5-block format"""
     try:
@@ -273,7 +302,7 @@ def analyze_property_structured(land_id):
                 if existing_variant:
                     existing_variant.analysis = final_analysis
                     existing_variant.model = model_used
-                    existing_variant.created_at = datetime.utcnow()
+                    existing_variant.created_at = datetime.now(timezone.utc)
                 else:
                     db.session.add(
                         AiAnalysisVariant(
@@ -304,15 +333,16 @@ def analyze_property_structured(land_id):
             }), status_code
             
     except Exception as e:
-        logger.error(f"Structured AI analysis failed for land {land_id}: {str(e)}")
+        logger.error("Structured AI analysis failed for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 
 @api_bp.route('/analysis/generate/<int:land_id>/openai', methods=['POST'])
-@rate_limit(max_requests=3, window_seconds=300)
+@admin_required
+@limiter.limit("3 per 5 minutes")
 def generate_openai_structured(land_id):
     """Generate structured AI analysis with OpenAI (ChatGPT) and store it for comparison."""
     try:
@@ -349,7 +379,7 @@ def generate_openai_structured(land_id):
         if existing:
             existing.analysis = analysis
             existing.model = model
-            existing.created_at = datetime.utcnow()
+            existing.created_at = datetime.now(timezone.utc)
             variant = existing
         else:
             variant = AiAnalysisVariant(
@@ -370,7 +400,7 @@ def generate_openai_structured(land_id):
 
     except Exception as e:
         logger.error("OpenAI structured analysis failed for land %s: %s", land_id, e)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": "An internal error occurred. Check server logs for details."}), 500
 
 
 @api_bp.route('/analysis/compare/<int:land_id>', methods=['GET'])
@@ -408,9 +438,11 @@ def compare_ai_analyses(land_id):
         })
     except Exception as e:
         logger.error("AI comparison failed for land %s: %s", land_id, e)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": "An internal error occurred. Check server logs for details."}), 500
 
 @api_bp.route('/enhance/description/<int:land_id>', methods=['POST'])
+@admin_required
+@limiter.limit("5 per 5 minutes")
 def enhance_description(land_id):
     """Enhance property description using AI"""
     try:
@@ -453,10 +485,10 @@ def enhance_description(land_id):
             }), 500
             
     except Exception as e:
-        logger.error(f"Description enhancement failed for land {land_id}: {str(e)}")
+        logger.error("Description enhancement failed for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/description/variants/<int:land_id>', methods=['GET'])
@@ -480,13 +512,14 @@ def get_description_variants(land_id):
         })
         
     except Exception as e:
-        logger.error(f"Failed to get description variants for land {land_id}: {str(e)}")
+        logger.error("Failed to get description variants for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/land/<int:land_id>/environment', methods=['POST'])
+@admin_required
 def update_environment(land_id):
     """Update environment data for a land property"""
     try:
@@ -516,13 +549,15 @@ def update_environment(land_id):
         })
         
     except Exception as e:
-        logger.error(f"Failed to update environment for land {land_id}: {str(e)}")
+        logger.error("Failed to update environment for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/analyze/property/<int:land_id>', methods=['POST'])
+@admin_required
+@limiter.limit("5 per 5 minutes")
 def analyze_property_ai(land_id):
     """Analyze property using Anthropic Claude AI"""
     try:
@@ -566,10 +601,10 @@ def analyze_property_ai(land_id):
             }), 500
             
     except Exception as e:
-        logger.error(f"AI analysis failed for land {land_id}: {str(e)}")
+        logger.error("AI analysis failed for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/lands')
@@ -580,9 +615,9 @@ def get_lands():
         sort_by = request.args.get('sort', 'score_total')
         sort_order = request.args.get('order', 'desc')
         land_type_filter = request.args.get('filter')
-        limit = request.args.get('limit', 100, type=int)
-        offset = request.args.get('offset', 0, type=int)
-        
+        limit = min(max(request.args.get('limit', 100, type=int), 1), 500)
+        offset = max(request.args.get('offset', 0, type=int), 0)
+
         # Build query
         query = Land.query
         
@@ -611,18 +646,18 @@ def get_lands():
         })
         
     except Exception as e:
-        logger.error(f"Failed to get lands: {str(e)}")
+        logger.error("Failed to get lands", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/lands/<int:land_id>')
 def get_land_detail(land_id):
     """Get detailed information about a specific land"""
     try:
-        land = Land.query.get(land_id)
-        
+        land = db.session.get(Land, land_id)
+
         if not land:
             return jsonify({
                 "success": False,
@@ -641,10 +676,10 @@ def get_land_detail(land_id):
         })
         
     except Exception as e:
-        logger.error(f"Failed to get land detail {land_id}: {str(e)}")
+        logger.error("Failed to get land detail %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/criteria')
@@ -662,15 +697,15 @@ def get_criteria():
         })
         
     except Exception as e:
-        logger.error(f"Failed to get criteria: {str(e)}")
+        logger.error("Failed to get criteria", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/criteria', methods=['PUT'])
 @admin_required
-@rate_limit(max_requests=10, window_seconds=60)  # 10 requests per minute
+@limiter.limit("10 per minute")
 def update_criteria():
     """Update scoring criteria weights"""
     try:
@@ -715,10 +750,10 @@ def update_criteria():
             }), 500
         
     except Exception as e:
-        logger.error(f"Failed to update criteria: {str(e)}")
+        logger.error("Failed to update criteria", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/scheduler/status')
@@ -735,13 +770,14 @@ def scheduler_status():
         })
         
     except Exception as e:
-        logger.error(f"Failed to get scheduler status: {str(e)}")
+        logger.error("Failed to get scheduler status", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/land/<int:land_id>/favorite', methods=['POST'])
+@admin_required
 def toggle_favorite(land_id):
     """Toggle favorite status for a land property"""
     try:
@@ -768,18 +804,17 @@ def toggle_favorite(land_id):
         })
 
     except Exception as e:
-        logger.error(f"Failed to toggle favorite for land {land_id}: {str(e)}")
+        logger.error("Failed to toggle favorite for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 @api_bp.route('/land/<int:land_id>/set-status', methods=['POST'])
+@admin_required
 def set_land_status(land_id):
     """Manually set the listing status (for when automatic check fails due to captcha)"""
     try:
-        from datetime import datetime
-
         land = Land.query.get_or_404(land_id)
         data = request.get_json() or {}
 
@@ -792,10 +827,10 @@ def set_land_status(land_id):
 
         old_status = land.listing_status
         land.listing_status = new_status
-        land.listing_last_checked = datetime.utcnow()
+        land.listing_last_checked = datetime.now(timezone.utc)
 
         if new_status in ('removed', 'sold') and old_status == 'active':
-            land.listing_removed_date = datetime.utcnow()
+            land.listing_removed_date = datetime.now(timezone.utc)
 
             # Create history record for favorites
             if land.is_favorite:
@@ -815,14 +850,15 @@ def set_land_status(land_id):
         })
 
     except Exception as e:
-        logger.error(f"Failed to set status for land {land_id}: {str(e)}")
+        logger.error("Failed to set status for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 
 @api_bp.route('/land/<int:land_id>/check-status', methods=['POST'])
+@admin_required
 def check_land_status(land_id):
     """Check if a listing is still active on Idealista"""
     try:
@@ -850,10 +886,10 @@ def check_land_status(land_id):
         })
 
     except Exception as e:
-        logger.error(f"Failed to check status for land {land_id}: {str(e)}")
+        logger.error("Failed to check status for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 
@@ -874,10 +910,10 @@ def check_favorites_status():
         })
 
     except Exception as e:
-        logger.error(f"Failed to check favorites status: {str(e)}")
+        logger.error("Failed to check favorites status", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 
@@ -899,10 +935,10 @@ def check_all_listings_status():
         })
 
     except Exception as e:
-        logger.error(f"Failed to check all listings status: {str(e)}")
+        logger.error("Failed to check all listings status", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 
@@ -926,10 +962,10 @@ def get_land_history(land_id):
         })
 
     except Exception as e:
-        logger.error(f"Failed to get history for land {land_id}: {str(e)}")
+        logger.error("Failed to get history for land %s", land_id, exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500
 
 
@@ -1031,8 +1067,8 @@ def get_stats():
         })
         
     except Exception as e:
-        logger.error(f"Failed to get stats: {str(e)}")
+        logger.error("Failed to get stats", exc_info=True)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": "An internal error occurred. Check server logs for details."
         }), 500

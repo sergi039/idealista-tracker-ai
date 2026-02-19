@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import requests
@@ -230,7 +230,7 @@ class OpenAIService:
         # Prefer strict JSON output when supported.
         payload["response_format"] = {"type": "json_object"}
 
-        started = datetime.utcnow()
+        started = datetime.now(timezone.utc)
         # Some newer models require `max_completion_tokens` instead of `max_tokens`.
         # Use a retry with the alternative parameter based on API error message.
         def _post(json_payload: Dict[str, Any]):

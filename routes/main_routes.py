@@ -1,12 +1,12 @@
 import logging
 import math
 from decimal import Decimal
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, session
 from sqlalchemy import or_, and_, case, func
 from sqlalchemy.orm import defer
 from models import Land, ScoringCriteria
 from app import db
-from utils.auth import admin_required
+from utils.auth import admin_required, login_admin, logout_admin
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,29 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
     c = 2 * math.asin(math.sqrt(a))
     return r * c
+
+@main_bp.route('/login', methods=['GET', 'POST'])
+def login():
+    """Admin login page"""
+    if session.get('admin_authenticated'):
+        return redirect(request.args.get('next') or url_for('main.lands'))
+
+    if request.method == 'POST':
+        token = request.form.get('token', '').strip()
+        if login_admin(token):
+            next_url = request.form.get('next') or url_for('main.lands')
+            return redirect(next_url)
+        flash('Invalid admin token.', 'error')
+
+    return render_template('login.html', next=request.args.get('next', ''))
+
+
+@main_bp.route('/logout')
+def logout():
+    """Log out and clear session"""
+    logout_admin()
+    return redirect(url_for('main.login'))
+
 
 @main_bp.route('/')
 def index():
@@ -61,11 +84,9 @@ def lands():
             hide_removed_filter = True  # Default: hide removed
         view_type = request.args.get('view_type', 'cards')  # Default to cards
         
-        # Pagination parameters
-        page = request.args.get('page', 1, type=int)
-        per_page = request.args.get('per_page', 25, type=int)
-        # Limit per_page to reasonable values
-        per_page = min(max(per_page, 10), 100)
+        # Pagination parameters (clamp to valid ranges)
+        page = max(1, request.args.get('page', 1, type=int))
+        per_page = min(max(request.args.get('per_page', 25, type=int), 10), 100)
         
         # Build query - defer heavy JSONB columns for listing view performance
         query = Land.query.options(
@@ -217,8 +238,8 @@ def lands():
         )
         
     except Exception as e:
-        logger.error(f"Failed to load lands page: {str(e)}")
-        flash(f"Error loading lands: {str(e)}", 'error')
+        logger.error("Failed to load lands page", exc_info=True)
+        flash("An error occurred. Check server logs for details.", 'error')
         return render_template('lands.html', lands=[], municipalities=[], current_filters={})
 
 @main_bp.route('/lands/<int:land_id>')
@@ -297,8 +318,8 @@ def land_detail(land_id):
         )
         
     except Exception as e:
-        logger.error(f"Failed to load land detail {land_id}: {str(e)}")
-        flash(f"Error loading land details: {str(e)}", 'error')
+        logger.error("Failed to load land detail %s", land_id, exc_info=True)
+        flash("An error occurred. Check server logs for details.", 'error')
         return redirect(url_for('main.lands'))
 
 @main_bp.route('/map')
@@ -331,8 +352,8 @@ def map_view():
         return render_template('map.html', markers=markers)
 
     except Exception as e:
-        logger.error(f"Failed to load map view: {str(e)}")
-        flash(f"Error loading map: {str(e)}", 'error')
+        logger.error("Failed to load map view", exc_info=True)
+        flash("An error occurred. Check server logs for details.", 'error')
         return render_template('map.html', markers=[])
 
 @main_bp.route('/criteria')
@@ -358,8 +379,8 @@ def criteria():
         if not lifestyle_weights and hasattr(Config, 'SCORING_PROFILES'):
             lifestyle_weights = Config.SCORING_PROFILES.get('lifestyle', {})
 
-        # Get combined mix ratio
-        combined_mix = getattr(Config, 'COMBINED_MIX', {'investment': 0.32, 'lifestyle': 0.68})
+        # Get combined mix ratio (DB first, Config fallback)
+        combined_mix = scoring_service._load_combined_mix()
 
         # Get criteria descriptions for display
         criteria_descriptions = {
@@ -391,8 +412,8 @@ def criteria():
                              market_settings=market_settings)
 
     except Exception as e:
-        logger.error(f"Failed to load criteria page: {str(e)}")
-        flash(f"Error loading criteria: {str(e)}", 'error')
+        logger.error("Failed to load criteria page", exc_info=True)
+        flash("An error occurred. Check server logs for details.", 'error')
         return render_template('criteria.html',
                              investment_weights={},
                              lifestyle_weights={},
@@ -428,8 +449,8 @@ def update_criteria():
         return redirect(url_for('main.criteria'))
         
     except Exception as e:
-        logger.error(f"Failed to update criteria: {str(e)}")
-        flash(f"Error updating criteria: {str(e)}", 'error')
+        logger.error("Failed to update criteria", exc_info=True)
+        flash("An error occurred. Check server logs for details.", 'error')
         return redirect(url_for('main.criteria'))
 
 @main_bp.route('/criteria/update_profile/<profile>', methods=['POST'])
@@ -465,8 +486,8 @@ def update_criteria_profile(profile):
             flash(f'Failed to update {profile} profile weights.', 'error')
             
     except Exception as e:
-        logger.error(f"Failed to update {profile} profile criteria: {str(e)}")
-        flash(f'Error updating {profile} profile: {str(e)}', 'error')
+        logger.error("Failed to update %s profile criteria", profile, exc_info=True)
+        flash('An error occurred. Check server logs for details.', 'error')
         
     return redirect(url_for('main.criteria'))
 
@@ -486,14 +507,25 @@ def update_combined_mix():
             return redirect(url_for('main.criteria'))
         
         logger.info(f"Updating combined mix: Investment={investment_weight:.3f}, Lifestyle={lifestyle_weight:.3f}")
-        
-        # Update config (in a real app, this would update database or config file)
-        # For now, we'll update the runtime config and rescore all properties
-        from config import Config
-        Config.COMBINED_MIX = {
-            'investment': investment_weight,
-            'lifestyle': lifestyle_weight
-        }
+
+        # Persist combined mix to database
+        from models import ScoringCriteria
+        from decimal import Decimal as D
+        for key, val in [('investment', investment_weight), ('lifestyle', lifestyle_weight)]:
+            row = ScoringCriteria.query.filter_by(
+                criteria_name=key, profile='combined'
+            ).first()
+            if row:
+                row.weight = D(str(val))
+                row.active = True
+            else:
+                db.session.add(ScoringCriteria(
+                    criteria_name=key,
+                    profile='combined',
+                    weight=D(str(val)),
+                    active=True,
+                ))
+        db.session.commit()
         
         # Rescore all lands with new mix in batches
         from models import Land
@@ -520,8 +552,8 @@ def update_combined_mix():
         flash(f'Combined mix updated to {investment_weight*100:.0f}% Investment + {lifestyle_weight*100:.0f}% Lifestyle. {total_rescored} properties rescored!', 'success')
         
     except Exception as e:
-        logger.error(f"Failed to update combined mix: {str(e)}")
-        flash(f'Error updating combined mix: {str(e)}', 'error')
+        logger.error("Failed to update combined mix", exc_info=True)
+        flash('An error occurred. Check server logs for details.', 'error')
         
     return redirect(url_for('main.criteria'))
 
@@ -538,7 +570,7 @@ def update_reference_cities():
         flash("Reference cities updated. Re-enrich properties to update travel times.", "success")
     except Exception as e:
         logger.error("Failed to update reference cities: %s", e)
-        flash(f"Error updating reference cities: {e}", "error")
+        flash("Error updating reference cities. Check server logs for details.", "error")
 
     return redirect(url_for('main.criteria'))
 
@@ -595,12 +627,13 @@ def update_market_settings():
     except Exception as e:
         logger.error("Failed to update market settings: %s", e)
         db.session.rollback()
-        flash(f"Error updating market settings: {e}", "error")
+        flash("Error updating market settings. Check server logs for details.", "error")
 
     return redirect(url_for('main.criteria'))
 
 
 @main_bp.route('/land/<int:land_id>/edit-environment', methods=['GET', 'POST'])
+@admin_required
 def edit_environment(land_id):
     """Edit environment data for a land"""
     try:
@@ -632,11 +665,12 @@ def edit_environment(land_id):
         return render_template('edit_environment.html', land=land)
         
     except Exception as e:
-        logger.error(f"Failed to edit environment for land {land_id}: {str(e)}")
-        flash(f"Error editing environment: {str(e)}", 'error')
+        logger.error("Failed to edit environment for land %s", land_id, exc_info=True)
+        flash("An error occurred. Check server logs for details.", 'error')
         return redirect(url_for('main.land_detail', land_id=land_id))
 
 @main_bp.route('/land/<int:land_id>/update-score', methods=['POST'])
+@admin_required
 def update_score(land_id):
     """Update manual score for a land"""
     try:
@@ -668,8 +702,8 @@ def update_score(land_id):
         return redirect(url_for('main.land_detail', land_id=land_id))
         
     except Exception as e:
-        logger.error(f"Failed to update score for land {land_id}: {str(e)}")
-        flash(f"Error updating score: {str(e)}", 'error')
+        logger.error("Failed to update score for land %s", land_id, exc_info=True)
+        flash("An error occurred. Check server logs for details.", 'error')
         return redirect(url_for('main.land_detail', land_id=land_id))
 
 @main_bp.route('/export.csv')
@@ -832,8 +866,8 @@ def export_csv():
         return response
         
     except Exception as e:
-        logger.error(f"Failed to export CSV: {str(e)}")
-        flash(f"Error exporting CSV: {str(e)}", 'error')
+        logger.error("Failed to export CSV", exc_info=True)
+        flash("An error occurred. Check server logs for details.", 'error')
         return redirect(url_for('main.lands'))
 
 @main_bp.route('/healthz')

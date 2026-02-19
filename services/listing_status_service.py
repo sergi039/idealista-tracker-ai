@@ -7,7 +7,7 @@ import logging
 import requests
 import time
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List, Tuple
 
 from models import Land, LandHistory, SyncHistory
@@ -114,7 +114,7 @@ class ListingStatusService:
             logger.warning(f"Timeout checking listing: {url}")
             return 'error', None
         except requests.RequestException as e:
-            logger.error(f"Error checking listing {url}: {str(e)}")
+            logger.error("Error checking listing %s", url, exc_info=True)
             return 'error', None
 
     def _extract_removal_date(self, html_content: str) -> Optional[str]:
@@ -160,7 +160,7 @@ class ListingStatusService:
         }
 
         # Update last checked time
-        land.listing_last_checked = datetime.utcnow()
+        land.listing_last_checked = datetime.now(timezone.utc)
 
         # If status changed to removed or sold
         if status in ('removed', 'sold') and land.listing_status == 'active':
@@ -171,9 +171,9 @@ class ListingStatusService:
                 try:
                     land.listing_removed_date = datetime.strptime(removed_date_str, '%d/%m/%Y')
                 except ValueError:
-                    land.listing_removed_date = datetime.utcnow()
+                    land.listing_removed_date = datetime.now(timezone.utc)
             else:
-                land.listing_removed_date = datetime.utcnow()
+                land.listing_removed_date = datetime.now(timezone.utc)
 
             land.listing_status = status
 
@@ -276,8 +276,8 @@ class ListingStatusService:
         Returns:
             Summary of the check operation
         """
-        start_time = datetime.utcnow()
-        cutoff_date = datetime.utcnow() - timedelta(days=days_since_check)
+        start_time = datetime.now(timezone.utc)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_since_check)
 
         # Get active listings that need checking
         listings = Land.query.filter(
@@ -342,14 +342,14 @@ class ListingStatusService:
                     expired_count=results['removed'] + results['sold'],
                     status='completed',
                     started_at=start_time,
-                    completed_at=datetime.utcnow(),
-                    sync_duration=int((datetime.utcnow() - start_time).total_seconds())
+                    completed_at=datetime.now(timezone.utc),
+                    sync_duration=int((datetime.now(timezone.utc) - start_time).total_seconds())
                 )
                 db.session.add(sync_history)
                 db.session.commit()
                 logger.info(f"Recorded status check in SyncHistory: {results['removed']} removed, {results['sold']} sold")
             except Exception as e:
-                logger.error(f"Failed to record status check in SyncHistory: {e}")
+                logger.error("Failed to record status check in SyncHistory", exc_info=True)
 
         logger.info(f"Checked {results['checked']} listings: "
                    f"{results['active']} active, {results['removed']} removed, "

@@ -310,7 +310,7 @@ class MarketAnalysisService:
             }
             
         except Exception as e:
-            logger.error(f"Error calculating construction value: {str(e)}")
+            logger.error("Error calculating construction value", exc_info=True)
             return {}
     
     def analyze_market_trends(self, land: Land) -> Dict:
@@ -416,7 +416,7 @@ class MarketAnalysisService:
             }
             
         except Exception as e:
-            logger.error(f"Error analyzing market trends: {str(e)}")
+            logger.error("Error analyzing market trends", exc_info=True)
             return self._get_default_market_trends()
     
     def calculate_rental_analysis(self, land: Land, construction_data: Optional[Dict] = None) -> Dict:
@@ -549,7 +549,7 @@ class MarketAnalysisService:
             }
             
         except Exception as e:
-            logger.error(f"Error calculating rental analysis: {str(e)}")
+            logger.error("Error calculating rental analysis", exc_info=True)
             return {
                 'error': 'Unable to calculate rental analysis',
                 'location_type': 'Unknown',

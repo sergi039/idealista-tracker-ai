@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -13,6 +13,7 @@ def app():
     setup_test_environment()
     app = create_app()
     app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
     app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
 
     with app.app_context():
@@ -33,7 +34,7 @@ def test_price_change_email_does_not_create_new_land(app, monkeypatch):
                 {
                     "type": "price_change",
                     "source_email_id": "imap_1",
-                    "email_received_at": datetime.utcnow(),
+                    "email_received_at": datetime.now(timezone.utc),
                     "title": "Flat / apartment in calle Foo, Bar",
                     "url": "https://www.idealista.com/en/inmueble/123/",
                     "price": 285000.0,

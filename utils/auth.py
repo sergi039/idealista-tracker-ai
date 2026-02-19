@@ -1,20 +1,24 @@
 """Authentication utilities for admin endpoints"""
 import os
-import hashlib
 import hmac
-import time
 from functools import wraps
-from flask import request, jsonify, current_app
+from flask import request, jsonify, session, redirect, url_for, current_app
 import logging
 
 logger = logging.getLogger(__name__)
 
-# Simple in-memory rate limiting
-rate_limit_storage = {}
 
 def check_admin_auth():
-    """Check if the request has valid admin authentication"""
-    # Allow admin endpoints in test mode
+    """Check if the request has valid admin authentication.
+
+    Auth sources (checked in order):
+    1. Flask TESTING flag (unit-test bypass)
+    2. Authorization header (Bearer / API-Key) with ADMIN_API_TOKEN
+    3. Flask session with admin_authenticated flag
+
+    FAIL-CLOSED: if ADMIN_API_TOKEN is not configured, access is denied.
+    """
+    # 1. Test mode bypass
     try:
         if current_app and current_app.config.get('TESTING'):
             return True
@@ -22,101 +26,85 @@ def check_admin_auth():
         pass
 
     # Get admin token from environment
-    admin_token = os.environ.get('ADMIN_API_TOKEN')
-    
-    # FAIL-CLOSED: If no admin token is configured, deny access for security
+    admin_token = os.environ.get('ADMIN_API_TOKEN', '').strip()
+
+    # FAIL-CLOSED: no token configured = no access
     if not admin_token:
-        # Allow bypass only in explicit development mode
-        if os.environ.get('DEV_MODE') == 'true':
-            logger.warning("ADMIN_API_TOKEN not configured - allowing access in DEV_MODE")
+        logger.error("ADMIN_API_TOKEN not configured - denying access (fail-closed)")
+        return False
+
+    # 2. Check Authorization header (API / programmatic access)
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header:
+        if auth_header.startswith('Bearer '):
+            provided_token = auth_header[7:]
+        elif auth_header.startswith('API-Key '):
+            provided_token = auth_header[8:]
+        else:
+            provided_token = auth_header
+
+        if hmac.compare_digest(provided_token, admin_token):
             return True
-        logger.error("ADMIN_API_TOKEN not configured - denying access for security")
-        return False
-    
-    # Check Authorization header
-    auth_header = request.headers.get('Authorization')
-    if not auth_header:
-        return False
-    
-    # Support both Bearer token and API-Key formats
-    if auth_header.startswith('Bearer '):
-        provided_token = auth_header[7:]
-    elif auth_header.startswith('API-Key '):
-        provided_token = auth_header[8:]
-    else:
-        provided_token = auth_header
-    
-    # Constant-time comparison to prevent timing attacks
-    return hmac.compare_digest(provided_token, admin_token)
+
+    # 3. Check Flask session (browser-based access via login page)
+    if session.get('admin_authenticated'):
+        return True
+
+    return False
+
 
 def admin_required(f):
-    """Decorator to require admin authentication for endpoints"""
+    """Decorator to require admin authentication.
+
+    For API routes (blueprint='api' or JSON request): returns 401 JSON.
+    For page routes: redirects to login page.
+    """
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not check_admin_auth():
-            logger.warning(f"Unauthorized access attempt to {request.endpoint} from {request.remote_addr}")
-            return jsonify({
-                "success": False,
-                "error": "Unauthorized. Admin authentication required."
-            }), 401
+            logger.warning(
+                "Unauthorized access attempt to %s from %s",
+                request.endpoint,
+                request.remote_addr,
+            )
+            # API routes return JSON 401
+            if _is_api_request():
+                return jsonify({
+                    "success": False,
+                    "error": "Unauthorized. Admin authentication required."
+                }), 401
+            # Page routes redirect to login
+            return redirect(url_for('main.login', next=request.url))
         return f(*args, **kwargs)
     return decorated_function
 
-def rate_limit(max_requests=10, window_seconds=60):
-    """Rate limiting decorator
-    
-    Args:
-        max_requests: Maximum number of requests allowed
-        window_seconds: Time window in seconds
-    """
-    def decorator(f):
-        @wraps(f)
-        def decorated_function(*args, **kwargs):
-            # Get client identifier (IP address)
-            client_id = request.remote_addr
-            endpoint = request.endpoint
-            key = f"{client_id}:{endpoint}"
-            
-            current_time = time.time()
-            
-            # Clean up old entries
-            if key in rate_limit_storage:
-                rate_limit_storage[key] = [
-                    timestamp for timestamp in rate_limit_storage[key]
-                    if current_time - timestamp < window_seconds
-                ]
-            
-            # Check rate limit
-            if key in rate_limit_storage:
-                if len(rate_limit_storage[key]) >= max_requests:
-                    logger.warning(f"Rate limit exceeded for {client_id} on {endpoint}")
-                    return jsonify({
-                        "success": False,
-                        "error": f"Rate limit exceeded. Maximum {max_requests} requests per {window_seconds} seconds."
-                    }), 429
-            else:
-                rate_limit_storage[key] = []
-            
-            # Record this request
-            rate_limit_storage[key].append(current_time)
-            
-            return f(*args, **kwargs)
-        return decorated_function
-    return decorator
 
-def cleanup_rate_limits():
-    """Clean up old rate limit entries (call periodically)"""
-    current_time = time.time()
-    window = 3600  # Clean entries older than 1 hour
-    
-    keys_to_delete = []
-    for key in rate_limit_storage:
-        rate_limit_storage[key] = [
-            timestamp for timestamp in rate_limit_storage[key]
-            if current_time - timestamp < window
-        ]
-        if not rate_limit_storage[key]:
-            keys_to_delete.append(key)
-    
-    for key in keys_to_delete:
-        del rate_limit_storage[key]
+def _is_api_request():
+    """Determine if request expects JSON response."""
+    if request.blueprint == 'api':
+        return True
+    if request.is_json:
+        return True
+    accept = request.headers.get('Accept', '')
+    if 'application/json' in accept:
+        return True
+    return False
+
+
+def login_admin(token):
+    """Validate token and set admin session. Returns True on success."""
+    admin_token = os.environ.get('ADMIN_API_TOKEN', '').strip()
+    if not admin_token:
+        return False
+    if hmac.compare_digest(token, admin_token):
+        session['admin_authenticated'] = True
+        session.permanent = True
+        return True
+    return False
+
+
+def logout_admin():
+    """Clear admin session."""
+    session.pop('admin_authenticated', None)
+
+

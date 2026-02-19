@@ -1,8 +1,13 @@
-from datetime import datetime
 import json
+from datetime import datetime, timezone
+
 from app import db
 from sqlalchemy import CheckConstraint
 from sqlalchemy.types import JSON
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
 
 class Land(db.Model):
     __tablename__ = 'lands'
@@ -16,6 +21,35 @@ class Land(db.Model):
         db.Index('ix_lands_score_total', 'score_total'),
         db.Index('ix_lands_score_investment', 'score_investment'),
         db.Index('ix_lands_score_lifestyle', 'score_lifestyle'),
+        # Data integrity constraints
+        CheckConstraint('price IS NULL OR price >= 0', name='ck_lands_price_non_negative'),
+        CheckConstraint('area IS NULL OR area >= 0', name='ck_lands_area_non_negative'),
+        CheckConstraint('location_lat IS NULL OR (location_lat >= -90 AND location_lat <= 90)',
+                        name='ck_lands_lat_range'),
+        CheckConstraint('location_lon IS NULL OR (location_lon >= -180 AND location_lon <= 180)',
+                        name='ck_lands_lon_range'),
+        CheckConstraint('score_total IS NULL OR (score_total >= 0 AND score_total <= 100)',
+                        name='ck_lands_score_total_range'),
+        CheckConstraint('score_investment IS NULL OR (score_investment >= 0 AND score_investment <= 100)',
+                        name='ck_lands_score_investment_range'),
+        CheckConstraint('score_lifestyle IS NULL OR (score_lifestyle >= 0 AND score_lifestyle <= 100)',
+                        name='ck_lands_score_lifestyle_range'),
+        CheckConstraint('travel_time_oviedo IS NULL OR travel_time_oviedo >= 0',
+                        name='ck_lands_tt_oviedo'),
+        CheckConstraint('travel_time_gijon IS NULL OR travel_time_gijon >= 0',
+                        name='ck_lands_tt_gijon'),
+        CheckConstraint('travel_time_nearest_beach IS NULL OR travel_time_nearest_beach >= 0',
+                        name='ck_lands_tt_beach'),
+        CheckConstraint('travel_time_airport IS NULL OR travel_time_airport >= 0',
+                        name='ck_lands_tt_airport'),
+        CheckConstraint('travel_time_train_station IS NULL OR travel_time_train_station >= 0',
+                        name='ck_lands_tt_train'),
+        CheckConstraint('travel_time_hospital IS NULL OR travel_time_hospital >= 0',
+                        name='ck_lands_tt_hospital'),
+        CheckConstraint('travel_time_police IS NULL OR travel_time_police >= 0',
+                        name='ck_lands_tt_police'),
+        CheckConstraint("listing_status IN ('active', 'removed', 'sold', 'unknown')",
+                        name='ck_lands_listing_status_enum'),
     )
 
     id = db.Column(db.Integer, primary_key=True)
@@ -83,9 +117,9 @@ class Land(db.Model):
     listing_removed_date = db.Column(db.DateTime)  # When listing was removed from Idealista
     listing_last_checked = db.Column(db.DateTime)  # Last time we checked the listing status
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=_utcnow)
     email_date = db.Column(db.DateTime)  # Date when the email was received
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)  # Last update time
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)  # Last update time
     
     def __repr__(self):
         return f'<Land {self.id}: {self.title[:50]}...>'
@@ -211,8 +245,8 @@ class ScoringCriteria(db.Model):
     profile = db.Column(db.String(20), nullable=True, default='combined')  # 'investment', 'lifestyle', 'combined'
     weight = db.Column(db.Numeric(3, 2), default=1.0)
     active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=_utcnow)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
     
     # Unique constraint for criteria_name + profile combination
     __table_args__ = (
@@ -228,7 +262,7 @@ class LandHistory(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     land_id = db.Column(db.Integer, db.ForeignKey('lands.id', ondelete='CASCADE'), nullable=False)
-    snapshot_date = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    snapshot_date = db.Column(db.DateTime, default=_utcnow, nullable=False)
 
     # Tracked fields
     price = db.Column(db.Numeric(10, 2))
@@ -308,7 +342,7 @@ class SyncHistory(db.Model):
     sync_duration = db.Column(db.Integer)  # Duration in seconds
     status = db.Column(db.String(20), default='completed')  # 'completed', 'failed', 'partial'
     error_message = db.Column(db.Text)
-    started_at = db.Column(db.DateTime, default=datetime.utcnow)
+    started_at = db.Column(db.DateTime, default=_utcnow)
     completed_at = db.Column(db.DateTime)
     
     def __repr__(self):
@@ -321,8 +355,8 @@ class AppSetting(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     key = db.Column(db.String(120), unique=True, nullable=False, index=True)
     value = db.Column(JSON, nullable=False, default=dict)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
     def __repr__(self):
         return f"<AppSetting {self.key}>"
@@ -371,8 +405,8 @@ class MarketSettings(db.Model):
     rural_rental_avg = db.Column(db.Integer, default=7)
     rural_rental_max = db.Column(db.Integer, default=9)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=_utcnow)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
 
     def __repr__(self):
         return f'<MarketSettings id={self.id}>'
@@ -451,7 +485,7 @@ class AiAnalysisVariant(db.Model):
     provider = db.Column(db.String(32), nullable=False, index=True)  # 'claude', 'openai'
     model = db.Column(db.String(128), nullable=True)
     analysis = db.Column(JSON, nullable=False, default=dict)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
 
     land = db.relationship('Land', backref=db.backref('ai_analysis_variants', lazy='dynamic'))
 

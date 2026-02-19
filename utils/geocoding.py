@@ -50,7 +50,7 @@ class GeocodingService:
                 return self._fallback_geocoding(address)
                 
         except Exception as e:
-            logger.error(f"Geocoding error for '{address}': {str(e)}")
+            logger.error("Geocoding error for '%s'", address, exc_info=True)
             return self._fallback_geocoding(address)
     
     def _fallback_geocoding(self, address: str) -> Optional[Dict]:
@@ -86,7 +86,7 @@ class GeocodingService:
             return None
             
         except Exception as e:
-            logger.error(f"Fallback geocoding error for '{address}': {str(e)}")
+            logger.error("Fallback geocoding error for '%s'", address, exc_info=True)
             return None
     
     def reverse_geocode(self, lat: float, lng: float) -> Optional[Dict]:
@@ -116,7 +116,7 @@ class GeocodingService:
             return self._fallback_reverse_geocoding(lat, lng)
             
         except Exception as e:
-            logger.error(f"Reverse geocoding error for {lat},{lng}: {str(e)}")
+            logger.error("Reverse geocoding error for %s,%s", lat, lng, exc_info=True)
             return None
     
     def _fallback_reverse_geocoding(self, lat: float, lng: float) -> Optional[Dict]:
@@ -146,5 +146,5 @@ class GeocodingService:
             return None
             
         except Exception as e:
-            logger.error(f"Fallback reverse geocoding error for {lat},{lng}: {str(e)}")
+            logger.error("Fallback reverse geocoding error for %s,%s", lat, lng, exc_info=True)
             return None
