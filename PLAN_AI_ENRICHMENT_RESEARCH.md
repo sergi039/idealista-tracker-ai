@@ -2,22 +2,23 @@
 
 ## Executive Summary
 
-Исследование системы AI-обогащения данных о недвижимости в проекте Idealista Tracker AI. Анализ текущей реализации, сравнение с лучшими практиками индустрии, и рекомендации по улучшению.
+This document reviews the AI property-enrichment system in Idealista Tracker AI, compares the current implementation against industry best practices, and provides a prioritized improvement plan.
 
 ---
 
-## 1. Текущая Архитектура
+## 1. Current Architecture
 
-### 1.1 Как работает AI-обогащение сейчас
+### 1.1 Current AI Enrichment Flow
 
-**Поток данных:**
-```
+**Data pipeline:**
+
+```text
 Email (Idealista alert)
     ↓
-Парсинг: title, price, area, description
+Parsing: title, price, area, description
     ↓
 Geographic Enrichment:
-  - Google Maps API (координаты, travel times)
+  - Google Maps API (coordinates, travel times)
   - Google Places API (amenities)
   - OpenStreetMap (fallback POIs)
     ↓
@@ -33,201 +34,188 @@ AI Analysis (Claude/ChatGPT):
 Storage: Land.ai_analysis (JSON)
 ```
 
-### 1.2 Данные отправляемые в AI
+### 1.2 Data Sent to AI
 
-**Базовые поля:**
-- title, price, area, municipality, land_type, score_total
-- description (max 500 chars)
+**Core fields:**
+- `title`, `price`, `area`, `municipality`, `land_type`, `score_total`
+- `description` (max 500 chars)
 
-**Location & Travel:**
-- travel_time_nearest_beach, travel_time_oviedo, travel_time_gijon, travel_time_airport
-- coordinates (lat, lon)
+**Location and travel:**
+- `travel_time_nearest_beach`, `travel_time_oviedo`, `travel_time_gijon`, `travel_time_airport`
+- `coordinates` (`lat`, `lon`)
 
 **Infrastructure:**
 - Basic utilities (electricity, water, internet, gas)
 - Extended amenities (supermarket, school, hospital, restaurant)
 - Transport (train, bus, airport)
 
-**Enriched Context:**
+**Enriched context:**
 - Construction estimates (buildable area, costs)
 - Market data (price/m², trends, sample size)
 - Rental analysis (yields, cap rate, payback period)
 - Similar properties (top 3 by score)
 
-### 1.3 Структура ответа AI (5 блоков)
+### 1.3 AI Response Structure
 
 ```json
 {
-  "price_analysis": { verdict, summary, price_per_m2, recommendation },
-  "investment_potential": { rating, forecast, key_drivers, risk_level },
-  "risks_analysis": { major_risks, minor_issues, advantages, mitigation },
-  "development_ideas": { best_use, building_size, special_features, estimated_cost },
-  "comparable_analysis": { market_position, advantages_vs_similar, disadvantages_vs_similar },
-  "similar_objects": { comparison_summary, recommended_alternatives },
-  "construction_value_estimation": { min/max/avg values, construction_type, total_investment },
-  "market_price_dynamics": { price_trend, annual_growth_rate, market_factors },
-  "rental_market_analysis": { monthly_rent, rental_yield, cap_rate, investment_rating }
+  "price_analysis": { "verdict": "...", "summary": "...", "price_per_m2": 0, "recommendation": "..." },
+  "investment_potential": { "rating": "...", "forecast": "...", "key_drivers": [], "risk_level": "..." },
+  "risks_analysis": { "major_risks": [], "minor_issues": [], "advantages": [], "mitigation": [] },
+  "development_ideas": { "best_use": "...", "building_size": "...", "special_features": [], "estimated_cost": "..." },
+  "comparable_analysis": { "market_position": "...", "advantages_vs_similar": [], "disadvantages_vs_similar": [] },
+  "similar_objects": { "comparison_summary": "...", "recommended_alternatives": [] },
+  "construction_value_estimation": { "min": 0, "max": 0, "avg": 0, "construction_type": "...", "total_investment": 0 },
+  "market_price_dynamics": { "price_trend": "...", "annual_growth_rate": 0, "market_factors": [] },
+  "rental_market_analysis": { "monthly_rent": 0, "rental_yield": 0, "cap_rate": 0, "investment_rating": "..." }
 }
 ```
 
 ---
 
-## 2. Проблемы Текущей Реализации
+## 2. Current Gaps
 
-### 2.1 Критические проблемы
+### 2.1 Critical Gaps
 
-| Проблема | Описание | Влияние |
-|----------|----------|---------|
-| **Hardcoded market data** | Стоимость строительства (€800-2000/m²) и rental yields (3.5-7.5%) захардкожены | AI получает неактуальные/неточные данные |
-| **No real transaction data** | Нет доступа к реальным ценам сделок | Оценки основаны на listing prices, не на продажах |
-| **Limited comparables** | Similar properties только из своей БД (max 3) | Малая выборка = ненадёжные тренды |
-| **Regional assumptions** | Все расчёты для "Asturias" generic | Различия между муниципалитетами игнорируются |
+| Issue | Description | Impact |
+|------|-------------|--------|
+| Hardcoded market data | Construction costs (€800-2000/m²) and rental yields (3.5-7.5%) are hardcoded | AI receives stale or inaccurate market context |
+| No real transaction data | No access to real closed-sale prices | Estimates depend on listing prices only |
+| Limited comparables | Similar properties come only from local DB (max 3) | Small sample size lowers reliability |
+| Regional assumptions | Generic Asturias assumptions for all calculations | Municipality-level differences are ignored |
 
-### 2.2 Проблемы качества данных
+### 2.2 Data Quality Gaps
 
-| Проблема | Описание |
-|----------|----------|
-| **Municipality extraction** | Сложные паттерны адресов, частые ошибки парсинга |
-| **Geocoding fallback** | При неточном geocoding используется центр города |
-| **Duplicate coordinates** | Только для precise results, approximate могут дублироваться |
-| **Description truncation** | 500 chars недостаточно для полного контекста |
+| Issue | Description |
+|------|-------------|
+| Municipality extraction | Complex address patterns cause frequent parsing errors |
+| Geocoding fallback | City center fallback can reduce precision |
+| Duplicate coordinates | Duplicate filtering is stronger for precise than approximate results |
+| Description truncation | 500 chars is often too short for full context |
 
-### 2.3 Проблемы AI prompts
+### 2.3 Prompt Quality Gaps
 
-| Проблема | Описание |
-|----------|----------|
-| **No few-shot examples** | Промпт без примеров качественного ответа |
-| **No chain-of-thought** | Нет пошагового reasoning |
-| **Generic context** | Нет информации о текущем состоянии рынка Asturias |
-| **No validation** | Нет проверки возвращённых значений на адекватность |
-
----
-
-## 3. Лучшие Практики Индустрии
-
-### 3.1 Automated Valuation Models (AVMs)
-
-**Zillow Zestimate** достигает 1.8-2.4% median error для on-market homes за счёт:
-- Миллионов data points
-- Real-time market analysis
-- Machine learning на исторических продажах
-
-**Ключевые принципы:**
-1. **Data quality > Algorithm complexity** - Качество данных важнее сложности модели
-2. **Human-AI collaboration** - AI анализирует, человек принимает решения
-3. **Hybrid approach** - Сочетание автоматизации и экспертной оценки
-
-### 3.2 Prompting Best Practices для Real Estate
-
-Из академического исследования [On the Performance of LLMs for Real Estate Appraisal](https://arxiv.org/html/2506.11812v1):
-
-1. **Few-shot learning** - 10 similar properties в контексте значительно улучшает точность
-2. **Geographic proximity** - Примеры должны быть географически близки
-3. **Market report context** - Включение актуального market report улучшает temporal trends
-4. **Hedonic variables** - LLMs эффективно используют: size, amenities, location quality
-
-### 3.3 Data Sources для Spain
-
-**CASAFARI** - AI Data Platform с 60M+ properties:
-- Cadastral data для Spain
-- Actual transaction prices (not just listings)
-- Deduplicated listings
-
-**Idealista/data** - Официальный data provider:
-- Public sources: Cadastre, IGN, INE
-- Private: Idealista.com listings
-- Структурированная real-time информация
-
-**TerceroB (Idealista):**
-- Lookup в Spanish Cadastre по floor/door
-- Enrichment с past transaction prices
+| Issue | Description |
+|------|-------------|
+| No few-shot examples | Prompt has no high-quality example outputs |
+| No explicit reasoning steps | Prompt does not force a consistent analytical sequence |
+| Generic market context | No current Asturias market briefing in prompt |
+| No output validation | Returned values are not validated for plausibility |
 
 ---
 
-## 4. Актуальные Данные по Рынку
+## 3. Industry Best Practices
 
-### 4.1 Construction Costs Spain 2024-2025
+### 3.1 AVM (Automated Valuation Model) Lessons
 
-| Тип | Стоимость (€/m²) | Источник |
-|-----|------------------|----------|
-| **Economic** | €1,100/m² | Square volume, basic finishes |
-| **Standard** | €1,300-1,500/m² | Unique volumes, quality finishes |
-| **Premium** | €1,700+/m² | Basement, premium materials |
-| **Average 2024** | €2,235/m² | Including all costs |
+Zillow Zestimate reports low median error for on-market homes due to:
+- Massive data coverage
+- Real-time market inputs
+- Training on historical transactions
 
-**Текущие hardcoded значения (€800-2000/m²) занижены!**
+**Core principles:**
+1. Data quality matters more than model complexity.
+2. Human-AI collaboration improves decision quality.
+3. Hybrid automation plus expert review is more robust.
 
-### 4.2 Rental Yields Spain
+### 3.2 Prompt Engineering for Real Estate
 
-| Регион/Тип | Gross Yield |
-|------------|-------------|
-| Barcelona/Madrid | 4-6% |
-| Valencia/Málaga | до 8% |
-| Average Spain 2020 | 7.5% (Idealista) |
-| Expected return (Central Bank) | 11% (8.4% with mortgage) |
+From [On the Performance of LLMs for Real Estate Appraisal](https://arxiv.org/html/2506.11812v1):
 
-**Текущие hardcoded значения (3.5-7.5%) в целом корректны, но:**
-- Не учитывают vacancy rate
-- Не учитывают operating expenses (net yield на 1.5-2% ниже)
+1. Few-shot learning improves valuation quality.
+2. Geographic proximity of examples is important.
+3. Current market-report context improves temporal understanding.
+4. Hedonic variables (size, amenities, location quality) are high-value features.
 
-### 4.3 Purchase Costs Spain
+### 3.3 Data Sources for Spain
 
-Дополнительные расходы при покупке: **10-14% от цены**
-- Transfer Tax (ITP): 8-10%
-- Stamp Duty (AJD)
-- Notary, Registry, Legal fees
+**CASAFARI**
+- Cadastral information for Spain
+- Transaction-focused market data
+- Deduplicated listing coverage
 
-**Это не учитывается в текущих расчётах total investment!**
+**Idealista/data**
+- Public and private source aggregation
+- Structured real-time data outputs
+
+**Spanish Cadastre integrations**
+- Parcel-level lookup
+- Property history enrichment
 
 ---
 
-## 5. Рекомендации по Улучшению
+## 4. Current Market Inputs (Spain)
 
-### 5.1 Приоритет 1: Улучшение Market Data
+### 4.1 Construction Costs (2024-2025)
 
-#### A. Dynamic Construction Costs
+| Tier | Cost (€/m²) | Notes |
+|------|--------------|-------|
+| Economic | ~€1,100 | Basic finishes |
+| Standard | ~€1,300-1,500 | Typical quality builds |
+| Premium | ~€1,700+ | Premium materials and design |
+| National average reference | Up to ~€2,235 | Includes broader total-cost assumptions |
+
+Current hardcoded values (`€800-2000/m²`) are likely understated for many scenarios.
+
+### 4.2 Rental Yields (Spain)
+
+| Region / Segment | Gross Yield |
+|------------------|-------------|
+| Barcelona / Madrid | ~4-6% |
+| Valencia / Málaga | up to ~8% |
+| National reference | commonly in the ~5-8% band |
+
+Current hardcoded yield values are directionally useful, but miss:
+- Vacancy assumptions
+- Operating expenses
+- Net yield normalization
+
+### 4.3 Transaction Cost Impact
+
+Typical acquisition overhead in Spain is often around **10-14%** of purchase price (taxes, legal, notary, registry).
+
+If excluded from `total_investment`, ROI can be significantly overstated.
+
+---
+
+## 5. Recommended Improvements
+
+### 5.1 Priority 1: Better Market Inputs
+
+#### A. Dynamic Construction Cost Table
 
 ```python
-# Вместо hardcoded
 CONSTRUCTION_COSTS_2025 = {
-    'economic': {'min': 1100, 'avg': 1200, 'max': 1300},
-    'standard': {'min': 1300, 'avg': 1500, 'max': 1700},
-    'premium': {'min': 1700, 'avg': 2000, 'max': 2500}
+    "economic": {"min": 1100, "avg": 1200, "max": 1300},
+    "standard": {"min": 1300, "avg": 1500, "max": 1700},
+    "premium": {"min": 1700, "avg": 2000, "max": 2500},
 }
 
-# + Annual inflation adjustment
-# + Regional coefficient (Asturias ~0.85 of national average)
+# Add annual inflation updates and regional coefficient multipliers.
 ```
 
-#### B. Realistic Rental Yields
+#### B. Net Rental Yield Modeling
 
 ```python
-# Добавить:
-# - Vacancy rate assumption (10-20% для vacation, 5% для long-term)
-# - Operating expenses (maintenance, management, insurance)
-# - Net yield calculation
-
 RENTAL_ADJUSTMENTS = {
-    'vacancy_rate': 0.10,  # 10% average
-    'operating_expenses': 0.15,  # 15% of gross rent
-    'management_fee': 0.08  # If using property manager
+    "vacancy_rate": 0.10,
+    "operating_expenses": 0.15,
+    "management_fee": 0.08,
 }
 ```
 
-#### C. Include Purchase Costs
+#### C. Purchase Cost Inclusion
 
 ```python
-# В total_investment добавить:
-PURCHASE_COSTS_ASTURIAS = 0.11  # ~11% (ITP 8% + other)
+PURCHASE_COSTS_ASTURIAS = 0.11
 total_investment = land_price * (1 + PURCHASE_COSTS_ASTURIAS) + construction_cost
 ```
 
-### 5.2 Приоритет 2: Улучшение AI Prompts
+### 5.2 Priority 2: Prompt Upgrades
 
-#### A. Добавить Few-Shot Examples
+#### A. Few-Shot Examples
 
 ```python
-# В промпт добавить 2-3 примера качественного анализа:
 EXAMPLE_ANALYSIS = """
 Example 1 - Good Investment:
 Property: 800m² developed land, €45,000, 25min to beach
@@ -239,105 +227,72 @@ Analysis: {structured_example_2}
 """
 ```
 
-#### B. Chain-of-Thought Reasoning
+#### B. Explicit Reasoning Sequence
 
-```python
-# Добавить в промпт:
-"""
-Before providing your final analysis, reason through these steps:
-1. Compare price/m² to similar properties in the database
-2. Evaluate location accessibility (beach, cities, airport)
-3. Assess construction feasibility and costs
-4. Calculate realistic rental potential
-5. Identify major risks and opportunities
-
-Then provide your structured analysis:
-"""
+```text
+Before final output:
+1. Compare price/m² with database comparables.
+2. Evaluate accessibility (beach, city, airport).
+3. Estimate construction feasibility and costs.
+4. Calculate realistic rental potential.
+5. Identify major risks and opportunities.
 ```
 
-#### C. Market Context Section
+#### C. Dynamic Market Context Block
 
 ```python
-# Добавить актуальный market context:
 MARKET_CONTEXT_2025 = """
 ASTURIAS REAL ESTATE MARKET CONTEXT (2025):
-- Housing prices: Rising 4-5% annually
-- Construction costs: €1,300-1,700/m² for quality builds
-- Rental demand: Growing due to remote work trends
-- Key drivers: Gijón tech hub growth, coastal lifestyle appeal
-- Risks: Limited infrastructure in rural areas, harsh winters
+- Housing prices: rising mid-single digits annually
+- Construction costs: elevated versus pre-2022 baseline
+- Rental demand: stronger in selected municipalities
+- Risks: infrastructure variance in rural areas
 """
 ```
 
-### 5.3 Приоритет 3: Внешние Data Sources
+### 5.3 Priority 3: External Data Enrichment
 
-#### A. Интеграция с CASAFARI API (опционально)
-
-Если бюджет позволяет:
-- Real transaction data
-- Comparable sales
-- Market reports
+#### A. Optional CASAFARI Integration
+- Transaction-level data
+- Better comparable sales coverage
+- Broader market reporting
 
 #### B. Spanish Cadastre Integration
+- Official parcel and property dimensions
+- Land classification details
+- Permit and building-history enrichment
 
-```python
-# Бесплатно через Catastro API:
-# - Official property dimensions
-# - Land classification
-# - Building permits history
-# https://www.catastro.minhap.es/ws/webservices.pdf
-```
+#### C. INE Statistics Integration
+- Regional price indices
+- Construction cost indices
+- Population and employment signals
 
-#### C. INE Statistics
+### 5.4 Priority 4: Validation and Confidence
 
-```python
-# Instituto Nacional de Estadística:
-# - Regional price indices
-# - Construction cost indices
-# - Population/employment data
-# https://www.ine.es/
-```
-
-### 5.4 Приоритет 4: Validation & Quality
-
-#### A. Response Validation
+#### A. Value Validation Layer
 
 ```python
 def validate_ai_response(analysis: dict) -> dict:
-    """Validate AI response values are within reasonable bounds."""
-
-    validations = {
-        'price_per_m2': (10, 5000),  # €10-5000/m²
-        'rental_yield': (1, 15),      # 1-15%
-        'cap_rate': (1, 12),          # 1-12%
-        'annual_growth_rate': (-10, 20),  # -10% to +20%
+    bounds = {
+        "price_per_m2": (10, 5000),
+        "rental_yield": (1, 15),
+        "cap_rate": (1, 12),
+        "annual_growth_rate": (-10, 20),
     }
-
-    for field, (min_val, max_val) in validations.items():
-        value = get_nested_value(analysis, field)
-        if value and not (min_val <= value <= max_val):
-            log_warning(f"Suspicious {field}: {value}")
-            # Flag for human review
-
+    # Flag out-of-range values for human review.
     return analysis
 ```
 
-#### B. Confidence Scoring
+#### B. Confidence Score
 
 ```python
-# Добавить confidence score на основе:
-# - Sample size для comparables
-# - Geocoding accuracy
-# - Description completeness
-# - Infrastructure data availability
-
 def calculate_confidence(property_data: dict) -> float:
     score = 1.0
-    if property_data['geocoding_accuracy'] != 'precise':
+    if property_data["geocoding_accuracy"] != "precise":
         score *= 0.8
-    if property_data['similar_count'] < 5:
+    if property_data["similar_count"] < 5:
         score *= 0.7
-    if len(property_data['description']) < 100:
+    if len(property_data.get("description", "")) < 100:
         score *= 0.9
     return score
 ```
@@ -346,54 +301,54 @@ def calculate_confidence(property_data: dict) -> float:
 
 ## 6. Implementation Roadmap
 
-### Phase 1: Quick Wins (1-2 дня)
-- [ ] Update construction costs to 2025 values
-- [ ] Add purchase costs (11%) to total investment
-- [ ] Add market context to AI prompt
-- [ ] Increase description limit to 1000 chars
+### Phase 1: Quick Wins (1-2 days)
+- [ ] Update construction costs to 2025 assumptions
+- [ ] Add purchase costs to total investment
+- [ ] Add market context to AI prompts
+- [ ] Increase description length limit to 1000 chars
 
-### Phase 2: Prompt Engineering (3-5 дней)
-- [ ] Create 3 high-quality few-shot examples
-- [ ] Add chain-of-thought reasoning section
-- [ ] Implement response validation
+### Phase 2: Prompt Engineering (3-5 days)
+- [ ] Create 3 strong few-shot examples
+- [ ] Add explicit reasoning sequence
+- [ ] Add response validation logic
 - [ ] Add confidence scoring
 
-### Phase 3: Data Quality (1 неделя)
-- [ ] Integrate Spanish Cadastre API for land verification
-- [ ] Add INE price index data
+### Phase 3: Data Quality (1 week)
+- [ ] Integrate Spanish Cadastre API for verification
+- [ ] Add INE market indicators
 - [ ] Improve municipality extraction
-- [ ] Better vacancy/expenses modeling for rentals
+- [ ] Improve vacancy/expense rental model
 
 ### Phase 4: Advanced (future)
-- [ ] CASAFARI integration (if budget allows)
-- [ ] Historical price tracking per property
-- [ ] ML-based price prediction (собственная модель)
-- [ ] Automated market report generation
+- [ ] Add CASAFARI integration if budget allows
+- [ ] Track historical price trajectories per property
+- [ ] Add ML-assisted price estimation model
+- [ ] Generate automated market reports
 
 ---
 
-## 7. Выводы
+## 7. Conclusions
 
-### Что работает хорошо:
-1. **Структурированный output** - 5-block JSON format удобен и понятен
-2. **Travel time enrichment** - Реальные данные из Google Maps
-3. **Multi-provider comparison** - Claude vs ChatGPT сравнение
-4. **Similar properties context** - Хорошая идея, но limited sample
+### What Works Well
+1. Structured JSON output is clear and reusable.
+2. Travel-time enrichment uses high-quality API signals.
+3. Multi-provider AI comparison is useful.
+4. Comparable-property context is conceptually strong.
 
-### Что требует улучшения:
-1. **Market data актуальность** - Hardcoded values устарели
-2. **Prompt engineering** - Нет few-shot, нет chain-of-thought
-3. **Data validation** - AI может вернуть нереалистичные значения
-4. **Regional specificity** - Все расчёты generic для региона
+### What Needs Improvement
+1. Market data freshness is limited by hardcoded assumptions.
+2. Prompt quality can improve with examples and reasoning steps.
+3. Output validation is required for production reliability.
+4. Regional granularity should be municipality-aware.
 
-### Оценка точности текущих данных:
+### Estimated Accuracy Impact
 
-| Метрика | Текущая точность | После улучшений |
-|---------|------------------|-----------------|
-| Construction costs | ~60% (занижены) | ~85% |
-| Rental yields | ~70% (gross, не net) | ~80% |
-| Price trends | ~50% (малая выборка) | ~70% |
-| Location quality | ~80% (Google APIs) | ~85% |
+| Metric | Current | After Improvements |
+|--------|---------|--------------------|
+| Construction cost realism | ~60% | ~85% |
+| Rental yield realism | ~70% | ~80% |
+| Price trend confidence | ~50% | ~70% |
+| Location signal quality | ~80% | ~85% |
 
 ---
 
