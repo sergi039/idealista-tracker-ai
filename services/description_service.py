@@ -204,7 +204,7 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
                     'enhanced_es': fallback_desc,
                     'original_description': raw_description,
                     'processing_status': 'fallback',
-                    'error': 'AI enhancement failed. Check server logs for details.'
+                    'error': 'AI enhancement failed'
                 }
 
         except Exception as e:
@@ -216,7 +216,7 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
                 'enhanced_es': raw_description,
                 'original_description': raw_description,
                 'processing_status': 'failed',
-                'error': 'Description enhancement failed. Check server logs for details.'
+                'error': 'Description enhancement failed'
             }
     
     def _create_fallback_description(self, raw_description: str, extracted_data: Dict) -> str:
@@ -286,4 +286,4 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
             
         except Exception as e:
             logger.error("Failed to get description variants for land %s", land_id, exc_info=True)
-            return {'error': 'Failed to load description variants. Check server logs for details.'}
+            return {'error': 'Failed to retrieve description variants'}

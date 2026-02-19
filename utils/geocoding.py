@@ -4,6 +4,7 @@ import requests
 import time
 from typing import Dict, Optional
 from config import Config
+from utils.http import request_with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -25,20 +26,29 @@ class GeocodingService:
                 'region': 'es'  # Bias results to Spain
             }
             
-            response = requests.get(url, params=params, timeout=10)
+            response = request_with_retries(requests.get, url, params=params, timeout=10, logger=logger)
             if response.status_code == 200:
                 data = response.json()
                 
                 if data.get('status') == 'OK' and data.get('results'):
                     result = data['results'][0]
                     location = result['geometry']['location']
+                    location_type = result.get('geometry', {}).get('location_type')
+
+                    accuracy = 'unknown'
+                    if location_type == 'ROOFTOP':
+                        accuracy = 'precise'
+                    elif location_type in {'RANGE_INTERPOLATED', 'GEOMETRIC_CENTER', 'APPROXIMATE'}:
+                        accuracy = 'approximate'
                     
                     logger.info(f"Google geocoding successful for '{address}'")
                     return {
                         'lat': location['lat'],
                         'lng': location['lng'],
                         'formatted_address': result['formatted_address'],
-                        'address_components': result.get('address_components', [])
+                        'address_components': result.get('address_components', []),
+                        'location_type': location_type,
+                        'accuracy': accuracy,
                     }
                 else:
                     status = data.get('status', 'UNKNOWN')
@@ -66,10 +76,10 @@ class GeocodingService:
             }
             
             headers = {
-                'User-Agent': 'Idealista-Land-Watch/1.0'
+                'User-Agent': 'Idealista-Property-Watch/1.0'
             }
             
-            response = requests.get(url, params=params, headers=headers)
+            response = request_with_retries(requests.get, url, params=params, headers=headers, timeout=10, logger=logger)
             if response.status_code == 200:
                 data = response.json()
                 
@@ -79,7 +89,9 @@ class GeocodingService:
                         'lat': float(result['lat']),
                         'lng': float(result['lon']),
                         'formatted_address': result['display_name'],
-                        'address_components': []
+                        'address_components': [],
+                        'location_type': None,
+                        'accuracy': 'approximate',
                     }
             
             logger.warning(f"Fallback geocoding also failed for '{address}'")
@@ -102,7 +114,7 @@ class GeocodingService:
                 'language': 'es'
             }
             
-            response = requests.get(url, params=params)
+            response = request_with_retries(requests.get, url, params=params, timeout=10, logger=logger)
             if response.status_code == 200:
                 data = response.json()
                 
@@ -131,10 +143,10 @@ class GeocodingService:
             }
             
             headers = {
-                'User-Agent': 'Idealista-Land-Watch/1.0'
+                'User-Agent': 'Idealista-Property-Watch/1.0'
             }
             
-            response = requests.get(url, params=params, headers=headers)
+            response = request_with_retries(requests.get, url, params=params, headers=headers, timeout=10, logger=logger)
             if response.status_code == 200:
                 data = response.json()
                 

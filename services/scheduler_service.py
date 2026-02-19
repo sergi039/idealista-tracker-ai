@@ -15,7 +15,7 @@ scheduler_lock_file = None
 def init_scheduler(app):
     """Initialize the background scheduler with protection against duplicate instances"""
     global scheduler, scheduler_lock_file
-    
+
     if app.config.get('TESTING'):
         logger.info("Scheduler disabled in TESTING")
         return None
@@ -26,15 +26,15 @@ def init_scheduler(app):
 
     if scheduler is not None:
         return scheduler
-    
+
     # Try to acquire an exclusive lock to prevent duplicate schedulers
-    lock_path = os.path.join(tempfile.gettempdir(), 'idealista_scheduler.lock')
+    lock_path = os.path.join(tempfile.gettempdir(), 'idealista_universal_scheduler.lock')
     try:
         scheduler_lock_file = open(lock_path, 'w')
         fcntl.flock(scheduler_lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         scheduler_lock_file.write(str(os.getpid()))
         scheduler_lock_file.flush()
-        logger.info(f"Acquired scheduler lock (PID: {os.getpid()})")
+        logger.info("Acquired scheduler lock (PID: %s)", os.getpid())
     except IOError:
         # Lock held by another instance — close file handle before returning
         if scheduler_lock_file:
@@ -88,7 +88,7 @@ def init_scheduler(app):
                 hour = int(hour_str)
                 minute = int(minute_str)
             except Exception:
-                logger.warning(f"Invalid ingestion time '{time_str}', skipping")
+                logger.warning("Invalid ingestion time '%s', skipping", time_str)
                 continue
 
             scheduler.add_job(
@@ -127,7 +127,7 @@ def init_scheduler(app):
         )
         return scheduler
 
-    except Exception as e:
+    except Exception:
         logger.error("Failed to initialize scheduler", exc_info=True)
         # Release lock so other instances can try
         cleanup()
@@ -137,48 +137,72 @@ def run_scheduled_ingestion():
     """Run the scheduled ingestion job"""
     try:
         from config import Config
-        
-        # Use IMAP service for email ingestion
-        logger.info("Starting scheduled IMAP ingestion")
-        from services.imap_service import IMAPService
-        service = IMAPService()
+        target = getattr(Config, "INGESTION_TARGET", "properties")
+
+        logger.info("Starting scheduled IMAP ingestion (target=%s)", target)
+
+        if target == "lands":
+            from services.imap_service import IMAPService
+
+            service = IMAPService()
+        else:
+            from services.property_imap_service import PropertyIMAPService
+
+            service = PropertyIMAPService()
+
         processed_count = service.run_ingestion()
-        
-        logger.info(f"Scheduled ingestion completed. Processed {processed_count} properties")
-        
-    except Exception as e:
+
+        logger.info("Scheduled ingestion completed. Processed %s properties", processed_count)
+
+    except Exception:
         logger.error("Scheduled ingestion failed", exc_info=True)
 
 def run_listing_status_check():
     """Run the scheduled listing status check job"""
     try:
-        logger.info("Starting scheduled listing status check")
+        from config import Config
+
+        target = getattr(Config, "INGESTION_TARGET", "properties")
+        if target != "lands":
+            logger.info("Skipping scheduled listing status check (target=%s, email-driven)", target)
+            return
+
+        logger.info("Starting scheduled listing status check (lands)")
         from services.listing_status_service import ListingStatusService
         service = ListingStatusService()
 
         # Check favorites first (they get priority)
         results = service.check_favorites_status(limit=30)
 
-        logger.info(f"Listing status check completed. Checked {results['checked']} favorites: "
-                   f"{results['removed']} removed, {results['sold']} sold")
+        logger.info(
+            "Listing status check completed. Checked %s favorites: %s removed, %s sold",
+            results['checked'],
+            results['removed'],
+            results['sold'],
+        )
 
         # If any listings were removed, log details
         if results.get('details'):
             for detail in results['details']:
-                logger.info(f"Status change: Land {detail['land_id']} ({detail['title']}) - "
-                           f"{detail['old_status']} -> {detail['new_status']}")
+                logger.info(
+                    "Status change: Land %s (%s) - %s -> %s",
+                    detail['land_id'],
+                    detail['title'],
+                    detail['old_status'],
+                    detail['new_status'],
+                )
 
-    except Exception as e:
+    except Exception:
         logger.error("Listing status check failed", exc_info=True)
 
 
 def get_scheduler_status():
     """Get current scheduler status"""
     global scheduler
-    
+
     if scheduler is None:
         return {"status": "not_initialized"}
-    
+
     jobs = []
     for job in scheduler.get_jobs():
         jobs.append({
@@ -187,7 +211,7 @@ def get_scheduler_status():
             "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
             "trigger": str(job.trigger)
         })
-    
+
     return {
         "status": "running" if scheduler.running else "stopped",
         "jobs": jobs

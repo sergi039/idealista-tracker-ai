@@ -22,6 +22,12 @@ window.IdealistaApp = {
         
         // Responsive table handling
         this.setupResponsiveTables();
+
+        // Favorites for universal properties
+        this.setupPropertyFavorites();
+
+        // AI analysis for universal property detail
+        this.setupPropertyAIAnalysis();
         
         // Criteria form enhancements
         this.setupCriteriaForm();
@@ -166,7 +172,8 @@ window.IdealistaApp = {
                             target.appendChild(document.createTextNode('Manual Sync'));
                         }
 
-                        const shouldReload = window.location && window.location.pathname === '/lands';
+                        const path = (window.location && window.location.pathname) ? window.location.pathname : '';
+                        const shouldReload = path === '/lands' || path === '/properties' || path === '/map';
                         if (shouldReload) {
                             window.setTimeout(() => window.location.reload(), 2000);
                         } else if (indicator) {
@@ -188,7 +195,8 @@ window.IdealistaApp = {
                             target.appendChild(document.createTextNode('Manual Sync'));
                         }
 
-                        const shouldReload = window.location && window.location.pathname === '/lands';
+                        const path = (window.location && window.location.pathname) ? window.location.pathname : '';
+                        const shouldReload = path === '/lands' || path === '/properties' || path === '/map';
                         if (shouldReload) {
                             window.setTimeout(() => window.location.reload(), 2000);
                         } else if (indicator) {
@@ -198,10 +206,38 @@ window.IdealistaApp = {
                             }, 2500);
                         }
                     }
-                } else if (hxPost.includes('/api/land/') && hxPost.includes('/enrich')) {
+                } else if ((hxPost.includes('/api/land/') || hxPost.includes('/api/property/')) && hxPost.includes('/enrich')) {
                     // Enrichment endpoint returns JSON; show a toast and keep the button readable.
                     try {
                         const response = JSON.parse(evt.detail.xhr.responseText);
+                        if (response && response.status === 'queued' && response.job_id && IdealistaApp.pollJob) {
+                            IdealistaApp.showNotification(response.message || 'Enrichment queued', 'info');
+                            IdealistaApp.pollJob(response.job_id, {
+                                onSuccess: (job) => {
+                                    const result = job && job.result ? job.result : {};
+                                    const ok = result.success !== false;
+                                    const message = result.message || result.error || 'Enrichment completed';
+                                    IdealistaApp.showNotification(message, ok ? 'success' : 'error');
+                                    if (ok && target instanceof HTMLElement && target.tagName === 'BUTTON') {
+                                        target.classList.remove('btn-outline-warning');
+                                        target.classList.add('btn-success');
+
+                                        const existingCheck = target.querySelector('.badge');
+                                        if (!existingCheck) {
+                                            const check = document.createElement('span');
+                                            check.className = 'badge bg-light text-dark ms-1';
+                                            check.textContent = '✓';
+                                            target.appendChild(check);
+                                        }
+                                    }
+                                },
+                                onError: (job) => {
+                                    const message = (job && job.error) ? job.error : 'Enrichment failed';
+                                    IdealistaApp.showNotification(message, 'error');
+                                }
+                            });
+                            return;
+                        }
                         const ok = response && response.success === true;
                         const message = response && (response.message || response.error) ?
                             (response.message || response.error) :
@@ -280,6 +316,148 @@ window.IdealistaApp = {
         const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
         const tooltipList = tooltipTriggerList.map(function(tooltipTriggerEl) {
             return new bootstrap.Tooltip(tooltipTriggerEl);
+        });
+    },
+
+    setupPropertyFavorites: function() {
+        const buttons = document.querySelectorAll('.property-favorite-btn[data-property-id]');
+        if (!buttons || !buttons.length) return;
+
+        const toggle = async (propertyId) => {
+            const response = await fetch(`/api/property/${propertyId}/favorite`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to toggle favorite');
+            }
+
+            const data = await response.json();
+            if (!data || data.success !== true) {
+                throw new Error(data && data.error ? data.error : 'Toggle favorite failed');
+            }
+
+            const related = document.querySelectorAll(`.property-favorite-btn[data-property-id="${propertyId}"]`);
+            related.forEach(button => {
+                const icon = button.querySelector('i.fa-star');
+                if (!icon) return;
+
+                if (data.is_favorite) {
+                    icon.classList.remove('text-muted');
+                    icon.classList.add('text-warning');
+                    button.title = 'Remove from favorites';
+                } else {
+                    icon.classList.remove('text-warning');
+                    icon.classList.add('text-muted');
+                    button.title = 'Add to favorites';
+                }
+            });
+
+            return data;
+        };
+
+        buttons.forEach(button => {
+            if (button.dataset.boundFavoriteClick === 'true') return;
+            button.dataset.boundFavoriteClick = 'true';
+
+            button.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const propertyId = button.getAttribute('data-property-id');
+                if (!propertyId) return;
+
+                try {
+                    await toggle(propertyId);
+                } catch (error) {
+                    console.error('Error toggling favorite:', error);
+                    IdealistaApp.showNotification('Failed to toggle favorite', 'error');
+                }
+            });
+        });
+    },
+
+    setupPropertyAIAnalysis: function() {
+        const buttons = document.querySelectorAll('.property-ai-btn[data-property-id][data-provider]');
+        if (!buttons || !buttons.length) return;
+
+        const output = document.getElementById('property-ai-output');
+        const statusEl = document.getElementById('property-ai-status');
+
+        const setStatus = (text, type = 'info') => {
+            if (!statusEl) return;
+            statusEl.classList.remove('text-danger', 'text-success', 'text-body-secondary');
+            if (type === 'error') statusEl.classList.add('text-danger');
+            else if (type === 'success') statusEl.classList.add('text-success');
+            else statusEl.classList.add('text-body-secondary');
+            statusEl.textContent = text || '';
+        };
+
+        const run = async (propertyId, provider) => {
+            const resp = await fetch(`/api/property/${propertyId}/analyze/structured`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ provider })
+            });
+            const data = await resp.json().catch(() => null);
+            if (resp.status === 202 && data && data.job_id && IdealistaApp.pollJob) {
+                return await new Promise((resolve, reject) => {
+                    IdealistaApp.pollJob(data.job_id, {
+                        onSuccess: (job) => {
+                            const result = job && job.result ? job.result : {};
+                            if (result.success) {
+                                resolve(result);
+                            } else {
+                                reject(new Error(result.error || 'Analysis failed'));
+                            }
+                        },
+                        onError: (job) => {
+                            reject(new Error((job && job.error) ? job.error : 'Analysis failed'));
+                        }
+                    });
+                });
+            }
+            if (!resp.ok || !data || data.success !== true) {
+                const error = (data && data.error) ? data.error : `HTTP ${resp.status}`;
+                throw new Error(error);
+            }
+            return data;
+        };
+
+        buttons.forEach(btn => {
+            if (btn.dataset.boundPropertyAiClick === 'true') return;
+            btn.dataset.boundPropertyAiClick = 'true';
+
+            btn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const propertyId = btn.getAttribute('data-property-id');
+                const provider = btn.getAttribute('data-provider') || 'claude';
+                if (!propertyId) return;
+
+                buttons.forEach(b => (b.disabled = true));
+                setStatus(`Analyzing with ${provider}…`);
+
+                try {
+                    const data = await run(propertyId, provider);
+                    if (output) {
+                        output.textContent = JSON.stringify(data.analysis || {}, null, 2);
+                    }
+                    setStatus('Analysis saved', 'success');
+                    IdealistaApp.showNotification('AI analysis generated', 'success');
+                } catch (err) {
+                    console.error('Property AI analysis failed:', err);
+                    setStatus(String(err && err.message ? err.message : err), 'error');
+                    IdealistaApp.showNotification('AI analysis failed', 'error');
+                } finally {
+                    buttons.forEach(b => (b.disabled = false));
+                    window.setTimeout(() => setStatus(''), 3500);
+                }
+            });
         });
     },
 
@@ -758,6 +936,68 @@ window.IdealistaApp = {
             });
     },
 
+    pollJob: function(jobId, options = {}) {
+        if (!jobId) return () => {};
+
+        const intervalMs = options.intervalMs || 2000;
+        const timeoutMs = options.timeoutMs || 120000;
+        const onUpdate = typeof options.onUpdate === 'function' ? options.onUpdate : null;
+        const onSuccess = typeof options.onSuccess === 'function' ? options.onSuccess : null;
+        const onError = typeof options.onError === 'function' ? options.onError : null;
+
+        let stopped = false;
+        const startedAt = Date.now();
+        let timerId = null;
+
+        const stop = () => {
+            stopped = true;
+            if (timerId) {
+                window.clearTimeout(timerId);
+                timerId = null;
+            }
+        };
+
+        const schedule = () => {
+            if (stopped) return;
+            timerId = window.setTimeout(pollOnce, intervalMs);
+        };
+
+        const pollOnce = async () => {
+            if (stopped) return;
+            if (Date.now() - startedAt > timeoutMs) {
+                stop();
+                if (onError) onError({ status: 'timeout', error: 'Timed out waiting for job' });
+                return;
+            }
+            try {
+                const resp = await fetch(`/api/jobs/${jobId}`);
+                const data = await resp.json().catch(() => null);
+                if (!resp.ok || !data || data.success !== true) {
+                    throw new Error((data && data.error) ? data.error : `HTTP ${resp.status}`);
+                }
+                const job = data.job || {};
+                if (onUpdate) onUpdate(job);
+                if (job.status === 'success') {
+                    stop();
+                    if (onSuccess) onSuccess(job);
+                    return;
+                }
+                if (job.status === 'error') {
+                    stop();
+                    if (onError) onError(job);
+                    return;
+                }
+                schedule();
+            } catch (err) {
+                stop();
+                if (onError) onError({ status: 'error', error: String(err && err.message ? err.message : err) });
+            }
+        };
+
+        pollOnce();
+        return stop;
+    },
+
     showNotification: function(message, type = 'info', durationMs = 3000) {
         // Ephemeral "toast" notifications (no close button, do not take layout space).
         const alertClass =
@@ -1144,7 +1384,7 @@ function cancelEnvironmentEdit() {
     editBtn.innerHTML = '<i class="fas fa-edit"></i> Edit';
 }
 
-function saveEnvironment(event, landId) {
+function saveEnvironment(event, resourceId, resourceType = 'land') {
     event.preventDefault();
     
     const form = document.getElementById('environment-form');
@@ -1162,7 +1402,7 @@ function saveEnvironment(event, landId) {
     };
     
     // Send update to server
-    fetch(`/api/land/${landId}/environment`, {
+    fetch(`/api/${resourceType}/${resourceId}/environment`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',

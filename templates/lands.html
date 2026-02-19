@@ -13,12 +13,14 @@
 {% endblock %}
 
 {% block content %}
+{% set ref_city_a = reference_cities[0] if reference_cities and reference_cities|length >= 1 else None %}
+{% set ref_city_b = reference_cities[1] if reference_cities and reference_cities|length >= 2 else None %}
 <div class="row">
     <div class="col-12">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1>
-                <i class="fas fa-map-marked-alt me-2"></i>
-                {{ t('properties') }}
+	        <div class="d-flex justify-content-between align-items-center mb-4">
+	            <h1>
+	                <i class="fas fa-map-marked-alt me-2"></i>
+	                {{ t('properties') }}
                 {% if pagination %}
                     <span class="badge bg-secondary">{{ pagination.total }}</span>
                 {% else %}
@@ -36,12 +38,22 @@
                         hx-indicator="#ingestion-spinner">
                     <i class="fas fa-sync-alt me-2"></i>{{ t('manual_sync') }}
                 </button>
-            </div>
-        </div>
+	            </div>
+	        </div>
+
+	        <div class="alert alert-warning d-flex align-items-start gap-2" role="alert">
+	            <i class="fas fa-triangle-exclamation mt-1"></i>
+	            <div>
+	                <div class="fw-semibold">Legacy page (lands)</div>
+	                <div class="small">
+	                    This screen is kept for migration and troubleshooting. Use the universal <a class="alert-link" href="{{ url_for('main.properties') }}">Properties</a> page for day-to-day work.
+	                </div>
+	            </div>
+	        </div>
 
 
-        <!-- Filters -->
-        <div class="card mb-3 filters-card" id="filters-card">
+	        <!-- Filters -->
+	        <div class="card mb-3 filters-card" id="filters-card">
             <div class="card-header py-2">
                 <h6 class="card-title mb-0">
                     <i class="fas fa-filter me-2"></i>{{ t('filters_search') }}
@@ -176,10 +188,10 @@
                                         {{ t('beach_distance') }}
                                     </option>
                                     <option value="travel_time_oviedo" {{ 'selected' if current_filters.sort_by == 'travel_time_oviedo' }}>
-                                        Travel to Oviedo (OV)
+                                        Travel to {{ ref_city_a.name if ref_city_a else 'City A' }} ({{ (ref_city_a.name[:2] if ref_city_a and ref_city_a.name else 'A')|upper }})
                                     </option>
                                     <option value="travel_time_gijon" {{ 'selected' if current_filters.sort_by == 'travel_time_gijon' }}>
-                                        Travel to Gijón (GJ)
+                                        Travel to {{ ref_city_b.name if ref_city_b else 'City B' }} ({{ (ref_city_b.name[:2] if ref_city_b and ref_city_b.name else 'B')|upper }})
                                     </option>
                                     <option value="investment_metrics" {{ 'selected' if current_filters.sort_by == 'investment_metrics' }}>
                                         Inv. Metr.
@@ -354,16 +366,16 @@
                                         </th>
                                         <th style="white-space: nowrap;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='travel_time_oviedo', order='asc' if current_filters.sort_by == 'travel_time_oviedo' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}"
-                                               class="lands-th-link text-decoration-none" title="Sort by travel time to Oviedo">
-                                                OV
+                                               class="lands-th-link text-decoration-none" title="Sort by travel time to {{ ref_city_a.name if ref_city_a else 'City A' }}">
+                                                {{ (ref_city_a.name[:2] if ref_city_a and ref_city_a.name else 'A')|upper }}
                                                 {% if current_filters.sort_by == 'travel_time_oviedo' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }}"></i>
                                                 {% endif %}
                                             </a>
                                             <span class="text-muted mx-1">|</span>
 	                                            <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='travel_time_gijon', order='asc' if current_filters.sort_by == 'travel_time_gijon' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}"
-	                                               class="lands-th-link text-decoration-none" title="Sort by travel time to Gijón">
-	                                                GJ
+	                                               class="lands-th-link text-decoration-none" title="Sort by travel time to {{ ref_city_b.name if ref_city_b else 'City B' }}">
+	                                                {{ (ref_city_b.name[:2] if ref_city_b and ref_city_b.name else 'B')|upper }}
 	                                                {% if current_filters.sort_by == 'travel_time_gijon' %}
 	                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }}"></i>
 	                                                {% endif %}
@@ -515,7 +527,7 @@
                                             </td>
                                             <td style="min-width: 110px !important; white-space: nowrap !important;">
                                                 {% if land.travel_time_nearest_beach %}
-                                                    <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/{{ land.nearest_beach_name if land.nearest_beach_name else 'Playa' }},+Asturias,+Spain" 
+                                                    <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/{{ land.nearest_beach_name if land.nearest_beach_name else 'beach' }},+Spain" 
                                                        target="_blank" class="text-decoration-none text-info d-flex align-items-center" 
                                                        title="Drive to {{ land.nearest_beach_name if land.nearest_beach_name else 'nearest beach' }}">
                                                         <i class="fas fa-umbrella-beach me-1"></i>
@@ -532,19 +544,19 @@
                                                 {% if land.travel_time_oviedo or land.travel_time_gijon %}
                                                     <div class="d-flex flex-column small">
                                                         {% if land.travel_time_oviedo %}
-                                                            <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Oviedo,+Asturias,+Spain"
-                                                               target="_blank" class="text-decoration-none d-inline-flex align-items-center" title="Drive to Oviedo">
+                                                            <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/{% if ref_city_a %}{{ ref_city_a.lat }},{{ ref_city_a.lon }}{% else %}Spain{% endif %}"
+                                                               target="_blank" class="text-decoration-none d-inline-flex align-items-center" title="Drive to {{ ref_city_a.name if ref_city_a else 'City A' }}">
                                                                 <i class="fas fa-car me-1 text-primary"></i>
                                                                 <span class="fw-bold">{{ land.travel_time_oviedo }}min</span>
-                                                                <small class="text-muted ms-1">OV</small>
+                                                                <small class="text-muted ms-1">{{ (ref_city_a.name[:2] if ref_city_a and ref_city_a.name else 'A')|upper }}</small>
                                                             </a>
                                                         {% endif %}
                                                         {% if land.travel_time_gijon %}
-                                                            <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Gijón,+Asturias,+Spain"
-                                                               target="_blank" class="text-decoration-none d-inline-flex align-items-center" title="Drive to Gijón">
+                                                            <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/{% if ref_city_b %}{{ ref_city_b.lat }},{{ ref_city_b.lon }}{% else %}Spain{% endif %}"
+                                                               target="_blank" class="text-decoration-none d-inline-flex align-items-center" title="Drive to {{ ref_city_b.name if ref_city_b else 'City B' }}">
                                                                 <i class="fas fa-car me-1 text-primary"></i>
                                                                 <span class="fw-bold">{{ land.travel_time_gijon }}min</span>
-                                                                <small class="text-muted ms-1">GJ</small>
+                                                                <small class="text-muted ms-1">{{ (ref_city_b.name[:2] if ref_city_b and ref_city_b.name else 'B')|upper }}</small>
                                                             </a>
                                                         {% endif %}
                                                     </div>
@@ -733,7 +745,7 @@
                                 <div class="row mb-3">
                                     {% if land.travel_time_nearest_beach %}
                                         <div class="col-12 mb-2">
-                                            <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/{{ land.nearest_beach_name if land.nearest_beach_name else 'Playa' }},+Asturias,+Spain" 
+                                            <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/{{ land.nearest_beach_name if land.nearest_beach_name else 'beach' }},+Spain" 
                                                target="_blank" class="text-decoration-none d-flex align-items-center">
                                                 <i class="fas fa-umbrella-beach me-2 text-info"></i>
                                                 <span class="fw-bold">{{ land.travel_time_nearest_beach }}min</span>
@@ -745,19 +757,19 @@
                                     <div class="col-12">
                                         <div class="d-flex flex-wrap gap-3">
                                             {% if land.travel_time_oviedo %}
-                                                <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Oviedo,+Asturias,+Spain" 
+                                                <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/{% if ref_city_a %}{{ ref_city_a.lat }},{{ ref_city_a.lon }}{% else %}Spain{% endif %}" 
                                                    target="_blank" class="text-decoration-none">
                                                     <i class="fas fa-car me-1 text-primary"></i>
                                                     <span class="fw-bold">{{ land.travel_time_oviedo }}min</span>
-                                                    <small class="text-muted">OV</small>
+                                                    <small class="text-muted">{{ (ref_city_a.name[:2] if ref_city_a and ref_city_a.name else 'A')|upper }}</small>
                                                 </a>
                                             {% endif %}
                                             {% if land.travel_time_gijon %}
-                                                <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/Gijón,+Asturias,+Spain" 
+                                                <a href="https://www.google.com/maps/dir/{{ land.location_lat }},{{ land.location_lon }}/{% if ref_city_b %}{{ ref_city_b.lat }},{{ ref_city_b.lon }}{% else %}Spain{% endif %}" 
                                                    target="_blank" class="text-decoration-none">
                                                     <i class="fas fa-car me-1 text-primary"></i>
                                                     <span class="fw-bold">{{ land.travel_time_gijon }}min</span>
-                                                    <small class="text-muted">GJ</small>
+                                                    <small class="text-muted">{{ (ref_city_b.name[:2] if ref_city_b and ref_city_b.name else 'B')|upper }}</small>
                                                 </a>
                                             {% endif %}
                                         </div>

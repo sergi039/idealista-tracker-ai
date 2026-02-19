@@ -12,6 +12,7 @@ from typing import Optional, Dict, List, Tuple
 
 from models import Land, LandHistory, SyncHistory
 from app import db
+from utils.http import request_with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,13 @@ class ListingStatusService:
             return 'error', None
 
         try:
-            response = self.session.get(url, timeout=15, allow_redirects=True)
+            response = request_with_retries(
+                self.session.get,
+                url,
+                timeout=15,
+                allow_redirects=True,
+                logger=logger,
+            )
 
             # Check for 404
             if response.status_code == 404:

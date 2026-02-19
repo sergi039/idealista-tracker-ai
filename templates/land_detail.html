@@ -5,6 +5,15 @@
 {% block content %}
 <div class="row">
     <div class="col-12 mb-4">
+        <div class="alert alert-warning d-flex align-items-start gap-2" role="alert">
+            <i class="fas fa-triangle-exclamation mt-1"></i>
+            <div>
+                <div class="fw-semibold">Legacy page (lands)</div>
+                <div class="small">
+                    This detail view belongs to the legacy land model and is kept for migration. Use the universal <a class="alert-link" href="{{ url_for('main.properties') }}">Properties</a> pages for new work.
+                </div>
+            </div>
+        </div>
         <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
             <div class="d-flex align-items-start gap-3">
                 <button class="btn btn-outline-secondary btn-sm rounded-circle favorite-btn-header"
@@ -1324,7 +1333,7 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <form method="POST" action="{{ url_for('main.update_score', land_id=land.id) }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                 <div class="modal-header">
                     <h5 class="modal-title" id="editScoreModalLabel">Edit Score</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
@@ -1425,6 +1434,7 @@ async function checkListingStatus(landId) {
     const originalContent = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Checking...';
+    let queued = false;
 
     try {
         const response = await fetch(`/api/land/${landId}/check-status`, {
@@ -1434,9 +1444,40 @@ async function checkListingStatus(landId) {
             }
         });
 
-        const data = await response.json();
+        const data = await response.json().catch(() => null);
 
-        if (data.success) {
+        if (response.status === 202 && data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
+            queued = true;
+            btn.innerHTML = '<i class="fas fa-clock me-1"></i>Queued';
+            IdealistaApp.pollJob(data.job_id, {
+                onSuccess: (job) => {
+                    const result = job && job.result ? job.result : {};
+                    if (result.success) {
+                        if (result.changed) {
+                            window.location.reload();
+                            return;
+                        }
+                        btn.innerHTML = '<i class="fas fa-check me-1"></i>No Change';
+                    } else {
+                        btn.innerHTML = '<i class="fas fa-exclamation-triangle me-1"></i>Error';
+                    }
+                    setTimeout(() => {
+                        btn.innerHTML = originalContent;
+                        btn.disabled = false;
+                    }, 2000);
+                },
+                onError: () => {
+                    btn.innerHTML = '<i class="fas fa-exclamation-triangle me-1"></i>Error';
+                    setTimeout(() => {
+                        btn.innerHTML = originalContent;
+                        btn.disabled = false;
+                    }, 2000);
+                }
+            });
+            return;
+        }
+
+        if (data && data.success) {
             if (data.changed) {
                 // Status changed, reload page to show new status
                 window.location.reload();
@@ -1461,6 +1502,11 @@ async function checkListingStatus(landId) {
             btn.innerHTML = originalContent;
             btn.disabled = false;
         }, 2000);
+    } finally {
+        if (!queued && btn.disabled && btn.innerHTML.includes('Checking')) {
+            btn.innerHTML = originalContent;
+            btn.disabled = false;
+        }
     }
 }
 
@@ -1945,6 +1991,15 @@ function runClaudeAnalysis(landId) {
     const target = document.getElementById(targetId);
     const previousHtml = target ? target.innerHTML : '';
 
+    let queued = false;
+
+    const restoreButton = () => {
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = originalContent;
+        }
+    };
+
     if (button) {
         button.disabled = true;
         button.innerHTML = `<i class="fas fa-spinner fa-spin me-2"></i>Analyzing…`;
@@ -1967,38 +2022,67 @@ function runClaudeAnalysis(landId) {
 
     const requestBody = {};
 
+    const applyAnalysis = (analysis) => {
+        window.__EXISTING_CLAUDE_ANALYSIS__ = analysis;
+        if (target) {
+            target.innerHTML = renderStructuredAIAnalysis(_normalizeAnalysisData(analysis));
+        }
+        if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
+            window.IdealistaApp.showNotification('Claude analysis generated', 'success', 3000);
+        }
+        refreshAiComparison();
+    };
+
+    const handleFailure = (message) => {
+        if (target) target.innerHTML = previousHtml;
+        showTransientAlert(alertsId, 'warning', message || `Claude is busy. Try again in 20 seconds.`, 4500);
+    };
+
     fetch(`/api/analyze/property/${landId}/structured`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody)
     })
-    .then(r => r.json())
-    .then(data => {
-        if (!data.success) {
-            if (target) target.innerHTML = previousHtml;
-            showTransientAlert(alertsId, 'warning', `Claude is busy. Try again in 20 seconds.`, 4500);
+    .then(r => r.json().then(data => ({ ok: r.ok, status: r.status, data })))
+    .then(({ ok, status, data }) => {
+        if (status === 202 && data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
+            queued = true;
+            if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
+                window.IdealistaApp.showNotification(data.message || 'Claude analysis queued', 'info', 3000);
+            }
+            IdealistaApp.pollJob(data.job_id, {
+                onSuccess: (job) => {
+                    const result = job && job.result ? job.result : {};
+                    if (result.success) {
+                        applyAnalysis(result.analysis);
+                    } else {
+                        handleFailure(result.error || 'Claude analysis failed');
+                    }
+                    queued = false;
+                    restoreButton();
+                },
+                onError: (job) => {
+                    handleFailure((job && job.error) ? job.error : 'Claude analysis failed');
+                    queued = false;
+                    restoreButton();
+                }
+            });
             return;
         }
 
-        window.__EXISTING_CLAUDE_ANALYSIS__ = data.analysis;
-
-        if (target) {
-            target.innerHTML = renderStructuredAIAnalysis(_normalizeAnalysisData(data.analysis));
-        }
-        if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
-            window.IdealistaApp.showNotification('Claude analysis generated', 'success', 3000);
+        if (!ok || !data || data.success !== true) {
+            handleFailure('Claude is busy. Try again in 20 seconds.');
+            return;
         }
 
-        refreshAiComparison();
+        applyAnalysis(data.analysis);
     })
-    .catch(err => {
-        if (target) target.innerHTML = previousHtml;
-        showTransientAlert(alertsId, 'warning', `Claude request failed. Try again in 20 seconds.`, 4500);
+    .catch(() => {
+        handleFailure('Claude request failed. Try again in 20 seconds.');
     })
     .finally(() => {
-        if (button) {
-            button.disabled = false;
-            button.innerHTML = originalContent;
+        if (!queued) {
+            restoreButton();
         }
     });
 }
@@ -2223,6 +2307,15 @@ async function generateChatGPTAnalysis() {
             `;
         }
 
+        let queued = false;
+
+        const restoreButton = () => {
+            if (btn && !btn.innerHTML.includes('Try again in')) {
+                btn.disabled = false;
+                btn.innerHTML = `<i class="fas fa-wand-magic-sparkles me-1"></i>Run ChatGPT`;
+            }
+        };
+
         if (btn) {
             btn.disabled = true;
             btn.innerHTML = `<i class="fas fa-spinner fa-spin me-2"></i>Analyzing…`;
@@ -2233,42 +2326,76 @@ async function generateChatGPTAnalysis() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ force: true })
         });
-        const data = await resp.json();
-        if (!data.success) {
+        const data = await resp.json().catch(() => null);
+
+        const applyAnalysis = (analysis) => {
+            window.__EXISTING_OPENAI_ANALYSIS__ = analysis;
+            if (target) {
+                target.innerHTML = renderStructuredAIAnalysis(_normalizeAnalysisData(analysis));
+            }
             if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
-                window.IdealistaApp.showNotification(data.error || 'Failed to generate ChatGPT analysis', 'error');
+                window.IdealistaApp.showNotification('ChatGPT analysis generated', 'success');
+            }
+            refreshAiComparison();
+        };
+
+        const handleFailure = (message, statusCode) => {
+            if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
+                window.IdealistaApp.showNotification(message || 'Failed to generate ChatGPT analysis', 'error');
             }
             if (target) target.innerHTML = previousHtml;
-            if (resp.status === 429) {
+            if (statusCode === 429) {
                 showTransientAlert(alertsId, 'warning', `Rate limit reached. Try again in 20 seconds.`, 4500);
                 cooldownButton(btn, 20);
             } else {
                 showTransientAlert(alertsId, 'warning', `ChatGPT failed. Try again in 20 seconds.`, 4500);
             }
+        };
+
+        if (resp.status === 202 && data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
+            queued = true;
+            if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
+                window.IdealistaApp.showNotification(data.message || 'ChatGPT analysis queued', 'info');
+            }
+            await new Promise((resolve, reject) => {
+                IdealistaApp.pollJob(data.job_id, {
+                    onSuccess: (job) => {
+                        const result = job && job.result ? job.result : {};
+                        if (result.success) {
+                            applyAnalysis(result.analysis);
+                            resolve();
+                        } else {
+                            handleFailure(result.error || 'Failed to generate ChatGPT analysis');
+                            resolve();
+                        }
+                        queued = false;
+                        restoreButton();
+                    },
+                    onError: (job) => {
+                        handleFailure((job && job.error) ? job.error : 'Failed to generate ChatGPT analysis');
+                        resolve();
+                        queued = false;
+                        restoreButton();
+                    }
+                });
+            });
             return;
         }
 
-        window.__EXISTING_OPENAI_ANALYSIS__ = data.analysis;
+        if (!data || data.success !== true) {
+            handleFailure((data && data.error) ? data.error : 'Failed to generate ChatGPT analysis', resp.status);
+            return;
+        }
 
-        if (target) {
-            target.innerHTML = renderStructuredAIAnalysis(_normalizeAnalysisData(data.analysis));
-        }
-        if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
-            window.IdealistaApp.showNotification('ChatGPT analysis generated', 'success');
-        }
-        refreshAiComparison();
+        applyAnalysis(data.analysis);
     } catch (e) {
         if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
             window.IdealistaApp.showNotification(`Failed to generate ChatGPT analysis: ${e}`, 'error');
         }
         showTransientAlert('ai-chatgpt-alerts', 'warning', `ChatGPT request failed. Try again in 20 seconds.`, 4500);
     } finally {
-        const btn = document.getElementById('ai-chatgpt-run-btn');
-        if (btn) {
-            if (!btn.innerHTML.includes('Try again in')) {
-                btn.disabled = false;
-                btn.innerHTML = `<i class="fas fa-wand-magic-sparkles me-1"></i>Run ChatGPT`;
-            }
+        if (!queued) {
+            restoreButton();
         }
     }
 }

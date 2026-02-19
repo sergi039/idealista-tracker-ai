@@ -3,55 +3,48 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: idealista-app
+    container_name: idealista-universal-app
     ports:
-      - "5001:5001"
+      # Use a different host port to avoid clobbering the legacy app
+      - "5050:5001"
     depends_on:
       db:
         condition: service_healthy
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql://${DB_USER:-idealista}:${DB_PASSWORD}@db:5432/${DB_NAME:-idealista}
-      # Development conveniences (disable in production)
-      - AUTO_CREATE_DB=true
-      - AUTO_START_SCHEDULER=true
+      - DATABASE_URL=postgresql://${DB_USER:-idealista}:${DB_PASSWORD}@db:5432/${DB_NAME:-idealista_universal}
     command: >
-      gunicorn --bind 0.0.0.0:5001 --workers 1 --threads 4 --reload main:app
+      gunicorn --bind 0.0.0.0:5001 --workers 1 --threads 4 main:app
     volumes:
-      # Mount code for development (comment out for production)
-      - .:/app
       # Persist last seen UID
       - ./data:/app/data
     restart: unless-stopped
     networks:
-      - idealista-network
+      - idealista-universal-network
 
   db:
     image: postgres:15-alpine
-    container_name: idealista-db
+    container_name: idealista-universal-db
     environment:
-      POSTGRES_DB: ${DB_NAME:-idealista}
+      POSTGRES_DB: ${DB_NAME:-idealista_universal}
       POSTGRES_USER: ${DB_USER:-idealista}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
-      - pgdata:/var/lib/postgresql/data
-    ports:
-      # Expose for debugging (remove in production)
-      - "5433:5432"
+      - pgdata_universal:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-idealista} -d ${DB_NAME:-idealista}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-idealista} -d ${DB_NAME:-idealista_universal}"]
       interval: 5s
       timeout: 5s
       retries: 5
     restart: unless-stopped
     networks:
-      - idealista-network
+      - idealista-universal-network
 
 volumes:
-  pgdata:
-    name: idealista-pgdata
+  pgdata_universal:
+    name: idealista-universal-pgdata
 
 networks:
-  idealista-network:
-    name: idealista-network
+  idealista-universal-network:
+    name: idealista-universal-network

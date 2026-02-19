@@ -38,19 +38,15 @@ TRANSLATIONS = {
         'loading': 'Loading',
         
         # Table headers
-        'score': 'SCORE',
         'title': 'TITLE',
         'coords': 'COORDS',
         'beach': 'BEACH',
         'travel': 'TRAVEL',
         'type': 'TYPE',
-        'added': 'ADDED',
         'actions': 'ACTIONS',
         'municipality': 'Municipality',
         'land_type': 'Land Type',
         'legal_status': 'Legal Status',
-        'price': 'Price',
-        'area': 'Area',
         'score': 'Score',
         'view_details': 'View Details',
         'clear_filters': 'Clear Filters',
@@ -103,7 +99,6 @@ TRANSLATIONS = {
         'weight': 'Weight',
         
         # Messages
-        'loading': 'Loading...',
         'running_gmail_ingestion': 'Running Gmail ingestion...',
         'enrichment_in_progress': 'Enrichment in progress...',
         'analysis_complete': 'Analysis complete',
@@ -152,19 +147,15 @@ TRANSLATIONS = {
         'loading': 'Cargando',
         
         # Table headers
-        'score': 'PUNTUACIÓN',
         'title': 'TÍTULO',
         'coords': 'COORDENADAS',
         'beach': 'PLAYA',
         'travel': 'VIAJE',
         'type': 'TIPO',
-        'added': 'AGREGADO',
         'actions': 'ACCIONES',
         'municipality': 'Municipio',
         'land_type': 'Tipo de Terreno',
         'legal_status': 'Estado Legal',
-        'price': 'Precio',
-        'area': 'Área',
         'score': 'Puntuación',
         'view_details': 'Ver Detalles',
         'clear_filters': 'Limpiar Filtros',
@@ -217,7 +208,6 @@ TRANSLATIONS = {
         'weight': 'Peso',
         
         # Messages
-        'loading': 'Cargando...',
         'running_gmail_ingestion': 'Ejecutando ingesta de Gmail...',
         'enrichment_in_progress': 'Enriquecimiento en progreso...',
         'analysis_complete': 'Análisis completado',

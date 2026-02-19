@@ -647,10 +647,10 @@ class IMAPService:
             
         except Exception as e:
             logger.error("IMAP ingestion failed", exc_info=True)
-            
+
             # Update sync history with error
             sync_history.status = 'failed'
-            sync_history.error_message = str(e)
+            sync_history.error_message = 'IMAP ingestion failed'
             sync_history.completed_at = datetime.now(timezone.utc)
             sync_history.sync_duration = int((datetime.now(timezone.utc) - start_time).total_seconds())
             db.session.commit()

@@ -38,13 +38,13 @@ def test_land(app):
     with app.app_context():
         land = Land(
             source_email_id='market_test_1',
-            title='Test Land in Gijón',
-            municipality='Gijón',
+            title='Test Land in Madrid',
+            municipality='Madrid',
             land_type='developed',
             price=Decimal('65000.00'),
             area=Decimal('800.00'),
-            location_lat=Decimal('43.5322'),
-            location_lon=Decimal('-5.6611'),
+            location_lat=Decimal('40.4168'),
+            location_lon=Decimal('-3.7038'),
             infrastructure_basic={
                 'electricity': True,
                 'water': True,
@@ -79,7 +79,7 @@ class TestMarketAnalysisService:
         assert premium['max'] == 2200
 
     def test_purchase_costs_ratio(self, market_service):
-        """Test that purchase costs ratio is 10% (Asturias ITP 8% + notary/registry ~2%)"""
+        """Test that purchase costs ratio is 10% (default assumption)"""
         assert market_service.PURCHASE_COSTS_RATIO == 0.10
 
     def test_rental_adjustments_exist(self, market_service):
@@ -101,7 +101,7 @@ class TestMarketAnalysisService:
             assert 'purchase_costs' in result
             assert 'land_price_with_costs' in result
 
-            # Purchase costs should be 10% of land price (Asturias)
+            # Purchase costs should be 10% of land price (default)
             expected_purchase_costs = float(land.price) * 0.10
             assert abs(result['purchase_costs'] - expected_purchase_costs) < 1
 
@@ -153,7 +153,7 @@ class TestMarketAnalysisService:
             assert 'total_deductions' in assumptions
 
     def test_urban_location_detection(self, app, market_service, test_land):
-        """Test that Gijón is detected as urban location"""
+        """Test that a reference city is detected as urban location"""
         with app.app_context():
             land = db.session.get(Land, test_land)
             construction = market_service.calculate_construction_value(land)
@@ -192,7 +192,7 @@ class TestMarketAnalysisService:
             result = market_service.calculate_construction_value(land)
 
             land_price = float(land.price)
-            purchase_costs = land_price * 0.10  # Asturias rate
+            purchase_costs = land_price * 0.10  # default rate
             construction_avg = result['average_value']
 
             expected_total = land_price + purchase_costs + construction_avg

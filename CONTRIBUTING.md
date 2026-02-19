@@ -27,7 +27,7 @@ pip install -r requirements.txt
 ```bash
 export SESSION_SECRET="your-dev-session-key"
 export DATABASE_URL="postgresql://user:pass@localhost/dbname"
-export DEV_MODE="true"  # Bypasses admin auth for development
+export DEV_MODE="true"  # Enables dev logging and convenience defaults
 ```
 
 4. **Initialize the database**

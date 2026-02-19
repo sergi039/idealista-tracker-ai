@@ -26,6 +26,7 @@ limiter = Limiter(
     default_limits=[],  # No global default; limits applied per-endpoint
 )
 
+
 def _validate_config(app_config):
     """Fail-fast validation of critical configuration at startup.
 

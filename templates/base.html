@@ -69,32 +69,43 @@
             <a class="navbar-brand" href="{{ url_for('main.index') }}">
                 <i class="fas fa-map-marked-alt me-2"></i>
                 {{ t('app_title') }}
+                <span class="badge text-bg-secondary ms-2" title="Host/port">{{ request.host }}</span>
             </a>
             
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
             </button>
             
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav me-auto">
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('main.lands') }}">
-                            <i class="fas fa-list me-1"></i>{{ t('properties') }}
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('main.map_view') }}">
-                            <i class="fas fa-map me-1"></i>Map
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('main.criteria') }}">
-                            <i class="fas fa-sliders-h me-1"></i>{{ t('scoring_criteria') }}
-                        </a>
-                    </li>
-                </ul>
-                
-                <ul class="navbar-nav">
+	            <div class="collapse navbar-collapse" id="navbarNav">
+	                <ul class="navbar-nav me-auto">
+	                    <li class="nav-item">
+	                        <a class="nav-link" href="{{ url_for('main.properties') }}">
+	                            <i class="fas fa-list me-1"></i>{{ t('properties') }}
+	                        </a>
+	                    </li>
+	                    <li class="nav-item">
+	                        <a class="nav-link" href="{{ url_for('main.profiles') }}">
+	                            <i class="fas fa-layer-group me-1"></i>Profiles
+	                        </a>
+	                    </li>
+	                    <li class="nav-item">
+	                        <a class="nav-link" href="{{ url_for('main.map_view') }}">
+	                            <i class="fas fa-map me-1"></i>Map
+	                        </a>
+	                    </li>
+	                    <li class="nav-item">
+	                        <a class="nav-link" href="{{ url_for('main.criteria') }}">
+	                            <i class="fas fa-sliders-h me-1"></i>{{ t('scoring_criteria') }}
+	                        </a>
+	                    </li>
+	                    <li class="nav-item">
+	                        <a class="nav-link" href="{{ url_for('main.property_settings') }}">
+	                            <i class="fas fa-gear me-1"></i>Settings
+	                        </a>
+	                    </li>
+	                </ul>
+	                
+	                <ul class="navbar-nav">
                     {% block nav_primary_action %}
                     <li class="nav-item me-2">
                         <button class="btn btn-outline-primary btn-sm"

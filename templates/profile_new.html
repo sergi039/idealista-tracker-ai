@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}New Profile{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <div>
+        <h2 class="mb-1">New profile</h2>
+        <div class="text-body-secondary small">Create a separate configuration per saved search (no mixing)</div>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('main.profiles') }}">
+            <i class="fas fa-arrow-left me-1"></i>Back
+        </a>
+    </div>
+</div>
+
+{% if not is_admin %}
+<div class="alert alert-warning">
+    Admin authentication is required to create profiles. Configure <code>ADMIN_API_TOKEN</code>.
+</div>
+{% endif %}
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <form method="POST" class="row g-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <div class="col-12 col-md-6">
+                <label class="form-label">Name</label>
+                <input class="form-control" name="name" maxlength="120" placeholder="e.g. Junio" required>
+                <div class="form-text">
+                    Should match the Idealista saved-search name embedded in alert emails (usually the part after “Search …”).
+                </div>
+            </div>
+
+            <div class="col-12">
+                <label class="form-label">Description (optional)</label>
+                <textarea class="form-control" name="description" rows="3" maxlength="2000" placeholder="Client / area / notes..."></textarea>
+            </div>
+
+            <div class="col-12 d-flex gap-4 flex-wrap">
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="is_active" name="is_active" checked>
+                    <label class="form-check-label" for="is_active">Active</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="is_default" name="is_default">
+                    <label class="form-check-label" for="is_default">Make default (fallback routing)</label>
+                </div>
+            </div>
+
+            <div class="col-12 d-flex gap-2">
+                <button class="btn btn-primary" type="submit" {% if not is_admin %}disabled{% endif %}>
+                    Create profile
+                </button>
+                <a class="btn btn-outline-secondary" href="{{ url_for('main.profiles') }}">Cancel</a>
+            </div>
+
+            <div class="col-12">
+                <div class="form-text">
+                    After creating, configure travel presets/targets in the profile editor.
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

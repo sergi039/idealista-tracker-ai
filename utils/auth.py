@@ -106,5 +106,3 @@ def login_admin(token):
 def logout_admin():
     """Clear admin session."""
     session.pop('admin_authenticated', None)
-
-

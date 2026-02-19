@@ -1,21 +1,20 @@
 """
-TEST-03: Tests for Phase C (P1 ops/data) fixes.
+TEST-03: Tests for Phase C (P1 ops/data) fixes — ported to Universal.
 
 Covers:
   DATA-01 - Timezone-aware datetimes (no more utcnow())
-  DATA-02 - CHECK constraints on Land model
+  DATA-02 - CHECK constraints on Land AND Property models
   OPS-01  - Config validation at startup
   OPS-02  - Enhanced /healthz with DB ping
 """
 
-import os
 import pytest
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import patch
 
 from app import create_app, db, _validate_config
-from models import Land, _utcnow
+from models import Land, Property, utcnow
 from tests import setup_test_environment
 
 
@@ -44,8 +43,8 @@ class TestTimezoneAwareDatetimes:
     """All generated datetimes must be timezone-aware (UTC)."""
 
     def test_utcnow_helper_is_aware(self):
-        """The _utcnow() model helper must return a timezone-aware datetime."""
-        dt = _utcnow()
+        """The utcnow() model helper must return a timezone-aware datetime."""
+        dt = utcnow()
         assert dt.tzinfo is not None
         assert dt.tzinfo == timezone.utc
 
@@ -56,19 +55,27 @@ class TestTimezoneAwareDatetimes:
             db.session.add(land)
             db.session.commit()
             assert land.created_at is not None
-            # SQLite may strip tzinfo, so check the model default directly
-            dt = _utcnow()
+            dt = utcnow()
+            assert dt.tzinfo is not None
+
+    def test_property_created_at_is_aware(self, app):
+        """Property.created_at default must produce timezone-aware datetime."""
+        with app.app_context():
+            prop = Property(source_email_id='tz_test_prop_1', title='TZ Prop Test')
+            db.session.add(prop)
+            db.session.commit()
+            assert prop.created_at is not None
+            dt = utcnow()
             assert dt.tzinfo is not None
 
 
 # ---------------------------------------------------------------------------
-# DATA-02: CHECK constraints
+# DATA-02: CHECK constraints on Land model
 # ---------------------------------------------------------------------------
-class TestCheckConstraints:
-    """CHECK constraints must reject invalid data."""
+class TestLandCheckConstraints:
+    """CHECK constraints on Land must reject invalid data."""
 
     def test_negative_price_rejected(self, app):
-        """Negative price must violate CHECK constraint."""
         with app.app_context():
             land = Land(
                 source_email_id='ck_price_neg',
@@ -81,7 +88,6 @@ class TestCheckConstraints:
             db.session.rollback()
 
     def test_zero_price_allowed(self, app):
-        """Zero price is valid (free land exists in edge cases)."""
         with app.app_context():
             land = Land(
                 source_email_id='ck_price_zero',
@@ -93,7 +99,6 @@ class TestCheckConstraints:
             assert land.id is not None
 
     def test_null_price_allowed(self, app):
-        """NULL price is valid (price unknown)."""
         with app.app_context():
             land = Land(
                 source_email_id='ck_price_null',
@@ -105,7 +110,6 @@ class TestCheckConstraints:
             assert land.id is not None
 
     def test_invalid_latitude_rejected(self, app):
-        """Latitude outside [-90, 90] must be rejected."""
         with app.app_context():
             land = Land(
                 source_email_id='ck_lat_bad',
@@ -118,7 +122,6 @@ class TestCheckConstraints:
             db.session.rollback()
 
     def test_invalid_longitude_rejected(self, app):
-        """Longitude outside [-180, 180] must be rejected."""
         with app.app_context():
             land = Land(
                 source_email_id='ck_lon_bad',
@@ -131,7 +134,6 @@ class TestCheckConstraints:
             db.session.rollback()
 
     def test_score_over_100_rejected(self, app):
-        """score_total > 100 must be rejected."""
         with app.app_context():
             land = Land(
                 source_email_id='ck_score_bad',
@@ -144,7 +146,6 @@ class TestCheckConstraints:
             db.session.rollback()
 
     def test_negative_travel_time_rejected(self, app):
-        """Negative travel time must be rejected."""
         with app.app_context():
             land = Land(
                 source_email_id='ck_tt_neg',
@@ -157,7 +158,6 @@ class TestCheckConstraints:
             db.session.rollback()
 
     def test_invalid_listing_status_rejected(self, app):
-        """Arbitrary listing_status string must be rejected."""
         with app.app_context():
             land = Land(
                 source_email_id='ck_status_bad',
@@ -170,7 +170,6 @@ class TestCheckConstraints:
             db.session.rollback()
 
     def test_valid_listing_statuses_accepted(self, app):
-        """All four valid listing_status values must be accepted."""
         with app.app_context():
             for i, status in enumerate(('active', 'removed', 'sold', 'unknown')):
                 land = Land(
@@ -184,13 +183,137 @@ class TestCheckConstraints:
 
 
 # ---------------------------------------------------------------------------
+# DATA-02b: CHECK constraints on Property model (Universal-specific)
+# ---------------------------------------------------------------------------
+class TestPropertyCheckConstraints:
+    """CHECK constraints on Property must reject invalid data."""
+
+    def test_negative_price_rejected(self, app):
+        with app.app_context():
+            prop = Property(
+                source_email_id='ck_prop_price_neg',
+                title='Neg Price Prop',
+                price=Decimal('-500.00'),
+            )
+            db.session.add(prop)
+            with pytest.raises(Exception):
+                db.session.commit()
+            db.session.rollback()
+
+    def test_zero_price_allowed(self, app):
+        with app.app_context():
+            prop = Property(
+                source_email_id='ck_prop_price_zero',
+                title='Free Prop',
+                price=Decimal('0.00'),
+            )
+            db.session.add(prop)
+            db.session.commit()
+            assert prop.id is not None
+
+    def test_null_price_allowed(self, app):
+        with app.app_context():
+            prop = Property(
+                source_email_id='ck_prop_price_null',
+                title='No Price Prop',
+                price=None,
+            )
+            db.session.add(prop)
+            db.session.commit()
+            assert prop.id is not None
+
+    def test_negative_area_rejected(self, app):
+        with app.app_context():
+            prop = Property(
+                source_email_id='ck_prop_area_neg',
+                title='Neg Area Prop',
+                area=Decimal('-50.00'),
+            )
+            db.session.add(prop)
+            with pytest.raises(Exception):
+                db.session.commit()
+            db.session.rollback()
+
+    def test_invalid_latitude_rejected(self, app):
+        with app.app_context():
+            prop = Property(
+                source_email_id='ck_prop_lat_bad',
+                title='Bad Lat Prop',
+                location_lat=Decimal('91.0'),
+            )
+            db.session.add(prop)
+            with pytest.raises(Exception):
+                db.session.commit()
+            db.session.rollback()
+
+    def test_invalid_longitude_rejected(self, app):
+        with app.app_context():
+            prop = Property(
+                source_email_id='ck_prop_lon_bad',
+                title='Bad Lon Prop',
+                location_lon=Decimal('-181.0'),
+            )
+            db.session.add(prop)
+            with pytest.raises(Exception):
+                db.session.commit()
+            db.session.rollback()
+
+    def test_score_over_100_rejected(self, app):
+        with app.app_context():
+            prop = Property(
+                source_email_id='ck_prop_score_bad',
+                title='Bad Score Prop',
+                score_total=Decimal('101.00'),
+            )
+            db.session.add(prop)
+            with pytest.raises(Exception):
+                db.session.commit()
+            db.session.rollback()
+
+    def test_investment_score_negative_rejected(self, app):
+        with app.app_context():
+            prop = Property(
+                source_email_id='ck_prop_inv_neg',
+                title='Neg Inv Score',
+                score_investment=Decimal('-1.00'),
+            )
+            db.session.add(prop)
+            with pytest.raises(Exception):
+                db.session.commit()
+            db.session.rollback()
+
+    def test_invalid_listing_status_rejected(self, app):
+        with app.app_context():
+            prop = Property(
+                source_email_id='ck_prop_status_bad',
+                title='Bad Status Prop',
+                listing_status='invalid_status',
+            )
+            db.session.add(prop)
+            with pytest.raises(Exception):
+                db.session.commit()
+            db.session.rollback()
+
+    def test_valid_listing_statuses_accepted(self, app):
+        with app.app_context():
+            for i, status in enumerate(('active', 'removed', 'sold', 'unknown')):
+                prop = Property(
+                    source_email_id=f'ck_prop_status_ok_{i}',
+                    title=f'Prop Status {status}',
+                    listing_status=status,
+                )
+                db.session.add(prop)
+            db.session.commit()
+            assert Property.query.count() == 4
+
+
+# ---------------------------------------------------------------------------
 # OPS-01: Config validation
 # ---------------------------------------------------------------------------
 class TestConfigValidation:
     """_validate_config must fail fast on invalid config."""
 
     def test_missing_database_url_raises(self):
-        """Missing DATABASE_URL must raise ValueError."""
         config = {
             'TESTING': False,
             'DATABASE_URL': None,
@@ -200,7 +323,6 @@ class TestConfigValidation:
             _validate_config(config)
 
     def test_invalid_database_scheme_raises(self):
-        """Non-PostgreSQL/SQLite DATABASE_URL must raise."""
         config = {
             'TESTING': False,
             'DATABASE_URL': 'mysql://user:pass@host/db',
@@ -209,25 +331,20 @@ class TestConfigValidation:
             _validate_config(config)
 
     def test_valid_postgresql_url_passes(self):
-        """Valid PostgreSQL DATABASE_URL must pass."""
         config = {
             'TESTING': False,
             'DATABASE_URL': 'postgresql://user:pass@host:5432/db',
         }
-        # Should not raise
         _validate_config(config)
 
     def test_testing_mode_skips_validation(self):
-        """TESTING=True must skip all validation."""
         config = {
             'TESTING': True,
             'DATABASE_URL': None,
         }
-        # Should not raise
         _validate_config(config)
 
     def test_bad_scoring_weights_raises(self):
-        """Scoring profile weights that don't sum to ~1.0 must raise."""
         config = {
             'TESTING': False,
             'DATABASE_URL': 'postgresql://user:pass@host:5432/db',
@@ -251,7 +368,6 @@ class TestHealthzEndpoint:
     """Enhanced /healthz must report dependency status."""
 
     def test_healthz_returns_checks(self, client):
-        """Response must include 'checks' dict with 'database' key."""
         resp = client.get('/api/healthz')
         assert resp.status_code == 200
         data = resp.get_json()
@@ -260,13 +376,11 @@ class TestHealthzEndpoint:
         assert data['checks']['database'] == 'ok'
 
     def test_healthz_reports_scheduler(self, client):
-        """Response must include scheduler status."""
         resp = client.get('/api/healthz')
         data = resp.get_json()
         assert 'scheduler' in data['checks']
 
     def test_healthz_503_on_db_failure(self, app):
-        """If DB is unreachable, healthz must return 503."""
         with app.test_client() as c:
             with patch.object(db.session, 'execute', side_effect=Exception('DB down')):
                 resp = c.get('/api/healthz')

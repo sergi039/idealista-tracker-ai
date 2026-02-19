@@ -76,6 +76,28 @@
     border-radius: 0.375rem;
 }
 
+/* Detail overview (header + stats) */
+.favorite-btn-header {
+    width: 40px;
+    height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.overview-label {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.overview-value {
+    font-weight: 600;
+    font-size: 1.05rem;
+    line-height: 1.2;
+    margin-top: 0.15rem;
+}
+
 /* Land row hover effect */
 .land-row {
     cursor: pointer;
@@ -143,6 +165,32 @@
 .table td {
     vertical-align: middle;
     border-bottom: 1px solid var(--bs-border-color);
+}
+
+/* Universal properties list table */
+.lands-table {
+    table-layout: fixed;
+    width: 100%;
+}
+
+.property-table-title {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.properties-travel-badges,
+.properties-type-badges {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.properties-travel-badges .badge,
+.properties-type-badges .badge {
+    font-size: 0.78rem;
+    padding: 0.25rem 0.45rem;
 }
 
 /* Card enhancements */

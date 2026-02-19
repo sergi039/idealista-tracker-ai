@@ -19,7 +19,6 @@ build/
 .idea/
 .vscode/
 .claude/
-CLAUDE.md
 *.swp
 *.swo
 *~

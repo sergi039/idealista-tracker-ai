@@ -7,7 +7,7 @@ import json
 from unittest.mock import Mock, patch
 from decimal import Decimal
 from app import create_app, db
-from models import Land, ScoringCriteria
+from models import Land, Property, PropertyAiAnalysisVariant, ScoringCriteria, SearchProfile
 from tests import setup_test_environment
 
 
@@ -99,7 +99,7 @@ class TestAPIHealthCheck:
 class TestManualIngestion:
     """Test manual ingestion endpoint"""
     
-    @patch('services.imap_service.IMAPService')
+    @patch('services.property_imap_service.PropertyIMAPService')
     def test_manual_ingestion_success(self, mock_imap_service, client):
         """Test successful manual ingestion"""
         # Mock IMAP service
@@ -114,8 +114,30 @@ class TestManualIngestion:
         assert data['success'] is True
         assert data['processed_count'] == 5
         assert 'Successfully processed' in data['message']
-    
-    @patch('services.imap_service.IMAPService')
+
+    @patch('utils.auth.check_admin_auth', return_value=False)
+    def test_manual_ingestion_full_requires_admin(self, mock_check_admin, client):
+        response = client.post('/api/ingest/email/run', json={'sync_type': 'full'})
+        assert response.status_code == 401
+        data = json.loads(response.data)
+        assert data['success'] is False
+
+    @patch('utils.auth.check_admin_auth', return_value=True)
+    @patch('services.property_imap_service.PropertyIMAPService')
+    def test_manual_ingestion_full_uses_run_full_sync(self, mock_imap_service, mock_check_admin, client):
+        mock_instance = Mock()
+        mock_imap_service.return_value = mock_instance
+        mock_instance.run_full_sync.return_value = 7
+
+        response = client.post('/api/ingest/email/run', json={'sync_type': 'full'})
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data['success'] is True
+        assert data['sync_type'] == 'full'
+        assert data['processed_count'] == 7
+        mock_instance.run_full_sync.assert_called_once()
+
+    @patch('services.property_imap_service.PropertyIMAPService')
     def test_manual_ingestion_failure(self, mock_imap_service, client):
         """Test manual ingestion failure"""
         # Mock IMAP service to raise exception
@@ -128,8 +150,238 @@ class TestManualIngestion:
         assert response.status_code == 500
         data = json.loads(response.data)
         assert data['success'] is False
-        assert 'error' in data  # Generic safe error message, no internal details leaked
 
+
+class TestPropertyFavorites:
+    def test_toggle_property_favorite(self, client, app):
+        with app.app_context():
+            prop = Property(
+                source_email_id="fav_prop_1",
+                title="Test Property",
+                municipality="Madrid",
+            )
+            db.session.add(prop)
+            db.session.commit()
+            prop_id = prop.id
+
+        response = client.post(f"/api/property/{prop_id}/favorite")
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["success"] is True
+        assert data["is_favorite"] is True
+
+        response2 = client.post(f"/api/property/{prop_id}/favorite")
+        assert response2.status_code == 200
+        data2 = json.loads(response2.data)
+        assert data2["success"] is True
+        assert data2["is_favorite"] is False
+
+
+class TestPropertyStatus:
+    def test_set_property_status_success(self, client, app):
+        with app.app_context():
+            prop = Property(
+                source_email_id="status_prop_1",
+                title="Status Test Property",
+                municipality="Madrid",
+            )
+            db.session.add(prop)
+            db.session.commit()
+            prop_id = prop.id
+
+        response = client.post(f"/api/property/{prop_id}/set-status", json={"status": "removed"})
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["success"] is True
+        assert data["status"] == "removed"
+
+        with app.app_context():
+            refreshed = db.session.get(Property, prop_id)
+            assert refreshed is not None
+            assert refreshed.listing_status == "removed"
+            assert refreshed.listing_last_checked is not None
+            assert refreshed.listing_removed_date is not None
+
+        response2 = client.post(f"/api/property/{prop_id}/set-status", json={"status": "active"})
+        assert response2.status_code == 200
+        data2 = json.loads(response2.data)
+        assert data2["success"] is True
+        assert data2["status"] == "active"
+
+        with app.app_context():
+            refreshed2 = db.session.get(Property, prop_id)
+            assert refreshed2 is not None
+            assert refreshed2.listing_status == "active"
+            assert refreshed2.listing_removed_date is None
+
+    def test_set_property_status_invalid(self, client, app):
+        with app.app_context():
+            prop = Property(
+                source_email_id="status_prop_2",
+                title="Status Invalid Test Property",
+                municipality="Madrid",
+            )
+            db.session.add(prop)
+            db.session.commit()
+            prop_id = prop.id
+
+        response = client.post(f"/api/property/{prop_id}/set-status", json={"status": "bad_status"})
+        assert response.status_code == 400
+        data = json.loads(response.data)
+        assert data["success"] is False
+
+
+class TestPropertiesCSVExport:
+    def test_export_properties_csv(self, client, app):
+        with app.app_context():
+            from services.search_profile_service import SearchProfileService
+
+            profile = SearchProfileService.get_default_profile(create=True)
+            assert profile is not None
+            profile_id = profile.id
+
+            prop = Property(
+                source_email_id="csv_prop_1",
+                title="CSV Export Property",
+                municipality="Madrid",
+                search_profile_id=profile_id,
+            )
+            db.session.add(prop)
+            db.session.commit()
+            prop_id = prop.id
+
+        response = client.get(f"/properties/export.csv?profile_id={profile_id}")
+        assert response.status_code == 200
+        assert response.headers.get("Content-Type", "").startswith("text/csv")
+        assert "idealista_properties.csv" in response.headers.get("Content-Disposition", "")
+
+        csv_text = response.data.decode("utf-8", errors="ignore")
+        assert "ID,Profile ID,Title,URL" in csv_text
+        assert str(prop_id) in csv_text
+
+
+class TestPropertiesAPI:
+    def test_get_properties_defaults_to_default_profile(self, client, app):
+        with app.app_context():
+            from services.search_profile_service import SearchProfileService
+
+            default_profile = SearchProfileService.get_default_profile(create=True)
+            assert default_profile is not None
+            default_profile_id = default_profile.id
+
+            other_profile = SearchProfile(name="Other", is_active=True, is_default=False, travel_targets={"presets": {}, "custom": []})
+            db.session.add(other_profile)
+            db.session.commit()
+
+            p1 = Property(source_email_id="api_prop_1", title="A", municipality="Madrid", search_profile_id=default_profile.id)
+            p2 = Property(source_email_id="api_prop_2", title="B", municipality="Madrid", search_profile_id=other_profile.id)
+            db.session.add_all([p1, p2])
+            db.session.commit()
+
+        response = client.get("/api/properties")
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["success"] is True
+        assert data["count"] == 1
+        assert data["selected_profile_id"] == default_profile_id
+        assert data["properties"][0]["title"] == "A"
+
+    def test_get_properties_filter_and_hide_removed(self, client, app):
+        with app.app_context():
+            from services.search_profile_service import SearchProfileService
+
+            default_profile = SearchProfileService.get_default_profile(create=True)
+            assert default_profile is not None
+
+            active = Property(
+                source_email_id="api_prop_active",
+                title="Active Apartment",
+                municipality="Madrid",
+                search_profile_id=default_profile.id,
+                property_category="housing",
+                property_subtype="apartment",
+                listing_status="active",
+            )
+            removed = Property(
+                source_email_id="api_prop_removed",
+                title="Removed Apartment",
+                municipality="Madrid",
+                search_profile_id=default_profile.id,
+                property_category="housing",
+                property_subtype="apartment",
+                listing_status="removed",
+            )
+            db.session.add_all([active, removed])
+            db.session.commit()
+
+        # Default hides removed.
+        response = client.get("/api/properties?category=housing&subtype=apartment")
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["success"] is True
+        assert data["count"] == 1
+        assert data["properties"][0]["title"] == "Active Apartment"
+
+        # Disable hide_removed -> both appear.
+        response2 = client.get("/api/properties?category=housing&subtype=apartment&hide_removed=0")
+        assert response2.status_code == 200
+        data2 = json.loads(response2.data)
+        assert data2["success"] is True
+        assert data2["count"] == 2
+
+    def test_get_properties_filter_unclassified(self, client, app):
+        with app.app_context():
+            from services.search_profile_service import SearchProfileService
+
+            default_profile = SearchProfileService.get_default_profile(create=True)
+            assert default_profile is not None
+
+            unclassified = Property(
+                source_email_id="api_prop_unclassified",
+                title="Unclassified",
+                municipality="Madrid",
+                search_profile_id=default_profile.id,
+                property_category=None,
+                property_subtype=None,
+                listing_status="active",
+            )
+            classified = Property(
+                source_email_id="api_prop_classified",
+                title="Classified Apartment",
+                municipality="Madrid",
+                search_profile_id=default_profile.id,
+                property_category="housing",
+                property_subtype="apartment",
+                listing_status="active",
+            )
+            db.session.add_all([unclassified, classified])
+            db.session.commit()
+
+        response = client.get("/api/properties?category=__none__&hide_removed=0")
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["success"] is True
+        assert data["count"] == 1
+        assert data["properties"][0]["title"] == "Unclassified"
+
+    def test_get_property_detail(self, client, app):
+        with app.app_context():
+            from services.search_profile_service import SearchProfileService
+
+            profile = SearchProfileService.get_default_profile(create=True)
+            assert profile is not None
+
+            prop = Property(source_email_id="api_prop_detail_1", title="Detail", municipality="Madrid", search_profile_id=profile.id)
+            db.session.add(prop)
+            db.session.commit()
+            prop_id = prop.id
+
+        response = client.get(f"/api/properties/{prop_id}")
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data["success"] is True
+        assert data["property"]["id"] == prop_id
+        assert data["property"]["title"] == "Detail"
 
 class TestLandsAPI:
     """Test lands API endpoints"""
@@ -220,7 +472,7 @@ class TestLandDetailAPI:
         """Test getting land details with score breakdown"""
         # Add score breakdown to a land
         with client.application.app_context():
-            land = Land.query.get(test_lands[0])
+            land = db.session.get(Land, test_lands[0])
             land.environment = {
                 'score_breakdown': {
                     'infrastructure_basic': 85.0,
@@ -379,15 +631,17 @@ class TestSchedulerStatus:
     
     @patch('services.scheduler_service.get_scheduler_status')
     def test_scheduler_status_failure(self, mock_get_status, client):
-        """Test scheduler status with exception"""
+        """Test scheduler status with exception returns generic error (no leak)"""
         mock_get_status.side_effect = Exception("Scheduler error")
-        
+
         response = client.get('/api/scheduler/status')
-        
+
         assert response.status_code == 500
         data = json.loads(response.data)
         assert data['success'] is False
-        assert 'error' in data  # Generic safe error message, no internal details leaked
+        # Must NOT leak the actual exception message
+        assert 'Scheduler error' not in data['error']
+        assert 'error' in data
 
 
 class TestStatsAPI:
@@ -498,3 +752,115 @@ class TestAPIDataValidation:
             assert response.status_code == 400
             data = json.loads(response.data)
             assert data['success'] is False
+
+
+class TestUniversalPropertyAI:
+    @patch('services.property_ai_service.PropertyAIService.analyze_property_structured')
+    def test_property_ai_openai_does_not_overwrite_claude_field(self, mock_analyze, client, app):
+        with app.app_context():
+            prop = Property(source_email_id='prop_ai_openai_1', title='Test Property', municipality='Alicante')
+            prop.ai_analysis = {"provider": "claude", "note": "keep"}
+            db.session.add(prop)
+            db.session.commit()
+
+            mock_analyze.return_value = {
+                "status": "success",
+                "structured_analysis": {"provider": "openai", "ok": True},
+                "model": "gpt-test",
+            }
+
+            resp = client.post(f'/api/property/{prop.id}/analyze/structured', json={'provider': 'openai'})
+            assert resp.status_code == 200
+            data = json.loads(resp.data)
+            assert data['success'] is True
+            assert data['provider'] == 'openai'
+            assert mock_analyze.called is True
+            _, kwargs = mock_analyze.call_args
+            assert kwargs.get('provider') == 'openai'
+
+            updated = db.session.get(Property, prop.id)
+            assert updated.ai_analysis == {"provider": "claude", "note": "keep"}
+
+            variant = (
+                PropertyAiAnalysisVariant.query.filter_by(property_id=prop.id, provider='openai')
+                .order_by(PropertyAiAnalysisVariant.created_at.desc())
+                .first()
+            )
+            assert variant is not None
+            assert variant.analysis.get('provider') == 'openai'
+            assert variant.model == 'gpt-test'
+
+    @patch('services.property_ai_service.PropertyAIService.analyze_property_structured')
+    def test_property_ai_claude_updates_property_ai_analysis(self, mock_analyze, client, app):
+        with app.app_context():
+            prop = Property(source_email_id='prop_ai_claude_1', title='Test Property', municipality='Alicante')
+            db.session.add(prop)
+            db.session.commit()
+
+            mock_analyze.return_value = {
+                "status": "success",
+                "structured_analysis": {"provider": "claude", "ok": True},
+                "model": "claude-test",
+            }
+
+            resp = client.post(f'/api/property/{prop.id}/analyze/structured', json={'provider': 'claude'})
+            assert resp.status_code == 200
+            data = json.loads(resp.data)
+            assert data['success'] is True
+            assert data['provider'] == 'claude'
+            assert mock_analyze.called is True
+            _, kwargs = mock_analyze.call_args
+            assert kwargs.get('provider') == 'claude'
+
+            updated = db.session.get(Property, prop.id)
+            assert updated.ai_analysis.get('provider') == 'claude'
+
+            variant = (
+                PropertyAiAnalysisVariant.query.filter_by(property_id=prop.id, provider='claude')
+                .order_by(PropertyAiAnalysisVariant.created_at.desc())
+                .first()
+            )
+            assert variant is not None
+            assert variant.analysis.get('provider') == 'claude'
+            assert variant.model == 'claude-test'
+
+    def test_property_ai_compare_endpoint(self, client, app):
+        with app.app_context():
+            prop = Property(source_email_id='prop_ai_compare_1', title='Test Property', municipality='Alicante')
+            prop.ai_analysis = {"rental_market_analysis": {"investment_rating": "GOOD - Above average returns"}}
+            db.session.add(prop)
+            db.session.commit()
+
+            db.session.add(
+                PropertyAiAnalysisVariant(
+                    property_id=prop.id,
+                    provider='openai',
+                    model='gpt-test',
+                    analysis={"rental_market_analysis": {"investment_rating": "MODERATE - Standard market returns"}},
+                )
+            )
+            db.session.commit()
+
+            resp = client.get(f'/api/property/{prop.id}/analysis/compare')
+            assert resp.status_code == 200
+            data = json.loads(resp.data)
+            assert data['success'] is True
+            assert data['property_id'] == prop.id
+            assert data['has_chatgpt'] is True
+            assert data['chatgpt_model'] == 'gpt-test'
+            assert 'comparison' in data
+            assert 'claude' in data['comparison']
+            assert 'expected' in data['comparison']
+
+    @patch('services.property_enrichment_service.PropertyEnrichmentService.enrich_property', return_value=True)
+    def test_property_google_enrich_endpoint(self, mock_enrich, client, app):
+        with app.app_context():
+            prop = Property(source_email_id='prop_enrich_1', title='Test Property', municipality='Alicante')
+            db.session.add(prop)
+            db.session.commit()
+
+            resp = client.post(f'/api/property/{prop.id}/enrich', json={})
+            assert resp.status_code == 200
+            data = json.loads(resp.data)
+            assert data['success'] is True
+            assert 'enriched successfully' in data['message'].lower()

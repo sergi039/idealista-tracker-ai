@@ -15,7 +15,7 @@ def _norm(name: str) -> str:
     return " ".join((name or "").strip().lower().split())
 
 
-# Curated registry (Spain + Asturias focus; extend as needed)
+# Curated registry (Spain-first; extend as needed)
 _CITIES: List[City] = [
     City("Oviedo", 43.3614, -5.8593),
     City("Gijón", 43.5322, -5.6611),
@@ -81,4 +81,3 @@ def suggest(query: str, limit: int = 10) -> List[City]:
 
     contains = [c for c in _CITIES if q in _norm(c.name) and c not in starts]
     return (starts + contains)[:limit]
-

@@ -22,6 +22,10 @@ def _compose_database_url():
 class Config:
     DEV_MODE = os.environ.get('DEV_MODE', '').lower() == 'true'
 
+    # Browser/session isolation (important when running legacy + universal on localhost).
+    # Cookies do not isolate by port, so use a different cookie name than the legacy app.
+    SESSION_COOKIE_NAME = os.environ.get("SESSION_COOKIE_NAME") or "idealista_universal_session"
+
     # Email backend selection
     EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "imap").lower()  # 'imap' or 'gmail'
     
@@ -40,7 +44,8 @@ class Config:
     IMAP_SSL = (os.environ.get("IMAP_SSL") or "true").lower() == "true"
     IMAP_USER = os.environ.get("IMAP_USER")  # Required when using IMAP
     IMAP_PASSWORD = os.environ.get("IMAP_PASSWORD")  # Required when using IMAP
-    IMAP_FOLDER = os.environ.get("IMAP_FOLDER") or "Idealista"
+    # Default to a dedicated Gmail label to avoid clobbering the legacy build.
+    IMAP_FOLDER = os.environ.get("IMAP_FOLDER") or "IdealistaProperties"
     IMAP_SEARCH_QUERY = os.environ.get("IMAP_SEARCH_QUERY") or "ALL"
     MAX_EMAILS_PER_RUN = int(os.environ.get("MAX_EMAILS_PER_RUN") or "200")
     
@@ -49,7 +54,7 @@ class Config:
     GMAIL_CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID") 
     GMAIL_CLIENT_SECRET = os.environ.get("GMAIL_CLIENT_SECRET")
     GMAIL_REFRESH_TOKEN = os.environ.get("GMAIL_REFRESH_TOKEN")
-    GMAIL_LABEL = "Idealista"
+    GMAIL_LABEL = os.environ.get("GMAIL_LABEL") or "IdealistaProperties"
     
     # Google APIs - Required for production
     GOOGLE_MAPS_API_KEY = _first_env("GOOGLE_MAPS_API_KEY", "GOOGLE_MAPS_API", "Google_api")
@@ -65,6 +70,20 @@ class Config:
     # Feature flags
     AUTO_CREATE_DB = os.environ.get("AUTO_CREATE_DB", "true" if DEV_MODE else "false").lower() == "true"
     AUTO_START_SCHEDULER = os.environ.get("AUTO_START_SCHEDULER", "true" if DEV_MODE else "false").lower() == "true"
+    AUTO_TRAVEL_ENRICHMENT = os.environ.get("AUTO_TRAVEL_ENRICHMENT", "true").lower() == "true"
+    AUTO_PROPERTY_SCORING = os.environ.get("AUTO_PROPERTY_SCORING", "true").lower() == "true"
+    AUTO_PROFILE_ASSIGNMENT = os.environ.get("AUTO_PROFILE_ASSIGNMENT", "true").lower() == "true"
+
+    # Universal build is sale-first; rentals are excluded unless explicitly enabled.
+    SALE_ONLY = os.environ.get("SALE_ONLY", "true").lower() == "true"
+
+    # Optional: skip categories entirely during ingestion (comma-separated).
+    # Useful to keep legacy land tracker and universal properties tracker isolated without Gmail labels.
+    EXCLUDED_PROPERTY_CATEGORIES = {
+        part.strip().lower()
+        for part in (os.environ.get("EXCLUDED_PROPERTY_CATEGORIES") or "").split(",")
+        if part.strip()
+    }
     
     # Scheduler settings
     SCHEDULER_TIMEZONE = 'Europe/Madrid'  # CET timezone
@@ -78,6 +97,13 @@ class Config:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))
     LAST_SEEN_UID_PATH = os.environ.get("LAST_SEEN_UID_PATH", os.path.join(DATA_DIR, ".last_seen_uid"))
+    LAST_SEEN_UID_PROPERTIES_PATH = os.environ.get(
+        "LAST_SEEN_UID_PROPERTIES_PATH",
+        os.path.join(DATA_DIR, ".last_seen_uid_properties"),
+    )
+
+    # Ingestion target selector (legacy lands vs new universal properties)
+    INGESTION_TARGET = os.environ.get("INGESTION_TARGET", "properties").lower()
     
     # Professional scoring weights based on Spanish/European standards
     # Total must equal 1.0 (100%) - Updated to include Investment Yield

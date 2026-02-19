@@ -1,19 +1,16 @@
 """
-TEST-02: Tests for Phase B (P1 core) fixes.
+TEST-02: Tests for Phase B (P1 core) fixes — ported to Universal.
 
 Covers:
   COR-02/03 - Price parsing defensive coercion
   COR-04    - Score clamping [0, 100]
   COR-05    - Pagination boundary validation
-  REL-01    - HTTP retry with exponential backoff
-  REL-02/05 - Per-email transaction isolation (savepoint)
+  REL-01    - HTTP retry with exponential backoff (utils.http)
   REL-03    - Scheduler lock file cleanup
   REL-04    - Distance Matrix element validation
 """
 
 import os
-import json
-import time
 import fcntl
 import tempfile
 import pytest
@@ -83,7 +80,6 @@ class TestScoreClamping:
         with app.app_context():
             svc = ScoringService()
             land = db.session.get(Land, test_land)
-            # Patch individual scoring functions to return negative
             with patch.object(svc, '_score_location_quality', return_value=-50), \
                  patch.object(svc, '_score_environment', return_value=-30):
                 svc.calculate_score(land)
@@ -133,57 +129,74 @@ class TestPaginationBounds:
 
 
 # ---------------------------------------------------------------------------
-# REL-01: HTTP retry with exponential backoff
+# REL-01: HTTP retry with exponential backoff (Universal: utils.http)
 # ---------------------------------------------------------------------------
 class TestHttpRetry:
-    """request_with_retry must retry on transient errors and return None on exhaustion."""
+    """request_with_retries must retry on transient errors and raise on exhaustion."""
 
     def test_success_on_first_try(self):
-        from utils.http_retry import request_with_retry
+        from utils.http import request_with_retries
+        import requests
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        with patch('utils.http_retry.requests.request', return_value=mock_resp) as m:
-            result = request_with_retry('get', 'http://example.com', max_retries=2, backoff=0)
+        with patch.object(requests, 'get', return_value=mock_resp) as m:
+            result = request_with_retries(
+                requests.get, 'http://example.com',
+                max_attempts=2, backoff_base=0, backoff_max=0,
+            )
             assert result is mock_resp
             assert m.call_count == 1
 
     def test_retries_on_500(self):
-        from utils.http_retry import request_with_retry
+        from utils.http import request_with_retries
+        import requests
         fail_resp = MagicMock()
         fail_resp.status_code = 500
         ok_resp = MagicMock()
         ok_resp.status_code = 200
-        with patch('utils.http_retry.requests.request', side_effect=[fail_resp, ok_resp]) as m:
-            result = request_with_retry('get', 'http://example.com', max_retries=2, backoff=0)
+        with patch.object(requests, 'get', side_effect=[fail_resp, ok_resp]) as m:
+            result = request_with_retries(
+                requests.get, 'http://example.com',
+                max_attempts=2, backoff_base=0, backoff_max=0,
+            )
             assert result is ok_resp
             assert m.call_count == 2
 
     def test_retries_on_connection_error(self):
         import requests as req
-        from utils.http_retry import request_with_retry
+        from utils.http import request_with_retries
         ok_resp = MagicMock()
         ok_resp.status_code = 200
-        with patch('utils.http_retry.requests.request',
-                   side_effect=[req.ConnectionError('fail'), ok_resp]) as m:
-            result = request_with_retry('get', 'http://example.com', max_retries=2, backoff=0)
+        with patch.object(req, 'get', side_effect=[req.ConnectionError('fail'), ok_resp]) as m:
+            result = request_with_retries(
+                req.get, 'http://example.com',
+                max_attempts=2, backoff_base=0, backoff_max=0,
+            )
             assert result is ok_resp
             assert m.call_count == 2
 
-    def test_returns_none_on_exhausted_connection_errors(self):
+    def test_raises_on_exhausted_connection_errors(self):
+        """After max_attempts exhausted on network errors, should raise."""
         import requests as req
-        from utils.http_retry import request_with_retry
-        with patch('utils.http_retry.requests.request',
-                   side_effect=req.ConnectionError('fail')):
-            result = request_with_retry('get', 'http://example.com', max_retries=1, backoff=0)
-            assert result is None
+        from utils.http import request_with_retries
+        with patch.object(req, 'get', side_effect=req.ConnectionError('fail')):
+            with pytest.raises(req.ConnectionError):
+                request_with_retries(
+                    req.get, 'http://example.com',
+                    max_attempts=1, backoff_base=0, backoff_max=0,
+                )
 
     def test_returns_last_retriable_response_on_exhaustion(self):
-        from utils.http_retry import request_with_retry
+        """After max_attempts exhausted on 429, should return last response."""
+        from utils.http import request_with_retries
+        import requests
         fail_resp = MagicMock()
         fail_resp.status_code = 429
-        with patch('utils.http_retry.requests.request', return_value=fail_resp):
-            result = request_with_retry('get', 'http://example.com', max_retries=1, backoff=0)
-            # Should return the 429 response (not None)
+        with patch.object(requests, 'get', return_value=fail_resp):
+            result = request_with_retries(
+                requests.get, 'http://example.com',
+                max_attempts=1, backoff_base=0, backoff_max=0,
+            )
             assert result is fail_resp
             assert result.status_code == 429
 
@@ -198,12 +211,10 @@ class TestSchedulerLockCleanup:
         """If BackgroundScheduler() raises, the lock file must be cleaned up."""
         with app.app_context():
             from services import scheduler_service
-            # Reset globals
             scheduler_service.scheduler = None
             scheduler_service.scheduler_lock_file = None
 
-            lock_path = os.path.join(tempfile.gettempdir(), 'idealista_scheduler.lock')
-            # Clean up any leftover lock
+            lock_path = os.path.join(tempfile.gettempdir(), 'idealista_universal_scheduler.lock')
             try:
                 os.remove(lock_path)
             except OSError:
@@ -222,13 +233,11 @@ class TestSchedulerLockCleanup:
                         result = scheduler_service.init_scheduler(app)
                         assert result is None
 
-            # The lock file should have been cleaned up
             assert scheduler_service.scheduler_lock_file is None
 
     def test_lock_file_closed_on_contention(self, app):
         """When another instance holds the lock, the file handle must not leak."""
-        lock_path = os.path.join(tempfile.gettempdir(), 'idealista_scheduler.lock')
-        # Acquire the lock from the "other instance"
+        lock_path = os.path.join(tempfile.gettempdir(), 'idealista_universal_scheduler.lock')
         holder = open(lock_path, 'w')
         fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
@@ -244,7 +253,6 @@ class TestSchedulerLockCleanup:
                     mock_config.AUTO_START_SCHEDULER = True
                     result = scheduler_service.init_scheduler(app)
                     assert result is None
-                    # scheduler_lock_file should be None (not leaked)
                     assert scheduler_service.scheduler_lock_file is None
         finally:
             fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
@@ -270,7 +278,7 @@ class TestDistanceMatrixValidation:
         return svc
 
     def test_missing_duration_returns_none(self):
-        """Element with status OK but no duration → should be treated as None."""
+        """Element with status OK but no duration → should return None."""
         svc = self._make_service()
         api_response = {
             'status': 'OK',
@@ -283,12 +291,12 @@ class TestDistanceMatrixValidation:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = api_response
-        with patch('utils.http_retry.requests.request', return_value=mock_resp):
+        with patch('services.travel_time_service.request_with_retries', return_value=mock_resp):
             result = svc._get_google_travel_time('43.36,-5.85', '43.53,-5.66')
             assert result is None
 
     def test_missing_distance_returns_none(self):
-        """Element with status OK but no distance → should be treated as None."""
+        """Element with status OK but no distance → should return None."""
         svc = self._make_service()
         api_response = {
             'status': 'OK',
@@ -301,7 +309,7 @@ class TestDistanceMatrixValidation:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = api_response
-        with patch('utils.http_retry.requests.request', return_value=mock_resp):
+        with patch('services.travel_time_service.request_with_retries', return_value=mock_resp):
             result = svc._get_google_travel_time('43.36,-5.85', '43.53,-5.66')
             assert result is None
 
@@ -321,7 +329,7 @@ class TestDistanceMatrixValidation:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = api_response
-        with patch('utils.http_retry.requests.request', return_value=mock_resp):
+        with patch('services.travel_time_service.request_with_retries', return_value=mock_resp):
             results = svc._get_google_travel_times('43.36,-5.85', ['d1', 'd2', 'd3'])
             assert len(results) == 3
             assert results[0] == {'time': 10, 'distance': 10}
@@ -346,7 +354,7 @@ class TestDistanceMatrixValidation:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = api_response
-        with patch('utils.http_retry.requests.request', return_value=mock_resp):
+        with patch('services.travel_time_service.request_with_retries', return_value=mock_resp):
             result = svc._get_google_travel_time('43.36,-5.85', '43.53,-5.66')
             assert result == {'time': 30, 'distance': 25}
 
@@ -360,8 +368,6 @@ class TestPriceParsingDefensive:
     def test_invalid_price_string_does_not_crash(self, app, test_land):
         """Non-numeric price should be handled gracefully."""
         with app.app_context():
-            land = db.session.get(Land, test_land)
-            # Simulate what IMAP service does with invalid price
             price_raw = 'not-a-number'
             new_price = None
             try:

@@ -1,0 +1,1816 @@
+{% extends "base.html" %}
+
+{% block title %}{{ property.title or ('Property #' ~ property.id) }}{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12 mb-4">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+            <div class="d-flex align-items-start gap-3">
+                <button class="btn btn-outline-secondary btn-sm rounded-circle favorite-btn-header property-favorite-btn"
+                        data-property-id="{{ property.id }}"
+                        title="{{ 'Remove from favorites' if property.is_favorite else 'Add to favorites' }}"
+                        aria-label="Toggle favorite">
+                    <i class="fas fa-star {{ 'text-warning' if property.is_favorite else 'text-muted' }}"></i>
+                </button>
+                <div>
+                    <h1 class="h3 mb-1">
+                        <i class="fas fa-map-marker-alt me-2"></i>
+                        {{ property.title or ('Property #' ~ property.id) }}
+                    </h1>
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        {% if property.listing_status == 'removed' %}
+                            <span class="badge bg-danger">
+                                <i class="fas fa-times-circle me-1"></i>REMOVED
+                            </span>
+                        {% elif property.listing_status == 'sold' %}
+                            <span class="badge bg-secondary">
+                                <i class="fas fa-check-circle me-1"></i>SOLD
+                            </span>
+                        {% endif %}
+                        {% if property.municipality %}
+                            <span class="text-body-secondary small">
+                                <i class="fas fa-city me-1"></i>{{ property.municipality }}
+                            </span>
+                        {% endif %}
+                    </div>
+                    <div class="text-body-secondary small mt-1">
+                        <span class="me-2">ID: {{ property.id }}</span>
+                        {% if property.idealista_property_id %}<span class="me-2">Idealista: {{ property.idealista_property_id }}</span>{% endif %}
+                        {% if property.listing_status %}<span class="me-2">Status: {{ property.listing_status }}</span>{% endif %}
+                        {% if property.listing_last_checked %}<span class="me-2">Checked: {{ property.listing_last_checked.strftime('%Y-%m-%d') }}</span>{% endif %}
+                        {% if property.listing_removed_date %}<span class="me-2">Removed: {{ property.listing_removed_date.strftime('%Y-%m-%d') }}</span>{% endif %}
+                        {% if property.search_profile %}<span class="me-2">Profile: {{ property.search_profile.name }}</span>{% endif %}
+                    </div>
+                </div>
+            </div>
+            <a href="{{ url_for('main.properties') }}" class="btn btn-outline-secondary btn-sm">
+                <i class="fas fa-arrow-left me-1"></i>{{ t('back_to_properties') }}
+            </a>
+        </div>
+    </div>
+</div>
+
+{% if property.listing_status in ('removed', 'sold') %}
+<div class="row mb-3">
+    <div class="col-12">
+        <div class="alert alert-{{ 'danger' if property.listing_status == 'removed' else 'secondary' }} d-flex align-items-center" role="alert">
+            <i class="fas fa-{{ 'times-circle' if property.listing_status == 'removed' else 'check-circle' }} me-3 fa-2x"></i>
+            <div>
+                <h5 class="mb-1">
+                    {% if property.listing_status == 'removed' %}
+                        This listing is no longer available on Idealista
+                    {% else %}
+                        This property has been sold
+                    {% endif %}
+                </h5>
+                {% if property.listing_removed_date %}
+                    <small>Removed on {{ property.listing_removed_date.strftime('%d %B %Y') }}</small>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="row" data-property-id="{{ property.id }}">
+    <div class="col-lg-8">
+        <div class="card mb-4">
+            <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
+                <h2 class="h6 mb-0">
+                    <i class="fas fa-info-circle me-2"></i>Overview
+                </h2>
+                {% if property.score_total is not none %}
+                    <span class="badge score-badge"
+                          style="background-color: {{ 'var(--bs-success)' if property.score_total >= 70 else 'var(--bs-warning)' if property.score_total >= 50 else 'var(--bs-danger)' }}">
+                        Score: {{ "%.1f"|format(property.score_total) }}
+                    </span>
+                {% endif %}
+            </div>
+            <div class="card-body">
+                <div class="row g-3 mb-3">
+                    <div class="col-6 col-lg-3">
+                        <div class="overview-stat bg-body-tertiary border rounded p-3 h-100">
+                            <div class="overview-label text-body-secondary">
+                                <i class="fas fa-euro-sign me-1"></i>Price
+                            </div>
+                            <div class="overview-value">
+                                {% if property.price %}
+                                    <span class="text-success">€{{ "{:,.0f}".format(property.price|float) }}</span>
+                                {% else %}
+                                    <span class="text-body-secondary">Not specified</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-lg-3">
+                        <div class="overview-stat bg-body-tertiary border rounded p-3 h-100">
+                            <div class="overview-label text-body-secondary">
+                                <i class="fas fa-ruler-combined me-1"></i>Area
+                            </div>
+                            <div class="overview-value">
+                                {% if property.area %}
+                                    {{ "{:,.0f}".format(property.area|float) }} m²
+                                {% else %}
+                                    <span class="text-body-secondary">Not specified</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-lg-3">
+                        <div class="overview-stat bg-body-tertiary border rounded p-3 h-100">
+                            <div class="overview-label text-body-secondary">
+                                <i class="fas fa-city me-1"></i>Municipality
+                            </div>
+                            <div class="overview-value">
+                                {{ property.municipality or 'Unknown' }}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-lg-3">
+                        <div class="overview-stat bg-body-tertiary border rounded p-3 h-100">
+                            <div class="overview-label text-body-secondary">
+                                <i class="fas fa-tag me-1"></i>Type
+                            </div>
+                            <div class="overview-value">
+                                {% if property.property_category %}
+                                    <span class="badge bg-secondary">{{ property.property_category }}</span>
+                                    {% if property.property_subtype %}
+                                        <span class="badge bg-light text-dark border ms-1">{{ property.property_subtype }}</span>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="text-body-secondary">Unknown</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {% set _travel = property.travel if property.travel is mapping else {} %}
+                {% set _targets = _travel.get('targets') if _travel is mapping else {} %}
+                {% set has_enrichment = (property.location_lat and property.location_lon and _targets and (_targets|length > 0)) %}
+
+                {% if property.location_lat and property.location_lon %}
+                    <div class="overview-location bg-body-tertiary border rounded p-3">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                            <div>
+                                <div class="overview-label text-body-secondary">
+                                    <i class="fas fa-location-dot me-1"></i>Location
+                                </div>
+                                <div class="overview-value font-monospace">
+                                    {{ "%.6f"|format(property.location_lat) }}, {{ "%.6f"|format(property.location_lon) }}
+                                </div>
+                                <div class="small text-body-secondary">{{ property.location_accuracy or 'unknown' }}</div>
+                            </div>
+                            <div class="btn-group btn-group-sm" role="group" aria-label="Location links">
+                                <a href="https://www.google.com/maps/search/?api=1&query={{ property.location_lat }},{{ property.location_lon }}"
+                                   target="_blank" class="btn btn-outline-primary" rel="noopener">
+                                    <i class="fas fa-map me-1"></i>Google Maps
+                                </a>
+                                {% if property.url %}
+                                <a href="{{ property.url }}"
+                                   target="_blank" class="btn btn-outline-success" rel="noopener">
+                                    <i class="fas fa-home me-1"></i>Idealista
+                                </a>
+                                {% endif %}
+                                <a href="{{ url_for('main.map_view', focus=property.id) }}"
+                                   class="btn btn-outline-secondary"
+                                   title="{{ t('view_on_app_map') }}">
+                                    <i class="fas fa-map-marked-alt me-1"></i>Our Maps
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                {% elif property.municipality %}
+                    <div class="overview-location bg-body-tertiary border rounded p-3">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                            <div>
+                                <div class="overview-label text-body-secondary">
+                                    <i class="fas fa-location-dot me-1"></i>Location
+                                </div>
+                                <div class="overview-value">
+                                    {{ property.municipality }}
+                                </div>
+                            </div>
+                            <div class="btn-group btn-group-sm" role="group" aria-label="Location links">
+                                <a href="https://www.google.com/maps/search/{{ property.municipality|urlencode }},+Spain"
+                                   target="_blank" class="btn btn-outline-primary" rel="noopener">
+                                    <i class="fas fa-map me-1"></i>Google Maps
+                                </a>
+                                {% if property.url %}
+                                <a href="{{ property.url }}"
+                                   target="_blank" class="btn btn-outline-success" rel="noopener">
+                                    <i class="fas fa-home me-1"></i>Idealista
+                                </a>
+                                {% endif %}
+                                <a href="{{ url_for('main.map_view', focus=property.id) }}"
+                                   class="btn btn-outline-secondary"
+                                   title="{{ t('view_on_app_map') }}">
+                                    <i class="fas fa-map-marked-alt me-1"></i>Our Maps
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                {% endif %}
+
+                <div class="d-flex flex-wrap gap-2 mt-3">
+                    <button type="button" class="btn btn-outline-info btn-sm" onclick="openAiSection('claude')">
+                        <i class="fas fa-brain me-1"></i>AI Analyses
+                    </button>
+                    <button class="btn {{ 'btn-success' if has_enrichment else 'btn-outline-warning' }} btn-sm"
+                            hx-post="{{ url_for('api.manual_property_enrichment', property_id=property.id) }}"
+                            hx-trigger="click"
+                            hx-indicator="#enrichment-spinner"
+                            hx-swap="none"
+                            data-enrich-label="Enrich with Google APIs">
+                        <i class="fas fa-sync me-1 {{ 'text-white' if has_enrichment else '' }}"></i>
+                        Enrich with Google APIs
+                        {% if has_enrichment %}
+                            <span class="badge bg-light text-dark ms-1">✓</span>
+                        {% endif %}
+                    </button>
+                </div>
+
+                {% if is_admin %}
+                    <div class="d-flex flex-wrap gap-2 mt-3">
+                        <form method="POST" action="{{ url_for('main.set_property_status_form', property_id=property.id) }}" class="d-inline-flex align-items-center gap-2">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                            <select name="status" class="form-select form-select-sm" style="width: 140px;" aria-label="Set listing status">
+                                <option value="active" {% if (property.listing_status or 'active') == 'active' %}selected{% endif %}>active</option>
+                                <option value="removed" {% if property.listing_status == 'removed' %}selected{% endif %}>removed</option>
+                                <option value="sold" {% if property.listing_status == 'sold' %}selected{% endif %}>sold</option>
+                            </select>
+                            <button class="btn btn-outline-secondary btn-sm" type="submit" title="Set listing status">
+                                <i class="fas fa-tag me-1"></i>Set status
+                            </button>
+                        </form>
+                        <form method="POST" action="{{ url_for('main.recalculate_property_travel', property_id=property.id) }}" class="d-inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                            <button class="btn btn-outline-secondary btn-sm" type="submit" title="Recalculate travel (Places + Distance Matrix)">
+                                <i class="fas fa-route me-1"></i>Recalculate travel
+                            </button>
+                        </form>
+                        <form method="POST" action="{{ url_for('main.recalculate_property_score', property_id=property.id) }}" class="d-inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                            <button class="btn btn-outline-secondary btn-sm" type="submit" title="Recalculate scoring for this property">
+                                <i class="fas fa-calculator me-1"></i>Recalculate scoring
+                            </button>
+                        </form>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if property.description %}
+        <div class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h5 class="mb-2">{{ t('property_description') }}</h5>
+                <div class="text-body-secondary" style="white-space: pre-wrap;">{{ property.description }}</div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if is_admin %}
+        {% set assignment_meta = property.enrichment.get('profile_assignment') if property.enrichment is mapping else {} %}
+        <div class="card shadow-sm mb-3">
+            <div class="card-body">
+                <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+                    <h5 class="mb-0">Profile assignment</h5>
+                    {% if assignment_meta and assignment_meta.get('method') %}
+                        <span class="badge bg-info text-dark">Last: {{ assignment_meta.get('method') }}</span>
+                    {% endif %}
+                </div>
+
+                <form method="POST" action="{{ url_for('main.set_property_profile_form', property_id=property.id) }}" class="row g-2 align-items-end">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <div class="col-12 col-md-5">
+                        <label class="form-label small mb-1">Profile</label>
+                        <select name="profile_id" class="form-select form-select-sm">
+                            <option value="">Default (auto)</option>
+                            {% for p in profiles %}
+                                <option value="{{ p.id }}" {% if property.search_profile_id == p.id %}selected{% endif %}>
+                                    {{ p.name }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="form-check mt-4">
+                            <input class="form-check-input" type="checkbox" id="profile_recalc_travel" name="recalc_travel" checked>
+                            <label class="form-check-label" for="profile_recalc_travel">Recalculate travel</label>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="form-check mt-4">
+                            <input class="form-check-input" type="checkbox" id="profile_recalc_scoring" name="recalc_scoring" checked>
+                            <label class="form-check-label" for="profile_recalc_scoring">Recalculate scoring</label>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-1 d-grid">
+                        <button class="btn btn-outline-primary btn-sm" type="submit">
+                            <i class="fas fa-save me-1"></i>Save
+                        </button>
+                    </div>
+                    <div class="col-12">
+                        <div class="form-text">
+                            Auto-assignment uses the nearest custom target from each active profile.
+                            Manual save sets an override for this property.
+                        </div>
+                        {% if assignment_meta and assignment_meta.get('distance_km') %}
+                            <div class="small text-body-secondary">
+                                Last assignment: {{ assignment_meta.get('profile_name') }} ({{ assignment_meta.get('distance_km') }} km)
+                            </div>
+                        {% endif %}
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        {% set attrs = property.attributes if property.attributes is mapping else {} %}
+        {% set locked = attrs.get('classification_locked') %}
+        <div class="card shadow-sm mb-3">
+            <div class="card-body">
+                <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+                    <h5 class="mb-0">Classification</h5>
+                    {% if locked %}
+                        <span class="badge bg-warning text-dark">Locked</span>
+                    {% endif %}
+                </div>
+
+                <form method="POST" action="{{ url_for('main.set_property_classification_form', property_id=property.id) }}" class="row g-2 align-items-end">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <div class="col-12 col-md-3">
+                        <label class="form-label small mb-1">Category</label>
+                        <input class="form-control form-control-sm" name="property_category" value="{{ property.property_category or '' }}" placeholder="housing / land / garage / ...">
+                    </div>
+                    <div class="col-12 col-md-3">
+                        <label class="form-label small mb-1">Subtype</label>
+                        <input class="form-control form-control-sm" name="property_subtype" value="{{ property.property_subtype or '' }}" placeholder="apartment / house / plot / ...">
+                    </div>
+                    <div class="col-12 col-md-3">
+                        <div class="form-check mt-4">
+                            <input class="form-check-input" type="checkbox" id="classification_locked" name="classification_locked" {% if locked %}checked{% endif %}>
+                            <label class="form-check-label" for="classification_locked">Lock (skip bulk reclassify)</label>
+                        </div>
+                        <div class="form-check mt-2">
+                            <input class="form-check-input" type="checkbox" id="classification_recalc_scoring" name="recalc_scoring" checked>
+                            <label class="form-check-label" for="classification_recalc_scoring">Recalculate scoring</label>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-3 d-grid gap-2">
+                        <button class="btn btn-outline-primary btn-sm" type="submit" name="action" value="set_manual">
+                            <i class="fas fa-save me-1"></i>Save
+                        </button>
+                        <button class="btn btn-outline-secondary btn-sm" type="submit" name="action" value="auto">
+                            <i class="fas fa-wand-magic-sparkles me-1"></i>Auto classify
+                        </button>
+                    </div>
+                    <div class="col-12">
+                        <div class="form-text">
+                            Auto classify uses the current profile rules (or global defaults). After changing rules, use “Reclassify properties” on the profile.
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- AI Analysis Section (legacy parity) -->
+        <div id="ai-analysis-section" class="mb-3">
+            <div class="card shadow-sm">
+                <div class="card-header py-2">
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                        <ul class="nav nav-tabs card-header-tabs" id="ai-analysis-tabs" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link active"
+                                        id="ai-claude-tab"
+                                        data-bs-toggle="tab"
+                                        data-bs-target="#ai-claude-pane"
+                                        type="button"
+                                        role="tab"
+                                        aria-controls="ai-claude-pane"
+                                        aria-selected="true">
+                                    <i class="fas fa-brain me-1"></i>Claude
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link"
+                                        id="ai-chatgpt-tab"
+                                        data-bs-toggle="tab"
+                                        data-bs-target="#ai-chatgpt-pane"
+                                        type="button"
+                                        role="tab"
+                                        aria-controls="ai-chatgpt-pane"
+                                        aria-selected="false">
+                                    <i class="fas fa-robot me-1"></i>ChatGPT
+                                </button>
+                            </li>
+                        </ul>
+                        <div class="small text-body-secondary">
+                            <i class="fas fa-chart-line me-1"></i>AI Investment Analysis
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="tab-content" id="ai-analysis-tab-content">
+                        <div class="tab-pane fade show active"
+                             id="ai-claude-pane"
+                             role="tabpanel"
+                             aria-labelledby="ai-claude-tab"
+                             tabindex="0">
+                            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                                <div class="small text-body-secondary" id="ai-claude-model-label">
+                                    Powered by Claude
+                                </div>
+                                <button type="button"
+                                        class="btn btn-sm btn-outline-primary"
+                                        id="ai-claude-run-btn"
+                                        onclick="runClaudeAnalysis({{ property.id }})">
+                                    <i class="fas fa-wand-magic-sparkles me-1"></i>Run Claude
+                                </button>
+                            </div>
+                            <div id="ai-claude-alerts"></div>
+                            <div class="analysis-content" id="ai-claude-analysis">
+                                <div id="ai-claude-structured-analysis"></div>
+                                <div class="text-center text-muted py-4"
+                                     id="ai-claude-placeholder"
+                                     style="{{ 'display: none;' if property.ai_analysis else '' }}">
+                                    <i class="fas fa-brain fa-3x mb-3 opacity-50"></i>
+                                    <p class="mb-0">No analysis yet</p>
+                                    <small class="d-block text-body-secondary mt-1">Click “Run Claude” to generate it.</small>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="tab-pane fade"
+                             id="ai-chatgpt-pane"
+                             role="tabpanel"
+                             aria-labelledby="ai-chatgpt-tab"
+                             tabindex="0">
+                            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                                <div class="small text-body-secondary" id="ai-chatgpt-model-label">
+                                    Powered by ChatGPT{% if openai_model %} ({{ openai_model }}){% endif %}
+                                </div>
+                                <button type="button"
+                                        class="btn btn-sm btn-outline-primary"
+                                        id="ai-chatgpt-run-btn"
+                                        onclick="generateChatGPTAnalysis({{ property.id }})"
+                                        {% if not openai_configured %}disabled{% endif %}>
+                                    <i class="fas fa-wand-magic-sparkles me-1"></i>Run ChatGPT
+                                </button>
+                            </div>
+                            <div id="ai-chatgpt-alerts"></div>
+                            <div class="analysis-content" id="ai-chatgpt-analysis">
+                                <div id="ai-chatgpt-structured-analysis"></div>
+                                <div class="text-center text-muted py-4"
+                                     id="ai-chatgpt-placeholder"
+                                     style="{{ 'display: none;' if openai_analysis else '' }}">
+                                    <i class="fas fa-robot fa-3x mb-3 opacity-50"></i>
+                                    <p class="mb-0">No analysis yet</p>
+                                    <small class="d-block text-body-secondary mt-1">Click “Run ChatGPT” to generate it.</small>
+                                    <small class="d-block text-body-secondary mt-1" id="ai-chatgpt-config-hint"></small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Claude vs ChatGPT comparison -->
+        <div class="mb-3" id="ai-compare-section">
+            <div class="card shadow-sm">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0">
+                        <i class="fas fa-scale-balanced me-2"></i>Claude vs ChatGPT
+                    </h6>
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="refreshAiComparison()">
+                            <i class="fas fa-rotate me-1"></i>Refresh
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div id="ai-compare-status" class="small text-body-secondary">Loading…</div>
+                    <div class="table-responsive mt-2">
+                        <table class="table table-sm align-middle mb-0" id="ai-compare-table" style="display:none;">
+                            <thead>
+                                <tr>
+                                    <th style="min-width: 190px;">Metric</th>
+                                    <th style="min-width: 160px;">Claude</th>
+                                    <th style="min-width: 160px;">ChatGPT</th>
+                                    <th style="min-width: 160px;">Baseline</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ai-compare-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div id="enrichment-spinner" class="htmx-indicator mb-3">
+            <div class="alert alert-info">
+                <i class="fas fa-spinner fa-spin me-2"></i>
+                Enriching property with Google API data...
+            </div>
+        </div>
+
+        {% if property.score_investment or property.score_lifestyle %}
+            <div class="card mb-3">
+                <div class="card-body p-3">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="mb-0 compact-header" title="{{ t('dual_scoring_analysis') }}">
+                            <i class="fas fa-chart-bar me-1"></i>{{ t('dual_scoring_analysis') }}
+                        </h6>
+                    </div>
+                    <div class="row g-2">
+                        {% if property.score_investment %}
+                            <div class="col-6">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <small class="text-warning fw-bold compact-text" title="{{ t('investment_score') }}">
+                                        <i class="fas fa-coins"></i> {{ t('investment_score') }}
+                                    </small>
+                                    <span class="badge bg-warning text-dark">{{ "%.0f"|format(property.score_investment) }}</span>
+                                </div>
+                            </div>
+                        {% endif %}
+                        {% if property.score_lifestyle %}
+                            <div class="col-6">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <small class="text-success fw-bold compact-text" title="{{ t('lifestyle_score') }}">
+                                        <i class="fas fa-home"></i> {{ t('lifestyle_score') }}
+                                    </small>
+                                    <span class="badge bg-success">{{ "%.0f"|format(property.score_lifestyle) }}</span>
+                                </div>
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        {% endif %}
+
+        <div class="card mb-4">
+            <div class="card-header">
+                <h6 class="card-title mb-0 compact-header" title="{{ t('travel_times_distances') }}">
+                    <i class="fas fa-map-marked-alt me-2"></i>{{ t('travel_times_distances') }}
+                </h6>
+            </div>
+            <div class="card-body">
+                {% set travel = property.travel if property.travel is mapping else {} %}
+                {% set travel_targets = travel.get('targets') if travel is mapping else {} %}
+                {% set travel_targets = travel_targets if travel_targets is mapping else {} %}
+                {% set display_targets = travel_display_targets if travel_display_targets is iterable else [] %}
+                {% set custom_targets = display_targets | selectattr('kind', 'equalto', 'custom') | list %}
+                {% set has_targets = (travel_targets|length > 0) or (custom_targets|length > 0) %}
+
+                {% if has_targets %}
+                    {% if custom_targets and custom_targets|length > 0 %}
+                        {% for target in custom_targets %}
+                            {% set tdata = travel_targets.get(target.key) if travel_targets is mapping else {} %}
+                            {% set distance_km = tdata.distance_km if tdata and tdata.distance_km is not none else (tdata.distance_m / 1000) if tdata and tdata.distance_m else None %}
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="small fw-bold compact-text" title="{{ target.label or target.key }}">
+                                    <i class="fas fa-city me-1 text-warning"></i>{{ target.label or target.key }}
+                                </span>
+                                <div>
+                                    {% if tdata and tdata.duration_min %}
+                                        <span class="badge bg-info me-1">{{ tdata.duration_min }}min</span>
+                                    {% endif %}
+                                    {% if distance_km is not none %}
+                                        <span class="badge bg-secondary">{{ '%.1f'|format(distance_km) }}km</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        {% endfor %}
+                        <hr class="my-2">
+                    {% endif %}
+
+                    {% for hub_key in ['airport', 'train_station', 'hospital'] %}
+                        {% set tdata = travel_targets.get(hub_key) if travel_targets is mapping else {} %}
+                        {% if tdata and not (tdata.kind == 'preset' and (tdata.enabled is defined) and (tdata.enabled == false)) %}
+                            {% set distance_km = tdata.distance_km if tdata.distance_km is not none else (tdata.distance_m / 1000) if tdata.distance_m else None %}
+                            {% if hub_key == 'airport' %}
+                                {% set hub_label = t('nearest_airport') %}
+                                {% set hub_icon = 'fa-plane' %}
+                            {% elif hub_key == 'train_station' %}
+                                {% set hub_label = t('train_station') %}
+                                {% set hub_icon = 'fa-train' %}
+                            {% else %}
+                                {% set hub_label = t('hospital') %}
+                                {% set hub_icon = 'fa-hospital' %}
+                            {% endif %}
+                            {% if tdata.duration_min or distance_km is not none %}
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <span class="small fw-bold compact-text" title="{{ hub_label }}">
+                                        <i class="fas {{ hub_icon }} me-1 text-primary"></i>{{ hub_label }}
+                                    </span>
+                                    <div>
+                                        {% if tdata.duration_min %}
+                                            <span class="badge bg-info me-1">{{ tdata.duration_min }}min</span>
+                                        {% endif %}
+                                        {% if distance_km is not none %}
+                                            <span class="badge bg-secondary">{{ '%.1f'|format(distance_km) }}km</span>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            {% endif %}
+                        {% endif %}
+                    {% endfor %}
+                {% else %}
+                    <div class="text-body-secondary small">
+                        Travel not calculated yet.
+                        {% if is_admin %}
+                            Use “Recalculate travel” after setting coordinates/targets.
+                        {% endif %}
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if property.infrastructure_basic %}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h6 class="card-title mb-0 compact-header" title="{{ t('basic_infrastructure') }}">
+                        <i class="fas fa-tools me-2"></i>{{ t('basic_infrastructure') }}
+                    </h6>
+                </div>
+                <div class="card-body">
+                    {% for key, value in property.infrastructure_basic.items() %}
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small">{{ key.replace('_', ' ').title() }}</span>
+                            {% if value is sameas true %}
+                                <i class="fas fa-check-circle text-success"></i>
+                            {% elif value is sameas false %}
+                                <i class="fas fa-times-circle text-danger"></i>
+                            {% else %}
+                                <span class="text-muted small">{{ value }}</span>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        {% endif %}
+
+        {% if property.infrastructure_extended %}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h6 class="card-title mb-0 compact-header" title="{{ t('extended_infrastructure') }}">
+                        <i class="fas fa-building me-2"></i>{{ t('extended_infrastructure') }}
+                    </h6>
+                </div>
+                <div class="card-body">
+                    {% for key, value in property.infrastructure_extended.items() %}
+                        {% if key == 'osm_amenities' and value is mapping %}
+                            <div class="mb-3">
+                                <span class="small fw-bold">Nearby Amenities:</span>
+                                <div class="mt-2">
+                                    {% for priority_amenity in ['hospital', 'pharmacy', 'police', 'bank'] %}
+                                        {% if priority_amenity in value %}
+                                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                                <span class="small text-capitalize fw-bold">
+                                                    {% if priority_amenity == 'hospital' %}
+                                                        <i class="fas fa-hospital me-1 text-danger"></i> Hospitals
+                                                    {% elif priority_amenity == 'pharmacy' %}
+                                                        <i class="fas fa-pills me-1 text-success"></i> Pharmacies
+                                                    {% elif priority_amenity == 'police' %}
+                                                        <i class="fas fa-shield-alt me-1 text-primary"></i> Police Stations
+                                                    {% elif priority_amenity == 'bank' %}
+                                                        <i class="fas fa-university me-1 text-info"></i> Banks
+                                                    {% endif %}
+                                                </span>
+                                                <span class="badge bg-primary">{{ value[priority_amenity] }} nearby</span>
+                                            </div>
+                                        {% endif %}
+                                    {% endfor %}
+
+                                    {% if (value.get('hospital') or value.get('pharmacy') or value.get('police') or value.get('bank')) and value.items()|length > (1 if (value.get('hospital') or value.get('pharmacy') or value.get('police') or value.get('bank')) else 0) %}
+                                        <hr class="my-2">
+                                    {% endif %}
+
+                                    {% for amenity, count in value.items() %}
+                                        {% if amenity not in ['hospital', 'pharmacy', 'police', 'bank'] %}
+                                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                                <span class="small text-capitalize">
+                                                    {% if amenity == 'cafe' %}
+                                                        <i class="fas fa-coffee me-1"></i> Cafes
+                                                    {% elif amenity == 'restaurant' %}
+                                                        <i class="fas fa-utensils me-1"></i> Restaurants
+                                                    {% elif amenity == 'school' %}
+                                                        <i class="fas fa-graduation-cap me-1"></i> Schools
+                                                    {% elif amenity == 'fuel' %}
+                                                        <i class="fas fa-gas-pump me-1"></i> Gas Stations
+                                                    {% elif amenity == 'supermarket' %}
+                                                        <i class="fas fa-shopping-cart me-1"></i> Supermarkets
+                                                    {% else %}
+                                                        <i class="fas fa-map-marker-alt me-1"></i> {{ amenity.replace('_', ' ').title() }}
+                                                    {% endif %}
+                                                </span>
+                                                <span class="badge bg-primary">{{ count }} nearby</span>
+                                            </div>
+                                        {% endif %}
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        {% else %}
+                            {% set base_key = key.replace('_available', '').replace('_distance', '').replace('_travel_time', '') %}
+                            {% set has_distance = property.infrastructure_extended.get(base_key + '_distance') if property.infrastructure_extended else None %}
+                            {% set has_travel_time = property.infrastructure_extended.get(base_key + '_travel_time') if property.infrastructure_extended else None %}
+
+                            {% if not (
+                                key.endswith('_available') and (has_distance or has_travel_time)
+                            ) and not (
+                                key.endswith('_distance') and value == 0
+                            ) %}
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <span class="small">{{ key.replace('_', ' ').title() }}</span>
+                                    {% if value is sameas true %}
+                                        <i class="fas fa-check-circle text-success"></i>
+                                    {% elif value is sameas false %}
+                                        <i class="fas fa-times-circle text-danger"></i>
+                                    {% elif value is number %}
+                                        {% if 'distance' in key %}
+                                            {% set distance_km = value/1000 %}
+                                            {% set travel_time_value = property.infrastructure_extended.get(base_key + '_travel_time') if property.infrastructure_extended else None %}
+                                            <div class="d-flex align-items-center">
+                                                {% if travel_time_value %}
+                                                    <span class="badge bg-info me-1">
+                                                        <i class="fas fa-car me-1"></i>{{ travel_time_value }}min
+                                                    </span>
+                                                    {% set walking_time = (travel_time_value * 4)|int %}
+                                                    {% if walking_time <= 15 %}
+                                                        <span class="badge bg-success me-1">
+                                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
+                                                        </span>
+                                                    {% endif %}
+                                                {% endif %}
+                                                <span class="badge bg-secondary">{{ "%.1f"|format(distance_km) }}km</span>
+                                            </div>
+                                        {% elif 'travel_time' in key %}
+                                            {% set distance_value = property.infrastructure_extended.get(base_key + '_distance') if property.infrastructure_extended else None %}
+                                            <div class="d-flex align-items-center">
+                                                <span class="badge bg-info me-1">
+                                                    <i class="fas fa-car me-1"></i>{{ value }}min
+                                                </span>
+                                                {% set walking_time = (value * 4)|int %}
+                                                {% if walking_time <= 15 %}
+                                                    <span class="badge bg-success me-1">
+                                                        <i class="fas fa-walking me-1"></i>{{ walking_time }}min
+                                                    </span>
+                                                {% endif %}
+                                                {% if distance_value %}
+                                                    <span class="badge bg-secondary">{{ "%.1f"|format(distance_value/1000) }}km</span>
+                                                {% endif %}
+                                            </div>
+                                        {% else %}
+                                            {% if 'duration' in key or 'time' in key %}
+                                                <span class="badge bg-info">{{ value }}min</span>
+                                            {% elif 'distance' in key %}
+                                                <span class="badge bg-secondary">{{ "%.1f"|format(value/1000) }}km</span>
+                                            {% else %}
+                                                <span class="badge bg-secondary">{{ value }}</span>
+                                            {% endif %}
+                                        {% endif %}
+                                    {% elif value is mapping %}
+                                        <div class="small">
+                                            {% for k, v in value.items() %}
+                                                <div>{{ k }}: {{ v }}</div>
+                                            {% endfor %}
+                                        </div>
+                                    {% else %}
+                                        <span class="text-muted small">{{ value }}</span>
+                                    {% endif %}
+                                </div>
+                            {% endif %}
+                        {% endif %}
+                    {% endfor %}
+                </div>
+            </div>
+        {% endif %}
+
+        {% if property.transport or property.travel_time_airport or property.travel_time_train_station or property.travel_time_hospital or property.travel_time_police %}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h6 class="card-title mb-0 compact-header" title="{{ t('transport') }}">
+                        <i class="fas fa-route me-2"></i>{{ t('transport') }}
+                    </h6>
+                </div>
+                <div class="card-body">
+                    {% if property.transport and property.transport.get('airport_available') == false %}
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small fw-bold"><i class="fas fa-plane me-1"></i>Airport</span>
+                            <div>
+                                <i class="fas fa-times-circle text-danger"></i>
+                                <small class="text-muted ms-1">Not available</small>
+                            </div>
+                        </div>
+                    {% elif property.travel_time_airport %}
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small fw-bold">Airport Distance</span>
+                            <div class="d-flex align-items-center">
+                                <span class="badge bg-info me-1">
+                                    <i class="fas fa-car me-1"></i>{{ property.travel_time_airport }}min
+                                </span>
+                                {% if property.distance_airport %}
+                                    {% set walking_time = (property.travel_time_airport * 4)|int %}
+                                    {% if walking_time <= 15 %}
+                                        <span class="badge bg-success me-1">
+                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
+                                        </span>
+                                    {% endif %}
+                                    <span class="badge bg-secondary">{{ property.distance_airport }}km</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% endif %}
+                    {% if property.travel_time_train_station %}
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small fw-bold">Train Station Distance</span>
+                            <div class="d-flex align-items-center">
+                                <span class="badge bg-info me-1">
+                                    <i class="fas fa-car me-1"></i>{{ property.travel_time_train_station }}min
+                                </span>
+                                {% if property.distance_train_station %}
+                                    {% set walking_time = (property.travel_time_train_station * 4)|int %}
+                                    {% if walking_time <= 15 %}
+                                        <span class="badge bg-success me-1">
+                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
+                                        </span>
+                                    {% endif %}
+                                    <span class="badge bg-secondary">{{ property.distance_train_station }}km</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% endif %}
+                    {% if property.travel_time_hospital %}
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small fw-bold">Hospital Distance</span>
+                            <div class="d-flex align-items-center">
+                                <span class="badge bg-info me-1">
+                                    <i class="fas fa-car me-1"></i>{{ property.travel_time_hospital }}min
+                                </span>
+                                {% if property.distance_hospital %}
+                                    {% set walking_time = (property.travel_time_hospital * 4)|int %}
+                                    {% if walking_time <= 15 %}
+                                        <span class="badge bg-success me-1">
+                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
+                                        </span>
+                                    {% endif %}
+                                    <span class="badge bg-secondary">{{ property.distance_hospital }}km</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% endif %}
+                    {% if property.travel_time_police %}
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small fw-bold">Police Station Distance</span>
+                            <div class="d-flex align-items-center">
+                                <span class="badge bg-info me-1">
+                                    <i class="fas fa-car me-1"></i>{{ property.travel_time_police }}min
+                                </span>
+                                {% if property.distance_police %}
+                                    {% set walking_time = (property.travel_time_police * 4)|int %}
+                                    {% if walking_time <= 15 %}
+                                        <span class="badge bg-success me-1">
+                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
+                                        </span>
+                                    {% endif %}
+                                    <span class="badge bg-secondary">{{ property.distance_police }}km</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% endif %}
+
+                    {% if (property.travel_time_airport or property.travel_time_train_station or property.travel_time_hospital or property.travel_time_police) and property.transport %}
+                        <hr class="my-3">
+                    {% endif %}
+
+                    {% if property.transport %}
+                        {% for key, value in property.transport.items() %}
+                            {% set base_key = key.replace('_available', '').replace('_distance', '').replace('_travel_time', '') %}
+                            {% set has_distance_field = property.transport.get(base_key + '_distance') if property.transport else None %}
+                            {% set has_travel_time_field = property.transport.get(base_key + '_travel_time') if property.transport else None %}
+
+                            {% if not (
+                                (key.endswith('_available') and (has_distance_field or has_travel_time_field)) or
+                                (key.endswith('_travel_time') and has_distance_field) or
+                                (key.startswith('duration_to_')) or
+                                (key == 'airport_available' and property.travel_time_airport)
+                            ) %}
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="small">{{ key.replace('_', ' ').title() }}</span>
+                                {% if value is sameas true %}
+                                    <i class="fas fa-check-circle text-success"></i>
+                                {% elif value is sameas false %}
+                                    <i class="fas fa-times-circle text-danger"></i>
+                                {% elif value is number and 'distance' in key %}
+                                    <div class="d-flex align-items-center">
+                                        {% if key.startswith('distance_to_') %}
+                                            {% set duration_key = key.replace('distance_to_', 'duration_to_') %}
+                                            {% set duration_value = property.transport.get(duration_key) %}
+                                            {% if value == 0 and not duration_value %}
+                                                <span class="text-muted small">no data</span>
+                                            {% else %}
+                                                {% if duration_value %}
+                                                    <span class="badge bg-info me-1">
+                                                        <i class="fas fa-car me-1"></i>{{ "%.0f"|format(duration_value/60) }}min
+                                                    </span>
+                                                {% endif %}
+                                                <span class="badge bg-secondary">
+                                                    <i class="fas fa-road me-1"></i>{{ "%.0f"|format(value/1000) }}km
+                                                </span>
+                                            {% endif %}
+                                        {% else %}
+                                            {% set transport_type = key.replace('_distance', '') %}
+                                            {% if property.transport and property.transport.get(transport_type + '_travel_time') %}
+                                                <span class="badge bg-info me-1">
+                                                    <i class="fas fa-car me-1"></i>{{ property.transport[transport_type + '_travel_time'] }}min
+                                                </span>
+                                                {% set walking_time = (property.transport[transport_type + '_travel_time'] * 4)|int %}
+                                                {% if walking_time <= 15 %}
+                                                    <span class="badge bg-success me-1">
+                                                        <i class="fas fa-walking me-1"></i>{{ walking_time }}min
+                                                    </span>
+                                                {% endif %}
+                                            {% endif %}
+                                            {% if value < 1000 %}
+                                                <span class="badge bg-secondary">
+                                                    <i class="fas fa-road me-1"></i>{{ "%.1f"|format(value/1000) }}km
+                                                </span>
+                                            {% else %}
+                                                <span class="badge bg-secondary">
+                                                    <i class="fas fa-road me-1"></i>{{ "%.0f"|format(value/1000) }}km
+                                                </span>
+                                            {% endif %}
+                                        {% endif %}
+                                    </div>
+                                {% elif value is number and 'duration' in key %}
+                                    <span class="badge bg-info">{{ "%.0f"|format(value/60) }}min</span>
+                                {% elif value is number and key.endswith('_travel_time') %}
+                                    <span class="badge bg-info">
+                                        <i class="fas fa-car me-1"></i>{{ value }}min
+                                    </span>
+                                {% else %}
+                                    <span class="text-muted small">{{ value }}</span>
+                                {% endif %}
+                            </div>
+                            {% endif %}
+                        {% endfor %}
+                    {% endif %}
+                </div>
+            </div>
+        {% endif %}
+
+        {% if property.environment %}
+            {% set environment_items = [] %}
+            {% for key, value in property.environment.items() %}
+                {% if key != 'score_breakdown' %}
+                    {% set _ = environment_items.append((key, value)) %}
+                {% endif %}
+            {% endfor %}
+
+            {% if environment_items %}
+                <div class="card mb-4">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h6 class="card-title mb-0">
+                            <i class="fas fa-leaf me-2"></i>{{ t('environment') }}
+                        </h6>
+                        <button class="btn btn-sm btn-outline-primary" onclick="toggleEnvironmentEdit({{ property.id }})" id="env-edit-btn">
+                            <i class="fas fa-edit"></i> Edit
+                        </button>
+                    </div>
+                    <div class="card-body" id="environment-display">
+                        {% for key, value in environment_items %}
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                {% if key in ['sea_view', 'forest_view', 'mountain_view'] %}
+                                    <span class="small">{{ key.replace('_view', '').replace('_', ' ').title() }} View</span>
+                                    {% if value is sameas true %}
+                                        <i class="fas fa-check-circle text-success"></i>
+                                    {% elif value is sameas false %}
+                                        <i class="fas fa-times-circle text-danger"></i>
+                                    {% else %}
+                                        <span class="text-muted small">N/A</span>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="small">{{ key.replace('_', ' ').title() }}</span>
+                                    {% if value is sameas true %}
+                                        <i class="fas fa-check-circle text-success"></i>
+                                    {% elif value is sameas false %}
+                                        <i class="fas fa-times-circle text-danger"></i>
+                                    {% else %}
+                                        <span class="text-muted small">{{ value if value else 'N/A' }}</span>
+                                    {% endif %}
+                                {% endif %}
+                            </div>
+                        {% endfor %}
+                    </div>
+                    <div class="card-body" id="environment-edit" style="display: none;">
+                        <form id="environment-form" onsubmit="saveEnvironment(event, {{ property.id }}, 'property')">
+                            <div class="mb-3">
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="sea_view" name="sea_view"
+                                           {{ 'checked' if property.environment.get('sea_view') }}>
+                                    <label class="form-check-label" for="sea_view">Sea View</label>
+                                </div>
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="mountain_view" name="mountain_view"
+                                           {{ 'checked' if property.environment.get('mountain_view') }}>
+                                    <label class="form-check-label" for="mountain_view">Mountain View</label>
+                                </div>
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="forest_view" name="forest_view"
+                                           {{ 'checked' if property.environment.get('forest_view') }}>
+                                    <label class="form-check-label" for="forest_view">Forest View</label>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="orientation" class="form-label small">Orientation</label>
+                                <input type="text" class="form-control form-control-sm" id="orientation" name="orientation"
+                                       value="{{ property.environment.get('orientation', '') }}">
+                            </div>
+                            <div class="mb-3">
+                                <label for="buildable_floors" class="form-label small">Buildable Floors</label>
+                                <input type="text" class="form-control form-control-sm" id="buildable_floors" name="buildable_floors"
+                                       value="{{ property.environment.get('buildable_floors', '') }}">
+                            </div>
+                            <div class="mb-3">
+                                <label for="access_type" class="form-label small">Access Type</label>
+                                <input type="text" class="form-control form-control-sm" id="access_type" name="access_type"
+                                       value="{{ property.environment.get('access_type', '') }}">
+                            </div>
+                            <div class="mb-3">
+                                <label for="certified_for" class="form-label small">Certified For</label>
+                                <input type="text" class="form-control form-control-sm" id="certified_for" name="certified_for"
+                                       value="{{ property.environment.get('certified_for', '') }}">
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button type="submit" class="btn btn-sm btn-success">Save</button>
+                                <button type="button" class="btn btn-sm btn-secondary" onclick="cancelEnvironmentEdit()">Cancel</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            {% endif %}
+        {% endif %}
+
+        {% if property.services_quality %}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h6 class="card-title mb-0">
+                        <i class="fas fa-star me-2"></i>{{ t('services_quality') }}
+                    </h6>
+                </div>
+                <div class="card-body">
+                    {% for key, value in property.services_quality.items() %}
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small">{{ key.replace('_', ' ').title() }}</span>
+                            {% if value is number %}
+                                <div class="d-flex align-items-center">
+                                    <span class="badge bg-warning me-2">{{ "%.1f"|format(value) }}/5</span>
+                                    <div class="small">
+                                        {% set rounded_rating = (value * 2)|round / 2 %}
+                                        {% set full_stars = rounded_rating|int %}
+                                        {% set has_half = (rounded_rating - full_stars) >= 0.5 %}
+
+                                        {% for i in range(1, 6) %}
+                                            {% if i <= full_stars %}
+                                                <i class="fas fa-star text-warning"></i>
+                                            {% elif i == full_stars + 1 and has_half %}
+                                                <i class="fas fa-star-half-alt text-warning"></i>
+                                            {% else %}
+                                                <i class="far fa-star text-muted"></i>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            {% else %}
+                                <span class="text-muted small">{{ value }}</span>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Formatting functions for AI analysis (ported from legacy land detail)
+function renderListItems(items, label, colorClass) {
+    if (!items || !Array.isArray(items) || items.length === 0) return '';
+
+    const listItems = items.map(item =>
+        `<li><i class="fas fa-dot-circle text-${colorClass} me-1"></i>${humanizeEnumLabel(item) || String(item ?? '')}</li>`
+    ).join('');
+
+    const header = label ? `<div class="fw-semibold mb-1">${label}</div>` : '';
+    return `<div class="analysis-list mb-2">${header}<ul class="list-unstyled mb-0">${listItems}</ul></div>`;
+}
+
+function renderSimilarProperties(similarProperties) {
+    if (!similarProperties || !Array.isArray(similarProperties) || similarProperties.length === 0) {
+        return '<p class="text-muted">No similar properties found</p>';
+    }
+
+    const propertyCards = similarProperties.map(prop => {
+        const propId = prop.id ?? prop.property_id ?? null;
+        const detailsHref = propId ? `/properties/${propId}` : '#';
+
+        const priceText = prop.price ? `€${Number(prop.price).toLocaleString()}` : 'Price N/A';
+        const areaText = prop.area ? `${Number(prop.area).toLocaleString()}m²` : 'Area N/A';
+        const scoreText = prop.score_total ? `${Number(prop.score_total).toFixed(1)}/100` : 'Not scored';
+        const scoreClass = prop.score_total ? (prop.score_total >= 70 ? 'text-success' : prop.score_total >= 50 ? 'text-warning' : 'text-danger') : 'text-muted';
+
+        const category = prop.property_category || prop.category || prop.land_type || 'Unknown';
+        const subtype = prop.property_subtype || prop.subtype || '';
+
+        return `
+            <div class="similar-property-card border rounded p-3 mb-2">
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                    <div class="flex-grow-1">
+                        <h6 class="mb-1">
+                            <a href="${detailsHref}" class="text-decoration-none link-body-emphasis">
+                                ${prop.title ? prop.title.substring(0, 50) + (prop.title.length > 50 ? '...' : '') : (propId ? 'Property #' + propId : 'Property')}
+                            </a>
+                        </h6>
+                        <div class="d-flex flex-wrap gap-3 small text-muted mb-2">
+                            <span><i class="fas fa-euro-sign me-1"></i>${priceText}</span>
+                            <span><i class="fas fa-ruler-combined me-1"></i>${areaText}</span>
+                            <span><i class="fas fa-map-marker-alt me-1"></i>${prop.municipality || 'Location N/A'}</span>
+                        </div>
+                    </div>
+                    <div class="text-end">
+                        <div class="d-flex flex-wrap gap-1 justify-content-end">
+                            <span class="badge bg-secondary small">${String(category)}</span>
+                            ${subtype ? `<span class="badge bg-light text-body-secondary border small">${String(subtype)}</span>` : ''}
+                        </div>
+                        <div class="small ${scoreClass} mt-1">
+                            <i class="fas fa-star me-1"></i>${scoreText}
+                        </div>
+                    </div>
+                </div>
+                <div class="d-flex justify-content-between align-items-center">
+                    <div class="d-flex gap-2">
+                        ${propId ? `<a href="${detailsHref}" class="btn btn-outline-primary btn-sm">
+                            <i class="fas fa-eye me-1"></i>View Details
+                        </a>` : ''}
+                        ${prop.url ? `<a href="${prop.url}" target="_blank" rel="noopener" class="btn btn-outline-secondary btn-sm">
+                            <i class="fas fa-external-link-alt me-1"></i>Idealista
+                        </a>` : ''}
+                    </div>
+                    <small class="text-muted">Similar property</small>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    return propertyCards;
+}
+
+function getPriceVerdictClass(verdict) {
+    switch(verdict) {
+        case 'FAIR_PRICE': return 'bg-success';
+        case 'UNDERPRICED': return 'bg-primary';
+        case 'OVERPRICED': return 'bg-danger';
+        default: return 'bg-secondary';
+    }
+}
+
+// Removed duplicate - see consolidated version below
+
+function getPriceTrendClass(trend) {
+    switch(trend) {
+        case 'RISING': return 'bg-success';
+        case 'STABLE': return 'bg-info';
+        case 'DECLINING': return 'bg-danger';
+        default: return 'bg-secondary';
+    }
+}
+
+function humanizeEnumLabel(value) {
+    if (value === null || value === undefined) return '';
+    const original = String(value).trim();
+    if (!original) return '';
+
+    const rawParts = original.split('-');
+    const rawHead = (rawParts.shift() || '').trim();
+    const rawTail = rawParts.join('-').trim();
+
+    const isEnumHead = rawHead && /^[A-Z0-9_]+$/.test(rawHead) && /[A-Z]/.test(rawHead);
+    if (!isEnumHead) return original;
+
+    const humanHead = rawHead
+        .replace(/_/g, ' ')
+        .toLowerCase()
+        .replace(/\b\w/g, ch => ch.toUpperCase())
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    if (!rawTail) return humanHead;
+
+    const humanTail = rawTail.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+    return humanTail ? `${humanHead} - ${humanTail}` : humanHead;
+}
+
+// Render structured AI analysis (legacy schema; tolerant to missing keys)
+function renderStructuredAIAnalysis(analysis) {
+    if (!analysis || typeof analysis !== 'object') {
+        return `<div class="alert alert-warning mb-0">No structured analysis available.</div>`;
+    }
+
+    // Helper to safely access nested properties
+    const safeGet = (obj, path, defaultValue = null) => {
+        try {
+            return path.split('.').reduce((current, key) => current && current[key], obj) || defaultValue;
+        } catch {
+            return defaultValue;
+        }
+    };
+
+    // Price analysis section
+    const priceAnalysis = analysis.price_analysis || {};
+    const verdict = priceAnalysis.verdict || 'UNKNOWN';
+    const verdictClass = getPriceVerdictClass(verdict);
+
+    // Investment potential section
+    const investment = analysis.investment_potential || {};
+    const investmentRating = investment.rating || 'UNKNOWN';
+    const riskLevel = investment.risk_level || 'UNKNOWN';
+
+    // Rental analysis section
+    const rental = analysis.rental_market_analysis || {};
+
+    // Market dynamics section
+    const market = analysis.market_price_dynamics || {};
+    const trend = market.price_trend || 'UNKNOWN';
+    const trendClass = getPriceTrendClass(trend);
+
+    // Similar objects
+    const similar = analysis.similar_objects || [];
+
+    return `
+        <div class="row g-3">
+            <!-- Price Analysis -->
+            <div class="col-12">
+                <div class="card border-0 bg-body-tertiary">
+                    <div class="card-body p-3">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <h6 class="mb-0"><i class="fas fa-tag me-2"></i>Price Analysis</h6>
+                            <span class="badge ${verdictClass}">${humanizeEnumLabel(verdict)}</span>
+                        </div>
+                        <p class="mb-0 small">${priceAnalysis.summary || 'No price analysis available'}</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Investment Potential -->
+            <div class="col-12">
+                <div class="card border-0 bg-body-tertiary">
+                    <div class="card-body p-3">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <h6 class="mb-0"><i class="fas fa-chart-line me-2"></i>Investment Potential</h6>
+                            <div class="d-flex gap-1">
+                                <span class="badge bg-primary">${humanizeEnumLabel(investmentRating)}</span>
+                                <span class="badge bg-warning text-dark">${humanizeEnumLabel(riskLevel)}</span>
+                            </div>
+                        </div>
+                        <p class="mb-0 small">${investment.summary || 'No investment potential analysis available'}</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Rental Metrics -->
+            <div class="col-12">
+                <div class="card border-0 bg-body-tertiary">
+                    <div class="card-body p-3">
+                        <h6 class="mb-2"><i class="fas fa-coins me-2"></i>Rental Market Analysis</h6>
+                        <div class="row g-2 text-center mb-2">
+                            <div class="col-6 col-md-3">
+                                <div class="small text-muted">Yield</div>
+                                <div class="fw-semibold">${rental.rental_yield || 'N/A'}%</div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="small text-muted">Cap Rate</div>
+                                <div class="fw-semibold">${rental.cap_rate || 'N/A'}%</div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="small text-muted">Price/Rent</div>
+                                <div class="fw-semibold">${rental.price_to_rent_ratio || 'N/A'}</div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="small text-muted">Payback</div>
+                                <div class="fw-semibold">${rental.payback_period_years || 'N/A'}y</div>
+                            </div>
+                        </div>
+                        <p class="mb-0 small">${rental.summary || rental.investment_rating || 'No rental analysis available'}</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Market Dynamics -->
+            <div class="col-12">
+                <div class="card border-0 bg-body-tertiary">
+                    <div class="card-body p-3">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <h6 class="mb-0"><i class="fas fa-arrow-trend-up me-2"></i>Market Price Dynamics</h6>
+                            <span class="badge ${trendClass}">${humanizeEnumLabel(trend)}</span>
+                        </div>
+                        <p class="mb-0 small">${market.trend_analysis || 'No market analysis available'}</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Similar Objects -->
+            <div class="col-12">
+                <div class="card border-0 bg-body-tertiary">
+                    <div class="card-body p-3">
+                        <h6 class="mb-2"><i class="fas fa-layer-group me-2"></i>Similar Objects</h6>
+                        ${renderSimilarProperties(similar)}
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function showTransientAlert(containerId, type, message, autoCloseMs = 4500) {
+    // Do not inject inline alerts into the page layout.
+    // Use global ephemeral notifications instead.
+    const ms = typeof autoCloseMs === 'number' ? autoCloseMs : 3000;
+    const notifType = type === 'danger' ? 'error' : (type || 'info');
+    if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
+        window.IdealistaApp.showNotification(String(message || ''), notifType, ms);
+    }
+}
+
+function cooldownButton(buttonEl, seconds) {
+    if (!buttonEl) return;
+    const original = buttonEl.innerHTML;
+    let remaining = seconds;
+    buttonEl.disabled = true;
+
+    const tick = () => {
+        if (remaining <= 0) {
+            clearInterval(timer);
+            buttonEl.disabled = false;
+            buttonEl.innerHTML = original;
+            return;
+        }
+        buttonEl.innerHTML = `<i class="fas fa-clock me-1"></i>Try again in ${remaining}s`;
+        remaining -= 1;
+    };
+
+    tick();
+    const timer = setInterval(tick, 1000);
+}
+
+function setActiveAiTab(tabName) {
+    const tabId = tabName === 'chatgpt' ? 'ai-chatgpt-tab' : 'ai-claude-tab';
+    const trigger = document.getElementById(tabId);
+    if (!trigger) return;
+    const tab = bootstrap.Tab.getOrCreateInstance(trigger);
+    tab.show();
+}
+
+function openAiSection(tabName) {
+    setActiveAiTab(tabName || 'claude');
+    const section = document.getElementById('ai-analysis-section');
+    if (section && typeof section.scrollIntoView === 'function') {
+        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+}
+
+function analyzeWithClaude(propertyId) {
+    openAiSection('claude');
+    runClaudeAnalysis(propertyId);
+}
+
+function _normalizeAnalysisData(raw) {
+    if (raw === null || raw === undefined) return null;
+    if (typeof raw === 'object') return raw;
+    if (typeof raw === 'string') {
+        try {
+            return JSON.parse(raw);
+        } catch {
+            return { _raw_text: raw };
+        }
+    }
+    return { _raw_text: String(raw) };
+}
+
+function renderAnalysisInto(targetId, rawData, placeholderId) {
+    const target = document.getElementById(targetId);
+    if (!target) return;
+
+    const placeholder = placeholderId ? document.getElementById(placeholderId) : null;
+    const normalized = _normalizeAnalysisData(rawData);
+
+    if (!normalized) {
+        target.innerHTML = '';
+        if (placeholder) placeholder.style.display = '';
+        return;
+    }
+
+    if (placeholder) placeholder.style.display = 'none';
+
+    if (normalized._raw_text) {
+        target.innerHTML = `<div class="analysis-text">${String(normalized._raw_text).replace(/\n/g, '<br>')}</div>`;
+        return;
+    }
+
+    try {
+        target.innerHTML = renderStructuredAIAnalysis(normalized);
+    } catch (e) {
+        target.innerHTML = `<div class="alert alert-warning mb-0">Error rendering analysis: ${e}</div>`;
+    }
+}
+
+// Make property data available globally for JavaScript
+window.propertyData = {{ property.to_dict() | tojson }};
+
+// Existing analyses (if present)
+window.__EXISTING_CLAUDE_ANALYSIS__ = {% if property.ai_analysis %}{{ property.ai_analysis|tojson|safe }}{% else %}null{% endif %};
+window.__EXISTING_OPENAI_ANALYSIS__ = {% if openai_analysis %}{{ openai_analysis|tojson|safe }}{% else %}null{% endif %};
+
+// Initialize structured AI analysis on page load
+document.addEventListener('DOMContentLoaded', function() {
+    refreshAiComparison();
+    renderAnalysisInto('ai-claude-structured-analysis', window.__EXISTING_CLAUDE_ANALYSIS__, 'ai-claude-placeholder');
+    renderAnalysisInto('ai-chatgpt-structured-analysis', window.__EXISTING_OPENAI_ANALYSIS__, 'ai-chatgpt-placeholder');
+});
+
+function runClaudeAnalysis(propertyId) {
+    setActiveAiTab('claude');
+
+    const button = document.getElementById('ai-claude-run-btn');
+    const originalContent = button ? button.innerHTML : '';
+    const targetId = 'ai-claude-structured-analysis';
+    const placeholderId = 'ai-claude-placeholder';
+    const alertsId = 'ai-claude-alerts';
+
+    const target = document.getElementById(targetId);
+    const previousHtml = target ? target.innerHTML : '';
+
+    let queued = false;
+
+    const restoreButton = () => {
+        if (button && !button.innerHTML.includes('Try again in')) {
+            button.disabled = false;
+            button.innerHTML = originalContent;
+        }
+    };
+
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = `<i class="fas fa-spinner fa-spin me-2"></i>Analyzing…`;
+    }
+
+    const placeholder = document.getElementById(placeholderId);
+    if (placeholder) placeholder.style.display = 'none';
+
+    if (target) {
+        target.innerHTML = `
+            <div class="text-center">
+                <div class="spinner-border text-primary mb-3" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="text-muted mb-1">Claude is analyzing this property…</p>
+                <small class="text-body-secondary">This may take 10-30 seconds</small>
+            </div>
+        `;
+    }
+
+    const applyAnalysis = (analysis) => {
+        window.__EXISTING_CLAUDE_ANALYSIS__ = analysis;
+        if (target) {
+            target.innerHTML = renderStructuredAIAnalysis(_normalizeAnalysisData(analysis));
+        }
+        if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
+            window.IdealistaApp.showNotification('Claude analysis generated', 'success', 3000);
+        }
+        refreshAiComparison();
+    };
+
+    const handleFailure = (message, statusCode) => {
+        if (target) target.innerHTML = previousHtml;
+        if (statusCode === 429) {
+            showTransientAlert(alertsId, 'warning', `Rate limit reached. Try again in 20 seconds.`, 4500);
+            cooldownButton(button, 20);
+        } else {
+            showTransientAlert(alertsId, 'warning', message || `Claude is busy. Try again in 20 seconds.`, 4500);
+        }
+    };
+
+    fetch(`/api/property/${propertyId}/analyze/structured`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'claude' })
+    })
+    .then(r => r.json().then(data => ({ ok: r.ok, status: r.status, data })))
+    .then(({ ok, status, data }) => {
+        if (status === 202 && data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
+            queued = true;
+            if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
+                window.IdealistaApp.showNotification(data.message || 'Claude analysis queued', 'info', 3000);
+            }
+            IdealistaApp.pollJob(data.job_id, {
+                onSuccess: (job) => {
+                    const result = job && job.result ? job.result : {};
+                    if (result.success) {
+                        applyAnalysis(result.analysis);
+                    } else {
+                        handleFailure(result.error || 'Claude analysis failed');
+                    }
+                    queued = false;
+                    restoreButton();
+                },
+                onError: (job) => {
+                    handleFailure((job && job.error) ? job.error : 'Claude analysis failed');
+                    queued = false;
+                    restoreButton();
+                }
+            });
+            return;
+        }
+
+        if (!ok || !data || data.success !== true) {
+            handleFailure('Claude is busy. Try again in 20 seconds.', status);
+            return;
+        }
+
+        applyAnalysis(data.analysis);
+    })
+    .catch(() => {
+        handleFailure('Claude request failed. Try again in 20 seconds.');
+    })
+    .finally(() => {
+        if (!queued) {
+            restoreButton();
+        }
+    });
+}
+
+async function refreshAiComparison() {
+    const statusEl = document.getElementById('ai-compare-status');
+    const tableEl = document.getElementById('ai-compare-table');
+    const tbody = document.getElementById('ai-compare-tbody');
+    const generateBtn = document.getElementById('ai-chatgpt-run-btn');
+    const chatgptHint = document.getElementById('ai-chatgpt-config-hint');
+
+    const claudeModelLabel = document.getElementById('ai-claude-model-label');
+    const chatgptModelLabel = document.getElementById('ai-chatgpt-model-label');
+
+    if (!statusEl || !tableEl || !tbody) return;
+
+    statusEl.textContent = 'Loading…';
+    tableEl.style.display = 'none';
+    tbody.innerHTML = '';
+
+    try {
+        const resp = await fetch(`/api/property/{{ property.id }}/analysis/compare`);
+        const data = await resp.json();
+
+        if (!data || data.success !== true) {
+            throw new Error(data?.error || 'Comparison failed');
+        }
+
+        const openaiConfigured = data.openai_configured === true;
+        if (generateBtn) {
+            generateBtn.disabled = !openaiConfigured;
+            generateBtn.title = openaiConfigured ? 'Run ChatGPT analysis' : 'Set OPENAI_API_KEY in .env and restart app';
+        }
+        if (chatgptHint) {
+            chatgptHint.textContent = openaiConfigured ? '' : 'ChatGPT is not configured: set OPENAI_API_KEY in .env and restart the app.';
+        }
+
+        const claude = data.comparison?.claude;
+        const gpt = data.comparison?.chatgpt;
+        const expected = data.comparison?.expected || {};
+
+        const MISSING = '—';
+        const claudeGenerated = !!(window.__EXISTING_CLAUDE_ANALYSIS__ && claude);
+        const gptGenerated = !!(window.__EXISTING_OPENAI_ANALYSIS__ && gpt);
+
+        const c = claude?.metrics || {};
+        const g = gpt?.metrics || {};
+
+        const _formatMetricValue = (value, suffix='') => {
+            if (value === null || value === undefined || value === '') return '—';
+            if (typeof value === 'number' && Number.isFinite(value)) {
+                return `${value}${suffix}`;
+            }
+            if (typeof value === 'string') {
+                return humanizeEnumLabel(value) || '—';
+            }
+            return String(value);
+        };
+
+        const _appendRow = (tbodyEl, label, claudeVal, gptVal, baselineVal) => {
+            const tr = document.createElement('tr');
+            const td0 = document.createElement('td');
+            td0.className = 'fw-semibold';
+            td0.textContent = label;
+            const td1 = document.createElement('td');
+            td1.textContent = claudeVal;
+            const td2 = document.createElement('td');
+            td2.textContent = gptVal;
+            const td3 = document.createElement('td');
+            td3.className = 'text-body-secondary';
+            td3.textContent = baselineVal;
+            tr.appendChild(td0);
+            tr.appendChild(td1);
+            tr.appendChild(td2);
+            tr.appendChild(td3);
+            tbodyEl.appendChild(tr);
+        };
+
+        _appendRow(
+            tbody,
+            'Investment rating',
+            claudeGenerated ? _formatMetricValue(c.investment_rating) : MISSING,
+            gptGenerated ? _formatMetricValue(g.investment_rating) : MISSING,
+            _formatMetricValue(expected.investment_rating)
+        );
+        _appendRow(
+            tbody,
+            'Rental yield',
+            claudeGenerated ? _formatMetricValue(c.rental_yield, '%') : MISSING,
+            gptGenerated ? _formatMetricValue(g.rental_yield, '%') : MISSING,
+            _formatMetricValue(expected.rental_yield, '%')
+        );
+        _appendRow(
+            tbody,
+            'Cap rate',
+            claudeGenerated ? _formatMetricValue(c.cap_rate, '%') : MISSING,
+            gptGenerated ? _formatMetricValue(g.cap_rate, '%') : MISSING,
+            _formatMetricValue(expected.cap_rate, '%')
+        );
+        _appendRow(
+            tbody,
+            'Price / rent ratio',
+            claudeGenerated ? _formatMetricValue(c.price_to_rent_ratio) : MISSING,
+            gptGenerated ? _formatMetricValue(g.price_to_rent_ratio) : MISSING,
+            _formatMetricValue(expected.price_to_rent_ratio)
+        );
+        _appendRow(
+            tbody,
+            'Payback (years)',
+            claudeGenerated ? _formatMetricValue(c.payback_period_years) : MISSING,
+            gptGenerated ? _formatMetricValue(g.payback_period_years) : MISSING,
+            _formatMetricValue(expected.payback_period_years)
+        );
+
+        _appendRow(
+            tbody,
+            'Schema completeness',
+            claudeGenerated ? `${claude?.schema?.found || 0}/${claude?.schema?.total || 0}` : MISSING,
+            gptGenerated ? `${gpt?.schema?.found || 0}/${gpt?.schema?.total || 0}` : MISSING,
+            MISSING
+        );
+        _appendRow(
+            tbody,
+            'Numeric fidelity (vs baseline)',
+            claudeGenerated ? _formatMetricValue(claude?.fidelity_score, '/100') : MISSING,
+            gptGenerated ? _formatMetricValue(gpt?.fidelity_score, '/100') : MISSING,
+            MISSING
+        );
+        _appendRow(
+            tbody,
+            'Overall score (baseline)',
+            claudeGenerated ? _formatMetricValue(claude?.overall_score, '/100') : MISSING,
+            gptGenerated ? _formatMetricValue(gpt?.overall_score, '/100') : MISSING,
+            MISSING
+        );
+
+        const claudeModel = data.claude_model || 'unknown';
+        if (claudeModelLabel) claudeModelLabel.textContent = `Powered by Claude (${claudeModel})`;
+        if (chatgptModelLabel) {
+            if (data.has_chatgpt) {
+                chatgptModelLabel.textContent = `Powered by ChatGPT (${data.chatgpt_model || 'unknown'})`;
+            } else {
+                chatgptModelLabel.textContent = 'Powered by ChatGPT';
+            }
+        }
+
+        const statusParts = [];
+        statusParts.push(`Claude: ${claudeModel}${claudeGenerated ? '' : ' (not generated)'}`);
+
+        if (!openaiConfigured) {
+            statusParts.push('ChatGPT: not configured (set OPENAI_API_KEY in .env, then restart the app).');
+        } else if (data.has_chatgpt) {
+            statusParts.push(`ChatGPT: ${data.chatgpt_model || 'unknown'}`);
+        } else {
+            statusParts.push('ChatGPT: not generated (open the ChatGPT tab and click “Run ChatGPT”).');
+        }
+
+        statusEl.textContent = statusParts.join(' • ');
+        tableEl.style.display = '';
+    } catch (e) {
+        statusEl.textContent = `Failed to load comparison: ${e}`;
+    }
+}
+
+async function generateChatGPTAnalysis(propertyId) {
+    try {
+        setActiveAiTab('chatgpt');
+        const btn = document.getElementById('ai-chatgpt-run-btn');
+        const targetId = 'ai-chatgpt-structured-analysis';
+        const placeholderId = 'ai-chatgpt-placeholder';
+        const alertsId = 'ai-chatgpt-alerts';
+        const placeholder = document.getElementById(placeholderId);
+        if (placeholder) placeholder.style.display = 'none';
+
+        const target = document.getElementById(targetId);
+        const previousHtml = target ? target.innerHTML : '';
+        if (target) {
+            target.innerHTML = `
+                <div class="text-center">
+                    <div class="spinner-border text-primary mb-3" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="text-muted mb-1">ChatGPT is analyzing this property…</p>
+                    <small class="text-body-secondary">This may take 10-30 seconds</small>
+                </div>
+            `;
+        }
+
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fas fa-spinner fa-spin me-2"></i>Analyzing…`;
+        }
+
+        const resp = await fetch(`/api/property/${propertyId}/analyze/structured`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider: 'openai' })
+        });
+        const data = await resp.json().catch(() => null);
+
+        const applyAnalysis = (analysis) => {
+            window.__EXISTING_OPENAI_ANALYSIS__ = analysis;
+            if (target) {
+                target.innerHTML = renderStructuredAIAnalysis(_normalizeAnalysisData(analysis));
+            }
+            if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
+                window.IdealistaApp.showNotification('ChatGPT analysis generated', 'success');
+            }
+            refreshAiComparison();
+        };
+
+        const handleFailure = (message, statusCode) => {
+            if (target) target.innerHTML = previousHtml;
+            if (statusCode === 429) {
+                showTransientAlert(alertsId, 'warning', `Rate limit reached. Try again in 20 seconds.`, 4500);
+                cooldownButton(btn, 20);
+            } else {
+                showTransientAlert(alertsId, 'warning', message || `ChatGPT failed. Try again in 20 seconds.`, 4500);
+            }
+        };
+
+        if (resp.status === 202 && data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
+            if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
+                window.IdealistaApp.showNotification(data.message || 'ChatGPT analysis queued', 'info');
+            }
+            await new Promise((resolve, reject) => {
+                IdealistaApp.pollJob(data.job_id, {
+                    onSuccess: (job) => {
+                        const result = job && job.result ? job.result : {};
+                        if (result.success) {
+                            applyAnalysis(result.analysis);
+                            resolve();
+                        } else {
+                            handleFailure(result.error || 'ChatGPT analysis failed');
+                            resolve();
+                        }
+                    },
+                    onError: (job) => {
+                        handleFailure((job && job.error) ? job.error : 'ChatGPT analysis failed');
+                        resolve();
+                    }
+                });
+            });
+            return;
+        }
+
+        if (!data || data.success !== true) {
+            handleFailure('ChatGPT failed. Try again in 20 seconds.', resp.status);
+            return;
+        }
+
+        applyAnalysis(data.analysis);
+    } catch (e) {
+        showTransientAlert('ai-chatgpt-alerts', 'warning', `ChatGPT request failed. Try again in 20 seconds.`, 4500);
+    } finally {
+        const btn = document.getElementById('ai-chatgpt-run-btn');
+        if (btn && !btn.innerHTML.includes('Try again in')) {
+            btn.disabled = false;
+            btn.innerHTML = `<i class="fas fa-wand-magic-sparkles me-1"></i>Run ChatGPT`;
+        }
+    }
+}
+</script>
+{% endblock %}

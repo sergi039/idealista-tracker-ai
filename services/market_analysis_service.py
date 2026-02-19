@@ -1,7 +1,7 @@
 """
 Market Analysis Service
 Provides construction cost estimates and market price dynamics
-based on real data from Asturias region
+based on configurable assumptions (defaults are generic for Spain)
 """
 
 import logging
@@ -17,26 +17,26 @@ logger = logging.getLogger(__name__)
 class MarketAnalysisService:
     """Service for analyzing market trends and construction costs"""
 
-    # Default values for Asturias 2025 (used as fallback if DB settings not available)
+    # Default values for 2025 (used as fallback if DB settings not available)
     DEFAULT_CONSTRUCTION_COSTS = {
         'basic': {'min': 1100, 'avg': 1300, 'max': 1500},
         'premium': {'min': 1500, 'avg': 1800, 'max': 2200}
     }
-    # Asturias ITP: 8% (<€300K), 9% (€300-500K), 10% (>€500K) + notary/registry ~2%
+    # Typical purchase costs ratio (transfer tax/VAT + notary/registry/legal); varies by region and deal.
     DEFAULT_PURCHASE_COSTS_RATIO = 0.10
     DEFAULT_RENTAL_ADJUSTMENTS = {
         'urban': {'vacancy_rate': 0.05, 'operating_expenses': 0.15, 'management_fee': 0.00},
         'suburban': {'vacancy_rate': 0.08, 'operating_expenses': 0.15, 'management_fee': 0.00},
         'rural': {'vacancy_rate': 0.20, 'operating_expenses': 0.18, 'management_fee': 0.10}
     }
-    # Rental prices per m²/month - Asturias 2025 (Idealista: Gijón €10.6, Oviedo €10.5)
+    # Rental prices per m²/month - configurable (defaults are generic).
     DEFAULT_RENTAL_PRICES = {
         'urban': {'min': 9, 'avg': 11, 'max': 13},
         'suburban': {'min': 7, 'avg': 9, 'max': 11},
         'rural': {'min': 5, 'avg': 7, 'max': 9}
     }
 
-    # Typical buildability ratios for different land types in Asturias
+    # Typical buildability ratios (heuristics; configurable later if needed)
     BUILDABILITY_RATIOS = {
         'developed': 0.25,      # 25% of land area can be built
         'undeveloped': 0.20,    # 20% for undeveloped land
@@ -44,7 +44,7 @@ class MarketAnalysisService:
         'default': 0.20         # Default 20%
     }
 
-    # Rental market data for Asturias (2024-2025)
+    # Rental market yield heuristics (2024-2025; configurable)
     RENTAL_YIELDS = {
         'urban': {'min': 3.5, 'avg': 4.5, 'max': 5.5},
         'suburban': {'min': 4.0, 'avg': 5.0, 'max': 6.0},
@@ -98,7 +98,7 @@ class MarketAnalysisService:
                     }
                 }
 
-                # Load rental prices from DB (Asturias 2025 defaults)
+                # Load rental prices from DB
                 self.RENTAL_PRICES = {
                     'urban': {
                         'min': settings.urban_rental_min or 9,
@@ -133,6 +133,22 @@ class MarketAnalysisService:
             self.RENTAL_ADJUSTMENTS = self.DEFAULT_RENTAL_ADJUSTMENTS.copy()
             self.RENTAL_PRICES = self.DEFAULT_RENTAL_PRICES.copy()
 
+    @staticmethod
+    def _reference_city_tokens() -> List[str]:
+        """Return normalized reference-city tokens for use as 'urban center' hints."""
+        try:
+            from services.settings_service import SettingsService
+
+            cities = SettingsService.get_reference_cities()
+            out: List[str] = []
+            for c in cities:
+                name = str((c or {}).get("name") or "").strip().lower()
+                if name:
+                    out.append(name)
+            return out
+        except Exception:
+            return []
+
     def _evaluate_construction_quality_objective(self, land: Land) -> Dict:
         """
         Evaluate construction quality based on objective criteria (score-independent)
@@ -153,15 +169,14 @@ class MarketAnalysisService:
         
         # 2. Municipality Quality (20 points max)
         municipality = (land.municipality or "").lower()
-        major_cities = ['gijón', 'oviedo', 'avilés', 'madrid', 'barcelona']
-        secondary_cities = ['suances', 'ribadedeva', 'llanes', 'ribadesella', 'santander']
+        major_cities = self._reference_city_tokens() or ['madrid', 'barcelona']
         
         if any(city in municipality for city in major_cities):
             quality_points += 20
             quality_factors.append(f"Premium location: {land.municipality}")
-        elif any(city in municipality for city in secondary_cities):
+        elif (land.travel_time_oviedo and land.travel_time_oviedo <= 60) or (land.travel_time_gijon and land.travel_time_gijon <= 60):
             quality_points += 15
-            quality_factors.append(f"Good location: {land.municipality}")
+            quality_factors.append(f"Good access to urban center: {land.municipality}")
         else:
             quality_points += 10
             quality_factors.append(f"Rural location: {land.municipality or 'Unknown'}")
@@ -370,13 +385,13 @@ class MarketAnalysisService:
                     trend_analysis = "Prices have remained relatively stable"
             else:
                 trend = "STABLE"
-                growth_rate = 3.5  # Default Asturias average
-                trend_analysis = "Insufficient data for trend analysis - using regional average"
+                growth_rate = 3.5
+                trend_analysis = "Insufficient data for trend analysis - using default assumption"
             
-            # Market factors specific to Asturias
+            # Market factors (best-effort heuristics)
             market_factors = []
             if land.municipality:
-                if any(city in land.municipality.lower() for city in ['gijón', 'oviedo', 'avilés']):
+                if any(city in land.municipality.lower() for city in (self._reference_city_tokens() or [])):
                     market_factors.append("Major urban center driving demand")
                 if (land.travel_time_nearest_beach and land.travel_time_nearest_beach <= 30) or (land.environment and land.environment.get('sea_view')):
                     market_factors.append("Coastal location premium")
@@ -397,9 +412,9 @@ class MarketAnalysisService:
             
             if not market_factors:
                 market_factors = [
-                    "Rural tourism development in Asturias",
+                    "Lifestyle/second-home demand",
                     "Growing remote work population",
-                    "Infrastructure improvements in the region"
+                    "Local infrastructure improvements"
                 ]
             
             return {
@@ -428,11 +443,12 @@ class MarketAnalysisService:
             location_type = 'rural'  # default
             if land.municipality:
                 municipality_lower = land.municipality.lower()
-                # Major Asturian cities = urban
-                if any(city in municipality_lower for city in ['gijón', 'oviedo', 'avilés']):
+                major_cities = self._reference_city_tokens() or ['madrid', 'barcelona']
+                # Major cities = urban
+                if any(city in municipality_lower for city in major_cities):
                     location_type = 'urban'
-                # Towns near major cities or coastal = suburban
-                elif any(town in municipality_lower for town in ['siero', 'llanera', 'noreña', 'villaviciosa', 'carreño', 'gozón']):
+                # Near major cities (commutable) = suburban
+                elif (land.travel_time_oviedo and land.travel_time_oviedo <= 60) or (land.travel_time_gijon and land.travel_time_gijon <= 60):
                     location_type = 'suburban'
             
             # Get rental yields and prices for location
@@ -514,7 +530,7 @@ class MarketAnalysisService:
             else:  # rural
                 demand_factors = [
                     "Vacation rental potential (Airbnb)",
-                    "Rural tourism growth in Asturias",
+                    "Nature / rural tourism demand",
                     "Weekend home rental opportunities"
                 ]
             
@@ -538,7 +554,7 @@ class MarketAnalysisService:
                 'rental_price_per_m2': f"€{rental_prices['avg']}/m²/month",
                 'demand_factors': demand_factors,
                 'investment_rating': self._get_investment_rating(net_rental_yield, cap_rate),
-                'market_comparison': f"Average rental yield in {location_type} Asturias: {yields['avg']}% gross, ~{yields['avg'] * 0.7:.1f}% net",
+                'market_comparison': f"Average rental yield in {location_type}: {yields['avg']}% gross, ~{yields['avg'] * 0.7:.1f}% net",
                 # Transparency: show assumptions
                 'assumptions': {
                     'vacancy_rate': f"{vacancy_rate * 100:.0f}%",
@@ -572,17 +588,17 @@ class MarketAnalysisService:
             return "BELOW AVERAGE - Consider other options"
     
     def _get_default_market_trends(self) -> Dict:
-        """Return default market trends for Asturias region"""
+        """Return default market trends (generic)."""
         return {
             'price_trend': 'STABLE',
             'annual_growth_rate': 3.5,
             'trend_period': '2024-2025',
-            'trend_analysis': 'Asturias property market shows steady growth',
-            'future_outlook': 'Expected 3-5% annual appreciation in line with regional averages',
+            'trend_analysis': 'Market shows steady growth',
+            'future_outlook': 'Expected 3-5% annual appreciation in line with broad averages',
             'market_factors': [
-                'Stable tourism industry',
-                'Growing interest in rural properties',
-                'Infrastructure development in the region'
+                'Stable local demand',
+                'Seasonality and second-home demand in some areas',
+                'Infrastructure development'
             ],
             'avg_price_per_m2': 50,
             'min_price_per_m2': 30,
