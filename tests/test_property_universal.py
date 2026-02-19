@@ -38,6 +38,14 @@ def test_extract_url_supports_language_and_root_paths():
     assert extract_url("https://www.idealista.com/inmueble/456/") == "https://www.idealista.com/inmueble/456/"
 
 
+def test_legacy_lands_page_redirects_to_properties(app):
+    client = app.test_client()
+    response = client.get("/lands?view_type=list&search=foo", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers.get("Location") == "/properties?view_type=list&search=foo"
+
+
 def test_extract_listing_title_and_municipality_from_email_html():
     html = """
     <html><body>
