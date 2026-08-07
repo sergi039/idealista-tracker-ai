@@ -53,6 +53,7 @@ def index():
     return redirect(url_for('main.properties'))
 
 @main_bp.route('/properties')
+@admin_required
 def properties():
     """Universal properties listing page (new model, migration-in-progress)."""
     try:
@@ -308,6 +309,7 @@ def lands():
     return redirect(target, code=302)
 
 @main_bp.route('/properties/<int:property_id>')
+@admin_required
 def property_detail(property_id):
     """Detailed view of a specific property (new universal model)."""
     try:
@@ -1191,6 +1193,7 @@ def set_property_profile_form(property_id: int):
 
 
 @main_bp.route('/lands/<int:land_id>')
+@admin_required
 def land_detail(land_id):
     """Detailed view of a specific land"""
     try:
@@ -1271,6 +1274,7 @@ def land_detail(land_id):
         return redirect(url_for('main.lands'))
 
 @main_bp.route('/map')
+@admin_required
 def map_view():
     """Interactive map view of all properties with coordinates"""
     try:
@@ -1415,6 +1419,7 @@ def map_view():
         return render_template('map.html', markers=[], profiles=[], selected_profile_id=None, travel_display_targets=[])
 
 @main_bp.route('/criteria')
+@admin_required
 def criteria():
     """Scoring criteria management page with dual scoring profiles"""
     try:
@@ -1906,6 +1911,7 @@ def update_score(land_id):
         return redirect(url_for('main.land_detail', land_id=land_id))
 
 @main_bp.route('/export.csv')
+@admin_required
 def export_csv():
     """Export current land selection to CSV"""
     try:
@@ -2073,6 +2079,7 @@ def export_csv():
         return redirect(url_for('main.lands'))
 
 @main_bp.route('/properties/export.csv')
+@admin_required
 def export_properties_csv():
     """Export current property selection to CSV (profile-aware)."""
     try:
