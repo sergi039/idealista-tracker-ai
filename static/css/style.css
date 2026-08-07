@@ -28,12 +28,22 @@
 
 /* Table cell truncation for property titles */
 .table-title {
-    max-width: 200px;
+    /* Fill the cell instead of a fixed 200px: under table-layout: fixed a
+       wider inline-block overflows and paints over the price column. */
+    max-width: 100%;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
-    display: inline-block;
+    display: block;
     cursor: help;
+}
+
+/* Table cells default to min-width:auto, which lets content push past the
+   allotted column width; 0 lets the ellipsis above actually kick in. */
+.table-title-cell,
+td:has(> .fw-bold > .table-title) {
+    min-width: 0;
+    overflow: hidden;
 }
 
 /* HTMX indicators */
