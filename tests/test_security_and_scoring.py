@@ -468,6 +468,64 @@ class TestPropertyDataRequiresAuth:
 
 
 # ---------------------------------------------------------------------------
+# Security: the full project source archive must not be downloadable
+# ---------------------------------------------------------------------------
+class TestSourceArchiveNotServed:
+    """Issue #29: GET /api/download/project served the full project source
+    archive (zip/tar.gz/txt) to anyone, unauthenticated, via
+    send_from_directory. Gating that route alone is not enough: the archive
+    files and the download.html page linking to them lived under static/,
+    which Flask serves directly at /static/<name> regardless of any
+    @admin_required decorator on an unrelated api_routes.py route. The real
+    fix removes the archives (and the dead route) from the repo entirely."""
+
+    ARCHIVE_STATIC_PATHS = [
+        '/static/idealista-project-new.zip',
+        '/static/idealista-project.tar.gz',
+        '/static/all_code.txt',
+        '/static/download.html',
+    ]
+
+    def test_archive_route_no_longer_exists(self, auth_disabled_client, client):
+        """The dead /api/download/project endpoint must not come back as a
+        live route, for anonymous or authenticated callers."""
+        for c in (auth_disabled_client, client):
+            resp = c.get('/api/download/project')
+            assert resp.status_code == 404, (
+                f"/api/download/project returned {resp.status_code}, expected 404 (route removed)"
+            )
+
+    def test_archive_files_not_served_from_static_anonymous(self, auth_disabled_client):
+        """None of the source-archive files must be reachable under /static/,
+        which Flask serves unauthenticated regardless of any route decorator."""
+        for path in self.ARCHIVE_STATIC_PATHS:
+            resp = auth_disabled_client.get(path)
+            assert resp.status_code == 404, (
+                f"{path} returned {resp.status_code}, expected 404 (file must not exist in static/)"
+            )
+
+    def test_archive_files_not_served_from_static_authenticated(self, client):
+        """Same check as an authenticated admin: the files must be gone, not
+        merely access-gated, since static/ bypasses admin_required entirely."""
+        for path in self.ARCHIVE_STATIC_PATHS:
+            resp = client.get(path)
+            assert resp.status_code == 404, (
+                f"{path} returned {resp.status_code}, expected 404 (file must not exist in static/)"
+            )
+
+    def test_archive_files_not_present_on_disk(self):
+        """Filesystem-level guard against silently recommitting the bundles:
+        regression coverage above only proves the *current* checkout is
+        clean, so also assert the files aren't sitting in static/ at all."""
+        import os as _os
+
+        static_dir = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), 'static')
+        for name in ('idealista-project-new.zip', 'idealista-project.tar.gz', 'all_code.txt', 'download.html'):
+            assert not _os.path.exists(_os.path.join(static_dir, name)), (
+                f"static/{name} must not be committed (issue #29: unauthenticated source disclosure)"
+            )
+
+# ---------------------------------------------------------------------------
 # Security: error messages don't leak internals
 # ---------------------------------------------------------------------------
 class TestErrorSanitization:

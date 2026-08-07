@@ -1,7 +1,6 @@
 import logging
-import os
 from datetime import datetime, timezone
-from flask import Blueprint, current_app, jsonify, request, send_from_directory
+from flask import Blueprint, current_app, jsonify, request
 from models import Land, LandHistory, ScoringCriteria, SyncHistory, AiAnalysisVariant
 from app import db
 from app import limiter
@@ -66,24 +65,6 @@ def health_check():
     all_ok = checks.get('database') == 'ok'
     status_code = 200 if all_ok else 503
     return jsonify({"ok": all_ok, "checks": checks}), status_code
-
-@api_bp.route('/download/project')
-def download_project():
-    """Download project archive"""
-    try:
-        static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static')
-        # Check which archive file exists
-        if os.path.exists(os.path.join(static_dir, 'idealista-project-new.zip')):
-            filename = 'idealista-project-new.zip'
-        elif os.path.exists(os.path.join(static_dir, 'idealista-project.tar.gz')):
-            filename = 'idealista-project.tar.gz'
-        else:
-            return jsonify({"error": "Project archive not found"}), 404
-        
-        return send_from_directory(static_dir, filename, as_attachment=True)
-    except Exception:
-        logger.error("Failed to serve project archive", exc_info=True)
-        return jsonify({"error": "Project archive not found"}), 404
 
 @api_bp.route('/lands/enrich-all', methods=['POST'])
 @admin_required
