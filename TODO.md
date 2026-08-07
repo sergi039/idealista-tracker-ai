@@ -27,6 +27,10 @@ This is the active backlog for the **new universal build** (`http://localhost:50
   - [ ] Collect 1–2 real email samples per deferred type and add regression tests
   - [ ] Refine rules from more email samples (avoid overfitting)
 
+## P1 — CI / quality gates
+
+- [ ] Add minimal CI workflow (GitHub Actions): run `pytest tests/` on push/PR. Today there is no `.github/workflows/` at all, so the 216 tests gate nothing. Tracked in [#31](https://github.com/sergi039/idealista-tracker-ai/issues/31). Source: AgentsRoom audit 2026-08-07 (`Skills/docs/agentsroom-projects.md` §6).
+
 ## P2 — UX polish
 
 - [x] Remove legacy links from the universal navbar (projects stay isolated).
