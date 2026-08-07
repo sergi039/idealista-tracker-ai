@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     container_name: idealista-app
     ports:
-      - "5001:5001"
+      - "127.0.0.1:5001:5001"
     depends_on:
       db:
         condition: service_healthy
@@ -26,7 +26,7 @@ services:
     image: postgres:15-alpine
     container_name: idealista-db
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5434:5432"
     environment:
       POSTGRES_DB: ${DB_NAME:-idealista_universal}
       POSTGRES_USER: ${DB_USER:-idealista}
