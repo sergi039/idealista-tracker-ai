@@ -5,18 +5,25 @@ from typing import Any, Dict, List, Optional, Tuple
 
 _PROPERTY_ID_RE = re.compile(r"/inmueble/(\d+)", re.IGNORECASE)
 
-# Price patterns (supports Spanish/English thousand separators)
+# Anchored number matcher (supports Spanish/English thousand separators, or none
+# at all). The lookbehind/lookahead forbid the match from starting or ending in
+# the middle of a longer digit/separator run, so a regex can never latch onto a
+# trailing fragment of a bigger number (root cause of GH issue #21: unanchored
+# `\d{1,3}(?:[.,]\d{3})*` patterns matched the trailing "000" of "59.000 €" as
+# its own, wrong "0.0" price).
+_PRICE_NUMBER = r'(?<![\d.,])(?:\d{1,3}(?:[.,]\d{3})+|\d+)(?![\d.,])'
+
+# Price patterns (supports Spanish/English thousand separators, and plain
+# digits with no separator at all, e.g. "59000 €").
 _PRICE_PATTERNS = [
-    r'(\d{1,3}(?:,\d{3})*)\s*€',
-    r'(\d{1,3}(?:\.\d{3})*)\s*€',
-    r'Price:?\s*(\d{1,3}(?:,\d{3})*)\s*€',
-    r'Precio:?\s*(\d{1,3}(?:\.\d{3})*)\s*€',
+    rf'(?:Price|Precio):?\s*({_PRICE_NUMBER})\s*€',
+    rf'({_PRICE_NUMBER})\s*€',
 ]
 
 # Price change patterns: extract (old, new) from "from X€ to Y€" / "de X€ a Y€".
 _PRICE_CHANGE_PATTERNS = [
-    r'\bfrom\s+(\d{1,3}(?:[.,]\d{3})*)\s*€\s+to\s+(\d{1,3}(?:[.,]\d{3})*)\s*€',
-    r'\bde\s+(\d{1,3}(?:[.,]\d{3})*)\s*€\s+a\s+(\d{1,3}(?:[.,]\d{3})*)\s*€',
+    rf'\bfrom\s+({_PRICE_NUMBER})\s*€\s+to\s+({_PRICE_NUMBER})\s*€',
+    rf'\bde\s+({_PRICE_NUMBER})\s*€\s+a\s+({_PRICE_NUMBER})\s*€',
 ]
 
 # Area patterns (m² / m2; no minimum threshold)
@@ -157,13 +164,13 @@ def extract_price_change(text: str) -> Tuple[Optional[float], Optional[float]]:
     # HTML formatting fallback: old price is struck through, new price follows.
     try:
         strike_re = re.compile(
-            r"(?is)(?:<s[^>]*>|<del[^>]*>|text-decoration\s*:\s*line-through[^>]*>)\s*(\d{1,3}(?:[.,]\d{3})*)\s*€",
+            rf"(?is)(?:<s[^>]*>|<del[^>]*>|text-decoration\s*:\s*line-through[^>]*>)\s*({_PRICE_NUMBER})\s*€",
         )
         strike_match = strike_re.search(text)
         if strike_match:
             old_price = _parse_price_number(strike_match.group(1))
             tail_plain = _strip_html(text[strike_match.end() :])
-            m = re.search(r"(\d{1,3}(?:[.,]\d{3})*)\s*€", tail_plain)
+            m = re.search(rf"({_PRICE_NUMBER})\s*€", tail_plain)
             if m:
                 new_price = _parse_price_number(m.group(1))
                 if old_price is not None and new_price is not None:
@@ -182,7 +189,7 @@ def extract_price_change(text: str) -> Tuple[Optional[float], Optional[float]]:
             return old_price, new_price
 
     all_prices: list[tuple[int, float]] = []
-    for m in re.finditer(r"(\d{1,3}(?:[.,]\d{3})*)\s*€", plain):
+    for m in re.finditer(rf"({_PRICE_NUMBER})\s*€", plain):
         parsed = _parse_price_number(m.group(1))
         if parsed is None:
             continue
