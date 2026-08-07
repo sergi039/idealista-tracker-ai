@@ -5,18 +5,36 @@ from typing import Any, Dict, List, Optional, Tuple
 
 _PROPERTY_ID_RE = re.compile(r"/inmueble/(\d+)", re.IGNORECASE)
 
-# Price patterns (supports Spanish/English thousand separators)
+# Two mutually exclusive number "grammars": in the first, '.' groups thousands
+# and ',' introduces 1-2 decimal digits (e.g. "1.234,56"); in the second the
+# roles are swapped (e.g. "1,234.56"). Both are anchored with a
+# lookbehind/lookahead so a match can never start or end in the middle of a
+# longer digit/separator run (root cause of GH issue #21: unanchored patterns
+# matched the trailing "000" fragment of "59.000 €" as its own, wrong "0.0"
+# price), and each grammar requires internally consistent separator usage, so
+# a genuinely mixed/invalid number like "1.234,567" (3 "decimal" digits under
+# the dot-group grammar) matches neither grammar and is correctly rejected
+# rather than silently truncated (PR #33 review follow-up finding).
+_NUMBER_DOT_GROUP = r'(?<![\d.,])(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2}))?(?![\d.,])'
+_NUMBER_COMMA_GROUP = r'(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?![\d.,])'
+# Either grammar as one alternation with 4 capture groups: exactly one
+# (dot_int, dot_dec) or (comma_int, comma_dec) pair is populated, depending on
+# which grammar matched. Parse with _parse_number_groups().
+_PRICE_NUMBER = rf'(?:{_NUMBER_DOT_GROUP}|{_NUMBER_COMMA_GROUP})'
+
+# Price patterns (supports Spanish/English thousand separators, decimal
+# endings, and plain digits with no separator at all, e.g. "59000 €").
 _PRICE_PATTERNS = [
-    r'(\d{1,3}(?:,\d{3})*)\s*€',
-    r'(\d{1,3}(?:\.\d{3})*)\s*€',
-    r'Price:?\s*(\d{1,3}(?:,\d{3})*)\s*€',
-    r'Precio:?\s*(\d{1,3}(?:\.\d{3})*)\s*€',
+    rf'(?:Price|Precio):?\s*{_PRICE_NUMBER}\s*€',
+    rf'{_PRICE_NUMBER}\s*€',
 ]
 
 # Price change patterns: extract (old, new) from "from X€ to Y€" / "de X€ a Y€".
+# Groups 1-4 are the old price (dot_int, dot_dec, comma_int, comma_dec);
+# groups 5-8 are the new price, in the same layout.
 _PRICE_CHANGE_PATTERNS = [
-    r'\bfrom\s+(\d{1,3}(?:[.,]\d{3})*)\s*€\s+to\s+(\d{1,3}(?:[.,]\d{3})*)\s*€',
-    r'\bde\s+(\d{1,3}(?:[.,]\d{3})*)\s*€\s+a\s+(\d{1,3}(?:[.,]\d{3})*)\s*€',
+    rf'\bfrom\s+{_PRICE_NUMBER}\s*€\s+to\s+{_PRICE_NUMBER}\s*€',
+    rf'\bde\s+{_PRICE_NUMBER}\s*€\s+a\s+{_PRICE_NUMBER}\s*€',
 ]
 
 # Area patterns (m² / m2; no minimum threshold)
@@ -107,15 +125,37 @@ def extract_url(text: str) -> Optional[str]:
     return url
 
 
-def _parse_price_number(value: str) -> Optional[float]:
-    raw = (value or "").strip()
-    if not raw:
+def _parse_price_match(int_part: Optional[str], dec_part: Optional[str]) -> Optional[float]:
+    """Combine a group-separated integer part with an optional 1-2 digit
+    decimal part into a float. `int_part` is expected to contain only digits
+    and a single, consistent group separator (already enforced by whichever
+    _NUMBER_*_GROUP grammar produced it)."""
+    if int_part is None:
         return None
-    raw = raw.replace(",", "").replace(".", "")
+    digits = re.sub(r"[.,]", "", int_part)
+    if not digits:
+        return None
     try:
-        return float(raw)
+        value = float(digits)
     except ValueError:
         return None
+    if dec_part:
+        try:
+            value += int(dec_part) / (10 ** len(dec_part))
+        except ValueError:
+            return None
+    return value
+
+
+def _parse_number_groups(groups: Tuple[Optional[str], ...]) -> Optional[float]:
+    """Parse a (dot_int, dot_dec, comma_int, comma_dec) 4-tuple captured by
+    _PRICE_NUMBER: exactly one grammar's (int, dec) pair is populated."""
+    dot_int, dot_dec, comma_int, comma_dec = groups
+    if dot_int is not None:
+        return _parse_price_match(dot_int, dot_dec)
+    if comma_int is not None:
+        return _parse_price_match(comma_int, comma_dec)
+    return None
 
 
 def extract_price(text: str) -> Optional[float]:
@@ -132,7 +172,7 @@ def extract_price(text: str) -> Optional[float]:
     seen: set[tuple[int, float]] = set()
     for pattern in _PRICE_PATTERNS:
         for m in re.finditer(pattern, plain, re.IGNORECASE):
-            parsed = _parse_price_number(m.group(1))
+            parsed = _parse_number_groups(m.groups())
             if parsed is None:
                 continue
             key = (m.start(), parsed)
@@ -157,15 +197,15 @@ def extract_price_change(text: str) -> Tuple[Optional[float], Optional[float]]:
     # HTML formatting fallback: old price is struck through, new price follows.
     try:
         strike_re = re.compile(
-            r"(?is)(?:<s[^>]*>|<del[^>]*>|text-decoration\s*:\s*line-through[^>]*>)\s*(\d{1,3}(?:[.,]\d{3})*)\s*€",
+            rf"(?is)(?:<s[^>]*>|<del[^>]*>|text-decoration\s*:\s*line-through[^>]*>)\s*{_PRICE_NUMBER}\s*€",
         )
         strike_match = strike_re.search(text)
         if strike_match:
-            old_price = _parse_price_number(strike_match.group(1))
+            old_price = _parse_number_groups(strike_match.groups())
             tail_plain = _strip_html(text[strike_match.end() :])
-            m = re.search(r"(\d{1,3}(?:[.,]\d{3})*)\s*€", tail_plain)
+            m = re.search(rf"{_PRICE_NUMBER}\s*€", tail_plain)
             if m:
-                new_price = _parse_price_number(m.group(1))
+                new_price = _parse_number_groups(m.groups())
                 if old_price is not None and new_price is not None:
                     return old_price, new_price
     except Exception:
@@ -176,14 +216,14 @@ def extract_price_change(text: str) -> Tuple[Optional[float], Optional[float]]:
         match = re.search(pattern, plain, re.IGNORECASE)
         if not match:
             continue
-        old_price = _parse_price_number(match.group(1))
-        new_price = _parse_price_number(match.group(2))
+        old_price = _parse_number_groups(match.groups()[0:4])
+        new_price = _parse_number_groups(match.groups()[4:8])
         if old_price is not None and new_price is not None:
             return old_price, new_price
 
     all_prices: list[tuple[int, float]] = []
-    for m in re.finditer(r"(\d{1,3}(?:[.,]\d{3})*)\s*€", plain):
-        parsed = _parse_price_number(m.group(1))
+    for m in re.finditer(rf"{_PRICE_NUMBER}\s*€", plain):
+        parsed = _parse_number_groups(m.groups())
         if parsed is None:
             continue
         all_prices.append((m.start(), parsed))
