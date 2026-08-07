@@ -319,7 +319,7 @@
                                         <th style="width: 40px; text-align: center;" title="Favorites">
                                             <i class="fas fa-star text-warning"></i>
                                         </th>
-                                        <th>{{ t('title') }}</th>
+                                        <th class="lands-title-col">{{ t('title') }}</th>
                                         <th style="min-width: 120px !important; white-space: nowrap !important;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='price', order='desc' if current_filters.sort_by == 'price' and current_filters.order == 'asc' else 'asc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}" 
                                                class="lands-th-link text-decoration-none d-flex align-items-center">
@@ -446,7 +446,7 @@
                                                        style="font-size: 1.1rem; cursor: pointer;"></i>
                                                 </button>
                                             </td>
-                                            <td>
+                                            <td class="lands-title-col">
                                                 <div class="fw-bold">
                                                     <a href="{{ url_for('main.land_detail', land_id=land.id) }}"
                                                        class="text-decoration-none table-title"

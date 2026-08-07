@@ -38,11 +38,12 @@
     cursor: help;
 }
 
-/* Table cells default to min-width:auto, which lets content push past the
-   allotted column width; 0 lets the ellipsis above actually kick in. */
-.table-title-cell,
-td:has(> .fw-bold > .table-title) {
-    min-width: 0;
+/* The title column carries no width of its own, so under table-layout: fixed
+   the neighbouring min-width columns squeeze it to nothing. Claim a share and
+   let the ellipsis above handle the rest. */
+.lands-title-col {
+    width: 26%;
+    min-width: 220px;
     overflow: hidden;
 }
 
