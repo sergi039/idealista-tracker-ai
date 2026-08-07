@@ -3,10 +3,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-import requests
-
 from config import Config
-from utils.http import request_with_retries
+from services import subscription_transport
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +91,11 @@ def _clean_json_text(text: str) -> str:
 
 class OpenAIService:
     def __init__(self):
-        self.api_key = Config.OPENAI_API_KEY
         self.model = Config.OPENAI_MODEL
-        if not self.api_key:
-            raise ValueError("OPENAI_API_KEY must be set")
+        if not Config.AI_BRIDGE_TOKEN:
+            raise ValueError(
+                "AI_BRIDGE_TOKEN must be set: OpenAI runs on the subscription bridge, not an API key"
+            )
 
     def _build_prompt(self, land, enriched_data: Dict[str, Any], similar_properties: list[dict]) -> str:
         title = land.title or f"Land #{land.id}"
@@ -236,102 +235,23 @@ class OpenAIService:
 
         prompt = self._build_prompt(land, enriched_data=enriched_data, similar_properties=similar_properties)
 
-        url = "https://api.openai.com/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        payload: Dict[str, Any] = {
-            "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        # gpt-5 models enforce default temperature handling server-side.
-        if not str(self.model).lower().startswith("gpt-5"):
-            payload["temperature"] = 0.7
-
-        # Prefer strict JSON output when supported.
-        payload["response_format"] = {"type": "json_object"}
-
         started = datetime.now(timezone.utc)
-        # Some newer models require `max_completion_tokens` instead of `max_tokens`.
-        # Use a retry with the alternative parameter based on API error message.
-        def _post(json_payload: Dict[str, Any]):
-            return request_with_retries(
-                requests.post,
-                url,
-                headers=headers,
-                json=json_payload,
-                timeout=600,
-                logger=logger,
-            )
-
-        def _is_unsupported(body: str, parameter: str) -> bool:
-            body_l = (body or "").lower()
-            return (
-                parameter.lower() in body_l
-                and (
-                    "unsupported parameter" in body_l
-                    or "unsupported value" in body_l
-                    or "does not support" in body_l
-                )
-            )
-
-        attempts = [{
-            "use_max_completion_tokens": True,
-            "include_temperature": "temperature" in payload,
-            "include_response_format": True,
-        }]
-        seen = set()
-        resp = None
-        last_error = ""
-
-        while attempts:
-            cfg = attempts.pop(0)
-            cfg_key = (
-                cfg["use_max_completion_tokens"],
-                cfg["include_temperature"],
-                cfg["include_response_format"],
-            )
-            if cfg_key in seen:
-                continue
-            seen.add(cfg_key)
-
-            current_payload = dict(payload)
-            if not cfg["include_temperature"]:
-                current_payload.pop("temperature", None)
-            if not cfg["include_response_format"]:
-                current_payload.pop("response_format", None)
-
-            if cfg["use_max_completion_tokens"]:
-                current_payload["max_completion_tokens"] = 4000
-            else:
-                current_payload["max_tokens"] = 4000
-
-            resp = _post(current_payload)
-            if resp.status_code < 400:
-                break
-
-            body = resp.text[:500]
-            last_error = body
-
-            if cfg["include_temperature"] and _is_unsupported(body, "temperature"):
-                attempts.insert(0, {**cfg, "include_temperature": False})
-            if cfg["use_max_completion_tokens"] and _is_unsupported(body, "max_completion_tokens"):
-                attempts.insert(0, {**cfg, "use_max_completion_tokens": False})
-            if cfg["include_response_format"] and _is_unsupported(body, "response_format"):
-                attempts.insert(0, {**cfg, "include_response_format": False})
-
-        if resp is None or resp.status_code >= 400:
-            raise RuntimeError(
-                f"OpenAI API error {resp.status_code if resp is not None else 'unknown'}: {last_error}"
-            )
-
-        data = resp.json()
-        content = (
-            data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
+        # One call through the host bridge: the Codex CLI carries the ChatGPT
+        # subscription, so none of the API-only parameter negotiation
+        # (max_tokens vs max_completion_tokens, response_format, temperature)
+        # applies here any more.
+        result = subscription_transport.complete(
+            prompt,
+            provider="openai",
+            system="Return only a single JSON object. No prose, no code fences.",
+            model=self.model,
+            timeout=600,
         )
+        logger.info(
+            "OpenAI analysis via subscription bridge finished in %.1fs",
+            (datetime.now(timezone.utc) - started).total_seconds(),
+        )
+        content = result.get("text", "")
 
         cleaned = _clean_json_text(content)
         analysis_data = json.loads(cleaned)

@@ -688,7 +688,7 @@ def compare_ai_analyses(land_id):
             "land_id": land_id,
             "has_chatgpt": bool(openai_variant),
             "chatgpt_model": openai_variant.model if openai_variant else None,
-            "openai_configured": bool(getattr(Config, "OPENAI_API_KEY", None)),
+            "openai_configured": bool(getattr(Config, "AI_BRIDGE_TOKEN", None)),
             "claude_model": (claude_variant.model if claude_variant else getattr(Config, "ANTHROPIC_MODEL", None)),
             "comparison": comparison,
         })
@@ -761,7 +761,7 @@ def compare_property_ai_analyses(property_id: int):
                 "property_id": property_id,
                 "has_chatgpt": bool(openai_variant),
                 "chatgpt_model": openai_variant.model if openai_variant else None,
-                "openai_configured": bool(getattr(Config, "OPENAI_API_KEY", None)),
+                "openai_configured": bool(getattr(Config, "AI_BRIDGE_TOKEN", None)),
                 "claude_model": (
                     claude_variant.model if claude_variant else getattr(Config, "ANTHROPIC_MODEL", None)
                 ),

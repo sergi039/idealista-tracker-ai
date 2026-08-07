@@ -573,7 +573,7 @@ def property_detail(property_id):
             'property_detail.html',
             property=prop,
             is_admin=check_admin_auth(),
-            openai_configured=bool(getattr(Config, "OPENAI_API_KEY", None)),
+            openai_configured=bool(getattr(Config, "AI_BRIDGE_TOKEN", None)),
             openai_analysis=(openai_variant.analysis if openai_variant else None),
             openai_model=(openai_variant.model if openai_variant else None),
             travel_display_targets=travel_display_targets,

@@ -29,14 +29,19 @@ class Config:
     # Email backend selection
     EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "imap").lower()  # 'imap' or 'gmail'
     
-    # AI Integration - Anthropic Claude
-    # Using claude_key from secrets for authentication (legacy alias)
-    ANTHROPIC_API_KEY = _first_env('ANTHROPIC_API_KEY', 'claude_key', 'claude_idealista')
+    # AI transport: the owner's Claude and ChatGPT *subscriptions*, reached
+    # through the host-side bridge (tools/ai_bridge.py) which shells out to the
+    # authenticated Claude Code and Codex CLIs. No ANTHROPIC_API_KEY /
+    # OPENAI_API_KEY anywhere: a key would bill per token instead of using the
+    # subscription, so this path is deliberately the only one.
+    AI_BRIDGE_URL = os.environ.get("AI_BRIDGE_URL") or "http://host.docker.internal:5061"
+    AI_BRIDGE_TOKEN = os.environ.get("AI_BRIDGE_TOKEN")
+
+    # Claude (via the claude CLI)
     ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-4-6"
 
-    # AI Integration - OpenAI (ChatGPT)
-    OPENAI_API_KEY = _first_env("OPENAI_API_KEY")
-    OPENAI_MODEL = os.environ.get("OPENAI_MODEL") or "gpt-5-mini"
+    # OpenAI (via the codex CLI)
+    OPENAI_MODEL = os.environ.get("OPENAI_MODEL") or "gpt-5.6-sol"
     
     # IMAP settings (for Gmail with App Password)
     IMAP_HOST = os.environ.get("IMAP_HOST") or "imap.gmail.com"

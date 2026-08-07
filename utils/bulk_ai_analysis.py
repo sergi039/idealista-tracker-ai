@@ -90,8 +90,11 @@ def main() -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("services.anthropic_service").setLevel(logging.WARNING)
 
-    if not os.environ.get("ANTHROPIC_API_KEY") and not os.environ.get("claude_key"):
-        print("ANTHROPIC_API_KEY is not configured; aborting.", file=sys.stderr)
+    if not os.environ.get("AI_BRIDGE_TOKEN"):
+        print(
+            "AI_BRIDGE_TOKEN is not configured; Claude runs on the subscription bridge. Aborting.",
+            file=sys.stderr,
+        )
         return 2
 
     app = create_app()

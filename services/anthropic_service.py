@@ -1,16 +1,17 @@
 """
-Anthropic Claude API Service
-Uses claude_key from secrets for authentication
+Claude service.
+
+Runs on the owner's Claude subscription: requests go to the host-side bridge
+(tools/ai_bridge.py), which drives the authenticated Claude Code CLI. No API
+key is read or accepted here.
 """
 
 import json
-import os
 import logging
 from typing import Optional, Dict, Any, List
-import anthropic
-from anthropic import Anthropic
 from sqlalchemy import and_, or_
 from config import Config
+from services.subscription_transport import SubscriptionClient
 
 logger = logging.getLogger(__name__)
 
@@ -45,20 +46,17 @@ class AnthropicService:
     DEFAULT_TEMPERATURE = 0.7
 
     def __init__(self):
-        """Initialize Anthropic client with API key from secrets"""
-        self.api_key = Config.ANTHROPIC_API_KEY
+        """Bind to the subscription bridge; fail closed when it is not configured."""
         self.model = DEFAULT_MODEL
-        
-        if not self.api_key:
-            logger.error("Anthropic API key not found in environment variables")
-            raise ValueError("ANTHROPIC_API_KEY (or claude_key) must be set in secrets")
-        
-        try:
-            self.client = Anthropic(api_key=self.api_key)
-            logger.debug("Anthropic client initialized successfully")
-        except Exception as e:
-            logger.error("Failed to initialize Anthropic client", exc_info=True)
-            raise
+
+        if not Config.AI_BRIDGE_TOKEN:
+            logger.error("AI_BRIDGE_TOKEN is not set - the subscription bridge is unconfigured")
+            raise ValueError(
+                "AI_BRIDGE_TOKEN must be set: Claude runs on the subscription bridge, not an API key"
+            )
+
+        self.client = SubscriptionClient(provider="claude", default_model=DEFAULT_MODEL)
+        logger.debug("Claude subscription transport initialized")
 
     def _extract_response_text(self, message) -> str:
         """Extract text content from Claude API response"""
@@ -117,7 +115,7 @@ Format your response in clear sections."""
                 'status': 'success'
             }
             
-        except Exception as e:
+        except Exception:
             logger.error("Failed to analyze property with Claude", exc_info=True)
             return {
                 'analysis': None,
@@ -155,7 +153,7 @@ Format your response in clear sections."""
             
             return self._extract_response_text(message) or None
             
-        except Exception as e:
+        except Exception:
             logger.error("Failed to generate summary", exc_info=True)
             return None
     
@@ -271,7 +269,7 @@ Format your response in clear sections."""
             
             return results[:limit]
             
-        except Exception as e:
+        except Exception:
             logger.error("Failed to find similar properties", exc_info=True)
             return []
     
@@ -340,7 +338,7 @@ Format your response in clear sections."""
                     land = db.session.query(Land).filter_by(id=property_data.get('id')).first()
                     if land:
                         enriched_data = market_service.get_enriched_data(land)
-                except Exception as e:
+                except Exception:
                     logger.debug("Could not get enriched data", exc_info=True)
             
             # Prepare comprehensive property data
@@ -349,7 +347,7 @@ Format your response in clear sections."""
             # Add construction and market data to the context
             if enriched_data.get('construction_value_estimation'):
                 construction = enriched_data['construction_value_estimation']
-                property_text += f"\n\nCONSTRUCTION ESTIMATES (configured assumptions):"
+                property_text += "\n\nCONSTRUCTION ESTIMATES (configured assumptions):"
                 property_text += f"\nBuildable area: {construction.get('buildable_area', 'N/A')}m² ({construction.get('buildability_ratio', 'N/A')} of land)"
                 property_text += f"\nConstruction cost per m²: €{construction.get('value_per_m2', 1000)}"
                 property_text += f"\nEstimated construction: €{construction.get('minimum_value', 0):,.0f} - €{construction.get('maximum_value', 0):,.0f}"
@@ -667,7 +665,7 @@ Respond with ONLY a number between 0 and 100, nothing else."""
             score = float(response.strip())
             return min(100, max(0, score))  # Ensure within bounds
             
-        except Exception as e:
+        except Exception:
             logger.error("Failed to score property", exc_info=True)
             return None
     

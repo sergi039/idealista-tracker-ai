@@ -1,14 +1,11 @@
 import json
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
-
-import requests
 
 from config import Config
 from models import Property
+from services import subscription_transport
 from services.search_profile_service import SearchProfileService
-from utils.http import request_with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -221,9 +218,10 @@ class PropertyAIService:
     """Category-aware AI analysis for Property (Claude/OpenAI), without regional hardcoding."""
 
     def __init__(self):
-        self.anthropic_key = Config.ANTHROPIC_API_KEY
+        # Both providers run on the owner's subscriptions through the host
+        # bridge; there is no API-key path left in this service.
+        self.bridge_configured = bool(Config.AI_BRIDGE_TOKEN)
         self.anthropic_model = Config.ANTHROPIC_MODEL
-        self.openai_key = Config.OPENAI_API_KEY
         self.openai_model = Config.OPENAI_MODEL
 
     def _schema_for_category(self, category: str) -> str:
@@ -412,127 +410,45 @@ class PropertyAIService:
         return self._analyze_claude(prompt)
 
     def _analyze_openai(self, prompt: str) -> Dict[str, Any]:
-        if not self.openai_key:
-            return {"status": "failed", "error": "OPENAI_API_KEY is not configured"}
+        if not self.bridge_configured:
+            return {"status": "failed", "error": "AI_BRIDGE_TOKEN is not configured"}
 
-        url = "https://api.openai.com/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {self.openai_key}", "Content-Type": "application/json"}
-        payload: Dict[str, Any] = {
-            "model": self.openai_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "response_format": {"type": "json_object"},
-        }
-        # gpt-5 models enforce default temperature handling server-side.
-        if not str(self.openai_model).lower().startswith("gpt-5"):
-            payload["temperature"] = 0.7
-
-        def _post(json_payload: Dict[str, Any]):
-            return request_with_retries(
-                requests.post,
-                url,
-                headers=headers,
-                json=json_payload,
+        try:
+            result = subscription_transport.complete(
+                prompt,
+                provider="openai",
+                system="Return only a single JSON object. No prose, no code fences.",
+                model=self.openai_model,
                 timeout=600,
-                logger=logger,
             )
+        except subscription_transport.SubscriptionTransportError as exc:
+            logger.error("OpenAI analysis via subscription bridge failed: %s", exc)
+            return {"status": "failed", "error": "AI analysis service is temporarily unavailable"}
 
-        def _is_unsupported(body: str, parameter: str) -> bool:
-            body_l = (body or "").lower()
-            return (
-                parameter.lower() in body_l
-                and (
-                    "unsupported parameter" in body_l
-                    or "unsupported value" in body_l
-                    or "does not support" in body_l
-                )
-            )
-
-        attempts = [{
-            "use_max_completion_tokens": True,
-            "include_temperature": "temperature" in payload,
-            "include_response_format": True,
-        }]
-        seen = set()
-        resp = None
-        last_error = ""
-
-        while attempts:
-            cfg = attempts.pop(0)
-            cfg_key = (
-                cfg["use_max_completion_tokens"],
-                cfg["include_temperature"],
-                cfg["include_response_format"],
-            )
-            if cfg_key in seen:
-                continue
-            seen.add(cfg_key)
-
-            current_payload = dict(payload)
-            if not cfg["include_temperature"]:
-                current_payload.pop("temperature", None)
-            if not cfg["include_response_format"]:
-                current_payload.pop("response_format", None)
-
-            if cfg["use_max_completion_tokens"]:
-                current_payload["max_completion_tokens"] = 4000
-            else:
-                current_payload["max_tokens"] = 4000
-
-            resp = _post(current_payload)
-            if resp.status_code < 400:
-                break
-
-            body = resp.text[:500]
-            last_error = body
-
-            if cfg["include_temperature"] and _is_unsupported(body, "temperature"):
-                attempts.insert(0, {**cfg, "include_temperature": False})
-            if cfg["use_max_completion_tokens"] and _is_unsupported(body, "max_completion_tokens"):
-                attempts.insert(0, {**cfg, "use_max_completion_tokens": False})
-            if cfg["include_response_format"] and _is_unsupported(body, "response_format"):
-                attempts.insert(0, {**cfg, "include_response_format": False})
-
-        if resp is None or resp.status_code >= 400:
-            return {
-                "status": "failed",
-                "error": (
-                    f"OpenAI API error {resp.status_code if resp is not None else 'unknown'}: {last_error}"
-                ),
-            }
-
-        data = resp.json()
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        cleaned = _clean_json_text(content)
-        analysis_data = json.loads(cleaned)
+        cleaned = _clean_json_text(result.get("text", ""))
+        try:
+            analysis_data = json.loads(cleaned)
+        except ValueError:
+            logger.error("OpenAI returned a non-JSON analysis payload")
+            return {"status": "failed", "error": "AI analysis returned malformed data"}
         return {"status": "success", "structured_analysis": analysis_data, "model": self.openai_model}
 
+
     def _analyze_claude(self, prompt: str) -> Dict[str, Any]:
-        if not self.anthropic_key:
-            return {"status": "failed", "error": "ANTHROPIC_API_KEY is not configured"}
+        if not self.bridge_configured:
+            return {"status": "failed", "error": "AI_BRIDGE_TOKEN is not configured"}
 
         try:
-            import anthropic
-            from anthropic import Anthropic
-        except Exception as e:
-            return {"status": "failed", "error": f"Anthropic SDK not available: {e}"}
-
-        try:
-            client = Anthropic(api_key=self.anthropic_key)
-            message = client.messages.create(
+            result = subscription_transport.complete(
+                prompt,
+                provider="claude",
+                system="Return only a single JSON object. No prose, no code fences.",
                 model=self.anthropic_model,
-                max_tokens=4000,
-                temperature=0.7,
-                messages=[{"role": "user", "content": prompt}],
+                timeout=600,
             )
-            text = ""
-            if message.content and len(message.content) > 0:
-                block = message.content[0]
-                if hasattr(block, "text") and block.text:
-                    text = block.text
-
-            cleaned = _clean_json_text(text)
+            cleaned = _clean_json_text(result.get("text", ""))
             analysis_data = json.loads(cleaned)
             return {"status": "success", "structured_analysis": analysis_data, "model": self.anthropic_model}
-        except Exception as e:
+        except Exception:
             logger.error("Claude analysis failed", exc_info=True)
             return {"status": "failed", "error": "AI analysis service is temporarily unavailable"}
