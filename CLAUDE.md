@@ -29,8 +29,15 @@ pytest tests/ -v                             # test suite
 pytest tests/ --cov=app --cov-report=html    # coverage report
 ```
 
-The current main line is the "universal" build (cutover finalized; legacy
-`/lands` redirects to `/properties`). The dual-build isolation contract
+**Working UI is `/lands`** (owner decision, 2026-08-07): the lands view —
+cards/list with Land Type, Sea View and to-beach filters — is what the app
+serves from `/`. The universal `/properties` page and its search-profile
+model still exist and stay wired up, but they are an **archived view**
+(linked in the navbar as "Universal (archive)"); do not build new work on
+them without asking. Both read the same database: `lands` holds the 168
+land rows, `properties` mirrors them under the "Legacy Lands" profile.
+
+The dual-build isolation contract
 from the transition — legacy on 5001 vs universal on 5050, unique Docker
 names, separate IMAP labels and cookie names — lives in docs/DEV_RULES.md
 and TODO.md; respect it if you ever run both side by side.
