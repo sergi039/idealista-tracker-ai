@@ -49,8 +49,8 @@ def logout():
 
 @main_bp.route('/')
 def index():
-    """Home page redirects to properties listing."""
-    return redirect(url_for('main.properties'))
+    """Home page redirects to the lands listing (the working UI)."""
+    return redirect(url_for('main.lands'))
 
 @main_bp.route('/properties')
 def properties():

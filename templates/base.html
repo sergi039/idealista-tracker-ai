@@ -79,8 +79,24 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('main.properties') }}">
+                        <a class="nav-link" href="{{ url_for('main.lands') }}">
                             <i class="fas fa-list me-1"></i>{{ t('properties') }}
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('main.map_view') }}">
+                            <i class="fas fa-map me-1"></i>Map
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('main.criteria') }}">
+                            <i class="fas fa-sliders-h me-1"></i>{{ t('scoring_criteria') }}
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link text-body-secondary" href="{{ url_for('main.properties') }}"
+                           title="Universal model — archived view">
+                            <i class="fas fa-box-archive me-1"></i>Universal (archive)
                         </a>
                     </li>
                 </ul>

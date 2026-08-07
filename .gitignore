@@ -55,3 +55,4 @@ attached_assets/
 # AgentsRoom: machine-local binding/caches and agent worktrees (see Skills/docs/agentsroom-setup.md)
 .agentsroom/
 .worktrees/
+.kimi-code/mcp.json
