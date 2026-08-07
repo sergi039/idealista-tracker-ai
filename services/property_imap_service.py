@@ -444,8 +444,21 @@ class PropertyIMAPService:
                     if not existing and url:
                         existing = Property.query.filter_by(url=url, search_profile_id=profile_id).all()
 
-                    if existing and email_data.get("price") is not None:
-                        new_price = float(email_data["price"])
+                    raw_price = email_data.get("price")
+                    new_price = None
+                    if raw_price is not None:
+                        try:
+                            candidate_price = float(raw_price)
+                        except (TypeError, ValueError):
+                            candidate_price = None
+                        # A parsed price of 0 (or lower) is never a real price signal —
+                        # treat it the same as "no price" so re-ingestion can never
+                        # zero out an existing stored price (regression guard,
+                        # mirrors the legacy imap_service.py Land pipeline).
+                        if candidate_price is not None and candidate_price > 0:
+                            new_price = candidate_price
+
+                    if existing and new_price is not None:
                         previous_price_hint = email_data.get("previous_price_hint")
                         email_date_obj = self._parse_email_received_at(email_data.get("email_received_at"))
                         any_updated = False

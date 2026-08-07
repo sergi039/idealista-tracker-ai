@@ -180,6 +180,69 @@ def test_reingestion_with_thousands_grouped_price_does_not_zero_existing_price(a
         assert float(existing.price) != 0.0
 
 
+def test_reingestion_with_zero_price_never_zeroes_existing_price(app, monkeypatch):
+    """Regression for the PR #33 review finding: extract_price("0 €") legitimately
+    parses to 0.0 (it's a valid number, just never a real price), and the update
+    path at property_imap_service.py:447-484 used to only check `price is not
+    None` -- so a 0.0 price would overwrite a real stored price with 0.0 and
+    record a bogus -100% price change. A parsed 0 must be treated the same as
+    "no price": the stored price must stay untouched.
+    """
+    with app.app_context():
+        Config.AUTO_TRAVEL_ENRICHMENT = False
+        Config.AUTO_PROPERTY_SCORING = False
+
+        profile = SearchProfile(
+            name="Profile A",
+            is_active=True,
+            is_default=True,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(profile)
+        db.session.commit()
+
+        listing_url = "https://www.idealista.com/inmueble/888888/"
+        existing = Property(
+            source_email_id="imap_seed_888888",
+            idealista_property_id=888888,
+            search_profile_id=profile.id,
+            url=listing_url,
+            title="Flat in Bar",
+            deal_type="sale",
+            price=Decimal("280000.00"),
+            area=Decimal("85.00"),
+            area_type="built",
+        )
+        db.session.add(existing)
+        db.session.commit()
+
+        subject = "Price: 0 €"
+        extracted_price = extract_price(subject)
+        assert extracted_price == 0.0  # sanity: 0 is a legitimately parsed number, not a parse failure
+
+        emails = [
+            {
+                "type": "listing",
+                "source_email_id": "imap_reingest_888888",
+                "url": listing_url,
+                "idealista_property_id": 888888,
+                "search_profile_id": profile.id,
+                "title": "Flat in Bar",
+                "price": extracted_price,
+                "area": 85,
+            }
+        ]
+
+        service = PropertyIMAPService()
+        monkeypatch.setattr(service, "get_idealista_emails", lambda max_results=None: list(emails))
+
+        service.run_ingestion(sync_type="test")
+
+        db.session.refresh(existing)
+        assert float(existing.price) == 280000.0
+        assert existing.price_change_percentage is None
+
+
 def test_default_classification_rules_do_not_misclassify_ambiguous_local_word(app):
     from services.settings_service import SettingsService
 
