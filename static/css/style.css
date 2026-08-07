@@ -42,9 +42,15 @@
    the neighbouring min-width columns squeeze it to nothing. Claim a share and
    let the ellipsis above handle the rest. */
 .lands-title-col {
-    width: 26%;
-    min-width: 220px;
+    width: 20%;
+    min-width: 180px;
     overflow: hidden;
+}
+
+/* Keep the badge column off the date next to it. */
+.lands-table td,
+.lands-table th {
+    padding-right: 0.75rem;
 }
 
 /* HTMX indicators */
