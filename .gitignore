@@ -56,6 +56,13 @@ attached_assets/
 static/idealista-project*.zip
 static/idealista-project*.tar.gz
 static/all_code.txt
+
+# Archives anywhere in the tree. The three blobs from #29 stayed reachable in
+# git history long after the live route was gone, so the guard is a blanket
+# one now. A genuinely needed fixture can be added with `git add -f`.
+*.zip
+*.tar.gz
+*.tgz
 .mcp.json
 .agentsroom/handoff-transcript-*.txt
 .agentsroom/handoff-summary-*.md
