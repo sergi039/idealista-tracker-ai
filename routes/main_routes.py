@@ -300,12 +300,204 @@ def properties():
 
 @main_bp.route('/lands')
 def lands():
-    """Legacy lands route: always redirect to universal properties."""
-    target = url_for('main.properties')
-    query_string = request.query_string.decode('utf-8', errors='ignore')
-    if query_string:
-        target = f"{target}?{query_string}"
-    return redirect(target, code=302)
+    """Main lands listing page with filtering and sorting"""
+    try:
+        from services.settings_service import SettingsService
+
+        # Get query parameters
+        mode = request.args.get('mode', 'combined')  # combined, investment, lifestyle
+        
+        # Smart sorting defaults based on mode
+        mode_sort_defaults = {
+            'combined': 'score_total',
+            'investment': 'score_investment', 
+            'lifestyle': 'score_lifestyle'
+        }
+        default_sort = mode_sort_defaults.get(mode, 'score_total')
+        
+        sort_by = request.args.get('sort', default_sort)
+        sort_order = request.args.get('order', 'desc')
+        land_type_filter = request.args.get('land_type', '')
+        municipality_filter = request.args.get('municipality', '')
+        search_query = request.args.get('search', '')
+        investment_metrics_filter = request.args.get('inv_metr', '')
+        sea_view_filter = request.args.get('sea_view', '') == 'on'
+        favorites_filter = request.args.get('favorites', '') == 'on'
+        # Hide removed: ON by default. Checkbox sends 'on' when checked, absent when unchecked.
+        # We need special handling: if 'hide_removed' param is missing AND no other filters applied, default to True
+        # If form was submitted (has any filter param), absence means unchecked (False)
+        hide_removed_param = request.args.get('hide_removed', None)
+        form_submitted = any(request.args.get(p) for p in ['search', 'land_type', 'municipality', 'inv_metr', 'sea_view', 'favorites', 'sort', 'hide_removed'])
+        if form_submitted:
+            hide_removed_filter = hide_removed_param == 'on'
+        else:
+            hide_removed_filter = True  # Default: hide removed
+        view_type = request.args.get('view_type', 'cards')  # Default to cards
+        
+        # Pagination parameters (clamp to valid ranges)
+        page = max(1, request.args.get('page', 1, type=int))
+        per_page = min(max(request.args.get('per_page', 25, type=int), 10), 100)
+        
+        # Build query - defer heavy JSONB columns for listing view performance
+        query = Land.query.options(
+            defer(Land.infrastructure_basic),
+            defer(Land.infrastructure_extended),
+            defer(Land.transport),
+            defer(Land.environment),
+            defer(Land.neighborhood),
+            defer(Land.services_quality),
+            defer(Land.enhanced_description),
+            defer(Land.property_details),
+            defer(Land.description)
+        )
+        
+        # Apply filters
+        if land_type_filter:
+            query = query.filter(Land.land_type == land_type_filter)
+
+        if municipality_filter:
+            query = query.filter(Land.municipality.ilike(f'%{municipality_filter}%'))
+
+        if search_query:
+            # Split search query into words for flexible matching
+            # Filter out common words and short terms
+            stop_words = {'for', 'in', 'the', 'a', 'an', 'of', 'to', 'and', 'or', 'sale', 'plot'}
+            words = [w.strip(',.;:!?()[]{}') for w in search_query.split()]
+            words = [w for w in words if w and len(w) > 1 and w.lower() not in stop_words]
+
+            if words:
+                # Each word must match at least one field (title, description, or municipality)
+                for word in words:
+                    word_pattern = f'%{word}%'
+                    query = query.filter(
+                        or_(
+                            Land.title.ilike(word_pattern),
+                            Land.description.ilike(word_pattern),
+                            Land.municipality.ilike(word_pattern)
+                        )
+                    )
+
+        if investment_metrics_filter:
+            rating_text = func.coalesce(
+                Land.ai_analysis['rental_market_analysis']['investment_rating'].as_string(),
+                ''
+            )
+            upper_rating = func.upper(rating_text)
+            filter_value = investment_metrics_filter.strip().upper()
+            if filter_value == 'EXCELLENT':
+                query = query.filter(upper_rating.like('EXCELLENT%'))
+            elif filter_value == 'GOOD':
+                query = query.filter(upper_rating.like('GOOD%'))
+            elif filter_value == 'MODERATE':
+                query = query.filter(upper_rating.like('MODERATE%'))
+            elif filter_value == 'BELOW':
+                query = query.filter(upper_rating.like('BELOW%'))
+        
+        if sea_view_filter:
+            # SQLAlchemy 2.x: .astext removed; use JSON accessors
+            query = query.filter(Land.environment['sea_view'].as_boolean().is_(True))
+
+        if favorites_filter:
+            query = query.filter(Land.is_favorite == True)
+
+        if hide_removed_filter:
+            query = query.filter(
+                or_(
+                    Land.listing_status == 'active',
+                    Land.listing_status.is_(None)
+                )
+            )
+
+        # Apply sorting with NULL values last
+        if sort_by == 'investment_metrics':
+            rating_text = func.coalesce(
+                Land.ai_analysis['rental_market_analysis']['investment_rating'].as_string(),
+                ''
+            )
+            upper_rating = func.upper(rating_text)
+            rank = case(
+                (upper_rating.like('EXCELLENT%'), 4),
+                (upper_rating.like('GOOD%'), 3),
+                (upper_rating.like('MODERATE%'), 2),
+                (upper_rating.like('BELOW%'), 1),
+                else_=None
+            )
+            if sort_order == 'asc':
+                query = query.order_by(rank.asc().nullslast(), Land.score_total.desc().nullslast())
+            else:
+                query = query.order_by(rank.desc().nullslast(), Land.score_total.desc().nullslast())
+        elif hasattr(Land, sort_by):
+            sort_column = getattr(Land, sort_by)
+            if sort_order == 'asc':
+                # For ascending, NULLs go last
+                query = query.order_by(sort_column.asc().nullslast())
+            else:
+                # For descending (default for score), NULLs go last
+                query = query.order_by(sort_column.desc().nullslast())
+        
+        # Get paginated results
+        pagination = query.paginate(
+            page=page,
+            per_page=per_page,
+            error_out=False
+        )
+        lands = pagination.items
+        
+        # Get unique municipalities for filter dropdown
+        municipalities = db.session.query(Land.municipality).distinct().filter(
+            Land.municipality.isnot(None)
+        ).all()
+        municipalities = [m[0] for m in municipalities if m[0]]
+        municipalities.sort()
+        
+        # Derive active_mode from sort_by for reliable UI state synchronization
+        if sort_by in ['score_investment']:
+            active_mode = 'investment'
+        elif sort_by in ['score_lifestyle']:
+            active_mode = 'lifestyle'
+        elif sort_by in ['score_total']:
+            active_mode = 'combined'
+        else:
+            # For non-score sorts (price, area, etc.), use explicit mode
+            active_mode = mode
+        
+        # Debug logging (temporary)
+        logger.debug(f"UI params mode={mode!r} sort={sort_by!r} -> active_mode={active_mode}")
+
+        reference_cities = []
+        try:
+            reference_cities = SettingsService.get_reference_cities()
+        except Exception:
+            reference_cities = []
+        
+        return render_template(
+            'lands.html',
+            lands=lands,
+            pagination=pagination,
+            municipalities=municipalities,
+            reference_cities=reference_cities,
+                current_filters={
+                    'mode': mode,
+                    'sort_by': sort_by,
+                    'order': sort_order,
+                    'land_type': land_type_filter,
+                    'municipality': municipality_filter,
+                    'search': search_query,
+                    'inv_metr': investment_metrics_filter,
+                    'sea_view': sea_view_filter,
+                    'favorites': favorites_filter,
+                    'hide_removed': hide_removed_filter,
+                    'active_mode': active_mode,
+                    'view_type': view_type,
+                    'page': page,
+                    'per_page': per_page
+                }
+        )
+        
+    except Exception as e:
+        logger.error("Failed to load lands page", exc_info=True)
+        flash("An error occurred while loading lands. Check server logs.", 'error')
+        return render_template('lands.html', lands=[], municipalities=[], current_filters={})
 
 @main_bp.route('/properties/<int:property_id>')
 def property_detail(property_id):
