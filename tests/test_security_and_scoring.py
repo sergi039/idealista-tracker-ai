@@ -41,6 +41,82 @@ def client(app):
 
 
 @pytest.fixture
+def isolated_app():
+    """Like `app`, but points SQLALCHEMY_DATABASE_URI at a real in-memory
+    database *before* create_app()/db.init_app() bind the engine.
+
+    The `app` fixture above sets `app.config['SQLALCHEMY_DATABASE_URI']`
+    *after* create_app() returns, which is too late: db.init_app() already
+    bound the engine to DATABASE_URL from the environment, which
+    tests/__init__.py points at a real file (sqlite:///test.db) shared by
+    every test module's `app` fixture across the whole suite. Late in a full
+    `pytest tests/` run, that file accumulates enough concurrently-open
+    connections from other modules' never-disposed engines that a handful of
+    admin-authenticated page renders in this file (land detail, map, CSV
+    export — heavier than the rest of the suite's API-only tests) can hit a
+    genuine 'database is locked' on this fixture's own db.drop_all().
+    Overriding DATABASE_URL before create_app() gives these tests a private,
+    uncontended in-memory database instead.
+    """
+    setup_test_environment()
+    orig_db_url = os.environ.get('DATABASE_URL')
+    os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
+    try:
+        app = create_app()
+        app.config['TESTING'] = True
+        app.config['WTF_CSRF_ENABLED'] = False
+        with app.app_context():
+            db.create_all()
+            yield app
+            db.drop_all()
+    finally:
+        if orig_db_url is not None:
+            os.environ['DATABASE_URL'] = orig_db_url
+        else:
+            os.environ.pop('DATABASE_URL', None)
+
+
+@pytest.fixture
+def disposed_client(isolated_app):
+    return isolated_app.test_client()
+
+
+@pytest.fixture
+def isolated_test_land(isolated_app):
+    """Create a land in the isolated_app's private in-memory DB."""
+    with isolated_app.app_context():
+        land = Land(
+            source_email_id='isolated_test_1',
+            title='Isolated Test Land',
+            municipality='Valencia',
+            land_type='developed',
+            price=Decimal('150000.00'),
+            area=Decimal('1500.00'),
+        )
+        db.session.add(land)
+        db.session.commit()
+        return land.id
+
+
+@pytest.fixture
+def isolated_test_property(isolated_app):
+    """Create a property in the isolated_app's private in-memory DB."""
+    with isolated_app.app_context():
+        prop = Property(
+            source_email_id='isolated_test_prop_1',
+            title='Isolated Test Property',
+            municipality='Barcelona',
+            property_category='housing',
+            property_subtype='apartment',
+            price=Decimal('250000.00'),
+            area=Decimal('90.00'),
+        )
+        db.session.add(prop)
+        db.session.commit()
+        return prop.id
+
+
+@pytest.fixture
 def auth_disabled_app():
     """App fixture with TESTING=False so auth checks are enforced.
     ADMIN_API_TOKEN is NOT set so all requests are denied (fail-closed)."""
@@ -106,6 +182,24 @@ def test_land(app):
         db.session.add(land)
         db.session.commit()
         return land.id
+
+
+@pytest.fixture
+def test_property(app):
+    """Create a universal Property for endpoint auth tests."""
+    with app.app_context():
+        prop = Property(
+            source_email_id='sec_test_prop_1',
+            title='Security Test Property',
+            municipality='Barcelona',
+            property_category='housing',
+            property_subtype='apartment',
+            price=Decimal('250000.00'),
+            area=Decimal('90.00'),
+        )
+        db.session.add(prop)
+        db.session.commit()
+        return prop.id
 
 
 @pytest.fixture
@@ -222,16 +316,155 @@ class TestUnauthorizedAccess:
         )
         assert resp.status_code == 401
 
-    def test_read_only_endpoints_accessible(self, auth_disabled_client, auth_disabled_test_land):
-        """Read-only endpoints should still work without auth."""
-        for endpoint in ['/api/healthz', '/api/stats', '/api/lands']:
+    def test_health_check_accessible_without_auth(self, auth_disabled_client):
+        """The health check must stay public (used by Docker/monitoring)."""
+        resp = auth_disabled_client.get('/api/healthz')
+        assert resp.status_code == 200
+
+
+class TestPropertyDataRequiresAuth:
+    """Issue #30: the entire property database must not be readable or
+    bulk-exportable without authentication. Every endpoint that returns
+    listing data must reject anonymous requests."""
+
+    PROTECTED_API_GET_ENDPOINTS = [
+        '/api/lands',
+        '/api/stats',
+    ]
+
+    def test_anonymous_get_returns_401_on_api_endpoints(self, auth_disabled_client):
+        """Anonymous GET to data-dumping JSON API endpoints must return 401."""
+        for endpoint in self.PROTECTED_API_GET_ENDPOINTS:
             resp = auth_disabled_client.get(endpoint)
-            assert resp.status_code == 200, (
-                f"{endpoint} returned {resp.status_code}, expected 200"
+            assert resp.status_code == 401, (
+                f"{endpoint} returned {resp.status_code}, expected 401"
+            )
+            data = json.loads(resp.data)
+            assert data['success'] is False
+
+    def test_anonymous_get_returns_401_on_land_scoped_endpoints(
+        self, auth_disabled_client, auth_disabled_test_land
+    ):
+        """Anonymous GET to per-land data endpoints must return 401."""
+        lid = auth_disabled_test_land
+        endpoints = [
+            f'/api/lands/{lid}',
+            f'/api/land/{lid}/history',
+            f'/api/analysis/compare/{lid}',
+            f'/api/description/variants/{lid}',
+        ]
+        for endpoint in endpoints:
+            resp = auth_disabled_client.get(endpoint)
+            assert resp.status_code == 401, (
+                f"{endpoint} returned {resp.status_code}, expected 401"
             )
 
-        resp = auth_disabled_client.get(f'/api/lands/{auth_disabled_test_land}')
-        assert resp.status_code == 200
+    def test_anonymous_get_returns_401_on_property_scoped_endpoints(
+        self, auth_disabled_client, auth_disabled_test_property
+    ):
+        """Anonymous GET to per-property data endpoints must return 401."""
+        pid = auth_disabled_test_property
+        endpoints = [
+            f'/api/properties/{pid}',
+            f'/api/property/{pid}/analysis/compare',
+        ]
+        for endpoint in endpoints:
+            resp = auth_disabled_client.get(endpoint)
+            assert resp.status_code == 401, (
+                f"{endpoint} returned {resp.status_code}, expected 401"
+            )
+
+    def test_anonymous_get_properties_returns_401(self, auth_disabled_client):
+        """/api/properties (the ?full=1-capable bulk dump) must require auth."""
+        resp = auth_disabled_client.get('/api/properties')
+        assert resp.status_code == 401
+        resp_full = auth_disabled_client.get('/api/properties?full=1')
+        assert resp_full.status_code == 401
+
+    def test_anonymous_page_access_redirects_to_login(
+        self, auth_disabled_client, auth_disabled_test_land, auth_disabled_test_property
+    ):
+        """Anonymous requests to HTML pages rendering property data must
+        redirect to the login page rather than rendering the data."""
+        lid = auth_disabled_test_land
+        pid = auth_disabled_test_property
+        pages = [
+            '/properties',
+            f'/properties/{pid}',
+            '/map',
+            '/criteria',
+            f'/lands/{lid}',
+        ]
+        for page in pages:
+            resp = auth_disabled_client.get(page)
+            assert resp.status_code in (302, 401), (
+                f"{page} returned {resp.status_code}, expected a redirect to login"
+            )
+            if resp.status_code == 302:
+                assert '/login' in resp.headers.get('Location', ''), (
+                    f"{page} redirected to {resp.headers.get('Location')}, expected /login"
+                )
+
+    def test_anonymous_csv_export_denied(self, auth_disabled_client):
+        """The bulk CSV export endpoints must not leak data anonymously."""
+        for endpoint in ['/export.csv', '/properties/export.csv']:
+            resp = auth_disabled_client.get(endpoint)
+            assert resp.status_code in (302, 401), (
+                f"{endpoint} returned {resp.status_code}, expected a redirect/401, "
+                "not the exported CSV"
+            )
+            assert 'text/csv' not in resp.headers.get('Content-Type', '')
+
+    # Sanity checks below confirm the TESTING bypass (acting as an authenticated
+    # admin) can still reach every endpoint we just locked down. Split into
+    # several small tests (instead of one big loop) to keep each test's request
+    # count low: sqlite's in-memory test DB is prone to spurious "database is
+    # locked" errors on teardown when a single test fires many full,
+    # DB-heavy view renders back-to-back.
+    def test_authenticated_admin_can_view_property_pages(self, client, test_property):
+        pid = test_property
+        for endpoint in ['/properties', f'/properties/{pid}', '/api/properties', f'/api/properties/{pid}']:
+            resp = client.get(endpoint)
+            assert resp.status_code == 200, (
+                f"{endpoint} returned {resp.status_code}, expected 200 for an admin"
+            )
+
+    def test_authenticated_admin_can_view_land_pages(self, disposed_client, isolated_test_land):
+        lid = isolated_test_land
+        for endpoint in ['/map', '/criteria', f'/lands/{lid}']:
+            resp = disposed_client.get(endpoint)
+            assert resp.status_code == 200, (
+                f"{endpoint} returned {resp.status_code}, expected 200 for an admin"
+            )
+
+    def test_authenticated_admin_can_export_csv(
+        self, disposed_client, isolated_test_land, isolated_test_property
+    ):
+        for endpoint in ['/export.csv', '/properties/export.csv']:
+            resp = disposed_client.get(endpoint)
+            assert resp.status_code == 200, (
+                f"{endpoint} returned {resp.status_code}, expected 200 for an admin"
+            )
+
+    def test_authenticated_admin_can_read_land_apis(self, client, test_land):
+        lid = test_land
+        for endpoint in ['/api/lands', f'/api/lands/{lid}', '/api/stats']:
+            resp = client.get(endpoint)
+            assert resp.status_code == 200, (
+                f"{endpoint} returned {resp.status_code}, expected 200 for an admin"
+            )
+
+    def test_authenticated_admin_can_read_land_history_and_comparison(self, client, test_land):
+        lid = test_land
+        for endpoint in [f'/api/land/{lid}/history', f'/api/analysis/compare/{lid}']:
+            resp = client.get(endpoint)
+            assert resp.status_code == 200, (
+                f"{endpoint} returned {resp.status_code}, expected 200 for an admin"
+            )
+        # /api/description/variants/<id> is intentionally not exercised here:
+        # it needs a configured ANTHROPIC_API_KEY to build DescriptionService,
+        # unrelated to the auth gate under test. Its 401-on-anonymous behavior
+        # is covered by test_anonymous_get_returns_401_on_land_scoped_endpoints.
 
 
 # ---------------------------------------------------------------------------

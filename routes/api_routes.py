@@ -659,6 +659,7 @@ def generate_openai_structured(land_id):
 
 
 @api_bp.route('/analysis/compare/<int:land_id>', methods=['GET'])
+@admin_required
 def compare_ai_analyses(land_id):
     """Return a rubric-based comparison between stored Claude analysis and ChatGPT analysis."""
     try:
@@ -697,6 +698,7 @@ def compare_ai_analyses(land_id):
 
 
 @api_bp.route('/property/<int:property_id>/analysis/compare', methods=['GET'])
+@admin_required
 def compare_property_ai_analyses(property_id: int):
     """Return a rubric-based comparison between stored Claude analysis and ChatGPT analysis for a Property."""
     try:
@@ -822,6 +824,7 @@ def enhance_description(land_id):
         }), 500
 
 @api_bp.route('/description/variants/<int:land_id>', methods=['GET'])
+@admin_required
 def get_description_variants(land_id):
     """Get both enhanced and original descriptions for a property"""
     try:
@@ -978,6 +981,7 @@ def analyze_property_ai(land_id):
         }), 500
 
 @api_bp.route('/lands')
+@admin_required
 def get_lands():
     """Get lands with optional filtering and sorting"""
     try:
@@ -1023,6 +1027,7 @@ def get_lands():
         }), 500
 
 @api_bp.route('/lands/<int:land_id>')
+@admin_required
 def get_land_detail(land_id):
     """Get detailed information about a specific land"""
     try:
@@ -1054,6 +1059,7 @@ def get_land_detail(land_id):
 
 
 @api_bp.route('/properties')
+@admin_required
 def get_properties():
     """Get universal Properties with filtering and sorting (defaults to the default SearchProfile)."""
     try:
@@ -1174,6 +1180,7 @@ def get_properties():
 
 
 @api_bp.route('/properties/<int:property_id>')
+@admin_required
 def get_property_detail(property_id: int):
     """Get detailed information about a specific universal Property."""
     try:
@@ -1624,6 +1631,7 @@ def check_all_listings_status():
 
 
 @api_bp.route('/land/<int:land_id>/history')
+@admin_required
 def get_land_history(land_id):
     """Get change history for a land property"""
     try:
@@ -1651,6 +1659,7 @@ def get_land_history(land_id):
 
 
 @api_bp.route('/stats')
+@admin_required
 def get_stats():
     """Get application statistics"""
     try:
