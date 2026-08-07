@@ -113,6 +113,56 @@ def test_extract_price_handles_thousands_grouped_and_plain_listing_emails(price_
     assert extract_price(price_text) == expected
 
 
+@pytest.mark.parametrize(
+    "price_text, expected",
+    [
+        ("1.234,56 €", 1234.56),  # dot groups thousands, comma introduces the decimal (EU grammar)
+        ("1,234.56 €", 1234.56),  # comma groups thousands, dot introduces the decimal (US/UK grammar)
+        ("1.234,567 €", None),  # inconsistent: 3 "decimal" digits under the dot-group grammar -> reject
+    ],
+)
+def test_extract_price_enforces_one_consistent_separator_grammar_per_number(price_text, expected):
+    """Regression for a PR #33 review follow-up finding: decimal endings
+    (dot or comma, 1-2 digits) must be supported, but a number's separator
+    usage must be internally consistent -- a mixed/invalid number like
+    "1.234,567 €" must be rejected (None), not silently truncated to
+    1234567.0 by stripping every '.'/',' blindly."""
+    assert extract_price(price_text) == expected
+
+
+@pytest.mark.parametrize(
+    "sentence, expected_old, expected_new",
+    [
+        ("The price of this listing has dropped from 1.234,56€ to 1.200,00€", 1234.56, 1200.0),
+        ("The price of this listing has dropped from 1,234.56€ to 1,200.00€", 1234.56, 1200.0),
+        ("The price of this listing has dropped from 1.234,567€ to 1.234,000€", None, None),
+    ],
+)
+def test_extract_price_change_enforces_one_consistent_separator_grammar_per_number(
+    sentence, expected_old, expected_new
+):
+    """Same separator-consistency/decimal-support requirement, applied to the
+    price-change ("from X€ to Y€") path, since it feeds the same
+    money-critical re-ingestion pipeline as extract_price()."""
+    old_price, new_price = extract_price_change(sentence)
+    assert old_price == expected_old
+    assert new_price == expected_new
+
+
+def test_extract_price_change_strikethrough_supports_decimal_endings():
+    """Same requirement, applied to the strikethrough-HTML detection path
+    used by real Idealista price-drop emails."""
+    html = """
+    <html><body>
+      <div><span style="text-decoration:line-through">1.234,56 €</span> <strong>1.200,00 €</strong></div>
+    </body></html>
+    """
+    old_price, new_price = extract_price_change(html)
+    assert old_price == 1234.56
+    assert new_price == 1200.0
+    assert extract_price(html) == 1200.0
+
+
 def test_reingestion_with_thousands_grouped_price_does_not_zero_existing_price(app, monkeypatch):
     """Regression for GH #21: before the fix, extract_price("59.000 €") returned
     0.0 (a fragment match), and property_imap_service.py's update path (which
