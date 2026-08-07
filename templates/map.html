@@ -11,20 +11,9 @@
                 Properties Map
                 <span class="badge bg-secondary">{{ markers|length }}</span>
             </h1>
-            <div class="d-flex align-items-center gap-2">
-                {% if profiles %}
-                <form method="GET" class="d-flex align-items-center gap-2">
-                    <select name="profile_id" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
-                        {% for p in profiles %}
-                            <option value="{{ p.id }}" {% if selected_profile_id == p.id %}selected{% endif %}>{{ p.name }}</option>
-                        {% endfor %}
-                    </select>
-                </form>
-                {% endif %}
-                <a href="{{ url_for('main.properties', profile_id=selected_profile_id) }}" class="btn btn-outline-secondary btn-sm">
-                    <i class="fas fa-list me-1"></i>{{ t('properties') }}
-                </a>
-            </div>
+            <a href="{{ url_for('main.lands') }}" class="btn btn-outline-secondary">
+                <i class="fas fa-list me-1"></i>List View
+            </a>
         </div>
 
         <div class="card">

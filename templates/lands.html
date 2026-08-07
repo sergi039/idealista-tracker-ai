@@ -13,8 +13,12 @@
 {% endblock %}
 
 {% block content %}
-{% set ref_city_a = reference_cities[0] if reference_cities and reference_cities|length >= 1 else None %}
-{% set ref_city_b = reference_cities[1] if reference_cities and reference_cities|length >= 2 else None %}
+{# This view sorts and renders the fixed travel_time_oviedo / travel_time_gijon
+   columns, so its labels have to name those two cities. Taking them from the
+   universal `reference_cities` setting (Madrid/Barcelona by default) put the
+   wrong city on top of Oviedo/Gijón numbers. #}
+{% set ref_city_a = {'name': 'Oviedo', 'abbr': 'OV', 'lat': 43.3619, 'lon': -5.8494} %}
+{% set ref_city_b = {'name': 'Gijón', 'abbr': 'GJ', 'lat': 43.5322, 'lon': -5.6611} %}
 <div class="row">
     <div class="col-12">
 	        <div class="d-flex justify-content-between align-items-center mb-4">
@@ -178,10 +182,10 @@
                                         {{ t('beach_distance') }}
                                     </option>
                                     <option value="travel_time_oviedo" {{ 'selected' if current_filters.sort_by == 'travel_time_oviedo' }}>
-                                        Travel to {{ ref_city_a.name if ref_city_a else 'City A' }} ({{ (ref_city_a.name[:2] if ref_city_a and ref_city_a.name else 'A')|upper }})
+                                        Travel to {{ ref_city_a.name if ref_city_a else 'City A' }} ({{ ref_city_a.abbr }})
                                     </option>
                                     <option value="travel_time_gijon" {{ 'selected' if current_filters.sort_by == 'travel_time_gijon' }}>
-                                        Travel to {{ ref_city_b.name if ref_city_b else 'City B' }} ({{ (ref_city_b.name[:2] if ref_city_b and ref_city_b.name else 'B')|upper }})
+                                        Travel to {{ ref_city_b.name if ref_city_b else 'City B' }} ({{ ref_city_b.abbr }})
                                     </option>
                                     <option value="investment_metrics" {{ 'selected' if current_filters.sort_by == 'investment_metrics' }}>
                                         Inv. Metr.
@@ -357,7 +361,7 @@
                                         <th style="white-space: nowrap;">
                                             <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='travel_time_oviedo', order='asc' if current_filters.sort_by == 'travel_time_oviedo' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}"
                                                class="lands-th-link text-decoration-none" title="Sort by travel time to {{ ref_city_a.name if ref_city_a else 'City A' }}">
-                                                {{ (ref_city_a.name[:2] if ref_city_a and ref_city_a.name else 'A')|upper }}
+                                                {{ ref_city_a.abbr }}
                                                 {% if current_filters.sort_by == 'travel_time_oviedo' %}
                                                     <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }}"></i>
                                                 {% endif %}
@@ -365,7 +369,7 @@
                                             <span class="text-muted mx-1">|</span>
 	                                            <a href="{{ url_for('main.lands', mode=current_filters.mode, sort='travel_time_gijon', order='asc' if current_filters.sort_by == 'travel_time_gijon' and current_filters.order == 'desc' else 'desc', land_type=current_filters.land_type, municipality=current_filters.municipality, search=current_filters.search, sea_view='on' if current_filters.sea_view else '', view_type=current_filters.view_type) }}"
 	                                               class="lands-th-link text-decoration-none" title="Sort by travel time to {{ ref_city_b.name if ref_city_b else 'City B' }}">
-	                                                {{ (ref_city_b.name[:2] if ref_city_b and ref_city_b.name else 'B')|upper }}
+	                                                {{ ref_city_b.abbr }}
 	                                                {% if current_filters.sort_by == 'travel_time_gijon' %}
 	                                                    <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }}"></i>
 	                                                {% endif %}
@@ -538,7 +542,7 @@
                                                                target="_blank" class="text-decoration-none d-inline-flex align-items-center" title="Drive to {{ ref_city_a.name if ref_city_a else 'City A' }}">
                                                                 <i class="fas fa-car me-1 text-primary"></i>
                                                                 <span class="fw-bold">{{ land.travel_time_oviedo }}min</span>
-                                                                <small class="text-muted ms-1">{{ (ref_city_a.name[:2] if ref_city_a and ref_city_a.name else 'A')|upper }}</small>
+                                                                <small class="text-muted ms-1">{{ ref_city_a.abbr }}</small>
                                                             </a>
                                                         {% endif %}
                                                         {% if land.travel_time_gijon %}
@@ -546,7 +550,7 @@
                                                                target="_blank" class="text-decoration-none d-inline-flex align-items-center" title="Drive to {{ ref_city_b.name if ref_city_b else 'City B' }}">
                                                                 <i class="fas fa-car me-1 text-primary"></i>
                                                                 <span class="fw-bold">{{ land.travel_time_gijon }}min</span>
-                                                                <small class="text-muted ms-1">{{ (ref_city_b.name[:2] if ref_city_b and ref_city_b.name else 'B')|upper }}</small>
+                                                                <small class="text-muted ms-1">{{ ref_city_b.abbr }}</small>
                                                             </a>
                                                         {% endif %}
                                                     </div>
@@ -751,7 +755,7 @@
                                                    target="_blank" class="text-decoration-none">
                                                     <i class="fas fa-car me-1 text-primary"></i>
                                                     <span class="fw-bold">{{ land.travel_time_oviedo }}min</span>
-                                                    <small class="text-muted">{{ (ref_city_a.name[:2] if ref_city_a and ref_city_a.name else 'A')|upper }}</small>
+                                                    <small class="text-muted">{{ ref_city_a.abbr }}</small>
                                                 </a>
                                             {% endif %}
                                             {% if land.travel_time_gijon %}
@@ -759,7 +763,7 @@
                                                    target="_blank" class="text-decoration-none">
                                                     <i class="fas fa-car me-1 text-primary"></i>
                                                     <span class="fw-bold">{{ land.travel_time_gijon }}min</span>
-                                                    <small class="text-muted">{{ (ref_city_b.name[:2] if ref_city_b and ref_city_b.name else 'B')|upper }}</small>
+                                                    <small class="text-muted">{{ ref_city_b.abbr }}</small>
                                                 </a>
                                             {% endif %}
                                         </div>
