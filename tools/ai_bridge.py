@@ -122,8 +122,13 @@ def complete_codex(prompt: str, system: str, model: str, timeout: int) -> dict:
         "read-only",
         "--skip-git-repo-check",
     ]
-    if model:
+    # The CLI only knows its own model ids. An API-era name such as
+    # "gpt-5-mini" makes it exit 1, so fall back to the CLI default instead of
+    # failing the whole analysis.
+    if model and (model.startswith("gpt-5.") or model.startswith("codex")):
         cmd += ["-m", model]
+    elif model:
+        LOG.warning("ignoring model %r: not a codex CLI model id", model)
 
     # Codex has no system-prompt flag; prepend it to the user turn instead.
     full_prompt = f"{system}\n\n{prompt}" if system else prompt
