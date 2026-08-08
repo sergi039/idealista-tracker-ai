@@ -257,7 +257,9 @@ else
 fi
 
 count="$(printf '%s' "$pr_query" | jq 'length')"
-log "evaluating ${count} open PR(s)${DRY_RUN:+ (dry run)}"
+dry_run_note=""
+[ "$DRY_RUN" = "1" ] && dry_run_note=" (dry run)"
+log "evaluating ${count} open PR(s)${dry_run_note}"
 
 printf '%s' "$pr_query" | jq -c '.[]' | while read -r pr_json; do
     number="$(printf '%s' "$pr_json" | jq -r '.number')"

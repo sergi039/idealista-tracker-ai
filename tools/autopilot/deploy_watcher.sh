@@ -24,6 +24,12 @@ ROLLBACK_TAG="${IMAGE}:autopilot-rollback"
 HEALTH_URL="${AUTOPILOT_HEALTH_URL:-http://127.0.0.1:5001/api/healthz}"
 LOCK_DIR="${AUTOPILOT_LOCK_DIR:-/tmp/idealista-autopilot-deploy.lock.d}"
 LOG_FILE="${AUTOPILOT_LOG_FILE:-${REPO_DIR}/data/autopilot-deploy.log}"
+# What is actually running, as opposed to what is checked out. Comparing
+# local git against remote git only answers "is the checkout current", and the
+# container can be older than the checkout - a `git pull` by hand is enough to
+# make the watcher believe there is nothing to do while the app still serves
+# the previous build. Observed on the very first run.
+DEPLOYED_MARKER="${AUTOPILOT_DEPLOYED_MARKER:-${REPO_DIR}/data/.deployed_sha}"
 
 # The app has to answer healthz within this window after a rebuild.
 HEALTH_TIMEOUT_SECONDS="${AUTOPILOT_HEALTH_TIMEOUT:-180}"
@@ -66,17 +72,29 @@ git fetch --quiet origin "$BRANCH" || die "git fetch failed"
 
 local_sha="$(git rev-parse HEAD)"
 remote_sha="$(git rev-parse "origin/${BRANCH}")"
+deployed_sha="$(cat "$DEPLOYED_MARKER" 2>/dev/null || true)"
 
-if [ "$local_sha" = "$remote_sha" ]; then
+# Two separate questions: is the checkout current, and is the container built
+# from it. Answering only the first is what let a hand-run `git pull` convince
+# the watcher that a stale container was up to date.
+if [ "$local_sha" = "$remote_sha" ] && [ "$remote_sha" = "$deployed_sha" ]; then
     # Nothing new. Stay quiet: this runs every few minutes and the log is read
     # by a human.
     exit 0
 fi
 
-log "new ${BRANCH}: ${local_sha:0:7} -> ${remote_sha:0:7}"
-git --no-pager log --oneline "${local_sha}..${remote_sha}" | while read -r line; do
-    log "    $line"
-done
+if [ "$local_sha" != "$remote_sha" ]; then
+    log "new ${BRANCH}: ${local_sha:0:7} -> ${remote_sha:0:7}"
+    git --no-pager log --oneline "${local_sha}..${remote_sha}" | while read -r line; do
+        log "    $line"
+    done
+elif [ -z "$deployed_sha" ]; then
+    # First run after installing the watcher, or the marker was removed. The
+    # running image cannot be identified, so redeploy rather than assume.
+    log "no deployment marker - redeploying ${remote_sha:0:7} to establish one"
+else
+    log "checkout is current (${remote_sha:0:7}) but the deployed build is ${deployed_sha:0:7}"
+fi
 
 # --- checkpoint for rollback ----------------------------------------------
 if docker image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -87,6 +105,17 @@ else
     log "WARNING: no existing '${IMAGE}' image to tag; rollback will be code-only"
     have_rollback_image=0
 fi
+
+# Written only after health passes, so the marker always names a build that
+# actually served traffic. Atomic rename: a half-written marker would be read
+# as a SHA that never existed.
+record_deployed() {
+    local sha="$1" tmp
+    tmp="$(mktemp "${DEPLOYED_MARKER}.XXXXXX")" || return 1
+    printf '%s\n' "$sha" >"$tmp" || { rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$DEPLOYED_MARKER" || { rm -f "$tmp"; return 1; }
+    return 0
+}
 
 rollback() {
     local reason="$1"
@@ -120,6 +149,14 @@ rollback() {
         log "  falling back to a rebuild from ${local_sha:0:7}"
         docker compose -f "$COMPOSE_FILE" up -d --build >>"$LOG_FILE" 2>&1 \
             || log "  rollback rebuild failed"
+    fi
+
+    # Record what is running now, not what we hoped to run. A marker left
+    # pointing at the failed commit would make the next tick skip the redeploy.
+    if ! record_deployed "$local_sha"; then
+        log "  could not update the deployment marker - removing it so the next"
+        log "  tick redeploys rather than trusting a stale value"
+        rm -f "$DEPLOYED_MARKER" 2>/dev/null || true
     fi
 
     if check_health; then
@@ -167,7 +204,16 @@ if ! check_health; then
 fi
 
 deployed_sha="$(git rev-parse HEAD)"
-log "DEPLOYED ${deployed_sha:0:7} successfully"
+if record_deployed "$deployed_sha"; then
+    log "DEPLOYED ${deployed_sha:0:7} successfully"
+else
+    # The deploy worked; only the bookkeeping failed. Say so, and leave no
+    # marker rather than a wrong one - the next tick will redeploy the same
+    # commit, which is wasteful but never wrong.
+    rm -f "$DEPLOYED_MARKER" 2>/dev/null || true
+    log "DEPLOYED ${deployed_sha:0:7} successfully, but the marker could not be"
+    log "written - the next tick will redeploy this same commit"
+fi
 
 # Scheduler state is worth a line in the log: a 'not_initialized' scheduler is
 # the difference between an app that ingests and one that only looks alive
