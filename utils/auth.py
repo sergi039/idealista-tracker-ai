@@ -19,7 +19,10 @@ def safe_redirect_target(candidate, fallback):
     be redirected to verbatim. Rejects absolute URLs (any scheme or netloc),
     protocol-relative URLs (`//evil.com`), and the backslash trick browsers
     normalize into `//evil.com` (`/\\evil.com`). Falls back to `fallback`
-    for anything that doesn't parse as an unambiguous local path.
+    for anything that doesn't parse as an unambiguous local path, including
+    values `urlparse` itself cannot parse (e.g. `//[`, which raises
+    `ValueError: Invalid IPv6 URL`) — malformed untrusted input must fail
+    closed to `fallback`, never surface as a 500.
     """
     if not candidate:
         return fallback
@@ -27,7 +30,12 @@ def safe_redirect_target(candidate, fallback):
     if not candidate:
         return fallback
 
-    parsed = urlparse(candidate)
+    try:
+        parsed = urlparse(candidate)
+    except ValueError:
+        # Malformed input urlparse itself cannot handle (e.g. "//[" raises
+        # "Invalid IPv6 URL") must fail closed to fallback, not 500.
+        return fallback
     if parsed.scheme or parsed.netloc:
         return fallback
 
