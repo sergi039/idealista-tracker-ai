@@ -114,3 +114,9 @@ and TODO.md; respect it if you ever run both side by side.
   not a stand-in for CI.
 - A local PostToolUse hook auto-runs `ruff check --fix` and `ruff format`
   on edited Python files — do not fight it.
+- `tools/autopilot/` runs the loop unattended: issue → PR → CI →
+  independent review → squash-merge, with a LaunchAgent that redeploys
+  main and rolls back on a red `/api/healthz`. A PR merges only on green
+  CI *and* a reviewer PASS; `UNAVAILABLE` is not a pass. One agent per
+  issue — see tools/autopilot/README.md before pointing a second one at
+  an issue that already has a branch.
