@@ -11,7 +11,8 @@
                 Properties Map
                 <span class="badge bg-secondary">{{ markers|length }}</span>
             </h1>
-            <a href="{{ url_for('main.lands') }}" class="btn btn-outline-secondary">
+            {# The markers come from `properties`, so the list view is /properties. #}
+            <a href="{{ url_for('main.properties') }}" class="btn btn-outline-secondary">
                 <i class="fas fa-list me-1"></i>List View
             </a>
         </div>

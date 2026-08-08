@@ -23,6 +23,57 @@ logger = logging.getLogger(__name__)
 
 main_bp = Blueprint("main", __name__)
 
+# Working-page controls carried over from /lands by issue #105.
+PROPERTY_MODE_SORT_DEFAULTS = {
+    "combined": "score_total",
+    "investment": "score_investment",
+    "lifestyle": "score_lifestyle",
+}
+PROPERTY_VIEW_TYPES = ("cards", "list")
+# A bare /properties must open on the freshest listings, so the mode default
+# only applies once the user actually picks a mode.
+DEFAULT_PROPERTY_SORT = "created_at"
+
+# Investment ratings the AI analysis emits, ordered worst to best. The rank is
+# what "sort by Inv. Metr." orders on; the keys are what the filter accepts.
+INVESTMENT_RATING_ORDER = ("BELOW", "MODERATE", "GOOD", "EXCELLENT")
+
+
+def _investment_rating_expr(model):
+    """Upper-cased `ai_analysis.rental_market_analysis.investment_rating`.
+
+    Shared by /lands and /properties, and by both CSV exports, so the filter
+    and the sort cannot drift apart between the two models.
+    """
+    return func.upper(
+        func.coalesce(
+            model.ai_analysis["rental_market_analysis"][
+                "investment_rating"
+            ].as_string(),
+            "",
+        )
+    )
+
+
+def _filter_by_investment_rating(query, model, raw_value):
+    """Keep only rows whose investment rating starts with `raw_value`."""
+    wanted = (raw_value or "").strip().upper()
+    if wanted not in INVESTMENT_RATING_ORDER:
+        return query
+    return query.filter(_investment_rating_expr(model).like(f"{wanted}%"))
+
+
+def _investment_rating_rank(model):
+    """Sortable rank for the investment rating; NULL when there is none."""
+    rating = _investment_rating_expr(model)
+    return case(
+        *[
+            (rating.like(f"{label}%"), position)
+            for position, label in enumerate(INVESTMENT_RATING_ORDER, start=1)
+        ],
+        else_=None,
+    )
+
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance between two points, in kilometers."""
@@ -40,13 +91,19 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 @main_bp.route("/")
 def index():
-    """Home page redirects to the lands listing (the working UI)."""
-    return redirect(url_for("main.lands"))
+    """Home page redirects to the properties listing (the working UI).
+
+    Owner decision 2026-08-08 (issue #105), superseding the 2026-08-07 one
+    that pointed here at /lands: the `lands` table stopped growing on
+    2026-02-18, every fresh listing is ingested into `properties`, and the
+    legacy `Land` model cannot represent the houses that now arrive.
+    """
+    return redirect(url_for("main.properties"))
 
 
 @main_bp.route("/properties")
 def properties():
-    """Universal properties listing page (new model, migration-in-progress)."""
+    """Properties listing -- the working page since issue #105."""
     try:
         from services.search_profile_service import (
             PROFILE_ALL_SENTINEL,
@@ -82,6 +139,7 @@ def properties():
         subtype_filter = request.args.get("subtype", "")
         municipality_filter = request.args.get("municipality", "")
         search_query = request.args.get("search", "")
+        investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
 
         # Hide removed: ON by default (similar to /lands)
@@ -94,6 +152,7 @@ def properties():
                 "subtype",
                 "municipality",
                 "search",
+                "inv_metr",
                 "sort",
                 "order",
                 "favorites",
@@ -105,8 +164,22 @@ def properties():
         else:
             hide_removed_filter = True
 
-        # Sorting
-        sort_by = request.args.get("sort", "created_at")
+        # View state carried over from /lands (issue #105): cards vs table,
+        # and the combined / investment / lifestyle scoring modes.
+        mode = request.args.get("mode", "combined")
+        if mode not in PROPERTY_MODE_SORT_DEFAULTS:
+            mode = "combined"
+        view_type = request.args.get("view_type", "cards")
+        if view_type not in PROPERTY_VIEW_TYPES:
+            view_type = "cards"
+
+        # Sorting. Picking a mode switches to that mode's score; a bare
+        # /properties keeps its date order so the newest listings stay on top.
+        if request.args.get("mode"):
+            default_sort = PROPERTY_MODE_SORT_DEFAULTS[mode]
+        else:
+            default_sort = DEFAULT_PROPERTY_SORT
+        sort_by = request.args.get("sort") or default_sort
         sort_order = request.args.get("order", "desc")
 
         # Pagination
@@ -152,25 +225,56 @@ def properties():
                 )
             )
 
+        if investment_metrics_filter:
+            query = _filter_by_investment_rating(
+                query, Property, investment_metrics_filter
+            )
+
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
 
         if hide_removed_filter:
             query = query.filter(Property.listing_status.notin_(["removed", "sold"]))
 
-        # Sorting (safe allow-list)
+        # Sorting (safe allow-list). An unknown sort -- an old /lands bookmark
+        # asking for travel_time_nearest_beach, say -- falls back to the
+        # default *and says so*, so the page never claims an order it did not
+        # apply.
         sort_columns = {
             "title": Property.title,
             "created_at": Property.created_at,
             "price": Property.price,
             "area": Property.area,
             "score_total": Property.score_total,
+            "score_investment": Property.score_investment,
+            "score_lifestyle": Property.score_lifestyle,
         }
-        sort_column = sort_columns.get(sort_by, Property.created_at)
-        if sort_order == "asc":
-            query = query.order_by(sort_column.asc().nullslast())
+        if sort_by not in sort_columns and sort_by != "investment_metrics":
+            sort_by = default_sort
+
+        if sort_by == "investment_metrics":
+            rank = _investment_rating_rank(Property)
+            rank_order = rank.asc() if sort_order == "asc" else rank.desc()
+            query = query.order_by(
+                rank_order.nullslast(), Property.score_total.desc().nullslast()
+            )
         else:
-            query = query.order_by(sort_column.desc().nullslast())
+            sort_column = sort_columns[sort_by]
+            if sort_order == "asc":
+                query = query.order_by(sort_column.asc().nullslast())
+            else:
+                query = query.order_by(sort_column.desc().nullslast())
+
+        # Derive the highlighted mode from the sort actually applied, the same
+        # way /lands does, so the buttons cannot disagree with the ordering.
+        if sort_by == "score_investment":
+            active_mode = "investment"
+        elif sort_by == "score_lifestyle":
+            active_mode = "lifestyle"
+        elif sort_by == "score_total":
+            active_mode = "combined"
+        else:
+            active_mode = mode
 
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
 
@@ -290,10 +394,14 @@ def properties():
                 "subtype": subtype_filter,
                 "municipality": municipality_filter,
                 "search": search_query,
+                "inv_metr": investment_metrics_filter,
                 "favorites": favorites_filter,
                 "hide_removed": hide_removed_filter,
                 "sort_by": sort_by,
                 "order": sort_order,
+                "mode": mode,
+                "active_mode": active_mode,
+                "view_type": view_type,
                 "page": page,
                 "per_page": per_page,
             },
@@ -310,7 +418,11 @@ def properties():
             categories=[],
             subtypes=[],
             municipalities=[],
-            current_filters={},
+            current_filters={
+                "mode": "combined",
+                "active_mode": "combined",
+                "view_type": "cards",
+            },
         )
 
 
@@ -420,22 +532,7 @@ def lands():
                     )
 
         if investment_metrics_filter:
-            rating_text = func.coalesce(
-                Land.ai_analysis["rental_market_analysis"][
-                    "investment_rating"
-                ].as_string(),
-                "",
-            )
-            upper_rating = func.upper(rating_text)
-            filter_value = investment_metrics_filter.strip().upper()
-            if filter_value == "EXCELLENT":
-                query = query.filter(upper_rating.like("EXCELLENT%"))
-            elif filter_value == "GOOD":
-                query = query.filter(upper_rating.like("GOOD%"))
-            elif filter_value == "MODERATE":
-                query = query.filter(upper_rating.like("MODERATE%"))
-            elif filter_value == "BELOW":
-                query = query.filter(upper_rating.like("BELOW%"))
+            query = _filter_by_investment_rating(query, Land, investment_metrics_filter)
 
         if sea_view_filter:
             # SQLAlchemy 2.x: .astext removed; use JSON accessors
@@ -451,28 +548,11 @@ def lands():
 
         # Apply sorting with NULL values last
         if sort_by == "investment_metrics":
-            rating_text = func.coalesce(
-                Land.ai_analysis["rental_market_analysis"][
-                    "investment_rating"
-                ].as_string(),
-                "",
+            rank = _investment_rating_rank(Land)
+            rank_order = rank.asc() if sort_order == "asc" else rank.desc()
+            query = query.order_by(
+                rank_order.nullslast(), Land.score_total.desc().nullslast()
             )
-            upper_rating = func.upper(rating_text)
-            rank = case(
-                (upper_rating.like("EXCELLENT%"), 4),
-                (upper_rating.like("GOOD%"), 3),
-                (upper_rating.like("MODERATE%"), 2),
-                (upper_rating.like("BELOW%"), 1),
-                else_=None,
-            )
-            if sort_order == "asc":
-                query = query.order_by(
-                    rank.asc().nullslast(), Land.score_total.desc().nullslast()
-                )
-            else:
-                query = query.order_by(
-                    rank.desc().nullslast(), Land.score_total.desc().nullslast()
-                )
         elif hasattr(Land, sort_by):
             sort_column = getattr(Land, sort_by)
             if sort_order == "asc":
@@ -2573,22 +2653,7 @@ def export_csv():
                     )
 
         if investment_metrics_filter:
-            rating_text = func.coalesce(
-                Land.ai_analysis["rental_market_analysis"][
-                    "investment_rating"
-                ].as_string(),
-                "",
-            )
-            upper_rating = func.upper(rating_text)
-            filter_value = investment_metrics_filter.strip().upper()
-            if filter_value == "EXCELLENT":
-                query = query.filter(upper_rating.like("EXCELLENT%"))
-            elif filter_value == "GOOD":
-                query = query.filter(upper_rating.like("GOOD%"))
-            elif filter_value == "MODERATE":
-                query = query.filter(upper_rating.like("MODERATE%"))
-            elif filter_value == "BELOW":
-                query = query.filter(upper_rating.like("BELOW%"))
+            query = _filter_by_investment_rating(query, Land, investment_metrics_filter)
 
         if sea_view_filter:
             # SQLAlchemy 2.x: .astext removed; use JSON accessors
@@ -2599,28 +2664,11 @@ def export_csv():
 
         # Apply sorting with same logic as main lands route
         if sort_by == "investment_metrics":
-            rating_text = func.coalesce(
-                Land.ai_analysis["rental_market_analysis"][
-                    "investment_rating"
-                ].as_string(),
-                "",
-            )
-            upper_rating = func.upper(rating_text)
-            rank = case(
-                (upper_rating.like("EXCELLENT%"), 4),
-                (upper_rating.like("GOOD%"), 3),
-                (upper_rating.like("MODERATE%"), 2),
-                (upper_rating.like("BELOW%"), 1),
-                else_=None,
-            )
-            if sort_order == "asc":
-                lands = query.order_by(
-                    rank.asc().nullslast(), Land.score_total.desc().nullslast()
-                ).all()
-            else:
-                lands = query.order_by(
-                    rank.desc().nullslast(), Land.score_total.desc().nullslast()
-                ).all()
+            rank = _investment_rating_rank(Land)
+            rank_order = rank.asc() if sort_order == "asc" else rank.desc()
+            lands = query.order_by(
+                rank_order.nullslast(), Land.score_total.desc().nullslast()
+            ).all()
         elif hasattr(Land, sort_by):
             sort_column = getattr(Land, sort_by)
             if sort_order == "asc":
@@ -2736,6 +2784,7 @@ def export_properties_csv():
         subtype_filter = request.args.get("subtype", "")
         municipality_filter = request.args.get("municipality", "")
         search_query = request.args.get("search", "")
+        investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
 
         hide_removed_param = request.args.get("hide_removed", None)
@@ -2747,6 +2796,7 @@ def export_properties_csv():
                 "subtype",
                 "municipality",
                 "search",
+                "inv_metr",
                 "sort",
                 "order",
                 "favorites",
@@ -2787,6 +2837,11 @@ def export_properties_csv():
                 )
             )
 
+        if investment_metrics_filter:
+            query = _filter_by_investment_rating(
+                query, Property, investment_metrics_filter
+            )
+
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
 
@@ -2798,6 +2853,8 @@ def export_properties_csv():
             "price": Property.price,
             "area": Property.area,
             "score_total": Property.score_total,
+            "score_investment": Property.score_investment,
+            "score_lifestyle": Property.score_lifestyle,
         }
         sort_column = sort_columns.get(sort_by, Property.created_at)
         if sort_order == "asc":

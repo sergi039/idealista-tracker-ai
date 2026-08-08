@@ -5,7 +5,7 @@
 {% block nav_primary_action %}
 <li class="nav-item me-2">
     <a class="btn btn-outline-success btn-sm"
-       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort=current_filters.sort_by, order=current_filters.order) }}"
+       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort=current_filters.sort_by, order=current_filters.order) }}"
        title="Download filtered data as CSV">
         <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
     </a>
@@ -13,10 +13,95 @@
 {% endblock %}
 
 {% block content %}
+{# Every in-page link has to carry the whole view state -- filters, scoring
+   mode and cards/list choice -- or clicking a column header silently throws
+   half of it away. #}
+{% set base_args = {
+    'profile_id': current_filters.profile_id,
+    'category': current_filters.category or None,
+    'subtype': current_filters.subtype or None,
+    'municipality': current_filters.municipality or None,
+    'search': current_filters.search or None,
+    'inv_metr': current_filters.inv_metr or None,
+    'favorites': 'on' if current_filters.favorites else None,
+    'hide_removed': 'on' if current_filters.hide_removed else None,
+    'mode': current_filters.mode,
+    'view_type': current_filters.view_type,
+    'per_page': current_filters.per_page
+} %}
+{% set view_type = current_filters.view_type or 'cards' %}
+{% set active_mode = current_filters.active_mode or 'combined' %}
+
+{% macro sort_icon(key, sort_by, order) -%}
+    {% if sort_by == key %}
+        <i class="fas fa-sort-{{ 'down' if order == 'desc' else 'up' }} ms-1"></i>
+    {% else %}
+        <i class="fas fa-sort ms-1 opacity-50"></i>
+    {% endif %}
+{%- endmacro %}
+
+{% macro score_badge(value, emphasis) -%}
+    {% if value is not none %}
+        <span class="badge"
+              style="background-color: {{ 'var(--bs-success)' if value >= 70 else 'var(--bs-warning)' if value >= 50 else 'var(--bs-danger)' }}; {{ emphasis }}">
+            {{ '%.1f'|format(value) }}
+        </span>
+    {% else %}
+        <span class="badge bg-light text-body-secondary border">&mdash;</span>
+    {% endif %}
+{%- endmacro %}
+
+{% macro travel_badges(p, display_targets) -%}
+    {% set travel = p.travel if p.travel is mapping else {} %}
+    {% set travel_targets = travel.get('targets') or {} %}
+    {% if display_targets %}
+        {% set visible_travel_targets = display_targets[:4] %}
+        <div class="d-flex flex-wrap gap-1 properties-travel-badges">
+            {% for tt in visible_travel_targets %}
+                {% set tdata = travel_targets.get(tt.key) if travel_targets else None %}
+                {% set minutes = tdata.duration_min if tdata else None %}
+                {% set distance_km = tdata.distance_km if tdata else None %}
+                {% set place_name = (tdata.place.name if (tdata and tdata.place) else None) %}
+                {% set travel_mode = (tdata.mode if tdata else None) %}
+                {% set status = tdata.status if tdata else None %}
+                {% if minutes %}
+                    <span class="badge bg-info"
+                          data-bs-toggle="tooltip"
+                          title="{{ tt.label }}{% if travel_mode %} ({{ travel_mode }}){% endif %}{% if place_name %}: {{ place_name }}{% endif %}{% if distance_km %} ({{ '%.1f'|format(distance_km) }} km){% endif %}">
+                        <i class="fas {{ tt.icon }} me-1"></i>{{ minutes }}m
+                    </span>
+                {% elif status %}
+                    <span class="badge bg-light text-body-secondary border"
+                          data-bs-toggle="tooltip"
+                          title="{{ tt.label }}{% if travel_mode %} ({{ travel_mode }}){% endif %} ({{ status }})">
+                        <i class="fas {{ tt.icon }} me-1"></i>&mdash;
+                    </span>
+                {% else %}
+                    <span class="badge bg-light text-body-secondary border"
+                          data-bs-toggle="tooltip"
+                          title="{{ tt.label }}{% if travel_mode %} ({{ travel_mode }}){% endif %} (not calculated)">
+                        <i class="fas {{ tt.icon }} me-1"></i>&mdash;
+                    </span>
+                {% endif %}
+            {% endfor %}
+            {% set hidden_travel_count = (display_targets|length) - (visible_travel_targets|length) %}
+            {% if hidden_travel_count > 0 %}
+                <span class="badge bg-light text-body-secondary border"
+                      data-bs-toggle="tooltip"
+                      title="{{ hidden_travel_count }} more targets in details view">
+                    +{{ hidden_travel_count }}
+                </span>
+            {% endif %}
+        </div>
+    {% else %}
+        <span class="text-body-secondary">&mdash;</span>
+    {% endif %}
+{%- endmacro %}
+
 <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
     <div>
         <h2 class="mb-1">{{ t('properties') }}</h2>
-        <div class="text-body-secondary small">Universal model (migration in progress)</div>
+        <div class="text-body-secondary small">Working view &mdash; every new listing is ingested here</div>
     </div>
     <div class="d-flex gap-2">
         <button class="btn btn-success"
@@ -63,6 +148,9 @@
 <div class="card shadow-sm mb-3">
     <div class="card-body">
         <form method="GET" class="row g-2 align-items-end">
+            {# Scoring mode and cards/list are view state, not filters: keep them across an Apply. #}
+            <input type="hidden" name="mode" value="{{ current_filters.mode or 'combined' }}">
+            <input type="hidden" name="view_type" value="{{ view_type }}">
             <div class="col-12 col-md-3">
                 <label class="form-label small mb-1">Search Profile</label>
                 <select name="profile_id" class="form-select form-select-sm">
@@ -106,6 +194,16 @@
                 <input name="search" value="{{ current_filters.search or '' }}" class="form-control form-control-sm" placeholder="{{ t('search_properties') }}">
             </div>
             <div class="col-12 col-md-3">
+                <label class="form-label small mb-1" for="inv_metr">Inv. Metr.</label>
+                <select id="inv_metr" name="inv_metr" class="form-select form-select-sm">
+                    <option value="" {% if not current_filters.inv_metr %}selected{% endif %}>All</option>
+                    <option value="EXCELLENT" {% if current_filters.inv_metr == 'EXCELLENT' %}selected{% endif %}>Excellent</option>
+                    <option value="GOOD" {% if current_filters.inv_metr == 'GOOD' %}selected{% endif %}>Good</option>
+                    <option value="MODERATE" {% if current_filters.inv_metr == 'MODERATE' %}selected{% endif %}>Moderate</option>
+                    <option value="BELOW" {% if current_filters.inv_metr == 'BELOW' %}selected{% endif %}>Below</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-3">
                 <div class="form-check mt-4">
                     <input class="form-check-input" type="checkbox" id="favorites" name="favorites" {% if current_filters.favorites %}checked{% endif %}>
                     <label class="form-check-label" for="favorites">
@@ -122,14 +220,46 @@
                 </div>
             </div>
 
+            {# Sea view and beach travel time exist on the archived Land model only.
+               `Property` has no sea-view field and no beach travel target, and per
+               issue #98 not one row carries a single travel time -- Google billing
+               is off, so every target comes back empty. Showing these as working
+               filters would be a lie, so they are rendered dead on purpose. #}
+            <div class="col-12">
+                <div class="border rounded p-2 bg-body-tertiary">
+                    <div class="d-flex flex-wrap align-items-center gap-3">
+                        <div class="form-check form-check-inline m-0">
+                            <input class="form-check-input" type="checkbox" id="sea_view" name="sea_view" disabled
+                                   aria-describedby="unavailable-filters-reason">
+                            <label class="form-check-label small text-body-secondary" for="sea_view">
+                                <i class="fas fa-water me-1"></i>{{ t('sea_view_only') }}
+                            </label>
+                        </div>
+                        <div class="small text-body-secondary" id="unavailable-filters-reason">
+                            <i class="fas fa-circle-info me-1"></i>
+                            <strong>Sea view</strong> and <strong>{{ t('beach_distance')|lower }}</strong> are unavailable here:
+                            they only ever existed on the archived
+                            <a href="{{ url_for('main.lands') }}">lands</a> rows, and no property has a
+                            travel time at all &mdash; see
+                            <a href="https://github.com/sergi039/idealista-tracker-ai/issues/98" target="_blank" rel="noopener">issue&nbsp;#98</a>.
+                            They come back when that is fixed.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div class="col-12 d-flex justify-content-between flex-wrap gap-2 mt-2">
                 <div class="d-flex gap-2 flex-wrap">
                     <select name="sort" class="form-select form-select-sm" style="width:auto">
+                        <option value="score_total" {% if current_filters.sort_by == 'score_total' %}selected{% endif %}>Combined Score</option>
+                        <option value="score_investment" {% if current_filters.sort_by == 'score_investment' %}selected{% endif %}>&#128188; Investment Score</option>
+                        <option value="score_lifestyle" {% if current_filters.sort_by == 'score_lifestyle' %}selected{% endif %}>&#127969; Lifestyle Score</option>
+                        <option value="investment_metrics" {% if current_filters.sort_by == 'investment_metrics' %}selected{% endif %}>Inv. Metr.</option>
                         <option value="title" {% if current_filters.sort_by == 'title' %}selected{% endif %}>{{ t('title') }}</option>
                         <option value="created_at" {% if current_filters.sort_by == 'created_at' %}selected{% endif %}>{{ t('date_added') }}</option>
                         <option value="price" {% if current_filters.sort_by == 'price' %}selected{% endif %}>{{ t('price') }}</option>
                         <option value="area" {% if current_filters.sort_by == 'area' %}selected{% endif %}>{{ t('area') }}</option>
-                        <option value="score_total" {% if current_filters.sort_by == 'score_total' %}selected{% endif %}>{{ t('score') }}</option>
+                        <option value="travel_time_nearest_beach" disabled>{{ t('beach_distance') }} &mdash; unavailable (#98)</option>
                     </select>
                     <select name="order" class="form-select form-select-sm" style="width:auto">
                         <option value="desc" {% if current_filters.order != 'asc' %}selected{% endif %}>desc</option>
@@ -137,6 +267,21 @@
                     </select>
                     <button class="btn btn-primary btn-sm" type="submit">{{ t('apply') }}</button>
                     <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('main.properties') }}">{{ t('clear') }}</a>
+
+                    <div class="btn-group btn-group-sm" role="group" aria-label="View type">
+                        <a id="view-list-btn"
+                           class="btn btn-outline-secondary {{ 'active' if view_type == 'list' else '' }}"
+                           href="{{ url_for('main.properties', **dict(base_args, view_type='list', sort=current_filters.sort_by, order=current_filters.order)) }}"
+                           title="Table view - compact data in rows">
+                            <i class="fas fa-list"></i>
+                        </a>
+                        <a id="view-cards-btn"
+                           class="btn btn-outline-secondary {{ 'active' if view_type == 'cards' else '' }}"
+                           href="{{ url_for('main.properties', **dict(base_args, view_type='cards', sort=current_filters.sort_by, order=current_filters.order)) }}"
+                           title="Card view - visual property cards">
+                            <i class="fas fa-th-large"></i>
+                        </a>
+                    </div>
                 </div>
                 <div class="text-body-secondary small">
                     {% if pagination %}
@@ -150,68 +295,83 @@
     </div>
 </div>
 
-<div class="card shadow-sm">
+<div class="d-flex justify-content-end mb-3">
+    <div class="btn-group btn-group-sm" role="group" aria-label="Analysis mode">
+        <a id="mode-combined-btn"
+           class="btn {{ 'btn-secondary' if active_mode == 'combined' else 'btn-outline-secondary' }}"
+           href="{{ url_for('main.properties', **dict(base_args, mode='combined', sort='score_total', order='desc')) }}"
+           title="Combined analysis - overall property rating">
+            <i class="fas fa-balance-scale"></i>
+        </a>
+        <a id="mode-investment-btn"
+           class="btn {{ 'btn-success' if active_mode == 'investment' else 'btn-outline-secondary' }}"
+           href="{{ url_for('main.properties', **dict(base_args, mode='investment', sort='score_investment', order='desc')) }}"
+           title="Investment analysis - focus on rental yield and ROI">
+            <i class="fas fa-chart-line"></i>
+        </a>
+        <a id="mode-lifestyle-btn"
+           class="btn {{ 'btn-warning' if active_mode == 'lifestyle' else 'btn-outline-secondary' }}"
+           href="{{ url_for('main.properties', **dict(base_args, mode='lifestyle', sort='score_lifestyle', order='desc')) }}"
+           title="Lifestyle analysis - focus on quality of life factors">
+            <i class="fas fa-home"></i>
+        </a>
+    </div>
+</div>
+
+{% if view_type == 'list' %}
+<div class="card shadow-sm" id="properties-list-view">
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0 lands-table properties-list-table">
             <thead class="lands-table-head">
                 <tr>
                     <th style="min-width: 300px; white-space: nowrap;">
-                        <a href="{{ url_for('main.properties', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort='title', order='asc' if current_filters.sort_by == 'title' and current_filters.order == 'desc' else 'desc', page=current_filters.page, per_page=current_filters.per_page) }}"
+                        <a href="{{ url_for('main.properties', **dict(base_args, sort='title', order='asc' if current_filters.sort_by == 'title' and current_filters.order == 'desc' else 'desc', page=current_filters.page)) }}"
                            class="lands-th-link text-decoration-none d-inline-flex align-items-center">
-                            {{ t('title') }}
-                            {% if current_filters.sort_by == 'title' %}
-                                <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
-                            {% else %}
-                                <i class="fas fa-sort ms-1 opacity-50"></i>
-                            {% endif %}
+                            {{ t('title') }}{{ sort_icon('title', current_filters.sort_by, current_filters.order) }}
                         </a>
                     </th>
                     <th style="width: 110px; white-space: nowrap;">
-                        <a href="{{ url_for('main.properties', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort='price', order='asc' if current_filters.sort_by == 'price' and current_filters.order == 'desc' else 'desc', page=current_filters.page, per_page=current_filters.per_page) }}"
+                        <a href="{{ url_for('main.properties', **dict(base_args, sort='price', order='asc' if current_filters.sort_by == 'price' and current_filters.order == 'desc' else 'desc', page=current_filters.page)) }}"
                            class="lands-th-link text-decoration-none d-inline-flex align-items-center">
-                            {{ t('price') }}
-                            {% if current_filters.sort_by == 'price' %}
-                                <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
-                            {% else %}
-                                <i class="fas fa-sort ms-1 opacity-50"></i>
-                            {% endif %}
+                            {{ t('price') }}{{ sort_icon('price', current_filters.sort_by, current_filters.order) }}
                         </a>
                     </th>
                     <th style="width: 90px; white-space: nowrap;">
-                        <a href="{{ url_for('main.properties', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort='area', order='asc' if current_filters.sort_by == 'area' and current_filters.order == 'desc' else 'desc', page=current_filters.page, per_page=current_filters.per_page) }}"
+                        <a href="{{ url_for('main.properties', **dict(base_args, sort='area', order='asc' if current_filters.sort_by == 'area' and current_filters.order == 'desc' else 'desc', page=current_filters.page)) }}"
                            class="lands-th-link text-decoration-none d-inline-flex align-items-center">
-                            {{ t('area') }}
-                            {% if current_filters.sort_by == 'area' %}
-                                <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
-                            {% else %}
-                                <i class="fas fa-sort ms-1 opacity-50"></i>
-                            {% endif %}
+                            {{ t('area') }}{{ sort_icon('area', current_filters.sort_by, current_filters.order) }}
                         </a>
                     </th>
                     <th style="width: 120px; white-space: nowrap;">{{ t('municipality') }}</th>
-                    <th style="width: 90px; white-space: nowrap;">
-                        <a href="{{ url_for('main.properties', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort='score_total', order='asc' if current_filters.sort_by == 'score_total' and current_filters.order == 'desc' else 'desc', page=current_filters.page, per_page=current_filters.per_page) }}"
-                           class="lands-th-link text-decoration-none d-inline-flex align-items-center">
-                            {{ t('score') }}
-                            {% if current_filters.sort_by == 'score_total' %}
-                                <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
-                            {% else %}
-                                <i class="fas fa-sort ms-1 opacity-50"></i>
-                            {% endif %}
-                        </a>
-                    </th>
+                    {% if active_mode == 'investment' %}
+                        <th style="width: 100px; white-space: nowrap; background-color: #198754; color: #fff;">
+                            <a href="{{ url_for('main.properties', **dict(base_args, sort='score_investment', order='asc' if current_filters.sort_by == 'score_investment' and current_filters.order == 'desc' else 'desc', page=current_filters.page)) }}"
+                               class="lands-th-link text-decoration-none d-inline-flex align-items-center">
+                                Investment{{ sort_icon('score_investment', current_filters.sort_by, current_filters.order) }}
+                            </a>
+                        </th>
+                    {% elif active_mode == 'lifestyle' %}
+                        <th style="width: 100px; white-space: nowrap; background-color: #ffc107; color: #212529;">
+                            <a href="{{ url_for('main.properties', **dict(base_args, sort='score_lifestyle', order='asc' if current_filters.sort_by == 'score_lifestyle' and current_filters.order == 'desc' else 'desc', page=current_filters.page)) }}"
+                               class="lands-th-link text-decoration-none d-inline-flex align-items-center">
+                                Lifestyle{{ sort_icon('score_lifestyle', current_filters.sort_by, current_filters.order) }}
+                            </a>
+                        </th>
+                    {% else %}
+                        <th style="width: 90px; white-space: nowrap;">
+                            <a href="{{ url_for('main.properties', **dict(base_args, sort='score_total', order='asc' if current_filters.sort_by == 'score_total' and current_filters.order == 'desc' else 'desc', page=current_filters.page)) }}"
+                               class="lands-th-link text-decoration-none d-inline-flex align-items-center">
+                                {{ t('score') }}{{ sort_icon('score_total', current_filters.sort_by, current_filters.order) }}
+                            </a>
+                        </th>
+                    {% endif %}
                     <th style="white-space: nowrap;">{{ t('travel') }}</th>
                     <th style="width: 140px; white-space: nowrap;">Type</th>
                     <th style="width: 95px; white-space: nowrap;">Status</th>
                     <th style="width: 100px; white-space: nowrap;">
-                        <a href="{{ url_for('main.properties', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort='created_at', order='asc' if current_filters.sort_by == 'created_at' and current_filters.order == 'desc' else 'desc', page=current_filters.page, per_page=current_filters.per_page) }}"
+                        <a href="{{ url_for('main.properties', **dict(base_args, sort='created_at', order='asc' if current_filters.sort_by == 'created_at' and current_filters.order == 'desc' else 'desc', page=current_filters.page)) }}"
                            class="lands-th-link text-decoration-none d-inline-flex align-items-center">
-                            {{ t('added') }}
-                            {% if current_filters.sort_by == 'created_at' %}
-                                <i class="fas fa-sort-{{ 'down' if current_filters.order == 'desc' else 'up' }} ms-1"></i>
-                            {% else %}
-                                <i class="fas fa-sort ms-1 opacity-50"></i>
-                            {% endif %}
+                            {{ t('added') }}{{ sort_icon('created_at', current_filters.sort_by, current_filters.order) }}
                         </a>
                     </th>
                     <th style="width: 118px; white-space: nowrap;">{{ t('actions') }}</th>
@@ -245,78 +405,35 @@
                             </td>
                             <td class="text-end text-nowrap">
                                 {% if p.price %}
-                                    €{{ '{:,.0f}'.format(p.price|float) }}
+                                    &euro;{{ '{:,.0f}'.format(p.price|float) }}
                                 {% else %}
-                                    <span class="text-body-secondary">—</span>
+                                    <span class="text-body-secondary">&mdash;</span>
                                 {% endif %}
                             </td>
                             <td class="text-end text-nowrap">
                                 {% if p.area %}
-                                    {{ '{:,.0f}'.format(p.area|float) }} m²
+                                    {{ '{:,.0f}'.format(p.area|float) }} m&sup2;
                                 {% else %}
-                                    <span class="text-body-secondary">—</span>
+                                    <span class="text-body-secondary">&mdash;</span>
                                 {% endif %}
                             </td>
                             <td>{{ p.municipality or '—' }}</td>
                             <td>
-                                {% if p.score_total %}
-                                    <span class="badge bg-primary">{{ '%.1f'|format(p.score_total) }}</span>
+                                {% if active_mode == 'investment' %}
+                                    {{ score_badge(p.score_investment|float if p.score_investment is not none else none, 'border: 2px solid #198754; font-weight: bold;') }}
+                                {% elif active_mode == 'lifestyle' %}
+                                    {{ score_badge(p.score_lifestyle|float if p.score_lifestyle is not none else none, 'border: 2px solid #ffc107; font-weight: bold;') }}
                                 {% else %}
-                                    <span class="text-body-secondary">—</span>
+                                    {{ score_badge(p.score_total|float if p.score_total is not none else none, '') }}
                                 {% endif %}
                             </td>
-                            <td>
-                                {% set travel = p.travel if p.travel is mapping else {} %}
-                                {% set travel_targets = travel.get('targets') or {} %}
-                                {% if travel_display_targets %}
-                                    {% set visible_travel_targets = travel_display_targets[:4] %}
-                                    <div class="d-flex flex-wrap gap-1 properties-travel-badges">
-                                        {% for tt in visible_travel_targets %}
-                                            {% set tdata = travel_targets.get(tt.key) if travel_targets else None %}
-                                            {% set minutes = tdata.duration_min if tdata else None %}
-                                            {% set distance_km = tdata.distance_km if tdata else None %}
-                                            {% set place_name = (tdata.place.name if (tdata and tdata.place) else None) %}
-                                            {% set mode = (tdata.mode if tdata else None) %}
-                                            {% set status = tdata.status if tdata else None %}
-                                            {% if minutes %}
-                                                <span class="badge bg-info"
-                                                      data-bs-toggle="tooltip"
-                                                      title="{{ tt.label }}{% if mode %} ({{ mode }}){% endif %}{% if place_name %}: {{ place_name }}{% endif %}{% if distance_km %} ({{ '%.1f'|format(distance_km) }} km){% endif %}">
-                                                    <i class="fas {{ tt.icon }} me-1"></i>{{ minutes }}m
-                                                </span>
-                                            {% elif status %}
-                                                <span class="badge bg-light text-body-secondary border"
-                                                      data-bs-toggle="tooltip"
-                                                      title="{{ tt.label }}{% if mode %} ({{ mode }}){% endif %} ({{ status }})">
-                                                    <i class="fas {{ tt.icon }} me-1"></i>—
-                                                </span>
-                                            {% else %}
-                                                <span class="badge bg-light text-body-secondary border"
-                                                      data-bs-toggle="tooltip"
-                                                      title="{{ tt.label }}{% if mode %} ({{ mode }}){% endif %} (not calculated)">
-                                                    <i class="fas {{ tt.icon }} me-1"></i>—
-                                                </span>
-                                            {% endif %}
-                                        {% endfor %}
-                                        {% set hidden_travel_count = (travel_display_targets|length) - (visible_travel_targets|length) %}
-                                        {% if hidden_travel_count > 0 %}
-                                            <span class="badge bg-light text-body-secondary border"
-                                                  data-bs-toggle="tooltip"
-                                                  title="{{ hidden_travel_count }} more targets in details view">
-                                                +{{ hidden_travel_count }}
-                                            </span>
-                                        {% endif %}
-                                    </div>
-                                {% else %}
-                                    <span class="text-body-secondary">—</span>
-                                {% endif %}
-                            </td>
+                            <td>{{ travel_badges(p, travel_display_targets) }}</td>
                             <td>
                                 <div class="d-flex flex-wrap gap-1 properties-type-badges">
                                     {% if p.property_category %}
                                         <span class="badge text-bg-secondary">{{ p.property_category }}</span>
                                     {% else %}
-                                        <span class="badge bg-light text-body-secondary border">—</span>
+                                        <span class="badge bg-light text-body-secondary border">&mdash;</span>
                                     {% endif %}
                                     {% if p.property_subtype and p.property_subtype != p.property_category and not (p.property_category == 'land' and p.property_subtype == 'plot') %}
                                         <span class="badge bg-light text-body-secondary border">{{ p.property_subtype }}</span>
@@ -332,11 +449,11 @@
                                         {{ p.listing_status }}
                                     </span>
                                 {% else %}
-                                    <span class="text-body-secondary">—</span>
+                                    <span class="text-body-secondary">&mdash;</span>
                                 {% endif %}
                             </td>
                             <td class="small text-body-secondary text-nowrap">
-                                {% if p.created_at %}<span class="text-nowrap">{{ p.created_at.strftime('%Y-%m-%d') }}</span>{% else %}—{% endif %}
+                                {% if p.created_at %}<span class="text-nowrap">{{ p.created_at.strftime('%Y-%m-%d') }}</span>{% else %}&mdash;{% endif %}
                             </td>
                             <td>
                                 <div class="d-flex gap-1 flex-nowrap properties-actions">
@@ -382,21 +499,165 @@
             </tbody>
         </table>
     </div>
+</div>
+{% else %}
+<div id="properties-cards-view">
+    {% if properties %}
+        <div class="row" id="properties-grid">
+            {% for p in properties %}
+                <div class="col-lg-6 col-xl-4 mb-4" data-listing-status="{{ p.listing_status or 'active' }}">
+                    <div class="card h-100 property-card {% if p.listing_status in ('removed', 'sold') %}listing-inactive-card{% endif %}"
+                         data-property-id="{{ p.id }}" style="overflow: hidden;">
+                        <div class="card-header bg-body-tertiary" style="padding: 0.5rem 1rem;">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div class="d-flex align-items-center gap-2" style="min-width: 0; flex: 1;">
+                                    {% if active_mode == 'investment' %}
+                                        {{ score_badge(p.score_investment|float if p.score_investment is not none else none, 'border: 2px solid #198754; font-weight: bold;') }}
+                                    {% elif active_mode == 'lifestyle' %}
+                                        {{ score_badge(p.score_lifestyle|float if p.score_lifestyle is not none else none, 'border: 2px solid #ffc107; font-weight: bold;') }}
+                                    {% else %}
+                                        {{ score_badge(p.score_total|float if p.score_total is not none else none, '') }}
+                                    {% endif %}
+                                    {% if p.property_category %}
+                                        <span class="badge text-bg-secondary" style="flex-shrink: 0;">{{ p.property_category }}</span>
+                                    {% endif %}
+                                    {% if p.property_subtype and p.property_subtype != p.property_category %}
+                                        <span class="badge bg-light text-body-secondary border" style="flex-shrink: 0;">{{ p.property_subtype }}</span>
+                                    {% endif %}
+                                </div>
+                                <div class="ms-2 d-flex align-items-center" style="flex-shrink: 0;">
+                                    <button class="btn btn-link p-0 me-2 property-favorite-btn"
+                                            data-property-id="{{ p.id }}"
+                                            title="{{ 'Remove from favorites' if p.is_favorite else 'Add to favorites' }}">
+                                        <i class="fas fa-star {{ 'text-warning' if p.is_favorite else 'text-muted' }}"
+                                           style="font-size: 1rem; cursor: pointer;"></i>
+                                    </button>
+                                    <small class="text-body-secondary">{{ p.created_at.strftime('%d %b %y') if p.created_at else '—' }}</small>
+                                </div>
+                            </div>
+                        </div>
 
-    {% if pagination and (pagination.pages or 0) > 1 %}
+                        <div class="card-body">
+                            <h6 class="card-title">
+                                <a href="{{ url_for('main.property_detail', property_id=p.id) }}"
+                                   class="text-decoration-none table-title property-table-title"
+                                   title="{{ p.title or ('Property #' ~ p.id) }}">
+                                    {{ p.title or ('Property #' ~ p.id) }}
+                                </a>
+                            </h6>
+
+                            <div class="row mb-3">
+                                <div class="col-6">
+                                    {% if p.price %}
+                                        <strong class="text-success">&euro;{{ '{:,.0f}'.format(p.price|float) }}</strong>
+                                        {% if p.previous_price and p.price_change_amount %}
+                                            <div class="price-change-card mt-1">
+                                                {% if p.price_change_amount|float < 0 %}
+                                                    <small class="text-success d-flex align-items-center">
+                                                        <i class="fas fa-arrow-down me-1"></i>
+                                                        <span class="fw-bold">-{{ '{:,.0f}'.format(-(p.price_change_amount|float)) }}&euro;</span>
+                                                    </small>
+                                                {% else %}
+                                                    <small class="text-danger d-flex align-items-center">
+                                                        <i class="fas fa-arrow-up me-1"></i>
+                                                        <span class="fw-bold">+{{ '{:,.0f}'.format(p.price_change_amount|float) }}&euro;</span>
+                                                    </small>
+                                                {% endif %}
+                                                <small class="text-body-secondary">was &euro;{{ '{:,.0f}'.format(p.previous_price|float) }}</small>
+                                            </div>
+                                        {% endif %}
+                                    {% else %}
+                                        <span class="text-body-secondary">Price N/A</span>
+                                    {% endif %}
+                                </div>
+                                <div class="col-6 text-end">
+                                    <span class="text-body-secondary">
+                                        {% if p.area %}
+                                            {{ '{:,.0f}'.format(p.area|float) }} m&sup2;
+                                        {% else %}
+                                            Area N/A
+                                        {% endif %}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                {% if p.location_lat and p.location_lon %}
+                                    <a href="https://www.google.com/maps/search/?api=1&amp;query={{ p.location_lat }},{{ p.location_lon }}"
+                                       target="_blank" rel="noopener" class="text-decoration-none d-flex align-items-center">
+                                        <i class="fas fa-map-marker-alt me-2 {{ 'text-success' if p.location_accuracy == 'precise' else 'text-warning' }}"></i>
+                                        <small>{{ p.municipality or 'Unknown location' }}</small>
+                                    </a>
+                                {% else %}
+                                    <div class="text-body-secondary d-flex align-items-center">
+                                        <i class="fas fa-map-marker-alt me-2"></i>
+                                        <small>{{ p.municipality or 'Location unknown' }}</small>
+                                    </div>
+                                {% endif %}
+                            </div>
+
+                            {{ travel_badges(p, travel_display_targets) }}
+                        </div>
+
+                        <div class="card-footer d-flex justify-content-between align-items-center">
+                            <div class="d-flex gap-2">
+                                {% if p.location_lat and p.location_lon %}
+                                    <a href="{{ url_for('main.map_view', focus=p.id) }}"
+                                       class="btn btn-outline-info btn-sm" title="Show on Map">
+                                        <i class="fas fa-map"></i>
+                                    </a>
+                                {% endif %}
+                                {% if p.url %}
+                                    <a href="{{ p.url }}" target="_blank" rel="noopener"
+                                       class="btn btn-success btn-sm" title="View on Idealista">
+                                        <i class="fas fa-home me-1"></i>Idealista
+                                    </a>
+                                {% endif %}
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                {% if p.listing_status and p.listing_status != 'active' %}
+                                    <span class="badge bg-secondary">{{ p.listing_status }}</span>
+                                {% endif %}
+                                <a class="btn btn-outline-secondary btn-sm"
+                                   href="{{ url_for('main.property_detail', property_id=p.id) }}"
+                                   title="{{ t('view_details') }}">
+                                    <i class="fas fa-arrow-up-right-from-square"></i>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="card shadow-sm">
+            <div class="card-body text-center text-body-secondary py-5">
+                <div>No properties yet. Run <span class="fw-semibold">Manual Sync</span> to start importing.</div>
+                <div class="small mt-1">
+                    If this is a fresh DB but your ingestion cursor already advanced, run
+                    <a href="{{ url_for('main.property_settings') }}" class="link-secondary">Full Sync</a>.
+                </div>
+            </div>
+        </div>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if pagination and (pagination.pages or 0) > 1 %}
+<div class="card shadow-sm mt-3">
     <div class="card-footer bg-body-tertiary d-flex justify-content-between align-items-center">
         <div class="small text-body-secondary">
             Page {{ pagination.page }} / {{ pagination.pages }}
         </div>
         <div class="d-flex gap-2">
             {% if pagination.has_prev %}
-                <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('main.properties', page=pagination.prev_num, per_page=current_filters.per_page, profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort=current_filters.sort_by, order=current_filters.order) }}">Prev</a>
+                <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('main.properties', **dict(base_args, page=pagination.prev_num, sort=current_filters.sort_by, order=current_filters.order)) }}">Prev</a>
             {% endif %}
             {% if pagination.has_next %}
-                <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('main.properties', page=pagination.next_num, per_page=current_filters.per_page, profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort=current_filters.sort_by, order=current_filters.order) }}">Next</a>
+                <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('main.properties', **dict(base_args, page=pagination.next_num, sort=current_filters.sort_by, order=current_filters.order)) }}">Next</a>
             {% endif %}
         </div>
     </div>
-    {% endif %}
 </div>
+{% endif %}
 {% endblock %}
