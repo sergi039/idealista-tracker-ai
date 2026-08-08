@@ -42,6 +42,7 @@ class PropertyIMAPService:
         self.host = Config.IMAP_HOST
         self.port = Config.IMAP_PORT
         self.ssl = Config.IMAP_SSL
+        self.timeout = Config.IMAP_TIMEOUT_SECONDS
         self.user = Config.IMAP_USER
         self.password = Config.IMAP_PASSWORD
         self.folder = Config.IMAP_FOLDER
@@ -318,7 +319,9 @@ class PropertyIMAPService:
         ]
 
         try:
-            with IMAPClient(self.host, port=self.port, ssl=self.ssl) as client:
+            with IMAPClient(
+                self.host, port=self.port, ssl=self.ssl, timeout=self.timeout
+            ) as client:
                 client.login(self.user, self.password)
                 logger.info("Connected to IMAP server as %s", self.user)
 
