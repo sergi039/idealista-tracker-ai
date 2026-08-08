@@ -10,11 +10,27 @@ left `Property.query` unfiltered by `search_profile_id`, so a page showing
 more than one profile's listings at once was impossible.
 """
 
+import re
+
 import pytest
 
 from app import create_app, db
 from models import Property, SearchProfile
 from tests import setup_test_environment
+
+
+def _extract_href(body, title_text):
+    """Pull the href of the <a ...> whose title attribute is `title_text`.
+
+    The templates emit `href="..."` on the line before `title="..."`, so a
+    plain substring check like `"profile_id=all" in body` can't tell *which*
+    link on the page carries it -- it passes as long as any one link does,
+    even if a different link silently lost it. Pinning each link's own href
+    is the only way to prove both independently.
+    """
+    match = re.search(rf'href="([^"]*)"\s*\n?\s*title="{re.escape(title_text)}"', body)
+    assert match, f"no link with title={title_text!r} found in the page"
+    return match.group(1)
 
 
 @pytest.fixture
@@ -122,11 +138,19 @@ class TestPropertiesPageProfileSelector:
         self, client, two_profiles_with_properties
     ):
         """The Export CSV / Map buttons must forward the explicit "all"
-        choice, not silently fall back to a single auto-selected profile."""
+        choice, not silently fall back to a single auto-selected profile.
+        Each link's href is checked independently -- a single "profile_id=all
+        is somewhere on the page" assertion would still pass if only one of
+        the two links carried it."""
         resp = client.get("/properties?profile_id=all")
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
-        assert "profile_id=all" in body
+
+        csv_href = _extract_href(body, "Download filtered data as CSV")
+        assert "profile_id=all" in csv_href
+
+        map_href = _extract_href(body, "View properties on map")
+        assert "profile_id=all" in map_href
 
     def test_no_profile_id_param_preserves_prior_auto_select_behavior(
         self, client, two_profiles_with_properties
