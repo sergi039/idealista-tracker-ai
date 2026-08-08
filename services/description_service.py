@@ -242,7 +242,7 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
                     "processing_status": "fallback",
                     "error": "AI response parsing failed",
                 }
-            except Exception as e:
+            except Exception:
                 logger.error("AI enhancement failed", exc_info=True)
                 fallback_desc = self._create_fallback_description(
                     raw_description, extracted_data
@@ -257,7 +257,7 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
                     "error": "AI enhancement failed",
                 }
 
-        except Exception as e:
+        except Exception:
             logger.error("Description enhancement failed", exc_info=True)
             return {
                 "enhanced_description": raw_description,
@@ -354,7 +354,7 @@ IMPORTANT: Create equivalent professional content in both languages - don't just
                 "status": "not_processed",
             }
 
-        except Exception as e:
+        except Exception:
             logger.error(
                 "Failed to get description variants for land %s", land_id, exc_info=True
             )

@@ -78,7 +78,7 @@ class EnrichmentService:
             logger.info(f"Successfully enriched land {land_id}")
             return True
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to enrich land %s", land_id, exc_info=True)
             return False
 
@@ -606,7 +606,7 @@ class EnrichmentService:
                 timeout=60 * 60 * 24 * 7,  # 7 days
             )
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to enrich with Google Places", exc_info=True)
             # Create fallback enrichment data when Google APIs fail
             self._create_fallback_amenities_data(land)
@@ -657,7 +657,7 @@ class EnrichmentService:
 
             return places
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to search nearby places", exc_info=True)
             return []
 
@@ -745,7 +745,7 @@ class EnrichmentService:
                 f"Created fallback amenities data for land {land.id} ({'urban' if is_urban else 'coastal' if is_coastal else 'rural'} area)"
             )
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to create fallback amenities data", exc_info=True)
 
     def _enrich_with_google_maps(self, land):
@@ -791,7 +791,7 @@ class EnrichmentService:
                 lat, lon, cache_type, transport, timeout=60 * 60 * 24 * 7
             )
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to enrich with Google Maps", exc_info=True)
 
     def _get_distance_matrix_batch(
@@ -874,7 +874,7 @@ class EnrichmentService:
 
             return None
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to get distance matrix", exc_info=True)
             return None
 
@@ -934,7 +934,7 @@ class EnrichmentService:
                     timeout=60 * 60 * 24 * 7,
                 )
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to enrich with OSM data", exc_info=True)
 
     def _analyze_environment(self, land):
@@ -1035,7 +1035,7 @@ class EnrichmentService:
 
             land.environment = environment
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to analyze environment", exc_info=True)
 
     def _is_coastal_location(self, land):

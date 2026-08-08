@@ -150,6 +150,32 @@ pytest tests/test_scoring_service.py -v
 pytest tests/ --cov=app --cov-report=html
 ```
 
+### Local CI gate
+
+Before pushing, run the same checks CI runs on GitHub — locally, in seconds:
+
+```bash
+tools/ci/local_ci.sh
+```
+
+It runs `ruff check .`, `ruff format --check .`, the no-source-bundles check,
+and `uv run pytest tests/ -q`, with a clear PASS/FAIL per step. Install it as
+a `pre-push` hook once per clone:
+
+```bash
+tools/ci/install_hooks.sh
+```
+
+The hook validates what is actually being pushed, not your working tree:
+every pushed commit is checked out into a throwaway `git worktree` and the
+gate runs there, deliberately with no working-tree shortcut — a tree that
+merely *looks* clean can still differ from the committed blob (excluded or
+ignored files), so an uncommitted "fix" can't hide a broken commit.
+`tests/test_local_ci_hook.py` pins this contract.
+
+Bypass a single push with `SKIP_LOCAL_CI=1 git push` if you need to push
+work-in-progress.
+
 ## 🐛 Bug Reports
 
 When reporting bugs, please include:

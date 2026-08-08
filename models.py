@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 import json
-from datetime import datetime, timezone
 
 from app import db
 from sqlalchemy import CheckConstraint

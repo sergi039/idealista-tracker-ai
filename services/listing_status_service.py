@@ -122,7 +122,7 @@ class ListingStatusService:
         except requests.Timeout:
             logger.warning(f"Timeout checking listing: {url}")
             return "error", None
-        except requests.RequestException as e:
+        except requests.RequestException:
             logger.error("Error checking listing %s", url, exc_info=True)
             return "error", None
 
@@ -221,7 +221,7 @@ class ListingStatusService:
         # Get favorites ordered by last checked (oldest first, null first)
         favorites = (
             Land.query.filter(
-                Land.is_favorite == True,
+                Land.is_favorite,
                 Land.listing_status == "active",
                 Land.url.isnot(None),
             )
@@ -375,7 +375,7 @@ class ListingStatusService:
                 logger.info(
                     f"Recorded status check in SyncHistory: {results['removed']} removed, {results['sold']} sold"
                 )
-            except Exception as e:
+            except Exception:
                 logger.error(
                     "Failed to record status check in SyncHistory", exc_info=True
                 )

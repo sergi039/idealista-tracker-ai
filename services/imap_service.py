@@ -101,7 +101,7 @@ class IMAPService:
             os.makedirs(os.path.dirname(uid_file), exist_ok=True)
             with open(uid_file, "w") as f:
                 f.write(str(uid))
-        except Exception as e:
+        except Exception:
             logger.error("Failed to save last UID", exc_info=True)
 
     def authenticate(self) -> bool:
@@ -115,7 +115,7 @@ class IMAPService:
                 client.login(self.user, self.password)
                 logger.info(f"IMAP authentication successful for {self.user}")
                 return True
-        except Exception as e:
+        except Exception:
             logger.error("IMAP authentication failed", exc_info=True)
             return False
 
@@ -411,7 +411,7 @@ class IMAPService:
                             logger.warning(
                                 f"Could not parse Idealista data from email UID {uid}"
                             )
-                    except Exception as e:
+                    except Exception:
                         logger.error("Failed to process UID %s", uid, exc_info=True)
                         continue
 
@@ -425,7 +425,7 @@ class IMAPService:
                     f"Successfully processed {len(email_data)} Idealista emails"
                 )
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to fetch via IMAP", exc_info=True)
 
         return email_data
@@ -740,7 +740,7 @@ class IMAPService:
                                 land.enhanced_description = result
                                 db.session.commit()
                                 logger.info(f"Enhanced description for land {land.id}")
-                    except Exception as e:
+                    except Exception:
                         logger.warning(
                             "Description enhancement failed for land %s",
                             land.id,
@@ -750,7 +750,7 @@ class IMAPService:
                     processed_count += 1
                     logger.info(f"Processed new land: {land.title}")
 
-                except Exception as e:
+                except Exception:
                     logger.error(
                         "Failed to process email %s",
                         email_data.get("source_email_id"),
@@ -775,7 +775,7 @@ class IMAPService:
             )
             return processed_count
 
-        except Exception as e:
+        except Exception:
             logger.error("IMAP ingestion failed", exc_info=True)
 
             # Update sync history with error
@@ -794,7 +794,6 @@ class IMAPService:
         logger.info("Starting full email synchronization")
 
         # Temporarily reset last seen UID for full sync
-        original_uid = self.last_seen_uid
         self.last_seen_uid = 0
 
         try:
