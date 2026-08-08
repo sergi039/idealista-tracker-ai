@@ -6,6 +6,18 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 
+def known_criteria_names() -> set:
+    """The valid scoring criterion names.
+
+    The criterion set is exactly the keys of Config.DEFAULT_SCORING_WEIGHTS
+    (config.py). Anything writing ScoringCriteria rows has to check against
+    this: the `combined` profile is also where _load_combined_mix() reads the
+    investment/lifestyle ratio from, so an unvalidated name repoints the whole
+    combined score instead of setting a criterion weight (#48).
+    """
+    return set(Config.DEFAULT_SCORING_WEIGHTS)
+
+
 class ScoringService:
     def __init__(self):
         # Copy, never bind: load_custom_weights() and update_weights() both
@@ -630,6 +642,15 @@ class ScoringService:
                 logger.error(f"Invalid profile: {profile}")
                 return False
 
+            # Validate criterion names. This is the shared primitive behind both
+            # write endpoints, so it does not trust its callers: an unknown name
+            # written at profile='combined' lands in the same namespace as the
+            # investment/lifestyle mix rows and silently changes scoring (#48).
+            unknown_criteria = sorted(set(new_weights) - known_criteria_names())
+            if unknown_criteria:
+                logger.error(f"Unknown scoring criteria: {unknown_criteria}")
+                return False
+
             # Update or create criteria records for this profile
             for criteria_name, weight in new_weights.items():
                 criterion = ScoringCriteria.query.filter_by(
@@ -902,7 +923,7 @@ class ScoringService:
                     )
 
                 # Check for unknown criteria
-                valid_criteria = set(Config.DEFAULT_SCORING_WEIGHTS.keys())
+                valid_criteria = known_criteria_names()
                 for criterion in weights.keys():
                     if criterion not in valid_criteria:
                         logger.warning(
