@@ -632,6 +632,146 @@ def test_an_ambiguous_email_stops_resolution_instead_of_falling_back(app):
         assert db.session.get(SearchProfile, existing.id).source_search_key is None
 
 
+def test_merge_never_pins_a_search_key_to_the_catch_all(app):
+    """The default profile must not end up representing one subscription.
+
+    A keyed profile and the default can normalize to the same canonical label
+    ("Same label" vs "Same label!"). The default sorts first, so carrying the
+    key onto the primary would make one row both the fallback for everything
+    unmatched and the identity of one saved search - the invariant
+    `_adopt_keyless_profile` protects, broken from the other end.
+    """
+    with app.app_context():
+        catch_all = SearchProfile(
+            name="Same label!",
+            is_active=True,
+            is_default=True,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        keyed = SearchProfile(
+            name="Same label",
+            is_active=True,
+            is_auto_created=True,
+            source_search_key=TERRENOS_KEY,
+            source_search_url=TERRENOS_URL,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add_all([catch_all, keyed])
+        db.session.commit()
+        catch_all_id, keyed_id = catch_all.id, keyed.id
+
+        report = SearchProfileService.merge_duplicate_profiles()
+
+        assert db.session.get(SearchProfile, catch_all_id).source_search_key is None, (
+            "the catch-all was pinned to one subscription"
+        )
+        assert db.session.get(SearchProfile, keyed_id) is not None, (
+            "the subscription's identity was deleted"
+        )
+        assert db.session.get(SearchProfile, keyed_id).is_default is False
+        assert report["merged_groups"] == 0
+        assert report["profiles_deleted"] == 0
+        assert report["conflicts"]
+
+
+def test_the_catch_all_is_never_a_subscription_that_is_merely_named_default(app):
+    """A saved search may legitimately be labelled "Default" now.
+
+    Labels are no longer unique, so a keyed profile can carry that name without
+    being the fallback. Flagging it would hand one subscription every email
+    that matches nothing.
+    """
+    with app.app_context():
+        subscription = SearchProfile(
+            name=search_profile_service.DEFAULT_PROFILE_NAME,
+            is_active=True,
+            is_default=False,
+            is_auto_created=True,
+            source_search_key=TERRENOS_KEY,
+            source_search_url=TERRENOS_URL,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(subscription)
+        db.session.commit()
+        subscription_id = subscription.id
+
+        catch_all = SearchProfileService.get_default_profile(create=True)
+
+        assert catch_all is not None
+        assert catch_all.id != subscription_id, (
+            "a subscription was promoted to the catch-all"
+        )
+        assert catch_all.source_search_key is None
+        assert db.session.get(SearchProfile, subscription_id).is_default is False
+
+
+def test_an_identified_email_that_cannot_be_resolved_stays_unassigned(app, monkeypatch):
+    """Falling back to the label would hand it to a *different* subscription.
+
+    Labels are no longer unique among identified profiles, so
+    `get_or_create_profile_by_name()` can return a profile carrying somebody
+    else's search key. An email whose own search URL was read successfully must
+    never be resolved by its label.
+
+    The failure is injected at the leaf that can genuinely fail in production -
+    the insert - so the whole real resolution path runs first.
+    """
+    with app.app_context():
+        foreign = SearchProfile(
+            name=SEARCH_NAME,
+            is_active=True,
+            is_auto_created=True,
+            source_search_key=search_key_for_url(VIVIENDAS_URL),
+            source_search_url=VIVIENDAS_URL,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(foreign)
+        db.session.commit()
+
+        monkeypatch.setattr(
+            SearchProfileService,
+            "_create_profile_for_identity",
+            staticmethod(lambda identity, search_name: None),
+        )
+
+        resolved = SearchProfileService.resolve_profile(
+            SUBJECT_FULL, f'<a href="{TERRENOS_URL}">x</a>'
+        )
+
+        assert resolved is None, (
+            "an identified email fell back to a label owned by another search"
+        )
+        assert SearchProfile.query.count() == 1
+        assert db.session.get(SearchProfile, foreign.id).source_search_key == (
+            search_key_for_url(VIVIENDAS_URL)
+        )
+
+
+def test_a_label_shared_by_two_subscriptions_resolves_to_neither(app):
+    """A URL-less email cannot choose between two searches with one label.
+
+    That pairing only became representable in #102, so this is a hazard the
+    change itself introduced into the label fallback.
+    """
+    with app.app_context():
+        for key in (TERRENOS_KEY, search_key_for_url(VIVIENDAS_URL)):
+            db.session.add(
+                SearchProfile(
+                    name=SEARCH_NAME,
+                    is_active=True,
+                    is_auto_created=True,
+                    source_search_key=key,
+                    travel_targets={"presets": {}, "custom": []},
+                )
+            )
+        db.session.commit()
+
+        by_label = SearchProfileService.get_or_create_profile_by_name(SEARCH_NAME)
+
+        assert by_label is None, "the label picked one of two subscriptions"
+        assert SearchProfile.query.count() == 2, "and it must not add a third"
+
+
 def test_merging_onto_a_keyless_primary_keeps_the_only_search_key(app):
     """The surviving row must inherit the identity, not drop it.
 

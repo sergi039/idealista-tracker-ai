@@ -29,7 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one profile, label at another) are logged and left alone, never merged
   automatically. An email linking to **several different** searches resolves to
   no profile at all — the listing is stored unassigned rather than guessed into
-  a same-named subscription.
+  a same-named subscription, and so does an email whose search URL *was* read
+  but could not be resolved (contested retries exhausted, or the insert
+  failed). Unassigned listings are not yet surfaced in the UI.
+- **The catch-all stays a catch-all**: since a saved search may now legitimately
+  be labelled "Default", `get_default_profile()` only ever considers profiles
+  with no search key, the merge refuses any group pairing the default profile
+  with an identified search, and a label claimed by two different subscriptions
+  resolves to neither.
 - **Concurrency**: the dropped UNIQUE was also what protected check-then-insert
   in `get_or_create_profile_by_name()` / `get_default_profile()` from two
   overlapping ingestions, so `013` adds a partial unique index on `name` for
