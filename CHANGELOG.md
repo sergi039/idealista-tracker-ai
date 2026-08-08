@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🛟 Fixed: a refused Google API is no longer stored as a search result (2026-08-08, #98)
+- **What**: `PropertyTravelService.calculate_for_property()` wrote
+  `status: "not_found"` and returned `True` whether Google had answered "there
+  is no train station nearby" or refused the request outright
+  (`REQUEST_DENIED`, missing key, HTTP or network error). Refusals now get their
+  own `status: "unavailable"` with a reason code and the stage that failed, a
+  run where every target was refused returns `False`, and the run logs one ERROR
+  carrying the code Google returned. `Property.travel["api_status"]` records the
+  verdict (`ok` / `degraded` / `unavailable`) and per-reason counts.
+  `EnrichmentService` (legacy lands) got the same treatment: a refused Places
+  search no longer becomes `<amenity>_available: False`, and `enrich_land()`
+  returns `False` when Google refused.
+- **Why**: on 2026-08-08 three independent outages (billing off, Distance Matrix
+  not enabled, a key from the wrong project) were all invisible — 0 of 350
+  properties had ever received a travel time while every run reported success.
+- **Consequence to keep in mind**: refused answers are no longer cached, and the
+  distance cache namespace moved to `property_travel_v2` so entries poisoned by
+  the outage are not served for another week. A run that Google refused keeps
+  the previously stored travel times instead of overwriting them with an empty
+  structure. Haversine fallbacks (no Maps key) are now labelled
+  `status: "estimated"` rather than passing as measured times. Removed
+  `_create_fallback_amenities_data()`, which invented amenity distances
+  (800 m to a supermarket, and so on) whenever the Places call raised.
+
 ### 🛟 Fixed: last_seen_uid no longer runs ahead of the database (2026-08-08, #24)
 - **What**: both IMAP services persisted `max(uids)` inside
   `get_idealista_emails()`, before `run_ingestion()` had written anything. A
