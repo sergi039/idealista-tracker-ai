@@ -74,7 +74,9 @@ def refresh_all(
             move_ok = True
             if old_lat is not None and old_lon is not None:
                 move_m = _delta_m(old_lat, old_lon, new_lat, new_lon)
-                move_ok = move_m >= min_move_m or (old_acc != "precise" and new_acc == "precise")
+                move_ok = move_m >= min_move_m or (
+                    old_acc != "precise" and new_acc == "precise"
+                )
 
             better = old_acc != "precise" and new_acc == "precise"
             should_apply = (old_lat is None or old_lon is None) or better or move_ok
@@ -126,11 +128,30 @@ def refresh_all(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Refresh land coordinates using improved geocoding from title.")
-    parser.add_argument("--limit", type=int, default=0, help="Limit number of lands processed (0 = all).")
-    parser.add_argument("--sleep", type=float, default=0.25, help="Sleep between geocoding calls (seconds).")
-    parser.add_argument("--dry-run", action="store_true", help="Do not write changes to DB.")
-    parser.add_argument("--min-move-m", type=float, default=150.0, help="Minimum movement (meters) to accept update.")
+    parser = argparse.ArgumentParser(
+        description="Refresh land coordinates using improved geocoding from title."
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Limit number of lands processed (0 = all).",
+    )
+    parser.add_argument(
+        "--sleep",
+        type=float,
+        default=0.25,
+        help="Sleep between geocoding calls (seconds).",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Do not write changes to DB."
+    )
+    parser.add_argument(
+        "--min-move-m",
+        type=float,
+        default=150.0,
+        help="Minimum movement (meters) to accept update.",
+    )
     args = parser.parse_args()
 
     app = create_app()

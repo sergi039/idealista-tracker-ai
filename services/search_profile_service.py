@@ -13,7 +13,10 @@ DEFAULT_PROFILE_NAME = "Default"
 
 TRAVEL_PRESET_DEFS: Dict[str, Dict[str, Any]] = {
     "airport": {"label": "Nearest airport", "place_types": ["airport"]},
-    "train_station": {"label": "Nearest train station", "place_types": ["train_station"]},
+    "train_station": {
+        "label": "Nearest train station",
+        "place_types": ["train_station"],
+    },
     "hospital": {"label": "Nearest hospital", "place_types": ["hospital"]},
     "police": {"label": "Nearest police station", "place_types": ["police"]},
     "supermarket": {"label": "Nearest supermarket", "place_types": ["supermarket"]},
@@ -26,6 +29,7 @@ def _as_list(value: Any) -> List[Any]:
         return value
     return []
 
+
 def _clean_profile_name(value: str) -> Optional[str]:
     raw = str(value or "").strip()
     if not raw:
@@ -36,7 +40,9 @@ def _clean_profile_name(value: str) -> Optional[str]:
     raw = raw.rstrip("!.,;:").strip()
     raw = " ".join(raw.split())
     # Idealista sometimes prefixes names with "Search"/"Búsqueda"; normalize it away.
-    raw = re.sub(r"^(?:search|búsqueda|busqueda)\s+", "", raw, flags=re.IGNORECASE).strip()
+    raw = re.sub(
+        r"^(?:search|búsqueda|busqueda)\s+", "", raw, flags=re.IGNORECASE
+    ).strip()
     if not raw:
         return None
 
@@ -103,7 +109,10 @@ def extract_search_name(subject: str, body: str) -> Optional[str]:
 
 def default_travel_targets_config() -> Dict[str, Any]:
     return {
-        "presets": {key: {"enabled": True, "mode": "driving"} for key in TRAVEL_PRESET_DEFS.keys()},
+        "presets": {
+            key: {"enabled": True, "mode": "driving"}
+            for key in TRAVEL_PRESET_DEFS.keys()
+        },
         "custom": [],
     }
 
@@ -154,7 +163,10 @@ def normalize_travel_targets_config(value: Any) -> Dict[str, Any]:
                 mode = "driving"
             presets[key] = {"enabled": enabled, "mode": mode}
     else:
-        presets = {key: {"enabled": True, "mode": "driving"} for key in TRAVEL_PRESET_DEFS.keys()}
+        presets = {
+            key: {"enabled": True, "mode": "driving"}
+            for key in TRAVEL_PRESET_DEFS.keys()
+        }
 
     if isinstance(raw_custom, list):
         for item in raw_custom:
@@ -228,7 +240,9 @@ class SearchProfileService:
         q = SearchProfile.query
         if active_only:
             q = q.filter(SearchProfile.is_active.is_(True))
-        return q.order_by(SearchProfile.is_default.desc(), SearchProfile.name.asc()).all()
+        return q.order_by(
+            SearchProfile.is_default.desc(), SearchProfile.name.asc()
+        ).all()
 
     @staticmethod
     def get_or_create_profile_by_name(name: str) -> Optional[SearchProfile]:
@@ -291,7 +305,10 @@ class SearchProfileService:
                     renamed += 1
                 continue
 
-            counts = {p.id: Property.query.filter_by(search_profile_id=p.id).count() for p in group}
+            counts = {
+                p.id: Property.query.filter_by(search_profile_id=p.id).count()
+                for p in group
+            }
             group_sorted = sorted(
                 group,
                 key=lambda p: (not p.is_default, -counts.get(p.id, 0), p.id),
@@ -306,26 +323,41 @@ class SearchProfileService:
                     primary.is_default = True
                 if dup.is_active and not primary.is_active:
                     primary.is_active = True
-                if not (primary.description or "").strip() and (dup.description or "").strip():
+                if (
+                    not (primary.description or "").strip()
+                    and (dup.description or "").strip()
+                ):
                     primary.description = dup.description
 
-                primary_targets = normalize_travel_targets_config(primary.travel_targets)
+                primary_targets = normalize_travel_targets_config(
+                    primary.travel_targets
+                )
                 dup_targets = normalize_travel_targets_config(dup.travel_targets)
                 primary_custom = list(primary_targets.get("custom") or [])
                 dup_custom = list(dup_targets.get("custom") or [])
                 if dup_custom:
                     seen = {
-                        (str(item.get("name") or "").strip().lower(), item.get("lat"), item.get("lon"))
+                        (
+                            str(item.get("name") or "").strip().lower(),
+                            item.get("lat"),
+                            item.get("lon"),
+                        )
                         for item in primary_custom
                     }
                     for item in dup_custom:
-                        key = (str(item.get("name") or "").strip().lower(), item.get("lat"), item.get("lon"))
+                        key = (
+                            str(item.get("name") or "").strip().lower(),
+                            item.get("lat"),
+                            item.get("lon"),
+                        )
                         if key in seen:
                             continue
                         primary_custom.append(item)
                         seen.add(key)
                     primary_targets["custom"] = primary_custom
-                    primary.travel_targets = normalize_travel_targets_config(primary_targets)
+                    primary.travel_targets = normalize_travel_targets_config(
+                        primary_targets
+                    )
 
                 updated = Property.query.filter_by(search_profile_id=dup.id).update(
                     {"search_profile_id": primary.id}
@@ -405,9 +437,15 @@ class SearchProfileService:
         return SearchProfileService.get_default_profile(create=True)
 
     @staticmethod
-    def get_classification_rules(profile: Optional[SearchProfile]) -> List[Dict[str, Any]]:
+    def get_classification_rules(
+        profile: Optional[SearchProfile],
+    ) -> List[Dict[str, Any]]:
         """Return classification rules for a profile, falling back to global defaults."""
-        if profile and isinstance(profile.classification_rules, list) and profile.classification_rules:
+        if (
+            profile
+            and isinstance(profile.classification_rules, list)
+            and profile.classification_rules
+        ):
             rules = [r for r in profile.classification_rules if isinstance(r, dict)]
             rules.sort(key=lambda r: int(r.get("priority", 0)), reverse=True)
             return rules

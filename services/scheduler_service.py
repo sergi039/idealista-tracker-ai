@@ -12,15 +12,16 @@ logger = logging.getLogger(__name__)
 scheduler = None
 scheduler_lock_file = None
 
+
 def init_scheduler(app):
     """Initialize the background scheduler with protection against duplicate instances"""
     global scheduler, scheduler_lock_file
 
-    if app.config.get('TESTING'):
+    if app.config.get("TESTING"):
         logger.info("Scheduler disabled in TESTING")
         return None
 
-    if not getattr(Config, 'AUTO_START_SCHEDULER', False):
+    if not getattr(Config, "AUTO_START_SCHEDULER", False):
         logger.info("Scheduler disabled by config")
         return None
 
@@ -28,9 +29,11 @@ def init_scheduler(app):
         return scheduler
 
     # Try to acquire an exclusive lock to prevent duplicate schedulers
-    lock_path = os.path.join(tempfile.gettempdir(), 'idealista_universal_scheduler.lock')
+    lock_path = os.path.join(
+        tempfile.gettempdir(), "idealista_universal_scheduler.lock"
+    )
     try:
-        scheduler_lock_file = open(lock_path, 'w')
+        scheduler_lock_file = open(lock_path, "w")
         fcntl.flock(scheduler_lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         scheduler_lock_file.write(str(os.getpid()))
         scheduler_lock_file.flush()
@@ -40,7 +43,9 @@ def init_scheduler(app):
         if scheduler_lock_file:
             scheduler_lock_file.close()
             scheduler_lock_file = None
-        logger.info("Another scheduler instance is already running, skipping initialization")
+        logger.info(
+            "Another scheduler instance is already running, skipping initialization"
+        )
         return None
     except Exception:
         # Unexpected error during lock — close handle to prevent leak
@@ -73,18 +78,18 @@ def init_scheduler(app):
     try:
         scheduler = BackgroundScheduler()
 
-        timezone = getattr(Config, 'SCHEDULER_TIMEZONE', 'Europe/Madrid')
+        timezone = getattr(Config, "SCHEDULER_TIMEZONE", "Europe/Madrid")
 
         # Schedule ingestion jobs from config.
-        ingestion_times = list(getattr(Config, 'INGESTION_TIMES', ['07:00', '19:00']))
+        ingestion_times = list(getattr(Config, "INGESTION_TIMES", ["07:00", "19:00"]))
         if len(ingestion_times) == 2:
-            ingestion_job_ids = ['morning_ingestion', 'evening_ingestion']
+            ingestion_job_ids = ["morning_ingestion", "evening_ingestion"]
         else:
-            ingestion_job_ids = [f'ingestion_{i}' for i in range(len(ingestion_times))]
+            ingestion_job_ids = [f"ingestion_{i}" for i in range(len(ingestion_times))]
 
         for idx, time_str in enumerate(ingestion_times):
             try:
-                hour_str, minute_str = time_str.split(':', 1)
+                hour_str, minute_str = time_str.split(":", 1)
                 hour = int(hour_str)
                 minute = int(minute_str)
             except Exception:
@@ -100,9 +105,9 @@ def init_scheduler(app):
             )
 
         # Schedule listing status check for favorites.
-        listing_time = getattr(Config, 'LISTING_STATUS_CHECK_TIME', '10:00')
+        listing_time = getattr(Config, "LISTING_STATUS_CHECK_TIME", "10:00")
         try:
-            hour_str, minute_str = listing_time.split(':', 1)
+            hour_str, minute_str = listing_time.split(":", 1)
             hour = int(hour_str)
             minute = int(minute_str)
         except Exception:
@@ -112,8 +117,8 @@ def init_scheduler(app):
         scheduler.add_job(
             func=run_listing_status_check,
             trigger=CronTrigger(hour=hour, minute=minute, timezone=timezone),
-            id='listing_status_check',
-            name='Daily Listing Status Check',
+            id="listing_status_check",
+            name="Daily Listing Status Check",
             replace_existing=True,
         )
 
@@ -133,10 +138,12 @@ def init_scheduler(app):
         cleanup()
         return None
 
+
 def run_scheduled_ingestion():
     """Run the scheduled ingestion job"""
     try:
         from config import Config
+
         target = getattr(Config, "INGESTION_TARGET", "properties")
 
         logger.info("Starting scheduled IMAP ingestion (target=%s)", target)
@@ -152,10 +159,13 @@ def run_scheduled_ingestion():
 
         processed_count = service.run_ingestion()
 
-        logger.info("Scheduled ingestion completed. Processed %s properties", processed_count)
+        logger.info(
+            "Scheduled ingestion completed. Processed %s properties", processed_count
+        )
 
     except Exception:
         logger.error("Scheduled ingestion failed", exc_info=True)
+
 
 def run_listing_status_check():
     """Run the scheduled listing status check job"""
@@ -164,11 +174,15 @@ def run_listing_status_check():
 
         target = getattr(Config, "INGESTION_TARGET", "properties")
         if target != "lands":
-            logger.info("Skipping scheduled listing status check (target=%s, email-driven)", target)
+            logger.info(
+                "Skipping scheduled listing status check (target=%s, email-driven)",
+                target,
+            )
             return
 
         logger.info("Starting scheduled listing status check (lands)")
         from services.listing_status_service import ListingStatusService
+
         service = ListingStatusService()
 
         # Check favorites first (they get priority)
@@ -176,20 +190,20 @@ def run_listing_status_check():
 
         logger.info(
             "Listing status check completed. Checked %s favorites: %s removed, %s sold",
-            results['checked'],
-            results['removed'],
-            results['sold'],
+            results["checked"],
+            results["removed"],
+            results["sold"],
         )
 
         # If any listings were removed, log details
-        if results.get('details'):
-            for detail in results['details']:
+        if results.get("details"):
+            for detail in results["details"]:
                 logger.info(
                     "Status change: Land %s (%s) - %s -> %s",
-                    detail['land_id'],
-                    detail['title'],
-                    detail['old_status'],
-                    detail['new_status'],
+                    detail["land_id"],
+                    detail["title"],
+                    detail["old_status"],
+                    detail["new_status"],
                 )
 
     except Exception:
@@ -205,14 +219,15 @@ def get_scheduler_status():
 
     jobs = []
     for job in scheduler.get_jobs():
-        jobs.append({
-            "id": job.id,
-            "name": job.name,
-            "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
-            "trigger": str(job.trigger)
-        })
+        jobs.append(
+            {
+                "id": job.id,
+                "name": job.name,
+                "next_run": job.next_run_time.isoformat()
+                if job.next_run_time
+                else None,
+                "trigger": str(job.trigger),
+            }
+        )
 
-    return {
-        "status": "running" if scheduler.running else "stopped",
-        "jobs": jobs
-    }
+    return {"status": "running" if scheduler.running else "stopped", "jobs": jobs}

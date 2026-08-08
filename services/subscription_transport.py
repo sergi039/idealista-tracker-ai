@@ -52,9 +52,13 @@ def _post(path: str, payload: Dict[str, Any], timeout: int) -> Dict[str, Any]:
             body = response.read(4 * 1024 * 1024)
     except urllib.error.HTTPError as exc:
         detail = exc.read(8192).decode("utf-8", "replace")
-        raise SubscriptionTransportError(f"bridge returned {exc.code}: {detail[:500]}") from exc
+        raise SubscriptionTransportError(
+            f"bridge returned {exc.code}: {detail[:500]}"
+        ) from exc
     except urllib.error.URLError as exc:
-        raise SubscriptionTransportError(f"bridge unreachable at {base}: {exc.reason}") from exc
+        raise SubscriptionTransportError(
+            f"bridge unreachable at {base}: {exc.reason}"
+        ) from exc
 
     try:
         return json.loads(body)
@@ -148,7 +152,9 @@ class _Messages:
                 prompt_parts.append(content)
             elif isinstance(content, list):
                 prompt_parts.extend(
-                    str(block.get("text", "")) for block in content if isinstance(block, dict)
+                    str(block.get("text", ""))
+                    for block in content
+                    if isinstance(block, dict)
                 )
         prompt = "\n\n".join(part for part in prompt_parts if part)
 

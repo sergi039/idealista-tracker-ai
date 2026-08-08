@@ -22,44 +22,46 @@ class ListingStatusService:
 
     # Patterns that indicate a listing has been removed
     REMOVED_PATTERNS = [
-        'this listing is no longer published',
-        'ya no está publicado',
-        'ya no está disponible',
-        'anuncio ya no está disponible',
-        'listing is no longer available',
-        'The advertiser removed it',
-        'El anunciante lo ha eliminado',
-        'sorry, this listing is no longer published',
+        "this listing is no longer published",
+        "ya no está publicado",
+        "ya no está disponible",
+        "anuncio ya no está disponible",
+        "listing is no longer available",
+        "The advertiser removed it",
+        "El anunciante lo ha eliminado",
+        "sorry, this listing is no longer published",
     ]
 
     # Patterns that indicate we hit a captcha/bot protection
     CAPTCHA_PATTERNS = [
-        'captcha-delivery.com',
-        'please enable js',
-        'checking your browser',
-        'just a moment',
-        'ddos-guard',
+        "captcha-delivery.com",
+        "please enable js",
+        "checking your browser",
+        "just a moment",
+        "ddos-guard",
     ]
 
     # Patterns that indicate listing was sold
     SOLD_PATTERNS = [
-        'has been sold',
-        'vendido',
-        'se ha vendido',
+        "has been sold",
+        "vendido",
+        "se ha vendido",
     ]
 
     # User agent to mimic browser
-    USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
     def __init__(self):
         self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': self.USER_AGENT,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-        })
+        self.session.headers.update(
+            {
+                "User-Agent": self.USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+            }
+        )
 
     def check_listing_status(self, url: str) -> Tuple[str, Optional[str]]:
         """
@@ -71,7 +73,7 @@ class ListingStatusService:
             removed_date_str: Date when removed (if found in page), or None
         """
         if not url:
-            return 'error', None
+            return "error", None
 
         try:
             response = request_with_retries(
@@ -84,7 +86,7 @@ class ListingStatusService:
 
             # Check for 404
             if response.status_code == 404:
-                return 'removed', None
+                return "removed", None
 
             # Check response content
             content = response.text.lower()
@@ -93,13 +95,13 @@ class ListingStatusService:
             for pattern in self.CAPTCHA_PATTERNS:
                 if pattern.lower() in content:
                     logger.warning(f"Hit captcha protection for: {url}")
-                    return 'error', None
+                    return "error", None
 
             # Check for sold patterns
             for pattern in self.SOLD_PATTERNS:
                 if pattern.lower() in content:
                     logger.info(f"Listing sold: {url}")
-                    return 'sold', None
+                    return "sold", None
 
             # Check for removed patterns
             for pattern in self.REMOVED_PATTERNS:
@@ -107,22 +109,22 @@ class ListingStatusService:
                     logger.info(f"Listing removed: {url}")
                     # Try to extract removal date
                     removed_date = self._extract_removal_date(response.text)
-                    return 'removed', removed_date
+                    return "removed", removed_date
 
             # If we get here and status is 200, listing is likely active
             if response.status_code == 200:
                 # Additional check: look for price element to confirm it's a valid listing
-                if 'info-data-price' in content or 'precio' in content:
-                    return 'active', None
+                if "info-data-price" in content or "precio" in content:
+                    return "active", None
 
-            return 'active', None
+            return "active", None
 
         except requests.Timeout:
             logger.warning(f"Timeout checking listing: {url}")
-            return 'error', None
+            return "error", None
         except requests.RequestException as e:
             logger.error("Error checking listing %s", url, exc_info=True)
-            return 'error', None
+            return "error", None
 
     def _extract_removal_date(self, html_content: str) -> Optional[str]:
         """Try to extract the removal date from the page content"""
@@ -130,9 +132,9 @@ class ListingStatusService:
 
         # Pattern: "The advertiser removed it on 01/12/2025"
         patterns = [
-            r'removed it on (\d{1,2}/\d{1,2}/\d{4})',
-            r'lo ha eliminado el (\d{1,2}/\d{1,2}/\d{4})',
-            r'(\d{1,2}/\d{1,2}/\d{4})',
+            r"removed it on (\d{1,2}/\d{1,2}/\d{4})",
+            r"lo ha eliminado el (\d{1,2}/\d{1,2}/\d{4})",
+            r"(\d{1,2}/\d{1,2}/\d{4})",
         ]
 
         for pattern in patterns:
@@ -149,34 +151,32 @@ class ListingStatusService:
         Returns dict with status info and updates the land object.
         """
         if not land.url:
-            return {
-                'success': False,
-                'error': 'No URL available',
-                'land_id': land.id
-            }
+            return {"success": False, "error": "No URL available", "land_id": land.id}
 
         # Check the listing
         status, removed_date_str = self.check_listing_status(land.url)
 
         result = {
-            'success': True,
-            'land_id': land.id,
-            'previous_status': land.listing_status,
-            'new_status': status,
-            'changed': False
+            "success": True,
+            "land_id": land.id,
+            "previous_status": land.listing_status,
+            "new_status": status,
+            "changed": False,
         }
 
         # Update last checked time
         land.listing_last_checked = datetime.now(timezone.utc)
 
         # If status changed to removed or sold
-        if status in ('removed', 'sold') and land.listing_status == 'active':
-            result['changed'] = True
+        if status in ("removed", "sold") and land.listing_status == "active":
+            result["changed"] = True
 
             # Parse removal date if available
             if removed_date_str:
                 try:
-                    land.listing_removed_date = datetime.strptime(removed_date_str, '%d/%m/%Y')
+                    land.listing_removed_date = datetime.strptime(
+                        removed_date_str, "%d/%m/%Y"
+                    )
                 except ValueError:
                     land.listing_removed_date = datetime.now(timezone.utc)
             else:
@@ -186,21 +186,21 @@ class ListingStatusService:
 
             # Create history record for favorites
             if land.is_favorite:
-                snapshot = LandHistory.create_snapshot(land, 'removed_from_listing')
+                snapshot = LandHistory.create_snapshot(land, "removed_from_listing")
                 db.session.add(snapshot)
                 logger.info(f"Created removal snapshot for favorite land {land.id}")
 
             logger.info(f"Land {land.id} status changed: active -> {status}")
 
         # If status changed back to active (re-listed)
-        elif status == 'active' and land.listing_status in ('removed', 'sold'):
-            result['changed'] = True
-            land.listing_status = 'active'
+        elif status == "active" and land.listing_status in ("removed", "sold"):
+            result["changed"] = True
+            land.listing_status = "active"
             land.listing_removed_date = None
 
             # Create history record for favorites
             if land.is_favorite:
-                snapshot = LandHistory.create_snapshot(land, 'relisted')
+                snapshot = LandHistory.create_snapshot(land, "relisted")
                 db.session.add(snapshot)
                 logger.info(f"Land {land.id} was re-listed")
 
@@ -219,21 +219,24 @@ class ListingStatusService:
             Summary of the check operation
         """
         # Get favorites ordered by last checked (oldest first, null first)
-        favorites = Land.query.filter(
-            Land.is_favorite == True,
-            Land.listing_status == 'active',
-            Land.url.isnot(None)
-        ).order_by(
-            Land.listing_last_checked.asc().nullsfirst()
-        ).limit(limit).all()
+        favorites = (
+            Land.query.filter(
+                Land.is_favorite == True,
+                Land.listing_status == "active",
+                Land.url.isnot(None),
+            )
+            .order_by(Land.listing_last_checked.asc().nullsfirst())
+            .limit(limit)
+            .all()
+        )
 
         results = {
-            'checked': 0,
-            'active': 0,
-            'removed': 0,
-            'sold': 0,
-            'errors': 0,
-            'details': []
+            "checked": 0,
+            "active": 0,
+            "removed": 0,
+            "sold": 0,
+            "errors": 0,
+            "details": [],
         }
 
         for land in favorites:
@@ -241,36 +244,42 @@ class ListingStatusService:
             time.sleep(random.uniform(1, 3))
 
             result = self.check_land_status(land)
-            results['checked'] += 1
+            results["checked"] += 1
 
-            if result.get('success'):
-                status = result.get('new_status', 'error')
-                if status == 'active':
-                    results['active'] += 1
-                elif status == 'removed':
-                    results['removed'] += 1
-                elif status == 'sold':
-                    results['sold'] += 1
+            if result.get("success"):
+                status = result.get("new_status", "error")
+                if status == "active":
+                    results["active"] += 1
+                elif status == "removed":
+                    results["removed"] += 1
+                elif status == "sold":
+                    results["sold"] += 1
                 else:
-                    results['errors'] += 1
+                    results["errors"] += 1
 
-                if result.get('changed'):
-                    results['details'].append({
-                        'land_id': land.id,
-                        'title': land.title[:50] if land.title else 'Unknown',
-                        'old_status': result.get('previous_status'),
-                        'new_status': status
-                    })
+                if result.get("changed"):
+                    results["details"].append(
+                        {
+                            "land_id": land.id,
+                            "title": land.title[:50] if land.title else "Unknown",
+                            "old_status": result.get("previous_status"),
+                            "new_status": status,
+                        }
+                    )
             else:
-                results['errors'] += 1
+                results["errors"] += 1
 
-        logger.info(f"Checked {results['checked']} favorites: "
-                   f"{results['active']} active, {results['removed']} removed, "
-                   f"{results['sold']} sold, {results['errors']} errors")
+        logger.info(
+            f"Checked {results['checked']} favorites: "
+            f"{results['active']} active, {results['removed']} removed, "
+            f"{results['sold']} sold, {results['errors']} errors"
+        )
 
         return results
 
-    def check_all_active_listings(self, limit: int = 100, days_since_check: int = 7, record_sync: bool = True) -> Dict:
+    def check_all_active_listings(
+        self, limit: int = 100, days_since_check: int = 7, record_sync: bool = True
+    ) -> Dict:
         """
         Check all active listings that haven't been checked in X days.
         Favorites are checked more frequently (daily), others weekly.
@@ -287,25 +296,30 @@ class ListingStatusService:
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_since_check)
 
         # Get active listings that need checking
-        listings = Land.query.filter(
-            Land.listing_status == 'active',
-            Land.url.isnot(None),
-            db.or_(
-                Land.listing_last_checked.is_(None),
-                Land.listing_last_checked < cutoff_date
+        listings = (
+            Land.query.filter(
+                Land.listing_status == "active",
+                Land.url.isnot(None),
+                db.or_(
+                    Land.listing_last_checked.is_(None),
+                    Land.listing_last_checked < cutoff_date,
+                ),
             )
-        ).order_by(
-            Land.is_favorite.desc(),  # Favorites first
-            Land.listing_last_checked.asc().nullsfirst()
-        ).limit(limit).all()
+            .order_by(
+                Land.is_favorite.desc(),  # Favorites first
+                Land.listing_last_checked.asc().nullsfirst(),
+            )
+            .limit(limit)
+            .all()
+        )
 
         results = {
-            'checked': 0,
-            'active': 0,
-            'removed': 0,
-            'sold': 0,
-            'errors': 0,
-            'details': []
+            "checked": 0,
+            "active": 0,
+            "removed": 0,
+            "sold": 0,
+            "errors": 0,
+            "details": [],
         }
 
         for land in listings:
@@ -313,53 +327,63 @@ class ListingStatusService:
             time.sleep(random.uniform(2, 4))
 
             result = self.check_land_status(land)
-            results['checked'] += 1
+            results["checked"] += 1
 
-            if result.get('success'):
-                status = result.get('new_status', 'error')
-                if status == 'active':
-                    results['active'] += 1
-                elif status == 'removed':
-                    results['removed'] += 1
-                elif status == 'sold':
-                    results['sold'] += 1
+            if result.get("success"):
+                status = result.get("new_status", "error")
+                if status == "active":
+                    results["active"] += 1
+                elif status == "removed":
+                    results["removed"] += 1
+                elif status == "sold":
+                    results["sold"] += 1
                 else:
-                    results['errors'] += 1
+                    results["errors"] += 1
 
-                if result.get('changed'):
-                    results['details'].append({
-                        'land_id': land.id,
-                        'title': land.title[:50] if land.title else 'Unknown',
-                        'is_favorite': land.is_favorite,
-                        'old_status': result.get('previous_status'),
-                        'new_status': status
-                    })
+                if result.get("changed"):
+                    results["details"].append(
+                        {
+                            "land_id": land.id,
+                            "title": land.title[:50] if land.title else "Unknown",
+                            "is_favorite": land.is_favorite,
+                            "old_status": result.get("previous_status"),
+                            "new_status": status,
+                        }
+                    )
             else:
-                results['errors'] += 1
+                results["errors"] += 1
 
         # Record in SyncHistory if any listings were removed/sold
-        if record_sync and (results['removed'] > 0 or results['sold'] > 0):
+        if record_sync and (results["removed"] > 0 or results["sold"] > 0):
             try:
                 sync_history = SyncHistory(
-                    sync_type='status_check',
-                    backend='web_scrape',
-                    total_emails_found=results['checked'],
+                    sync_type="status_check",
+                    backend="web_scrape",
+                    total_emails_found=results["checked"],
                     new_properties_added=0,
                     price_updated_count=0,
-                    expired_count=results['removed'] + results['sold'],
-                    status='completed',
+                    expired_count=results["removed"] + results["sold"],
+                    status="completed",
                     started_at=start_time,
                     completed_at=datetime.now(timezone.utc),
-                    sync_duration=int((datetime.now(timezone.utc) - start_time).total_seconds())
+                    sync_duration=int(
+                        (datetime.now(timezone.utc) - start_time).total_seconds()
+                    ),
                 )
                 db.session.add(sync_history)
                 db.session.commit()
-                logger.info(f"Recorded status check in SyncHistory: {results['removed']} removed, {results['sold']} sold")
+                logger.info(
+                    f"Recorded status check in SyncHistory: {results['removed']} removed, {results['sold']} sold"
+                )
             except Exception as e:
-                logger.error("Failed to record status check in SyncHistory", exc_info=True)
+                logger.error(
+                    "Failed to record status check in SyncHistory", exc_info=True
+                )
 
-        logger.info(f"Checked {results['checked']} listings: "
-                   f"{results['active']} active, {results['removed']} removed, "
-                   f"{results['sold']} sold, {results['errors']} errors")
+        logger.info(
+            f"Checked {results['checked']} listings: "
+            f"{results['active']} active, {results['removed']} removed, "
+            f"{results['sold']} sold, {results['errors']} errors"
+        )
 
         return results

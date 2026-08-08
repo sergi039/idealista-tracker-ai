@@ -1,37 +1,39 @@
 """
 Security utilities for API key validation and security configuration
 """
+
 import os
 import logging
 from typing import List, Dict, Tuple
 
 logger = logging.getLogger(__name__)
 
+
 class SecurityValidator:
     """Centralized security validation for the application"""
-    
+
     # Required secrets for basic application functionality
     # DATABASE_URL can be provided directly or composed from DB_* variables
     REQUIRED_SECRETS = {
-        'SESSION_SECRET': 'Flask session security',
+        "SESSION_SECRET": "Flask session security",
     }
 
     # Database can be configured either way
     DATABASE_SECRETS = {
-        'DATABASE_URL': 'Database connection (or use DB_USER, DB_PASSWORD, DB_NAME)',
+        "DATABASE_URL": "Database connection (or use DB_USER, DB_PASSWORD, DB_NAME)",
     }
-    
+
     # Optional secrets for enhanced functionality (warn if missing)
     OPTIONAL_SECRETS = {
-        'Google_api': 'Google Maps/Places API services and geocoding',
-        'GOOGLE_MAPS_API': 'Google Maps API services (alternative name)',
-        'GOOGLE_MAPS_API_KEY': 'Google Maps API services (canonical name)',
-        'GOOGLE_PLACES_API_KEY': 'Google Places API services (canonical name)',
-        'AI_BRIDGE_TOKEN': 'Claude/OpenAI via the subscription bridge (tools/ai_bridge.py)',
-        'IMAP_USER': 'Gmail IMAP access for email ingestion',
-        'IMAP_PASSWORD': 'Gmail App Password for IMAP access'
+        "Google_api": "Google Maps/Places API services and geocoding",
+        "GOOGLE_MAPS_API": "Google Maps API services (alternative name)",
+        "GOOGLE_MAPS_API_KEY": "Google Maps API services (canonical name)",
+        "GOOGLE_PLACES_API_KEY": "Google Places API services (canonical name)",
+        "AI_BRIDGE_TOKEN": "Claude/OpenAI via the subscription bridge (tools/ai_bridge.py)",
+        "IMAP_USER": "Gmail IMAP access for email ingestion",
+        "IMAP_PASSWORD": "Gmail App Password for IMAP access",
     }
-    
+
     @classmethod
     def validate_required_secrets(cls) -> Tuple[bool, List[str]]:
         """
@@ -47,20 +49,24 @@ class SecurityValidator:
                 logger.error(f"Missing required secret: {secret_key}")
 
         # Check database config - either DATABASE_URL or DB_* variables
-        has_db_url = bool(os.environ.get('DATABASE_URL'))
-        has_db_parts = all([
-            os.environ.get('DB_USER'),
-            os.environ.get('DB_PASSWORD'),
-            os.environ.get('DB_NAME')
-        ])
+        has_db_url = bool(os.environ.get("DATABASE_URL"))
+        has_db_parts = all(
+            [
+                os.environ.get("DB_USER"),
+                os.environ.get("DB_PASSWORD"),
+                os.environ.get("DB_NAME"),
+            ]
+        )
 
         if not has_db_url and not has_db_parts:
-            missing_secrets.append("DATABASE_URL or DB_USER/DB_PASSWORD/DB_NAME (Database connection)")
+            missing_secrets.append(
+                "DATABASE_URL or DB_USER/DB_PASSWORD/DB_NAME (Database connection)"
+            )
             logger.error("Missing database configuration")
 
         is_valid = len(missing_secrets) == 0
         return is_valid, missing_secrets
-    
+
     @classmethod
     def check_optional_secrets(cls) -> Dict[str, bool]:
         """
@@ -68,19 +74,19 @@ class SecurityValidator:
         Returns: dict mapping secret name to availability
         """
         availability = {}
-        
+
         for secret_key, description in cls.OPTIONAL_SECRETS.items():
             value = os.environ.get(secret_key)
             is_available = bool(value)
             availability[secret_key] = is_available
-            
+
             if not is_available:
                 logger.warning(f"Optional secret missing: {secret_key} ({description})")
             else:
                 logger.info(f"Optional secret available: {secret_key}")
-        
+
         return availability
-    
+
     @classmethod
     def validate_all_secrets(cls, raise_on_missing_required: bool = True) -> Dict:
         """
@@ -91,30 +97,32 @@ class SecurityValidator:
             dict with validation results
         """
         logger.info("Starting security validation...")
-        
+
         # Check required secrets
         is_valid, missing_required = cls.validate_required_secrets()
-        
+
         if not is_valid and raise_on_missing_required:
             error_msg = (
                 f"Missing required secrets in Replit Secrets: {', '.join(missing_required)}. "
                 f"Please add these in the Secrets tab."
             )
             raise ValueError(error_msg)
-        
+
         # Check optional secrets
         optional_availability = cls.check_optional_secrets()
-        
+
         results = {
-            'required_valid': is_valid,
-            'missing_required': missing_required,
-            'optional_availability': optional_availability,
-            'total_required': len(cls.REQUIRED_SECRETS),
-            'total_optional': len(cls.OPTIONAL_SECRETS),
-            'optional_available_count': sum(optional_availability.values())
+            "required_valid": is_valid,
+            "missing_required": missing_required,
+            "optional_availability": optional_availability,
+            "total_required": len(cls.REQUIRED_SECRETS),
+            "total_optional": len(cls.OPTIONAL_SECRETS),
+            "optional_available_count": sum(optional_availability.values()),
         }
-        
-        logger.info(f"Security validation completed. Required: {is_valid}, "
-                   f"Optional available: {results['optional_available_count']}/{results['total_optional']}")
-        
+
+        logger.info(
+            f"Security validation completed. Required: {is_valid}, "
+            f"Optional available: {results['optional_available_count']}/{results['total_optional']}"
+        )
+
         return results

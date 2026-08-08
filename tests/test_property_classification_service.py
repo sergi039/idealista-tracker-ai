@@ -68,7 +68,9 @@ def test_property_classification_service_respects_profile_override(app):
         db.session.add(prop)
         db.session.commit()
 
-        changed = PropertyClassificationService.apply_classification(prop, profile=profile)
+        changed = PropertyClassificationService.apply_classification(
+            prop, profile=profile
+        )
         assert changed is True
         assert prop.property_category == "commercial"
         assert prop.property_subtype == "office"
@@ -127,7 +129,9 @@ def test_property_classification_service_skips_locked_properties(app):
         ("Suelo urbanizable en venta en Cádiz", "land", "plot"),
     ],
 )
-def test_property_classification_service_covers_common_sale_types(app, title, expected_category, expected_subtype):
+def test_property_classification_service_covers_common_sale_types(
+    app, title, expected_category, expected_subtype
+):
     with app.app_context():
         prop = Property(
             source_email_id="cls_types",

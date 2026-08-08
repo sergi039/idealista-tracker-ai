@@ -96,7 +96,9 @@ def extract_highlights(analysis: Any) -> Dict[str, Any]:
             "market_trend",
         ]
     }
-    sig_bytes = json.dumps(sig_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    sig_bytes = json.dumps(sig_payload, sort_keys=True, ensure_ascii=False).encode(
+        "utf-8"
+    )
     highlights["signature"] = hashlib.sha256(sig_bytes).hexdigest()[:16]
 
     return highlights
@@ -176,7 +178,9 @@ def evaluate(land, analysis: Any) -> Dict[str, Any]:
     }
 
 
-def build_comparison(land, claude_analysis: Any, openai_analysis: Any) -> Dict[str, Any]:
+def build_comparison(
+    land, claude_analysis: Any, openai_analysis: Any
+) -> Dict[str, Any]:
     claude_eval = evaluate(land, claude_analysis)
     openai_eval = evaluate(land, openai_analysis) if openai_analysis else None
 

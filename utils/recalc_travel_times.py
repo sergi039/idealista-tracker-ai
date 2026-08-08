@@ -10,10 +10,23 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Recalculate travel times for lands (batch-optimized).")
-    parser.add_argument("--sleep", type=float, default=0.1, help="Sleep between properties (seconds).")
-    parser.add_argument("--only-missing", action="store_true", help="Only recalc lands with missing travel times.")
-    parser.add_argument("--limit", type=int, default=0, help="Limit number of lands processed (0 = all).")
+    parser = argparse.ArgumentParser(
+        description="Recalculate travel times for lands (batch-optimized)."
+    )
+    parser.add_argument(
+        "--sleep", type=float, default=0.1, help="Sleep between properties (seconds)."
+    )
+    parser.add_argument(
+        "--only-missing",
+        action="store_true",
+        help="Only recalc lands with missing travel times.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Limit number of lands processed (0 = all).",
+    )
     args = parser.parse_args()
 
     app = create_app()
@@ -59,4 +72,3 @@ def main() -> None:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     main()
-

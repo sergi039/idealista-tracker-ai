@@ -30,7 +30,13 @@ class PropertyEnrichmentService:
         self.travel_service = travel_service or PropertyTravelService()
         self.scoring_service = scoring_service or PropertyScoringService()
 
-    def enrich_property(self, prop: Property, *, refresh_coords: bool = False, recalc_scoring: bool = True) -> bool:
+    def enrich_property(
+        self,
+        prop: Property,
+        *,
+        refresh_coords: bool = False,
+        recalc_scoring: bool = True,
+    ) -> bool:
         if not prop:
             return False
 
@@ -43,12 +49,17 @@ class PropertyEnrichmentService:
         # Auto-assign profile by nearest custom target (optional).
         try:
             from config import Config
+
             if getattr(Config, "AUTO_PROFILE_ASSIGNMENT", False):
                 from services.profile_assignment_service import ProfileAssignmentService
 
                 ProfileAssignmentService().assign_nearest_profile(prop, commit=False)
         except Exception as e:
-            logger.warning("Auto profile assignment failed for %s: %s", getattr(prop, "id", None), e)
+            logger.warning(
+                "Auto profile assignment failed for %s: %s",
+                getattr(prop, "id", None),
+                e,
+            )
 
         ok = self.travel_service.calculate_for_property(prop, commit=False)
 
@@ -56,12 +67,18 @@ class PropertyEnrichmentService:
             try:
                 self.scoring_service.calculate_for_property(prop, commit=False)
             except Exception as e:
-                logger.warning("Property scoring failed during enrichment for %s: %s", prop.id, e)
+                logger.warning(
+                    "Property scoring failed during enrichment for %s: %s", prop.id, e
+                )
 
         enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
         if not isinstance(enrichment, dict):
             enrichment = {}
-        google_meta = enrichment.get("google") if isinstance(enrichment.get("google"), dict) else {}
+        google_meta = (
+            enrichment.get("google")
+            if isinstance(enrichment.get("google"), dict)
+            else {}
+        )
         google_meta["updated_at"] = datetime.now(timezone.utc).isoformat()
         enrichment["google"] = google_meta
         prop.enrichment = enrichment
@@ -69,8 +86,16 @@ class PropertyEnrichmentService:
         db.session.commit()
         return ok
 
-    def enrich_property_id(self, property_id: int, *, refresh_coords: bool = False, recalc_scoring: bool = True) -> bool:
+    def enrich_property_id(
+        self,
+        property_id: int,
+        *,
+        refresh_coords: bool = False,
+        recalc_scoring: bool = True,
+    ) -> bool:
         prop = db.session.get(Property, property_id)
         if not prop:
             return False
-        return self.enrich_property(prop, refresh_coords=refresh_coords, recalc_scoring=recalc_scoring)
+        return self.enrich_property(
+            prop, refresh_coords=refresh_coords, recalc_scoring=recalc_scoring
+        )

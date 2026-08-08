@@ -49,7 +49,9 @@ def test_sale_only_skips_rent_ingestion(app, monkeypatch):
         ]
 
         service = PropertyIMAPService()
-        monkeypatch.setattr(service, "get_idealista_emails", lambda max_results=None: list(emails))
+        monkeypatch.setattr(
+            service, "get_idealista_emails", lambda max_results=None: list(emails)
+        )
 
         Config.SALE_ONLY = True
         created = service.run_ingestion(sync_type="test")
@@ -62,4 +64,3 @@ def test_sale_only_skips_rent_ingestion(app, monkeypatch):
         prop = Property.query.first()
         assert prop is not None
         assert prop.deal_type == "rent"
-

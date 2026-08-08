@@ -15,7 +15,9 @@ class LandToPropertyMigrationService:
     DEFAULT_PROFILE_NAME = "Legacy Lands"
 
     def __init__(self, profile_name: Optional[str] = None):
-        self.profile_name = (profile_name or self.DEFAULT_PROFILE_NAME).strip() or self.DEFAULT_PROFILE_NAME
+        self.profile_name = (
+            profile_name or self.DEFAULT_PROFILE_NAME
+        ).strip() or self.DEFAULT_PROFILE_NAME
 
     @staticmethod
     def _as_positive_int(value: Any) -> Optional[int]:
@@ -72,9 +74,18 @@ class LandToPropertyMigrationService:
             "distance_police": getattr(land, "distance_police", None),
         }
 
-    def _legacy_travel_targets(self, legacy_blob: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-        labels = {d["key"]: d.get("label") or d["key"] for d in SearchProfileService.get_travel_preset_defs()}
-        infra_ext = legacy_blob.get("infrastructure_extended") if isinstance(legacy_blob, dict) else {}
+    def _legacy_travel_targets(
+        self, legacy_blob: Dict[str, Any]
+    ) -> Dict[str, Dict[str, Any]]:
+        labels = {
+            d["key"]: d.get("label") or d["key"]
+            for d in SearchProfileService.get_travel_preset_defs()
+        }
+        infra_ext = (
+            legacy_blob.get("infrastructure_extended")
+            if isinstance(legacy_blob, dict)
+            else {}
+        )
         infra_ext = infra_ext if isinstance(infra_ext, dict) else {}
 
         key_map = {
@@ -94,7 +105,9 @@ class LandToPropertyMigrationService:
             else:
                 duration_min = self._as_positive_int(legacy_blob.get(duration_key))
                 raw_dist = legacy_blob.get(distance_key)
-                distance_km = round(float(raw_dist), 1) if raw_dist is not None else None
+                distance_km = (
+                    round(float(raw_dist), 1) if raw_dist is not None else None
+                )
 
             if duration_min is None and distance_km is None:
                 continue
@@ -116,13 +129,17 @@ class LandToPropertyMigrationService:
 
         return out
 
-    def _merge_missing_legacy_travel(self, prop: Property, legacy_blob: Dict[str, Any]) -> bool:
+    def _merge_missing_legacy_travel(
+        self, prop: Property, legacy_blob: Dict[str, Any]
+    ) -> bool:
         """Backfill missing travel target keys from legacy land metrics."""
         if not isinstance(legacy_blob, dict):
             return False
 
         travel = prop.travel if isinstance(prop.travel, dict) else {}
-        targets = travel.get("targets") if isinstance(travel.get("targets"), dict) else {}
+        targets = (
+            travel.get("targets") if isinstance(travel.get("targets"), dict) else {}
+        )
 
         legacy_targets = self._legacy_travel_targets(legacy_blob)
         changed = False
@@ -149,8 +166,15 @@ class LandToPropertyMigrationService:
         travel["updated_at"] = datetime.now(timezone.utc).isoformat()
         if "profile_id" not in travel and prop.search_profile_id is not None:
             travel["profile_id"] = prop.search_profile_id
-        if "origin" not in travel and prop.location_lat is not None and prop.location_lon is not None:
-            travel["origin"] = {"lat": float(prop.location_lat), "lon": float(prop.location_lon)}
+        if (
+            "origin" not in travel
+            and prop.location_lat is not None
+            and prop.location_lon is not None
+        ):
+            travel["origin"] = {
+                "lat": float(prop.location_lat),
+                "lon": float(prop.location_lon),
+            }
 
         prop.travel = travel
         return True
@@ -172,11 +196,15 @@ class LandToPropertyMigrationService:
             db.session.commit()
             return profile
         except Exception as e:
-            logger.error("Failed to create migration profile %r: %s", self.profile_name, e)
+            logger.error(
+                "Failed to create migration profile %r: %s", self.profile_name, e
+            )
             db.session.rollback()
             return SearchProfile.query.filter_by(name=self.profile_name).first()
 
-    def migrate(self, *, dry_run: bool = True, limit: Optional[int] = None) -> Dict[str, Any]:
+    def migrate(
+        self, *, dry_run: bool = True, limit: Optional[int] = None
+    ) -> Dict[str, Any]:
         """Migrate legacy `Land` rows to `Property`.
 
         - Dedup key: `idealista_property_id` if present else `url`.
@@ -200,7 +228,13 @@ class LandToPropertyMigrationService:
             try:
                 existing = []
                 if land.idealista_property_id:
-                    existing = Property.query.filter_by(idealista_property_id=land.idealista_property_id).limit(1).all()
+                    existing = (
+                        Property.query.filter_by(
+                            idealista_property_id=land.idealista_property_id
+                        )
+                        .limit(1)
+                        .all()
+                    )
                 if not existing and land.url:
                     existing = Property.query.filter_by(url=land.url).limit(1).all()
                 if existing:
@@ -261,7 +295,9 @@ class LandToPropertyMigrationService:
 
             except Exception as e:
                 errors += 1
-                logger.error("Failed to migrate land %s: %s", getattr(land, "id", None), e)
+                logger.error(
+                    "Failed to migrate land %s: %s", getattr(land, "id", None), e
+                )
                 db.session.rollback()
 
         if not dry_run:
@@ -282,12 +318,16 @@ class LandToPropertyMigrationService:
             "errors": errors,
         }
 
-    def backfill_missing_legacy_travel(self, *, limit: Optional[int] = None, commit: bool = True) -> Dict[str, Any]:
+    def backfill_missing_legacy_travel(
+        self, *, limit: Optional[int] = None, commit: bool = True
+    ) -> Dict[str, Any]:
         """Backfill missing Property.travel targets from enrichment.legacy_land.
 
         Useful after cutover when records were migrated before this logic existed.
         """
-        query = Property.query.filter(Property.property_category == "land").order_by(Property.id.asc())
+        query = Property.query.filter(Property.property_category == "land").order_by(
+            Property.id.asc()
+        )
         if limit is not None:
             query = query.limit(max(1, int(limit)))
         properties = query.all()
@@ -298,8 +338,14 @@ class LandToPropertyMigrationService:
 
         for prop in properties:
             try:
-                enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
-                legacy_blob = enrichment.get("legacy_land") if isinstance(enrichment, dict) else None
+                enrichment = (
+                    prop.enrichment if isinstance(prop.enrichment, dict) else {}
+                )
+                legacy_blob = (
+                    enrichment.get("legacy_land")
+                    if isinstance(enrichment, dict)
+                    else None
+                )
                 if not isinstance(legacy_blob, dict):
                     no_legacy += 1
                     continue
@@ -307,7 +353,11 @@ class LandToPropertyMigrationService:
                     updated += 1
             except Exception as e:
                 errors += 1
-                logger.error("Failed to backfill legacy travel for property %s: %s", getattr(prop, "id", None), e)
+                logger.error(
+                    "Failed to backfill legacy travel for property %s: %s",
+                    getattr(prop, "id", None),
+                    e,
+                )
                 db.session.rollback()
 
         if commit and updated:
@@ -315,7 +365,9 @@ class LandToPropertyMigrationService:
                 db.session.commit()
             except Exception as e:
                 db.session.rollback()
-                raise RuntimeError(f"Failed to commit legacy travel backfill: {e}") from e
+                raise RuntimeError(
+                    f"Failed to commit legacy travel backfill: {e}"
+                ) from e
 
         return {
             "properties_scanned": len(properties),

@@ -19,36 +19,48 @@ class MarketAnalysisService:
 
     # Default values for 2025 (used as fallback if DB settings not available)
     DEFAULT_CONSTRUCTION_COSTS = {
-        'basic': {'min': 1100, 'avg': 1300, 'max': 1500},
-        'premium': {'min': 1500, 'avg': 1800, 'max': 2200}
+        "basic": {"min": 1100, "avg": 1300, "max": 1500},
+        "premium": {"min": 1500, "avg": 1800, "max": 2200},
     }
     # Typical purchase costs ratio (transfer tax/VAT + notary/registry/legal); varies by region and deal.
     DEFAULT_PURCHASE_COSTS_RATIO = 0.10
     DEFAULT_RENTAL_ADJUSTMENTS = {
-        'urban': {'vacancy_rate': 0.05, 'operating_expenses': 0.15, 'management_fee': 0.00},
-        'suburban': {'vacancy_rate': 0.08, 'operating_expenses': 0.15, 'management_fee': 0.00},
-        'rural': {'vacancy_rate': 0.20, 'operating_expenses': 0.18, 'management_fee': 0.10}
+        "urban": {
+            "vacancy_rate": 0.05,
+            "operating_expenses": 0.15,
+            "management_fee": 0.00,
+        },
+        "suburban": {
+            "vacancy_rate": 0.08,
+            "operating_expenses": 0.15,
+            "management_fee": 0.00,
+        },
+        "rural": {
+            "vacancy_rate": 0.20,
+            "operating_expenses": 0.18,
+            "management_fee": 0.10,
+        },
     }
     # Rental prices per m²/month - configurable (defaults are generic).
     DEFAULT_RENTAL_PRICES = {
-        'urban': {'min': 9, 'avg': 11, 'max': 13},
-        'suburban': {'min': 7, 'avg': 9, 'max': 11},
-        'rural': {'min': 5, 'avg': 7, 'max': 9}
+        "urban": {"min": 9, "avg": 11, "max": 13},
+        "suburban": {"min": 7, "avg": 9, "max": 11},
+        "rural": {"min": 5, "avg": 7, "max": 9},
     }
 
     # Typical buildability ratios (heuristics; configurable later if needed)
     BUILDABILITY_RATIOS = {
-        'developed': 0.25,      # 25% of land area can be built
-        'undeveloped': 0.20,    # 20% for undeveloped land
-        'rural': 0.15,          # 15% for rural land
-        'default': 0.20         # Default 20%
+        "developed": 0.25,  # 25% of land area can be built
+        "undeveloped": 0.20,  # 20% for undeveloped land
+        "rural": 0.15,  # 15% for rural land
+        "default": 0.20,  # Default 20%
     }
 
     # Rental market yield heuristics (2024-2025; configurable)
     RENTAL_YIELDS = {
-        'urban': {'min': 3.5, 'avg': 4.5, 'max': 5.5},
-        'suburban': {'min': 4.0, 'avg': 5.0, 'max': 6.0},
-        'rural': {'min': 5.0, 'avg': 6.0, 'max': 7.5}
+        "urban": {"min": 3.5, "avg": 4.5, "max": 5.5},
+        "suburban": {"min": 4.0, "avg": 5.0, "max": 6.0},
+        "rural": {"min": 5.0, "avg": 6.0, "max": 7.5},
     }
 
     def __init__(self):
@@ -59,62 +71,87 @@ class MarketAnalysisService:
         """Load market settings from database, fallback to defaults"""
         try:
             from models import MarketSettings
+
             settings = MarketSettings.query.first()
 
             if settings:
                 # Load construction costs from DB
                 self.CONSTRUCTION_COSTS = {
-                    'basic': {
-                        'min': settings.construction_basic_min or 1100,
-                        'avg': settings.construction_basic_avg or 1300,
-                        'max': settings.construction_basic_max or 1500
+                    "basic": {
+                        "min": settings.construction_basic_min or 1100,
+                        "avg": settings.construction_basic_avg or 1300,
+                        "max": settings.construction_basic_max or 1500,
                     },
-                    'premium': {
-                        'min': settings.construction_premium_min or 1500,
-                        'avg': settings.construction_premium_avg or 1800,
-                        'max': settings.construction_premium_max or 2200
-                    }
+                    "premium": {
+                        "min": settings.construction_premium_min or 1500,
+                        "avg": settings.construction_premium_avg or 1800,
+                        "max": settings.construction_premium_max or 2200,
+                    },
                 }
 
                 # Load purchase costs ratio from DB
-                self.PURCHASE_COSTS_RATIO = float(settings.purchase_costs_ratio) if settings.purchase_costs_ratio else 0.10
+                self.PURCHASE_COSTS_RATIO = (
+                    float(settings.purchase_costs_ratio)
+                    if settings.purchase_costs_ratio
+                    else 0.10
+                )
 
                 # Load rental adjustments from DB
                 self.RENTAL_ADJUSTMENTS = {
-                    'urban': {
-                        'vacancy_rate': float(settings.urban_vacancy_rate) if settings.urban_vacancy_rate else 0.05,
-                        'operating_expenses': float(settings.urban_operating_expenses) if settings.urban_operating_expenses else 0.15,
-                        'management_fee': float(settings.urban_management_fee) if settings.urban_management_fee else 0.00
+                    "urban": {
+                        "vacancy_rate": float(settings.urban_vacancy_rate)
+                        if settings.urban_vacancy_rate
+                        else 0.05,
+                        "operating_expenses": float(settings.urban_operating_expenses)
+                        if settings.urban_operating_expenses
+                        else 0.15,
+                        "management_fee": float(settings.urban_management_fee)
+                        if settings.urban_management_fee
+                        else 0.00,
                     },
-                    'suburban': {
-                        'vacancy_rate': float(settings.suburban_vacancy_rate) if settings.suburban_vacancy_rate else 0.08,
-                        'operating_expenses': float(settings.suburban_operating_expenses) if settings.suburban_operating_expenses else 0.15,
-                        'management_fee': float(settings.suburban_management_fee) if settings.suburban_management_fee else 0.00
+                    "suburban": {
+                        "vacancy_rate": float(settings.suburban_vacancy_rate)
+                        if settings.suburban_vacancy_rate
+                        else 0.08,
+                        "operating_expenses": float(
+                            settings.suburban_operating_expenses
+                        )
+                        if settings.suburban_operating_expenses
+                        else 0.15,
+                        "management_fee": float(settings.suburban_management_fee)
+                        if settings.suburban_management_fee
+                        else 0.00,
                     },
-                    'rural': {
-                        'vacancy_rate': float(settings.rural_vacancy_rate) if settings.rural_vacancy_rate else 0.20,
-                        'operating_expenses': float(settings.rural_operating_expenses) if settings.rural_operating_expenses else 0.18,
-                        'management_fee': float(settings.rural_management_fee) if settings.rural_management_fee else 0.10
-                    }
+                    "rural": {
+                        "vacancy_rate": float(settings.rural_vacancy_rate)
+                        if settings.rural_vacancy_rate
+                        else 0.20,
+                        "operating_expenses": float(settings.rural_operating_expenses)
+                        if settings.rural_operating_expenses
+                        else 0.18,
+                        "management_fee": float(settings.rural_management_fee)
+                        if settings.rural_management_fee
+                        else 0.10,
+                    },
                 }
 
                 # Load rental prices from DB
                 self.RENTAL_PRICES = {
-                    'urban': {
-                        'min': settings.urban_rental_min or 9,
-                        'avg': settings.urban_rental_avg or 11,
-                        'max': settings.urban_rental_max or 13
+                    "urban": {
+                        "min": settings.urban_rental_min or 9,
+                        "avg": settings.urban_rental_avg or 11,
+                        "max": settings.urban_rental_max or 13,
                     },
-                    'suburban': {
-                        'min': settings.suburban_rental_min or 7,
-                        'avg': settings.suburban_rental_avg or 9,
-                        'max': settings.suburban_rental_max or 11
+                    "suburban": {
+                        "min": settings.suburban_rental_min or 7,
+                        "avg": settings.suburban_rental_avg or 9,
+                        "max": settings.suburban_rental_max or 11,
                     },
-                    'rural': {
-                        'min': settings.rural_rental_min or 5,
-                        'avg': settings.rural_rental_avg or 7,
-                        'max': settings.rural_rental_max or 9
-                    }
+                    "rural": {
+                        "min": settings.rural_rental_min or 5,
+                        "avg": settings.rural_rental_avg or 7,
+                        "max": settings.rural_rental_max or 9,
+                    },
                 }
                 logger.debug("Loaded market settings from database")
             else:
@@ -127,7 +164,9 @@ class MarketAnalysisService:
 
         except Exception as e:
             # Fallback to defaults on any error
-            logger.warning(f"Could not load market settings from DB: {e}, using defaults")
+            logger.warning(
+                f"Could not load market settings from DB: {e}, using defaults"
+            )
             self.CONSTRUCTION_COSTS = self.DEFAULT_CONSTRUCTION_COSTS.copy()
             self.PURCHASE_COSTS_RATIO = self.DEFAULT_PURCHASE_COSTS_RATIO
             self.RENTAL_ADJUSTMENTS = self.DEFAULT_RENTAL_ADJUSTMENTS.copy()
@@ -157,58 +196,72 @@ class MarketAnalysisService:
         quality_points = 0
         max_points = 100
         quality_factors = []
-        
+
         # 1. Land Type Quality (25 points max)
-        land_type = land.land_type or 'buildable'
-        if land_type == 'developed':
+        land_type = land.land_type or "buildable"
+        if land_type == "developed":
             quality_points += 25
-            quality_factors.append("Fully developed land - supports premium construction")
-        elif land_type == 'buildable':
+            quality_factors.append(
+                "Fully developed land - supports premium construction"
+            )
+        elif land_type == "buildable":
             quality_points += 20
             quality_factors.append("Buildable land - suitable for quality construction")
-        
+
         # 2. Municipality Quality (20 points max)
         municipality = (land.municipality or "").lower()
-        major_cities = self._reference_city_tokens() or ['madrid', 'barcelona']
-        
+        major_cities = self._reference_city_tokens() or ["madrid", "barcelona"]
+
         if any(city in municipality for city in major_cities):
             quality_points += 20
             quality_factors.append(f"Premium location: {land.municipality}")
-        elif (land.travel_time_oviedo and land.travel_time_oviedo <= 60) or (land.travel_time_gijon and land.travel_time_gijon <= 60):
+        elif (land.travel_time_oviedo and land.travel_time_oviedo <= 60) or (
+            land.travel_time_gijon and land.travel_time_gijon <= 60
+        ):
             quality_points += 15
             quality_factors.append(f"Good access to urban center: {land.municipality}")
         else:
             quality_points += 10
             quality_factors.append(f"Rural location: {land.municipality or 'Unknown'}")
-        
+
         # 3. Infrastructure Basic (20 points max)
         if land.infrastructure_basic:
             infra_count = 0
-            basic_utilities = ['electricity', 'water', 'internet', 'gas']
+            basic_utilities = ["electricity", "water", "internet", "gas"]
             for utility in basic_utilities:
                 if land.infrastructure_basic.get(utility):
                     infra_count += 1
-            
+
             infra_score = (infra_count / len(basic_utilities)) * 20
             quality_points += infra_score
-            quality_factors.append(f"Basic infrastructure: {infra_count}/4 utilities available")
-        
+            quality_factors.append(
+                f"Basic infrastructure: {infra_count}/4 utilities available"
+            )
+
         # 4. Area Optimization (15 points max)
         if land.area:
             area_val = float(land.area)
             if 1000 <= area_val <= 5000:
                 quality_points += 15
-                quality_factors.append(f"Optimal area: {area_val}m² - ideal for premium construction")
+                quality_factors.append(
+                    f"Optimal area: {area_val}m² - ideal for premium construction"
+                )
             elif 500 <= area_val < 1000:
                 quality_points += 10
-                quality_factors.append(f"Adequate area: {area_val}m² - suitable for standard construction")
+                quality_factors.append(
+                    f"Adequate area: {area_val}m² - suitable for standard construction"
+                )
             elif area_val > 5000:
                 quality_points += 12
-                quality_factors.append(f"Large area: {area_val}m² - excellent for estate development")
+                quality_factors.append(
+                    f"Large area: {area_val}m² - excellent for estate development"
+                )
             else:
                 quality_points += 5
-                quality_factors.append(f"Small area: {area_val}m² - limited construction options")
-        
+                quality_factors.append(
+                    f"Small area: {area_val}m² - limited construction options"
+                )
+
         # 5. Transport Accessibility (10 points max)
         transport_score = 0
         if land.travel_time_airport and land.travel_time_airport <= 60:
@@ -219,7 +272,7 @@ class MarketAnalysisService:
             transport_score += 2
         if land.travel_time_oviedo and land.travel_time_oviedo <= 45:
             transport_score += 2
-        
+
         quality_points += transport_score
         if transport_score >= 8:
             quality_factors.append("Excellent transport connectivity")
@@ -227,43 +280,43 @@ class MarketAnalysisService:
             quality_factors.append("Good transport access")
         else:
             quality_factors.append("Limited transport connectivity")
-        
+
         # 6. Environment Quality (10 points max)
         if land.environment:
             env_score = 0
-            if land.environment.get('sea_view'):
+            if land.environment.get("sea_view"):
                 env_score += 5
                 quality_factors.append("Sea view premium")
-            if land.environment.get('mountain_view'):
+            if land.environment.get("mountain_view"):
                 env_score += 3
                 quality_factors.append("Mountain view")
-            if land.environment.get('forest_view'):
+            if land.environment.get("forest_view"):
                 env_score += 2
                 quality_factors.append("Forest surroundings")
-            
-            orientation = land.environment.get('orientation', '').lower()
-            if 'south' in orientation:
+
+            orientation = land.environment.get("orientation", "").lower()
+            if "south" in orientation:
                 env_score += 2
                 quality_factors.append("Optimal south orientation")
-            
+
             quality_points += min(env_score, 10)
-        
+
         # Determine construction tier based on total quality points
         quality_percentage = (quality_points / max_points) * 100
-        
+
         if quality_percentage >= 65:
             return {
-                'construction_tier': 'premium',
-                'quality_score': round(quality_percentage, 1),
-                'quality_factors': quality_factors,
-                'tier_reasoning': f'High quality score ({quality_percentage:.1f}%) indicates premium construction potential'
+                "construction_tier": "premium",
+                "quality_score": round(quality_percentage, 1),
+                "quality_factors": quality_factors,
+                "tier_reasoning": f"High quality score ({quality_percentage:.1f}%) indicates premium construction potential",
             }
         else:
             return {
-                'construction_tier': 'basic',
-                'quality_score': round(quality_percentage, 1),
-                'quality_factors': quality_factors,
-                'tier_reasoning': f'Quality score ({quality_percentage:.1f}%) indicates standard construction level'
+                "construction_tier": "basic",
+                "quality_score": round(quality_percentage, 1),
+                "quality_factors": quality_factors,
+                "tier_reasoning": f"Quality score ({quality_percentage:.1f}%) indicates standard construction level",
             }
 
     def calculate_construction_value(self, land: Land) -> Dict:
@@ -273,29 +326,31 @@ class MarketAnalysisService:
         """
         try:
             area = float(land.area) if land.area else 0
-            land_type = land.land_type or 'default'
-            
+            land_type = land.land_type or "default"
+
             # Use objective quality evaluation instead of score dependency
             quality_eval = self._evaluate_construction_quality_objective(land)
-            construction_tier = quality_eval['construction_tier']
-            
+            construction_tier = quality_eval["construction_tier"]
+
             # Determine buildable area based on land type
-            buildability_ratio = self.BUILDABILITY_RATIOS.get(land_type, self.BUILDABILITY_RATIOS['default'])
+            buildability_ratio = self.BUILDABILITY_RATIOS.get(
+                land_type, self.BUILDABILITY_RATIOS["default"]
+            )
             buildable_area = area * buildability_ratio
-            
+
             # Select construction costs based on objective quality evaluation
-            if construction_tier == 'premium':
-                costs = self.CONSTRUCTION_COSTS['premium']
+            if construction_tier == "premium":
+                costs = self.CONSTRUCTION_COSTS["premium"]
                 construction_type = "Premium villa with modern amenities"
             else:
-                costs = self.CONSTRUCTION_COSTS['basic']
+                costs = self.CONSTRUCTION_COSTS["basic"]
                 construction_type = "Standard single-family home"
-            
+
             # Calculate values
-            min_value = buildable_area * costs['min']
-            avg_value = buildable_area * costs['avg']
-            max_value = buildable_area * costs['max']
-            
+            min_value = buildable_area * costs["min"]
+            avg_value = buildable_area * costs["avg"]
+            max_value = buildable_area * costs["max"]
+
             # Total investment including land price and purchase costs
             land_price = float(land.price) if land.price else 0
             purchase_costs = land_price * self.PURCHASE_COSTS_RATIO
@@ -306,28 +361,28 @@ class MarketAnalysisService:
             total_investment_max = land_price_with_costs + max_value
 
             return {
-                'minimum_value': round(min_value),
-                'average_value': round(avg_value),
-                'maximum_value': round(max_value),
-                'buildable_area': round(buildable_area),
-                'construction_type': construction_type,
-                'construction_tier': construction_tier,
-                'value_per_m2': costs['avg'],
-                'land_price': round(land_price),
-                'purchase_costs': round(purchase_costs),
-                'purchase_costs_ratio': f"{self.PURCHASE_COSTS_RATIO * 100:.0f}%",
-                'land_price_with_costs': round(land_price_with_costs),
-                'total_investment_min': round(total_investment_min),
-                'total_investment_avg': round(total_investment_avg),
-                'total_investment_max': round(total_investment_max),
-                'buildability_ratio': f"{buildability_ratio * 100:.0f}%",
-                'quality_evaluation': quality_eval
+                "minimum_value": round(min_value),
+                "average_value": round(avg_value),
+                "maximum_value": round(max_value),
+                "buildable_area": round(buildable_area),
+                "construction_type": construction_type,
+                "construction_tier": construction_tier,
+                "value_per_m2": costs["avg"],
+                "land_price": round(land_price),
+                "purchase_costs": round(purchase_costs),
+                "purchase_costs_ratio": f"{self.PURCHASE_COSTS_RATIO * 100:.0f}%",
+                "land_price_with_costs": round(land_price_with_costs),
+                "total_investment_min": round(total_investment_min),
+                "total_investment_avg": round(total_investment_avg),
+                "total_investment_max": round(total_investment_max),
+                "buildability_ratio": f"{buildability_ratio * 100:.0f}%",
+                "quality_evaluation": quality_eval,
             }
-            
+
         except Exception as e:
             logger.error("Error calculating construction value", exc_info=True)
             return {}
-    
+
     def analyze_market_trends(self, land: Land) -> Dict:
         """
         Analyze market price dynamics based on similar properties in the database
@@ -335,45 +390,54 @@ class MarketAnalysisService:
         try:
             # Get similar properties from the same municipality or nearby areas
             similar_query = db.session.query(Land).filter(
-                and_(
-                    Land.id != land.id,
-                    Land.municipality == land.municipality
-                )
+                and_(Land.id != land.id, Land.municipality == land.municipality)
             )
-            
+
             # Calculate price per m² statistics
             price_per_m2_data = []
             for prop in similar_query.all():
                 if prop.price and prop.area and prop.area > 0:
                     price_per_m2 = float(prop.price) / float(prop.area)
-                    price_per_m2_data.append({
-                        'price_per_m2': price_per_m2,
-                        'date': prop.created_at,
-                        'land_type': prop.land_type
-                    })
-            
+                    price_per_m2_data.append(
+                        {
+                            "price_per_m2": price_per_m2,
+                            "date": prop.created_at,
+                            "land_type": prop.land_type,
+                        }
+                    )
+
             if not price_per_m2_data:
                 return self._get_default_market_trends()
-            
+
             # Sort by date to analyze trends
-            price_per_m2_data.sort(key=lambda x: x['date'] if x['date'] else datetime.now())
-            
+            price_per_m2_data.sort(
+                key=lambda x: x["date"] if x["date"] else datetime.now()
+            )
+
             # Calculate statistics
-            prices = [d['price_per_m2'] for d in price_per_m2_data]
+            prices = [d["price_per_m2"] for d in price_per_m2_data]
             avg_price = sum(prices) / len(prices)
             min_price = min(prices)
             max_price = max(prices)
-            
+
             # Analyze trend (simplified - comparing recent vs older prices)
             recent_cutoff = datetime.now() - timedelta(days=180)
-            recent_prices = [d['price_per_m2'] for d in price_per_m2_data if d['date'] and d['date'] > recent_cutoff]
-            older_prices = [d['price_per_m2'] for d in price_per_m2_data if d['date'] and d['date'] <= recent_cutoff]
-            
+            recent_prices = [
+                d["price_per_m2"]
+                for d in price_per_m2_data
+                if d["date"] and d["date"] > recent_cutoff
+            ]
+            older_prices = [
+                d["price_per_m2"]
+                for d in price_per_m2_data
+                if d["date"] and d["date"] <= recent_cutoff
+            ]
+
             if recent_prices and older_prices:
                 recent_avg = sum(recent_prices) / len(recent_prices)
                 older_avg = sum(older_prices) / len(older_prices)
                 growth_rate = ((recent_avg - older_avg) / older_avg) * 100
-                
+
                 if growth_rate > 5:
                     trend = "RISING"
                     trend_analysis = f"Prices have increased by {growth_rate:.1f}% in the last 6 months"
@@ -386,102 +450,125 @@ class MarketAnalysisService:
             else:
                 trend = "STABLE"
                 growth_rate = 3.5
-                trend_analysis = "Insufficient data for trend analysis - using default assumption"
-            
+                trend_analysis = (
+                    "Insufficient data for trend analysis - using default assumption"
+                )
+
             # Market factors (best-effort heuristics)
             market_factors = []
             if land.municipality:
-                if any(city in land.municipality.lower() for city in (self._reference_city_tokens() or [])):
+                if any(
+                    city in land.municipality.lower()
+                    for city in (self._reference_city_tokens() or [])
+                ):
                     market_factors.append("Major urban center driving demand")
-                if (land.travel_time_nearest_beach and land.travel_time_nearest_beach <= 30) or (land.environment and land.environment.get('sea_view')):
+                if (
+                    land.travel_time_nearest_beach
+                    and land.travel_time_nearest_beach <= 30
+                ) or (land.environment and land.environment.get("sea_view")):
                     market_factors.append("Coastal location premium")
                 # Check for high-quality infrastructure using objective criteria
                 high_quality_infra = False
                 if land.infrastructure_basic:
-                    basic_count = sum(1 for v in land.infrastructure_basic.values() if v)
+                    basic_count = sum(
+                        1 for v in land.infrastructure_basic.values() if v
+                    )
                     if basic_count >= 3:  # Most utilities available
                         high_quality_infra = True
                 if land.infrastructure_extended:
-                    extended_count = sum(1 for k, v in land.infrastructure_extended.items() 
-                                       if k.endswith('_available') and v)
+                    extended_count = sum(
+                        1
+                        for k, v in land.infrastructure_extended.items()
+                        if k.endswith("_available") and v
+                    )
                     if extended_count >= 2:  # Multiple amenities available
                         high_quality_infra = True
-                        
+
                 if high_quality_infra:
                     market_factors.append("High-quality infrastructure and services")
-            
+
             if not market_factors:
                 market_factors = [
                     "Lifestyle/second-home demand",
                     "Growing remote work population",
-                    "Local infrastructure improvements"
+                    "Local infrastructure improvements",
                 ]
-            
+
             return {
-                'price_trend': trend,
-                'annual_growth_rate': abs(growth_rate) if growth_rate else 3.5,
-                'trend_period': '2024-2025',
-                'trend_analysis': trend_analysis,
-                'future_outlook': f"Expected {abs(growth_rate):.1f}% annual growth based on current market conditions",
-                'market_factors': market_factors,
-                'avg_price_per_m2': round(avg_price),
-                'min_price_per_m2': round(min_price),
-                'max_price_per_m2': round(max_price),
-                'sample_size': len(price_per_m2_data)
+                "price_trend": trend,
+                "annual_growth_rate": abs(growth_rate) if growth_rate else 3.5,
+                "trend_period": "2024-2025",
+                "trend_analysis": trend_analysis,
+                "future_outlook": f"Expected {abs(growth_rate):.1f}% annual growth based on current market conditions",
+                "market_factors": market_factors,
+                "avg_price_per_m2": round(avg_price),
+                "min_price_per_m2": round(min_price),
+                "max_price_per_m2": round(max_price),
+                "sample_size": len(price_per_m2_data),
             }
-            
+
         except Exception as e:
             logger.error("Error analyzing market trends", exc_info=True)
             return self._get_default_market_trends()
-    
-    def calculate_rental_analysis(self, land: Land, construction_data: Optional[Dict] = None) -> Dict:
+
+    def calculate_rental_analysis(
+        self, land: Land, construction_data: Optional[Dict] = None
+    ) -> Dict:
         """
         Calculate rental market analysis and investment metrics
         """
         try:
             # Determine location type based on municipality
-            location_type = 'rural'  # default
+            location_type = "rural"  # default
             if land.municipality:
                 municipality_lower = land.municipality.lower()
-                major_cities = self._reference_city_tokens() or ['madrid', 'barcelona']
+                major_cities = self._reference_city_tokens() or ["madrid", "barcelona"]
                 # Major cities = urban
                 if any(city in municipality_lower for city in major_cities):
-                    location_type = 'urban'
+                    location_type = "urban"
                 # Near major cities (commutable) = suburban
-                elif (land.travel_time_oviedo and land.travel_time_oviedo <= 60) or (land.travel_time_gijon and land.travel_time_gijon <= 60):
-                    location_type = 'suburban'
-            
+                elif (land.travel_time_oviedo and land.travel_time_oviedo <= 60) or (
+                    land.travel_time_gijon and land.travel_time_gijon <= 60
+                ):
+                    location_type = "suburban"
+
             # Get rental yields and prices for location
-            yields = self.RENTAL_YIELDS.get(location_type, self.RENTAL_YIELDS['rural'])
-            rental_prices = self.RENTAL_PRICES.get(location_type, self.RENTAL_PRICES['rural'])
-            
+            yields = self.RENTAL_YIELDS.get(location_type, self.RENTAL_YIELDS["rural"])
+            rental_prices = self.RENTAL_PRICES.get(
+                location_type, self.RENTAL_PRICES["rural"]
+            )
+
             # Calculate property value (land + construction)
-            if not construction_data or not construction_data.get('total_investment_avg'):
+            if not construction_data or not construction_data.get(
+                "total_investment_avg"
+            ):
                 construction_data = self.calculate_construction_value(land)
 
             # Safely get values with defaults
             if construction_data:
-                total_investment = construction_data.get('total_investment_avg', 0)
-                buildable_area = construction_data.get('buildable_area', 0)
+                total_investment = construction_data.get("total_investment_avg", 0)
+                buildable_area = construction_data.get("buildable_area", 0)
             else:
                 total_investment = 0
                 buildable_area = 0
-            
+
             # Calculate monthly rental estimates based on buildable area
-            monthly_rent_min = buildable_area * rental_prices['min']
-            monthly_rent_avg = buildable_area * rental_prices['avg']
-            monthly_rent_max = buildable_area * rental_prices['max']
-            
+            monthly_rent_min = buildable_area * rental_prices["min"]
+            monthly_rent_avg = buildable_area * rental_prices["avg"]
+            monthly_rent_max = buildable_area * rental_prices["max"]
+
             # Annual rental income
             annual_rent_min = monthly_rent_min * 12
             annual_rent_avg = monthly_rent_avg * 12
             annual_rent_max = monthly_rent_max * 12
-            
+
             # Get realistic adjustments for this location type
-            adjustments = self.RENTAL_ADJUSTMENTS.get(location_type, self.RENTAL_ADJUSTMENTS['suburban'])
-            vacancy_rate = adjustments['vacancy_rate']
-            operating_expenses = adjustments['operating_expenses']
-            management_fee = adjustments['management_fee']
+            adjustments = self.RENTAL_ADJUSTMENTS.get(
+                location_type, self.RENTAL_ADJUSTMENTS["suburban"]
+            )
+            vacancy_rate = adjustments["vacancy_rate"]
+            operating_expenses = adjustments["operating_expenses"]
+            management_fee = adjustments["management_fee"]
 
             # Calculate effective annual rent (after vacancy)
             effective_annual_rent = annual_rent_avg * (1 - vacancy_rate)
@@ -499,7 +586,9 @@ class MarketAnalysisService:
                 net_rental_yield = (noi / total_investment) * 100
 
                 # Price-to-rent ratio (property price / annual rent)
-                price_to_rent_ratio = total_investment / annual_rent_avg if annual_rent_avg > 0 else 0
+                price_to_rent_ratio = (
+                    total_investment / annual_rent_avg if annual_rent_avg > 0 else 0
+                )
 
                 # Payback period in years (using net income)
                 payback_period = total_investment / noi if noi > 0 else 0
@@ -507,73 +596,77 @@ class MarketAnalysisService:
                 # Cap rate (Net Operating Income / Property Value)
                 cap_rate = (noi / total_investment) * 100
             else:
-                gross_rental_yield = yields['avg']
-                net_rental_yield = yields['avg'] * 0.7  # Approximate net
+                gross_rental_yield = yields["avg"]
+                net_rental_yield = yields["avg"] * 0.7  # Approximate net
                 price_to_rent_ratio = 0
                 payback_period = 0
                 cap_rate = 0
-            
+
             # Rental demand indicators
             demand_factors = []
-            if location_type == 'urban':
+            if location_type == "urban":
                 demand_factors = [
                     "High demand from professionals and students",
                     "Proximity to business centers and universities",
-                    "Strong rental market with quick tenant turnover"
+                    "Strong rental market with quick tenant turnover",
                 ]
-            elif location_type == 'suburban':
+            elif location_type == "suburban":
                 demand_factors = [
                     "Growing demand from families",
                     "Good schools and amenities nearby",
-                    "Balance of urban access and quality of life"
+                    "Balance of urban access and quality of life",
                 ]
             else:  # rural
                 demand_factors = [
                     "Vacation rental potential (Airbnb)",
                     "Nature / rural tourism demand",
-                    "Weekend home rental opportunities"
+                    "Weekend home rental opportunities",
                 ]
-            
+
             return {
-                'location_type': location_type.capitalize(),
-                'monthly_rent_min': round(monthly_rent_min),
-                'monthly_rent_avg': round(monthly_rent_avg),
-                'monthly_rent_max': round(monthly_rent_max),
-                'annual_rent_min': round(annual_rent_min),
-                'annual_rent_avg': round(annual_rent_avg),
-                'annual_rent_max': round(annual_rent_max),
-                'effective_annual_rent': round(effective_annual_rent),
-                'net_operating_income': round(noi),
-                'gross_rental_yield': round(gross_rental_yield, 1),
-                'net_rental_yield': round(net_rental_yield, 1),
-                'rental_yield': round(net_rental_yield, 1),  # Use net yield as primary
-                'expected_yield_range': f"{yields['min']}-{yields['max']}% gross",
-                'price_to_rent_ratio': round(price_to_rent_ratio, 1),
-                'payback_period_years': round(payback_period, 1),
-                'cap_rate': round(cap_rate, 1),
-                'rental_price_per_m2': f"€{rental_prices['avg']}/m²/month",
-                'demand_factors': demand_factors,
-                'investment_rating': self._get_investment_rating(net_rental_yield, cap_rate),
-                'market_comparison': f"Average rental yield in {location_type}: {yields['avg']}% gross, ~{yields['avg'] * 0.7:.1f}% net",
+                "location_type": location_type.capitalize(),
+                "monthly_rent_min": round(monthly_rent_min),
+                "monthly_rent_avg": round(monthly_rent_avg),
+                "monthly_rent_max": round(monthly_rent_max),
+                "annual_rent_min": round(annual_rent_min),
+                "annual_rent_avg": round(annual_rent_avg),
+                "annual_rent_max": round(annual_rent_max),
+                "effective_annual_rent": round(effective_annual_rent),
+                "net_operating_income": round(noi),
+                "gross_rental_yield": round(gross_rental_yield, 1),
+                "net_rental_yield": round(net_rental_yield, 1),
+                "rental_yield": round(net_rental_yield, 1),  # Use net yield as primary
+                "expected_yield_range": f"{yields['min']}-{yields['max']}% gross",
+                "price_to_rent_ratio": round(price_to_rent_ratio, 1),
+                "payback_period_years": round(payback_period, 1),
+                "cap_rate": round(cap_rate, 1),
+                "rental_price_per_m2": f"€{rental_prices['avg']}/m²/month",
+                "demand_factors": demand_factors,
+                "investment_rating": self._get_investment_rating(
+                    net_rental_yield, cap_rate
+                ),
+                "market_comparison": f"Average rental yield in {location_type}: {yields['avg']}% gross, ~{yields['avg'] * 0.7:.1f}% net",
                 # Transparency: show assumptions
-                'assumptions': {
-                    'vacancy_rate': f"{vacancy_rate * 100:.0f}%",
-                    'operating_expenses': f"{operating_expenses * 100:.0f}%",
-                    'management_fee': f"{management_fee * 100:.0f}%" if management_fee > 0 else 'Self-managed',
-                    'total_deductions': f"{(vacancy_rate + total_expense_rate * (1 - vacancy_rate)) * 100:.0f}%"
-                }
+                "assumptions": {
+                    "vacancy_rate": f"{vacancy_rate * 100:.0f}%",
+                    "operating_expenses": f"{operating_expenses * 100:.0f}%",
+                    "management_fee": f"{management_fee * 100:.0f}%"
+                    if management_fee > 0
+                    else "Self-managed",
+                    "total_deductions": f"{(vacancy_rate + total_expense_rate * (1 - vacancy_rate)) * 100:.0f}%",
+                },
             }
-            
+
         except Exception as e:
             logger.error("Error calculating rental analysis", exc_info=True)
             return {
-                'error': 'Unable to calculate rental analysis',
-                'location_type': 'Unknown',
-                'monthly_rent_avg': 0,
-                'annual_rent_avg': 0,
-                'rental_yield': 0
+                "error": "Unable to calculate rental analysis",
+                "location_type": "Unknown",
+                "monthly_rent_avg": 0,
+                "annual_rent_avg": 0,
+                "rental_yield": 0,
             }
-    
+
     def _get_investment_rating(self, rental_yield: float, cap_rate: float) -> str:
         """
         Determine investment rating based on yield and cap rate
@@ -586,26 +679,26 @@ class MarketAnalysisService:
             return "MODERATE - Standard market returns"
         else:
             return "BELOW AVERAGE - Consider other options"
-    
+
     def _get_default_market_trends(self) -> Dict:
         """Return default market trends (generic)."""
         return {
-            'price_trend': 'STABLE',
-            'annual_growth_rate': 3.5,
-            'trend_period': '2024-2025',
-            'trend_analysis': 'Market shows steady growth',
-            'future_outlook': 'Expected 3-5% annual appreciation in line with broad averages',
-            'market_factors': [
-                'Stable local demand',
-                'Seasonality and second-home demand in some areas',
-                'Infrastructure development'
+            "price_trend": "STABLE",
+            "annual_growth_rate": 3.5,
+            "trend_period": "2024-2025",
+            "trend_analysis": "Market shows steady growth",
+            "future_outlook": "Expected 3-5% annual appreciation in line with broad averages",
+            "market_factors": [
+                "Stable local demand",
+                "Seasonality and second-home demand in some areas",
+                "Infrastructure development",
             ],
-            'avg_price_per_m2': 50,
-            'min_price_per_m2': 30,
-            'max_price_per_m2': 150,
-            'sample_size': 0
+            "avg_price_per_m2": 50,
+            "min_price_per_m2": 30,
+            "max_price_per_m2": 150,
+            "sample_size": 0,
         }
-    
+
     def get_enriched_data(self, land: Land) -> Dict:
         """
         Get comprehensive enriched data for a property including
@@ -614,9 +707,9 @@ class MarketAnalysisService:
         construction_data = self.calculate_construction_value(land)
         market_data = self.analyze_market_trends(land)
         rental_data = self.calculate_rental_analysis(land, construction_data)
-        
+
         return {
-            'construction_value_estimation': construction_data,
-            'market_price_dynamics': market_data,
-            'rental_market_analysis': rental_data
+            "construction_value_estimation": construction_data,
+            "market_price_dynamics": market_data,
+            "rental_market_analysis": rental_data,
         }

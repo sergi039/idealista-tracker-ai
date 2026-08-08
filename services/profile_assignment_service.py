@@ -16,7 +16,10 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
     dlat = lat2 - lat1
     dlon = lon2 - lon1
-    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    )
     c = 2 * math.asin(math.sqrt(a))
     return r * c * 1000.0
 
@@ -24,7 +27,9 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 class ProfileAssignmentService:
     """Assign properties to the nearest profile center (custom targets)."""
 
-    def _get_profile_centers(self, profile: SearchProfile) -> List[Tuple[float, float, str]]:
+    def _get_profile_centers(
+        self, profile: SearchProfile
+    ) -> List[Tuple[float, float, str]]:
         config = SearchProfileService.get_travel_targets_config(profile)
         custom = config.get("custom") if isinstance(config, dict) else []
         centers: List[Tuple[float, float, str]] = []
@@ -54,9 +59,17 @@ class ProfileAssignmentService:
             return {"assigned": False, "reason": "no_coordinates"}
 
         enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
-        assignment_meta = enrichment.get("profile_assignment") if isinstance(enrichment.get("profile_assignment"), dict) else {}
+        assignment_meta = (
+            enrichment.get("profile_assignment")
+            if isinstance(enrichment.get("profile_assignment"), dict)
+            else {}
+        )
         if assignment_meta.get("manual_override") and not force:
-            return {"assigned": False, "reason": "manual_override", "profile_id": prop.search_profile_id}
+            return {
+                "assigned": False,
+                "reason": "manual_override",
+                "profile_id": prop.search_profile_id,
+            }
 
         profiles = SearchProfileService.list_profiles(active_only=True)
         best_profile: Optional[SearchProfile] = None
@@ -110,7 +123,9 @@ class ProfileAssignmentService:
                 db.session.commit()
             except Exception as e:
                 db.session.rollback()
-                logger.warning("Failed to commit profile assignment for %s: %s", prop.id, e)
+                logger.warning(
+                    "Failed to commit profile assignment for %s: %s", prop.id, e
+                )
 
         return {
             "assigned": True,

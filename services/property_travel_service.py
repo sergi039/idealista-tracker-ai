@@ -23,7 +23,10 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
     dlat = lat2 - lat1
     dlon = lon2 - lon1
-    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    )
     c = 2 * math.asin(math.sqrt(a))
     return r * c * 1000.0
 
@@ -50,8 +53,16 @@ class PropertyTravelService:
         google_places_key: Optional[str] = None,
         location_service: Optional[PropertyLocationService] = None,
     ):
-        self.google_maps_key = google_maps_key if google_maps_key is not None else Config.GOOGLE_MAPS_API_KEY
-        self.google_places_key = google_places_key if google_places_key is not None else Config.GOOGLE_PLACES_API_KEY
+        self.google_maps_key = (
+            google_maps_key
+            if google_maps_key is not None
+            else Config.GOOGLE_MAPS_API_KEY
+        )
+        self.google_places_key = (
+            google_places_key
+            if google_places_key is not None
+            else Config.GOOGLE_PLACES_API_KEY
+        )
         self.location_service = location_service or PropertyLocationService()
 
     def calculate_for_property(self, prop: Property, commit: bool = False) -> bool:
@@ -70,7 +81,9 @@ class PropertyTravelService:
 
         profile = self._resolve_profile(prop)
         config = SearchProfileService.get_travel_targets_config(profile)
-        preset_defs = {d["key"]: d for d in SearchProfileService.get_travel_preset_defs()}
+        preset_defs = {
+            d["key"]: d for d in SearchProfileService.get_travel_preset_defs()
+        }
 
         destinations: List[Dict[str, Any]] = []
         targets: Dict[str, Any] = {}
@@ -82,7 +95,10 @@ class PropertyTravelService:
                 if preset_key not in preset_defs:
                     continue
                 enabled = bool((preset_cfg or {}).get("enabled", True))
-                mode = str((preset_cfg or {}).get("mode") or "driving").strip() or "driving"
+                mode = (
+                    str((preset_cfg or {}).get("mode") or "driving").strip()
+                    or "driving"
+                )
                 if not enabled:
                     targets[preset_key] = {
                         "kind": "preset",
@@ -92,14 +108,18 @@ class PropertyTravelService:
                     }
                     continue
 
-                place = self._nearest_place_for_preset(origin_lat, origin_lon, preset_key, preset_defs[preset_key])
+                place = self._nearest_place_for_preset(
+                    origin_lat, origin_lon, preset_key, preset_defs[preset_key]
+                )
                 if not place:
                     targets[preset_key] = {
                         "kind": "preset",
                         "enabled": True,
                         "mode": mode,
                         "label": preset_defs[preset_key].get("label"),
-                        "status": "not_found" if self.google_places_key else "no_places_key",
+                        "status": "not_found"
+                        if self.google_places_key
+                        else "no_places_key",
                     }
                     continue
 
@@ -136,7 +156,10 @@ class PropertyTravelService:
                     continue
                 mode = str(item.get("mode") or "driving").strip() or "driving"
                 raw_id = str(item.get("id") or "").strip()
-                custom_id = raw_id or hashlib.md5(f"{name}:{lat}:{lon}".encode()).hexdigest()[:10]
+                custom_id = (
+                    raw_id
+                    or hashlib.md5(f"{name}:{lat}:{lon}".encode()).hexdigest()[:10]
+                )
                 key = f"custom:{custom_id}"
                 destinations.append({"key": key, "mode": mode, "lat": lat, "lon": lon})
                 targets[key] = {
@@ -168,9 +191,13 @@ class PropertyTravelService:
                 targets[target_key].update(
                     {
                         "distance_m": res.get("distance_m"),
-                        "distance_km": (res.get("distance_m") or 0) / 1000.0 if res.get("distance_m") else None,
+                        "distance_km": (res.get("distance_m") or 0) / 1000.0
+                        if res.get("distance_m")
+                        else None,
                         "duration_s": res.get("duration_s"),
-                        "duration_min": int(round((res.get("duration_s") or 0) / 60.0)) if res.get("duration_s") else None,
+                        "duration_min": int(round((res.get("duration_s") or 0) / 60.0))
+                        if res.get("duration_s")
+                        else None,
                     }
                 )
 
@@ -206,8 +233,12 @@ class PropertyTravelService:
                 pass
         return SearchProfileService.get_default_profile(create=True)
 
-    def _nearest_place_for_preset(self, lat: float, lon: float, preset_key: str, preset_def: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        place_types = preset_def.get("place_types") if isinstance(preset_def, dict) else None
+    def _nearest_place_for_preset(
+        self, lat: float, lon: float, preset_key: str, preset_def: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        place_types = (
+            preset_def.get("place_types") if isinstance(preset_def, dict) else None
+        )
         if not isinstance(place_types, list) or not place_types:
             return None
 
@@ -216,7 +247,9 @@ class PropertyTravelService:
             place = self._nearest_place(lat, lon, place_type=str(place_type))
             if not place:
                 continue
-            distance_m = _haversine_m(lat, lon, float(place["lat"]), float(place["lon"]))
+            distance_m = _haversine_m(
+                lat, lon, float(place["lat"]), float(place["lon"])
+            )
             if best is None or distance_m < best[0]:
                 best = (distance_m, place)
 
@@ -226,14 +259,20 @@ class PropertyTravelService:
         best_place["preset_key"] = preset_key
         return best_place
 
-    def _nearest_place(self, lat: float, lon: float, place_type: str) -> Optional[Dict[str, Any]]:
+    def _nearest_place(
+        self, lat: float, lon: float, place_type: str
+    ) -> Optional[Dict[str, Any]]:
         place_type = (place_type or "").strip()
         if not place_type:
             return None
 
         cache_type = f"places_nearest_v1:{place_type}"
         cached = get_cached_enrichment_data(lat, lon, cache_type)
-        if isinstance(cached, dict) and cached.get("lat") is not None and cached.get("lon") is not None:
+        if (
+            isinstance(cached, dict)
+            and cached.get("lat") is not None
+            and cached.get("lon") is not None
+        ):
             return cached
 
         if not self.google_places_key:
@@ -247,7 +286,9 @@ class PropertyTravelService:
                 "type": place_type,
                 "key": self.google_places_key,
             }
-            response = request_with_retries(requests.get, url, params=params, timeout=12, logger=logger)
+            response = request_with_retries(
+                requests.get, url, params=params, timeout=12, logger=logger
+            )
             if response.status_code != 200:
                 return None
             data = response.json()
@@ -275,13 +316,17 @@ class PropertyTravelService:
             logger.warning("Places lookup failed (%s): %s", place_type, e)
             return None
 
-    def _get_distances(self, lat: float, lon: float, destinations: List[Dict[str, Any]], mode: str) -> List[Optional[Dict[str, Any]]]:
+    def _get_distances(
+        self, lat: float, lon: float, destinations: List[Dict[str, Any]], mode: str
+    ) -> List[Optional[Dict[str, Any]]]:
         if not destinations:
             return []
 
         mode = (mode or "driving").lower()
 
-        dest_sig = "|".join(f"{d.get('lat')},{d.get('lon')}:{mode}" for d in destinations)
+        dest_sig = "|".join(
+            f"{d.get('lat')},{d.get('lon')}:{mode}" for d in destinations
+        )
         dest_hash = hashlib.md5(dest_sig.encode()).hexdigest()[:10]
         cache_type = f"property_travel_v1:{mode}:{dest_hash}"
 
@@ -323,7 +368,9 @@ class PropertyTravelService:
         cache_enrichment_data(lat, lon, cache_type, out, timeout=60 * 60 * 24 * 7)
         return out
 
-    def _distance_matrix_batch(self, lat: float, lon: float, destinations: List[str], mode: str) -> List[Optional[Dict[str, Any]]]:
+    def _distance_matrix_batch(
+        self, lat: float, lon: float, destinations: List[str], mode: str
+    ) -> List[Optional[Dict[str, Any]]]:
         if not destinations:
             return []
         try:
@@ -334,7 +381,9 @@ class PropertyTravelService:
                 "mode": mode,
                 "key": self.google_maps_key,
             }
-            response = request_with_retries(requests.get, url, params=params, timeout=15, logger=logger)
+            response = request_with_retries(
+                requests.get, url, params=params, timeout=15, logger=logger
+            )
             if response.status_code != 200:
                 return [None for _ in destinations]
             data = response.json()

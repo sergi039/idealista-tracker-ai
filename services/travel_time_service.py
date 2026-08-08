@@ -8,6 +8,7 @@ from utils.http import request_with_retries
 
 logger = logging.getLogger(__name__)
 
+
 class TravelTimeService:
     def __init__(self):
         self.google_maps_key = Config.GOOGLE_MAPS_API_KEY
@@ -19,7 +20,7 @@ class TravelTimeService:
         # - travel_time_gijon  = reference city B
         self.destinations = {
             "oviedo": "40.4168,-3.7038",  # Madrid (fallback)
-            "gijon": "41.3851,2.1734",    # Barcelona (fallback)
+            "gijon": "41.3851,2.1734",  # Barcelona (fallback)
         }
         self.destination_labels = {
             "oviedo": "City A",
@@ -31,8 +32,8 @@ class TravelTimeService:
             cities = SettingsService.get_reference_cities()
             if cities and len(cities) >= 2:
                 self.destinations = {
-                    'oviedo': f"{cities[0]['lat']},{cities[0]['lon']}",
-                    'gijon': f"{cities[1]['lat']},{cities[1]['lon']}"
+                    "oviedo": f"{cities[0]['lat']},{cities[0]['lon']}",
+                    "gijon": f"{cities[1]['lat']},{cities[1]['lon']}",
                 }
                 self.destination_labels = {
                     "oviedo": cities[0].get("name") or "City A",
@@ -50,18 +51,18 @@ class TravelTimeService:
             "hospital": {"type": "hospital"},
             "police": {"type": "police"},
         }
-    
+
     def calculate_travel_times(self, land_id: int) -> bool:
         """Calculate travel times for a land property"""
         try:
             from models import Land
             from app import db
-            
+
             land = db.session.get(Land, land_id)
             if not land or not land.location_lat or not land.location_lon:
                 logger.warning("Land %s has no coordinates", land_id)
                 return False
-            
+
             logger.info(f"Calculating travel times for land {land_id}")
 
             lat = float(land.location_lat)
@@ -84,11 +85,15 @@ class TravelTimeService:
             # Resolve nearest places (Places API) then compute travel (Distance Matrix or fallback).
             nearest_places: Dict[str, Optional[Dict]] = {}
             for key, spec in self._nearest_place_defs.items():
-                nearest_places[key] = self._nearest_place(lat, lon, place_type=spec.get("type"), keyword=spec.get("keyword"))
+                nearest_places[key] = self._nearest_place(
+                    lat, lon, place_type=spec.get("type"), keyword=spec.get("keyword")
+                )
 
             # If beach not found, try a second strategy.
             if not nearest_places.get("beach"):
-                nearest_places["beach"] = self._nearest_place(lat, lon, place_type="natural_feature", keyword="beach")
+                nearest_places["beach"] = self._nearest_place(
+                    lat, lon, place_type="natural_feature", keyword="beach"
+                )
 
             # Build destination list for a batch call.
             dest_map: Dict[str, str] = {
@@ -106,7 +111,11 @@ class TravelTimeService:
             dest_keys = list(dest_map.keys())
             dest_values = [dest_map[k] for k in dest_keys]
 
-            results = self._get_google_travel_times(origin, dest_values) if self.google_maps_key else [None for _ in dest_values]
+            results = (
+                self._get_google_travel_times(origin, dest_values)
+                if self.google_maps_key
+                else [None for _ in dest_values]
+            )
 
             def _res_for(key: str) -> Optional[Dict]:
                 try:
@@ -116,7 +125,9 @@ class TravelTimeService:
                 res = results[idx] if idx < len(results) else None
                 if res:
                     return res
-                return self._calculate_fallback_travel_time(origin, dest_map.get(key, ""))
+                return self._calculate_fallback_travel_time(
+                    origin, dest_map.get(key, "")
+                )
 
             oviedo_time = (_res_for("oviedo") or {}).get("time")
             gijon_time = (_res_for("gijon") or {}).get("time")
@@ -145,30 +156,30 @@ class TravelTimeService:
             train_station_data = _facility_data("train_station")
             hospital_data = _facility_data("hospital")
             police_data = _facility_data("police")
-            
+
             # Update land record
             if oviedo_time is not None:
                 land.travel_time_oviedo = oviedo_time
             if gijon_time is not None:
                 land.travel_time_gijon = gijon_time
             if nearest_beach_data:
-                land.travel_time_nearest_beach = nearest_beach_data['time']
-                land.nearest_beach_name = nearest_beach_data['name']
-                
+                land.travel_time_nearest_beach = nearest_beach_data["time"]
+                land.nearest_beach_name = nearest_beach_data["name"]
+
             # Update priority infrastructure travel times and distances
             if airport_data is not None:
-                land.travel_time_airport = airport_data['time']
-                land.distance_airport = airport_data['distance']
+                land.travel_time_airport = airport_data["time"]
+                land.distance_airport = airport_data["distance"]
             if train_station_data is not None:
-                land.travel_time_train_station = train_station_data['time']
-                land.distance_train_station = train_station_data['distance']
+                land.travel_time_train_station = train_station_data["time"]
+                land.distance_train_station = train_station_data["distance"]
             if hospital_data is not None:
-                land.travel_time_hospital = hospital_data['time']
-                land.distance_hospital = hospital_data['distance']
+                land.travel_time_hospital = hospital_data["time"]
+                land.distance_hospital = hospital_data["distance"]
             if police_data is not None:
-                land.travel_time_police = police_data['time']
-                land.distance_police = police_data['distance']
-            
+                land.travel_time_police = police_data["time"]
+                land.distance_police = police_data["distance"]
+
             cache_enrichment_data(
                 lat,
                 lon,
@@ -191,7 +202,7 @@ class TravelTimeService:
             )
 
             db.session.commit()
-            
+
             logger.info(
                 "Travel times updated for land %s: %s=%smin, %s=%smin, Beach=%smin",
                 land_id,
@@ -201,11 +212,13 @@ class TravelTimeService:
                 gijon_time,
                 nearest_beach_data["time"] if nearest_beach_data else None,
             )
-            
+
             return True
-            
+
         except Exception as e:
-            logger.error("Failed to calculate travel times for land %s", land_id, exc_info=True)
+            logger.error(
+                "Failed to calculate travel times for land %s", land_id, exc_info=True
+            )
             return False
 
     def _travel_times_cache_type(self) -> str:
@@ -213,7 +226,13 @@ class TravelTimeService:
         ref_hash = hashlib.md5(ref_sig.encode()).hexdigest()[:8]
         return f"travel_times_v2:{ref_hash}"
 
-    def _nearest_place(self, lat: float, lon: float, place_type: Optional[str] = None, keyword: Optional[str] = None) -> Optional[Dict]:
+    def _nearest_place(
+        self,
+        lat: float,
+        lon: float,
+        place_type: Optional[str] = None,
+        keyword: Optional[str] = None,
+    ) -> Optional[Dict]:
         """Find nearest place using Google Places Nearby Search (best-effort)."""
         if not self.google_places_key:
             return None
@@ -230,7 +249,9 @@ class TravelTimeService:
             if keyword:
                 params["keyword"] = str(keyword)
 
-            resp = request_with_retries(requests.get, url, params=params, timeout=15, logger=logger)
+            resp = request_with_retries(
+                requests.get, url, params=params, timeout=15, logger=logger
+            )
             if resp.status_code != 200:
                 return None
             data = resp.json() or {}
@@ -255,13 +276,27 @@ class TravelTimeService:
                 "types": top.get("types") or [],
             }
         except Exception as e:
-            logger.warning("Nearest place lookup failed (type=%s keyword=%s): %s", place_type, keyword, e)
+            logger.warning(
+                "Nearest place lookup failed (type=%s keyword=%s): %s",
+                place_type,
+                keyword,
+                e,
+            )
             return None
 
     def _beach_label(self, beach_full_name: str) -> str:
-        return beach_full_name.split(",")[0].replace("Playa de ", "").replace("Playa del ", "")
+        return (
+            beach_full_name.split(",")[0]
+            .replace("Playa de ", "")
+            .replace("Playa del ", "")
+        )
 
-    def _min_by_time(self, results: List[Optional[Dict]], names: Optional[List[str]] = None, name_transform=None) -> Optional[Dict]:
+    def _min_by_time(
+        self,
+        results: List[Optional[Dict]],
+        names: Optional[List[str]] = None,
+        name_transform=None,
+    ) -> Optional[Dict]:
         best = None
         for idx, r in enumerate(results):
             if not r or r.get("time") is None:
@@ -271,64 +306,76 @@ class TravelTimeService:
                 if names and idx < len(names):
                     label = names[idx]
                     best["full_name"] = label
-                    best["name"] = name_transform(label) if callable(name_transform) else label
+                    best["name"] = (
+                        name_transform(label) if callable(name_transform) else label
+                    )
         return best
-    
+
     def _get_travel_time(self, origin: str, destination: str) -> Optional[int]:
         """Get travel time in minutes between origin and destination"""
         result = self._get_travel_time_and_distance(origin, destination)
-        return result['time'] if result else None
-    
-    def _get_travel_time_and_distance(self, origin: str, destination: str) -> Optional[Dict]:
+        return result["time"] if result else None
+
+    def _get_travel_time_and_distance(
+        self, origin: str, destination: str
+    ) -> Optional[Dict]:
         """Get travel time in minutes and distance in km between origin and destination"""
         # Try Google API first if available
         if self.google_maps_key:
             result = self._get_google_travel_time(origin, destination)
             if result:
                 return result
-        
+
         # Fallback to mathematical estimation
         logger.info("Using fallback travel time calculation")
         return self._calculate_fallback_travel_time(origin, destination)
-    
+
     def _get_google_travel_time(self, origin: str, destination: str) -> Optional[Dict]:
         """Get travel time using Google Maps API"""
         try:
             url = "https://maps.googleapis.com/maps/api/distancematrix/json"
             params = {
-                'origins': origin,
-                'destinations': destination,
-                'mode': 'driving',
-                'units': 'metric',
-                'key': self.google_maps_key
+                "origins": origin,
+                "destinations": destination,
+                "mode": "driving",
+                "units": "metric",
+                "key": self.google_maps_key,
             }
-            
-            response = request_with_retries(requests.get, url, params=params, timeout=15, logger=logger)
+
+            response = request_with_retries(
+                requests.get, url, params=params, timeout=15, logger=logger
+            )
             if response.status_code == 200:
                 data = response.json()
 
-                if data.get('status') == 'OK' and data.get('rows'):
-                    elements = data['rows'][0].get('elements', [])
-                    if elements and elements[0].get('status') == 'OK':
+                if data.get("status") == "OK" and data.get("rows"):
+                    elements = data["rows"][0].get("elements", [])
+                    if elements and elements[0].get("status") == "OK":
                         el = elements[0]
-                        dur = el.get('duration')
-                        dist = el.get('distance')
+                        dur = el.get("duration")
+                        dist = el.get("distance")
                         if not dur or not dist:
                             return None
 
                         return {
-                            'time': round(dur['value'] / 60),  # convert to minutes
-                            'distance': round(dist['value'] / 1000)  # convert to kilometers
+                            "time": round(dur["value"] / 60),  # convert to minutes
+                            "distance": round(
+                                dist["value"] / 1000
+                            ),  # convert to kilometers
                         }
-            
-            logger.warning(f"Google API failed for {origin} to {destination}: {data.get('status') if 'data' in locals() else 'No response'}")
+
+            logger.warning(
+                f"Google API failed for {origin} to {destination}: {data.get('status') if 'data' in locals() else 'No response'}"
+            )
             return None
-            
+
         except Exception as e:
             logger.error("Google Maps API error", exc_info=True)
             return None
 
-    def _get_google_travel_times(self, origin: str, destinations: List[str]) -> List[Optional[Dict]]:
+    def _get_google_travel_times(
+        self, origin: str, destinations: List[str]
+    ) -> List[Optional[Dict]]:
         """Batch travel times using a single Distance Matrix call (destinations <= 25)."""
         if not self.google_maps_key or not destinations:
             return [None for _ in destinations]
@@ -343,7 +390,9 @@ class TravelTimeService:
                 "key": self.google_maps_key,
             }
 
-            response = request_with_retries(requests.get, url, params=params, timeout=15, logger=logger)
+            response = request_with_retries(
+                requests.get, url, params=params, timeout=15, logger=logger
+            )
             if response.status_code != 200:
                 return [None for _ in destinations]
 
@@ -377,78 +426,88 @@ class TravelTimeService:
         except Exception as e:
             logger.error("Distance Matrix batch error: %s", e)
             return [None for _ in destinations]
-    
-    def _calculate_fallback_travel_time(self, origin: str, destination: str) -> Optional[Dict]:
+
+    def _calculate_fallback_travel_time(
+        self, origin: str, destination: str
+    ) -> Optional[Dict]:
         """Calculate travel time using mathematical distance estimation"""
         try:
             # Parse origin coordinates
-            if ',' in origin:
-                origin_lat, origin_lon = map(float, origin.split(','))
+            if "," in origin:
+                origin_lat, origin_lon = map(float, origin.split(","))
             else:
                 logger.error(f"Invalid origin format: {origin}")
                 return None
-            
+
             # Get destination coordinates
             dest_coords = self._get_destination_coordinates(destination)
             if not dest_coords:
-                logger.warning(f"Could not get coordinates for destination: {destination}")
+                logger.warning(
+                    f"Could not get coordinates for destination: {destination}"
+                )
                 return None
-            
+
             dest_lat, dest_lon = dest_coords
-            
+
             # Calculate straight-line distance using Haversine formula
-            distance_km = self._haversine_distance(origin_lat, origin_lon, dest_lat, dest_lon)
-            
+            distance_km = self._haversine_distance(
+                origin_lat, origin_lon, dest_lat, dest_lon
+            )
+
             # Estimate travel time based on distance and road type
-            # Use realistic speed estimates: 
+            # Use realistic speed estimates:
             # - Short distances (<20km): 45 km/h average (local roads, traffic)
             # - Medium distances (20-50km): 55 km/h average (mixed roads)
             # - Long distances (>50km): 65 km/h average (highways)
-            
+
             if distance_km < 20:
                 avg_speed = 45
             elif distance_km < 50:
                 avg_speed = 55
             else:
                 avg_speed = 65
-            
+
             # Add 20% to account for actual road routes vs straight line
             actual_distance = distance_km * 1.2
-            travel_time = round((actual_distance / avg_speed) * 60)  # Convert to minutes
-            
-            return {
-                'time': travel_time,
-                'distance': round(actual_distance)
-            }
-            
+            travel_time = round(
+                (actual_distance / avg_speed) * 60
+            )  # Convert to minutes
+
+            return {"time": travel_time, "distance": round(actual_distance)}
+
         except Exception as e:
             logger.error("Fallback travel time calculation failed", exc_info=True)
             return None
-    
-    def _haversine_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+
+    def _haversine_distance(
+        self, lat1: float, lon1: float, lat2: float, lon2: float
+    ) -> float:
         """Calculate the great circle distance between two points on earth (in kilometers)"""
         import math
-        
+
         # Convert decimal degrees to radians
         lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
-        
+
         # Haversine formula
         dlat = lat2 - lat1
         dlon = lon2 - lon1
-        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+        a = (
+            math.sin(dlat / 2) ** 2
+            + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+        )
         c = 2 * math.asin(math.sqrt(a))
-        
+
         # Radius of earth in kilometers
         r = 6371
-        
+
         return c * r
-    
+
     def _get_destination_coordinates(self, destination: str) -> Optional[tuple]:
         """Get coordinates for common destinations"""
         # Destination can be provided as "lat,lon"
         try:
-            if isinstance(destination, str) and ',' in destination:
-                lat_s, lon_s = destination.split(',', 1)
+            if isinstance(destination, str) and "," in destination:
+                lat_s, lon_s = destination.split(",", 1)
                 lat = float(lat_s.strip())
                 lon = float(lon_s.strip())
                 if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
@@ -456,77 +515,92 @@ class TravelTimeService:
         except Exception:
             pass
         return None
-    
+
     def _find_nearest_beach(self, origin: str) -> Optional[Dict]:
         """Find nearest beach and travel time"""
         try:
             # Calculate times to all beaches using available method
             beach_times = []
-            
+
             for beach in self.beaches:
                 travel_data = self._get_travel_time_and_distance(origin, beach)
                 if travel_data:
-                    beach_name = beach.split(',')[0].replace('Playa de ', '').replace('Playa del ', '')
-                    beach_times.append({
-                        'name': beach_name,
-                        'time': travel_data['time'],
-                        'distance': travel_data['distance'],
-                        'full_name': beach
-                    })
-            
+                    beach_name = (
+                        beach.split(",")[0]
+                        .replace("Playa de ", "")
+                        .replace("Playa del ", "")
+                    )
+                    beach_times.append(
+                        {
+                            "name": beach_name,
+                            "time": travel_data["time"],
+                            "distance": travel_data["distance"],
+                            "full_name": beach,
+                        }
+                    )
+
             if beach_times:
                 # Return nearest beach by time
-                nearest = min(beach_times, key=lambda x: x['time'])
-                logger.info(f"Nearest beach: {nearest['name']} ({nearest['time']} minutes, {nearest['distance']} km)")
+                nearest = min(beach_times, key=lambda x: x["time"])
+                logger.info(
+                    f"Nearest beach: {nearest['name']} ({nearest['time']} minutes, {nearest['distance']} km)"
+                )
                 return nearest
-            
+
             return None
-            
+
         except Exception as e:
             logger.error("Error finding nearest beach", exc_info=True)
             return None
-    
-    def _find_nearest_facility(self, origin: str, facilities: List[str]) -> Optional[int]:
+
+    def _find_nearest_facility(
+        self, origin: str, facilities: List[str]
+    ) -> Optional[int]:
         """Find travel time to nearest facility from a list (legacy for backward compatibility)"""
         result = self._find_nearest_facility_with_distance(origin, facilities)
-        return result['time'] if result else None
-    
-    def _find_nearest_facility_with_distance(self, origin: str, facilities: List[str]) -> Optional[Dict]:
+        return result["time"] if result else None
+
+    def _find_nearest_facility_with_distance(
+        self, origin: str, facilities: List[str]
+    ) -> Optional[Dict]:
         """Find travel time and distance to nearest facility from a list"""
         if not facilities:
             return None
-        
+
         try:
             # Calculate times and distances to all facilities using available method
             facility_data = []
-            
+
             for facility in facilities:
                 result = self._get_travel_time_and_distance(origin, facility)
                 if result is not None:
                     facility_data.append(result)
-            
+
             if facility_data:
                 # Return nearest facility data (by time)
-                nearest = min(facility_data, key=lambda x: x['time'])
-                logger.info(f"Nearest facility: {nearest['time']} min, {nearest['distance']} km")
+                nearest = min(facility_data, key=lambda x: x["time"])
+                logger.info(
+                    f"Nearest facility: {nearest['time']} min, {nearest['distance']} km"
+                )
                 return nearest
-            
+
             return None
-            
+
         except Exception as e:
             logger.error("Error finding nearest facility", exc_info=True)
             return None
-    
-    def generate_google_maps_route_url(self, origin_lat: float, origin_lon: float, 
-                                      destination: str) -> str:
+
+    def generate_google_maps_route_url(
+        self, origin_lat: float, origin_lon: float, destination: str
+    ) -> str:
         """Generate Google Maps URL for route"""
         origin = f"{origin_lat},{origin_lon}"
-        
-        if destination == 'oviedo':
-            dest = self.destinations['oviedo']
-        elif destination == 'gijon':
-            dest = self.destinations['gijon']  
+
+        if destination == "oviedo":
+            dest = self.destinations["oviedo"]
+        elif destination == "gijon":
+            dest = self.destinations["gijon"]
         else:
             dest = destination
-        
+
         return f"https://www.google.com/maps/dir/{origin}/{dest}"

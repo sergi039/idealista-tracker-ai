@@ -25,7 +25,9 @@ def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
     return max(low, min(high, value))
 
 
-def _weighted_average(scores_and_weights: Dict[str, Tuple[Optional[float], float]]) -> Optional[float]:
+def _weighted_average(
+    scores_and_weights: Dict[str, Tuple[Optional[float], float]],
+) -> Optional[float]:
     total_weight = 0.0
     weighted_sum = 0.0
     for _, (score, weight) in scores_and_weights.items():
@@ -40,7 +42,9 @@ def _weighted_average(scores_and_weights: Dict[str, Tuple[Optional[float], float
     return weighted_sum / total_weight
 
 
-def _percentile_score_lower_is_better(value: float, values: list[float]) -> Optional[float]:
+def _percentile_score_lower_is_better(
+    value: float, values: list[float]
+) -> Optional[float]:
     """Return 0-100 where lower `value` is better compared to `values`."""
     if value is None:
         return None
@@ -60,7 +64,9 @@ def _percentile_score_lower_is_better(value: float, values: list[float]) -> Opti
     return _clamp(score)
 
 
-def _linear_minutes_score(minutes: Optional[float], best: float, worst: float) -> Optional[float]:
+def _linear_minutes_score(
+    minutes: Optional[float], best: float, worst: float
+) -> Optional[float]:
     if minutes is None:
         return None
     if worst <= best:
@@ -84,23 +90,40 @@ class PropertyScoreResult:
 class BasePropertyScorer:
     category: str = "unknown"
 
-    def calculate(self, prop: Property, profile: Optional[SearchProfile]) -> PropertyScoreResult:
+    def calculate(
+        self, prop: Property, profile: Optional[SearchProfile]
+    ) -> PropertyScoreResult:
         raise NotImplementedError
 
 
 class HousingPropertyScorer(BasePropertyScorer):
     category = "housing"
 
-    DEFAULT_INVESTMENT_WEIGHTS = {"value_score": 0.7, "travel_score": 0.3, "size_score": 0.0}
-    DEFAULT_LIFESTYLE_WEIGHTS = {"travel_score": 0.6, "size_score": 0.4, "value_score": 0.0}
+    DEFAULT_INVESTMENT_WEIGHTS = {
+        "value_score": 0.7,
+        "travel_score": 0.3,
+        "size_score": 0.0,
+    }
+    DEFAULT_LIFESTYLE_WEIGHTS = {
+        "travel_score": 0.6,
+        "size_score": 0.4,
+        "value_score": 0.0,
+    }
     DEFAULT_TRAVEL_MINUTES = {"best": 10.0, "worst": 60.0}
 
-    def calculate(self, prop: Property, profile: Optional[SearchProfile]) -> PropertyScoreResult:
-        scoring_config = (profile.scoring_config if profile and isinstance(profile.scoring_config, dict) else {}) or {}
+    def calculate(
+        self, prop: Property, profile: Optional[SearchProfile]
+    ) -> PropertyScoreResult:
+        scoring_config = (
+            profile.scoring_config
+            if profile and isinstance(profile.scoring_config, dict)
+            else {}
+        ) or {}
         cat_cfg = (
-            ((scoring_config.get("categories") or {}).get(self.category) if isinstance(scoring_config.get("categories"), dict) else None)
-            or {}
-        )
+            (scoring_config.get("categories") or {}).get(self.category)
+            if isinstance(scoring_config.get("categories"), dict)
+            else None
+        ) or {}
 
         investment_weights = dict(self.DEFAULT_INVESTMENT_WEIGHTS)
         lifestyle_weights = dict(self.DEFAULT_LIFESTYLE_WEIGHTS)
@@ -111,9 +134,13 @@ class HousingPropertyScorer(BasePropertyScorer):
             life = cat_cfg.get("lifestyle")
             travel_minutes = cat_cfg.get("travel_minutes")
             if isinstance(inv, dict):
-                investment_weights.update({k: float(v) for k, v in inv.items() if v is not None})
+                investment_weights.update(
+                    {k: float(v) for k, v in inv.items() if v is not None}
+                )
             if isinstance(life, dict):
-                lifestyle_weights.update({k: float(v) for k, v in life.items() if v is not None})
+                lifestyle_weights.update(
+                    {k: float(v) for k, v in life.items() if v is not None}
+                )
             if isinstance(travel_minutes, dict):
                 if travel_minutes.get("best") is not None:
                     travel_minutes_cfg["best"] = float(travel_minutes.get("best"))
@@ -123,23 +150,43 @@ class HousingPropertyScorer(BasePropertyScorer):
         mix = getattr(Config, "COMBINED_MIX", {"investment": 0.32, "lifestyle": 0.68})
         if isinstance(cat_cfg, dict) and isinstance(cat_cfg.get("combined_mix"), dict):
             mix_override = cat_cfg.get("combined_mix") or {}
-            if mix_override.get("investment") is not None and mix_override.get("lifestyle") is not None:
-                mix = {"investment": float(mix_override["investment"]), "lifestyle": float(mix_override["lifestyle"])}
+            if (
+                mix_override.get("investment") is not None
+                and mix_override.get("lifestyle") is not None
+            ):
+                mix = {
+                    "investment": float(mix_override["investment"]),
+                    "lifestyle": float(mix_override["lifestyle"]),
+                }
 
         value_score, value_meta = self._value_score(prop)
         size_score, size_meta = self._size_score(prop)
-        travel_score, travel_meta = self._travel_score(prop, profile, best=travel_minutes_cfg["best"], worst=travel_minutes_cfg["worst"])
+        travel_score, travel_meta = self._travel_score(
+            prop,
+            profile,
+            best=travel_minutes_cfg["best"],
+            worst=travel_minutes_cfg["worst"],
+        )
 
         investment = _weighted_average(
             {
-                "value_score": (value_score, investment_weights.get("value_score", 0.0)),
-                "travel_score": (travel_score, investment_weights.get("travel_score", 0.0)),
+                "value_score": (
+                    value_score,
+                    investment_weights.get("value_score", 0.0),
+                ),
+                "travel_score": (
+                    travel_score,
+                    investment_weights.get("travel_score", 0.0),
+                ),
                 "size_score": (size_score, investment_weights.get("size_score", 0.0)),
             }
         )
         lifestyle = _weighted_average(
             {
-                "travel_score": (travel_score, lifestyle_weights.get("travel_score", 0.0)),
+                "travel_score": (
+                    travel_score,
+                    lifestyle_weights.get("travel_score", 0.0),
+                ),
                 "size_score": (size_score, lifestyle_weights.get("size_score", 0.0)),
                 "value_score": (value_score, lifestyle_weights.get("value_score", 0.0)),
             }
@@ -149,7 +196,10 @@ class HousingPropertyScorer(BasePropertyScorer):
         if investment is not None or lifestyle is not None:
             combined = _weighted_average(
                 {
-                    "investment": (investment, float(mix.get("investment", 0.0) or 0.0)),
+                    "investment": (
+                        investment,
+                        float(mix.get("investment", 0.0) or 0.0),
+                    ),
                     "lifestyle": (lifestyle, float(mix.get("lifestyle", 0.0) or 0.0)),
                 }
             )
@@ -187,7 +237,12 @@ class HousingPropertyScorer(BasePropertyScorer):
             },
         }
 
-        return PropertyScoreResult(investment=investment, lifestyle=lifestyle, combined=combined, scoring_payload=payload)
+        return PropertyScoreResult(
+            investment=investment,
+            lifestyle=lifestyle,
+            combined=combined,
+            scoring_payload=payload,
+        )
 
     def _value_score(self, prop: Property) -> Tuple[Optional[float], Dict[str, Any]]:
         price = _safe_float(prop.price)
@@ -230,12 +285,16 @@ class HousingPropertyScorer(BasePropertyScorer):
         meta.update({"status": "ok", "peer_count": len(peer_areas), "area": area})
         return score, meta
 
-    def _collect_peer_ppm2(self, prop: Property, *, min_peers: int, limit: int) -> Tuple[list[float], Dict[str, Any]]:
+    def _collect_peer_ppm2(
+        self, prop: Property, *, min_peers: int, limit: int
+    ) -> Tuple[list[float], Dict[str, Any]]:
         """Collect peer price/m² values with progressive scope relaxation to avoid 'no peers' dead-ends."""
         scopes: list[tuple[str, Dict[str, bool]]] = []
         # Strict -> relaxed: municipality+subtype -> subtype -> category-only.
         if prop.municipality and prop.property_subtype:
-            scopes.append(("municipality+subtype", {"municipality": True, "subtype": True}))
+            scopes.append(
+                ("municipality+subtype", {"municipality": True, "subtype": True})
+            )
         if prop.property_subtype:
             scopes.append(("subtype", {"municipality": False, "subtype": True}))
         scopes.append(("category", {"municipality": False, "subtype": False}))
@@ -253,7 +312,9 @@ class HousingPropertyScorer(BasePropertyScorer):
                 q = q.filter(Property.property_subtype == prop.property_subtype)
             if cfg.get("municipality") and prop.municipality:
                 q = q.filter(Property.municipality == prop.municipality)
-            q = q.filter(Property.price.isnot(None), Property.area.isnot(None), Property.area > 0)
+            q = q.filter(
+                Property.price.isnot(None), Property.area.isnot(None), Property.area > 0
+            )
 
             peers = q.limit(limit).all()
             values: list[float] = []
@@ -273,10 +334,14 @@ class HousingPropertyScorer(BasePropertyScorer):
 
         return best_values, best_meta
 
-    def _collect_peer_areas(self, prop: Property, *, min_peers: int, limit: int) -> Tuple[list[float], Dict[str, Any]]:
+    def _collect_peer_areas(
+        self, prop: Property, *, min_peers: int, limit: int
+    ) -> Tuple[list[float], Dict[str, Any]]:
         scopes: list[tuple[str, Dict[str, bool]]] = []
         if prop.municipality and prop.property_subtype:
-            scopes.append(("municipality+subtype", {"municipality": True, "subtype": True}))
+            scopes.append(
+                ("municipality+subtype", {"municipality": True, "subtype": True})
+            )
         if prop.property_subtype:
             scopes.append(("subtype", {"municipality": False, "subtype": True}))
         scopes.append(("category", {"municipality": False, "subtype": False}))
@@ -355,57 +420,112 @@ class HousingPropertyScorer(BasePropertyScorer):
                 scores.append(s)
 
         if not scores:
-            return None, {"status": "missing_travel", "targets": key_scores, "best": best, "worst": worst}
+            return None, {
+                "status": "missing_travel",
+                "targets": key_scores,
+                "best": best,
+                "worst": worst,
+            }
 
         avg = sum(scores) / len(scores)
-        return _clamp(avg), {"status": "ok", "targets": key_scores, "best": best, "worst": worst}
+        return _clamp(avg), {
+            "status": "ok",
+            "targets": key_scores,
+            "best": best,
+            "worst": worst,
+        }
 
 
 class LandPropertyScorer(HousingPropertyScorer):
     category = "land"
 
-    DEFAULT_INVESTMENT_WEIGHTS = {"value_score": 0.8, "travel_score": 0.2, "size_score": 0.0}
-    DEFAULT_LIFESTYLE_WEIGHTS = {"travel_score": 0.5, "size_score": 0.5, "value_score": 0.0}
+    DEFAULT_INVESTMENT_WEIGHTS = {
+        "value_score": 0.8,
+        "travel_score": 0.2,
+        "size_score": 0.0,
+    }
+    DEFAULT_LIFESTYLE_WEIGHTS = {
+        "travel_score": 0.5,
+        "size_score": 0.5,
+        "value_score": 0.0,
+    }
+
 
 class GaragePropertyScorer(HousingPropertyScorer):
     category = "garage"
 
-    DEFAULT_INVESTMENT_WEIGHTS = {"value_score": 0.9, "travel_score": 0.1, "size_score": 0.0}
-    DEFAULT_LIFESTYLE_WEIGHTS = {"travel_score": 0.7, "size_score": 0.3, "value_score": 0.0}
+    DEFAULT_INVESTMENT_WEIGHTS = {
+        "value_score": 0.9,
+        "travel_score": 0.1,
+        "size_score": 0.0,
+    }
+    DEFAULT_LIFESTYLE_WEIGHTS = {
+        "travel_score": 0.7,
+        "size_score": 0.3,
+        "value_score": 0.0,
+    }
 
 
 class CommercialPropertyScorer(HousingPropertyScorer):
     category = "commercial"
 
-    DEFAULT_INVESTMENT_WEIGHTS = {"value_score": 0.85, "travel_score": 0.15, "size_score": 0.0}
-    DEFAULT_LIFESTYLE_WEIGHTS = {"travel_score": 0.6, "size_score": 0.4, "value_score": 0.0}
+    DEFAULT_INVESTMENT_WEIGHTS = {
+        "value_score": 0.85,
+        "travel_score": 0.15,
+        "size_score": 0.0,
+    }
+    DEFAULT_LIFESTYLE_WEIGHTS = {
+        "travel_score": 0.6,
+        "size_score": 0.4,
+        "value_score": 0.0,
+    }
 
 
 class BuildingPropertyScorer(HousingPropertyScorer):
     category = "building"
 
-    DEFAULT_INVESTMENT_WEIGHTS = {"value_score": 0.85, "travel_score": 0.15, "size_score": 0.0}
-    DEFAULT_LIFESTYLE_WEIGHTS = {"travel_score": 0.6, "size_score": 0.4, "value_score": 0.0}
+    DEFAULT_INVESTMENT_WEIGHTS = {
+        "value_score": 0.85,
+        "travel_score": 0.15,
+        "size_score": 0.0,
+    }
+    DEFAULT_LIFESTYLE_WEIGHTS = {
+        "travel_score": 0.6,
+        "size_score": 0.4,
+        "value_score": 0.0,
+    }
 
 
 class NewDevelopmentPropertyScorer(HousingPropertyScorer):
     category = "new_development"
 
-    DEFAULT_INVESTMENT_WEIGHTS = {"value_score": 0.7, "travel_score": 0.3, "size_score": 0.0}
-    DEFAULT_LIFESTYLE_WEIGHTS = {"travel_score": 0.6, "size_score": 0.4, "value_score": 0.0}
+    DEFAULT_INVESTMENT_WEIGHTS = {
+        "value_score": 0.7,
+        "travel_score": 0.3,
+        "size_score": 0.0,
+    }
+    DEFAULT_LIFESTYLE_WEIGHTS = {
+        "travel_score": 0.6,
+        "size_score": 0.4,
+        "value_score": 0.0,
+    }
 
 
 class DefaultPropertyScorer(BasePropertyScorer):
     category = "default"
 
-    def calculate(self, prop: Property, profile: Optional[SearchProfile]) -> PropertyScoreResult:
+    def calculate(
+        self, prop: Property, profile: Optional[SearchProfile]
+    ) -> PropertyScoreResult:
         payload = {
             "version": 1,
             "category": prop.property_category or "unknown",
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "status": "unsupported_category",
         }
-        return PropertyScoreResult(investment=None, lifestyle=None, combined=None, scoring_payload=payload)
+        return PropertyScoreResult(
+            investment=None, lifestyle=None, combined=None, scoring_payload=payload
+        )
 
 
 class PropertyScoringService:
@@ -441,9 +561,15 @@ class PropertyScoringService:
         scorer = self.scorer_for(prop)
         result = scorer.calculate(prop, profile)
 
-        prop.score_investment = Decimal(str(result.investment)) if result.investment is not None else None
-        prop.score_lifestyle = Decimal(str(result.lifestyle)) if result.lifestyle is not None else None
-        prop.score_total = Decimal(str(result.combined)) if result.combined is not None else None
+        prop.score_investment = (
+            Decimal(str(result.investment)) if result.investment is not None else None
+        )
+        prop.score_lifestyle = (
+            Decimal(str(result.lifestyle)) if result.lifestyle is not None else None
+        )
+        prop.score_total = (
+            Decimal(str(result.combined)) if result.combined is not None else None
+        )
         prop.scoring = result.scoring_payload
 
         if commit:

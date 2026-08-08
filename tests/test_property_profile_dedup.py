@@ -20,7 +20,9 @@ def app():
         db.drop_all()
 
 
-def test_property_ingestion_dedups_within_profile_but_allows_cross_profile_duplicates(app, monkeypatch):
+def test_property_ingestion_dedups_within_profile_but_allows_cross_profile_duplicates(
+    app, monkeypatch
+):
     with app.app_context():
         Config.AUTO_TRAVEL_ENRICHMENT = False
         Config.AUTO_PROPERTY_SCORING = False
@@ -79,15 +81,20 @@ def test_property_ingestion_dedups_within_profile_but_allows_cross_profile_dupli
         ]
 
         service = PropertyIMAPService()
-        monkeypatch.setattr(service, "get_idealista_emails", lambda max_results=None: list(emails))
+        monkeypatch.setattr(
+            service, "get_idealista_emails", lambda max_results=None: list(emails)
+        )
 
         created = service.run_ingestion(sync_type="test")
         assert created == 2
 
-        prop_a = Property.query.filter_by(idealista_property_id=123456, search_profile_id=profile_a.id).first()
-        prop_b = Property.query.filter_by(idealista_property_id=123456, search_profile_id=profile_b.id).first()
+        prop_a = Property.query.filter_by(
+            idealista_property_id=123456, search_profile_id=profile_a.id
+        ).first()
+        prop_b = Property.query.filter_by(
+            idealista_property_id=123456, search_profile_id=profile_b.id
+        ).first()
         assert prop_a is not None
         assert prop_b is not None
         assert float(prop_a.price) == 90000.0
         assert float(prop_b.price) == 100000.0
-
