@@ -29,8 +29,36 @@ if [ "${SKIP_LOCAL_CI:-0}" = "1" ]; then
     exit 0
 fi
 
-repo_root="$(git rev-parse --show-toplevel)"
+repo_root="$(git rev-parse --show-toplevel)" || {
+    echo "pre-push: not inside a work tree, cannot run the local CI gate" >&2
+    exit 1
+}
 zero_sha="0000000000000000000000000000000000000000"
+
+# Drop the git environment before spawning anything (defect in the gate as
+# it shipped in PR #78).
+#
+# git runs hooks with GIT_DIR exported whenever the push originates from a
+# LINKED WORKTREE (not from the main clone) - and this repo is worked almost
+# entirely from `git worktree` checkouts. Every child we spawn - ruff, uv,
+# pytest, the gate script - inherits it, and any git command they run then
+# resolves *this* repository instead of the one they meant:
+#
+#   * `git init` in a test's throwaway repo re-initialises THIS repo, and
+#     because GIT_DIR is set with no work tree it does so as a BARE repo:
+#     `core.bare = true` lands in the shared .git/config and every worktree
+#     dies with "fatal: this operation must be run in a work tree".
+#     (extensions.worktreeConfig is on here, so the write is shared, not
+#     scoped to one worktree.)
+#   * `git ls-files` in the snapshot reads the main clone's index, so the
+#     no-source-bundles step would silently judge the wrong tree.
+#
+# Everything below therefore addresses the repo explicitly with -C, and the
+# checks run against a genuinely clean git environment. Regression coverage:
+# tests/test_local_ci_hook.py.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE \
+    GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+    GIT_NAMESPACE GIT_PREFIX GIT_QUARANTINE_PATH
 
 # git feeds "<local-ref> <local-sha> <remote-ref> <remote-sha>" lines on
 # stdin, one per ref being pushed (a single `git push` can carry several).
@@ -65,12 +93,12 @@ run_gate_on_commit() {
 
     cleanup() {
         cd "$repo_root" 2>/dev/null || true
-        git worktree remove --force "$wt" >/dev/null 2>&1
+        git -C "$repo_root" worktree remove --force "$wt" >/dev/null 2>&1
         rm -rf "$tmp_worktree"
     }
     trap cleanup EXIT INT TERM
 
-    if ! git worktree add --detach --quiet "$wt" "$sha" >/dev/null 2>&1; then
+    if ! git -C "$repo_root" worktree add --detach --quiet "$wt" "$sha" >/dev/null 2>&1; then
         echo "pre-push: could not create a clean worktree for commit $sha"
         trap - EXIT INT TERM
         cleanup

@@ -23,6 +23,17 @@
 
 set -uo pipefail
 
+# Drop any inherited git environment before resolving the repository
+# (defect in the gate as it shipped in PR #78).
+# .githooks/pre-push already scrubs it, but this script is also
+# a standalone entry point and can be invoked from other hook contexts: with
+# GIT_DIR set, `git rev-parse --show-toplevel` degrades to "wherever I am"
+# and `git ls-files` below would read a foreign index, so the gate would
+# report on a tree it never checked. See tests/test_local_ci_hook.py.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE \
+    GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+    GIT_NAMESPACE GIT_PREFIX GIT_QUARANTINE_PATH
+
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 RED='\033[0;31m'
