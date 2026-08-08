@@ -97,7 +97,9 @@ class OpenAIService:
                 "AI_BRIDGE_TOKEN must be set: OpenAI runs on the subscription bridge, not an API key"
             )
 
-    def _build_prompt(self, land, enriched_data: Dict[str, Any], similar_properties: list[dict]) -> str:
+    def _build_prompt(
+        self, land, enriched_data: Dict[str, Any], similar_properties: list[dict]
+    ) -> str:
         title = land.title or f"Land #{land.id}"
         price = float(land.price) if land.price else None
         area = float(land.area) if land.area else None
@@ -120,15 +122,21 @@ class OpenAIService:
             f"PROPERTY: {title}",
             f"PRICE: €{price:,.0f}" if price is not None else "PRICE: N/A",
             f"AREA: {area:,.0f}m²" if area is not None else "AREA: N/A",
-            f"PRICE PER M²: €{price_per_m2:,.0f}/m²" if price_per_m2 is not None else "PRICE PER M²: N/A",
+            f"PRICE PER M²: €{price_per_m2:,.0f}/m²"
+            if price_per_m2 is not None
+            else "PRICE PER M²: N/A",
             f"LOCATION: {land.municipality or 'Unknown'}",
             f"TYPE: {land.land_type or 'unknown'}",
-            f"TOTAL SCORE: {float(land.score_total):.2f}/100" if land.score_total is not None else "TOTAL SCORE: N/A",
+            f"TOTAL SCORE: {float(land.score_total):.2f}/100"
+            if land.score_total is not None
+            else "TOTAL SCORE: N/A",
         ]
 
         if land.travel_time_nearest_beach:
             beach_name = land.nearest_beach_name or "nearest beach"
-            lines.append(f"BEACH ACCESS: {land.travel_time_nearest_beach} min to {beach_name}")
+            lines.append(
+                f"BEACH ACCESS: {land.travel_time_nearest_beach} min to {beach_name}"
+            )
         try:
             from services.settings_service import SettingsService
 
@@ -136,8 +144,12 @@ class OpenAIService:
         except Exception:
             reference_cities = []
 
-        city_a = (reference_cities[0].get("name") if len(reference_cities) > 0 else None) or "City A"
-        city_b = (reference_cities[1].get("name") if len(reference_cities) > 1 else None) or "City B"
+        city_a = (
+            reference_cities[0].get("name") if len(reference_cities) > 0 else None
+        ) or "City A"
+        city_b = (
+            reference_cities[1].get("name") if len(reference_cities) > 1 else None
+        ) or "City B"
 
         if land.travel_time_oviedo:
             lines.append(f"{city_a}: {land.travel_time_oviedo} min")
@@ -178,7 +190,7 @@ class OpenAIService:
                 "",
                 f"RENTAL MARKET ANALYSIS ({rental.get('location_type', 'Unknown')} area):",
                 f"Estimated monthly rent: €{rental.get('monthly_rent_min', 0):,.0f} - €{rental.get('monthly_rent_max', 0):,.0f} (avg: €{rental.get('monthly_rent_avg', 0):,.0f})",
-                f"Annual rental income: €{rental.get('monthly_rent_min', 0)*12:,.0f} - €{rental.get('monthly_rent_max', 0)*12:,.0f}",
+                f"Annual rental income: €{rental.get('monthly_rent_min', 0) * 12:,.0f} - €{rental.get('monthly_rent_max', 0) * 12:,.0f}",
                 f"Rental yield: {rental.get('rental_yield', 0):.1f}% (expected range: 5.0-7.5%)",
                 f"Price-to-rent ratio: {rental.get('price_to_rent_ratio', 0):.1f}",
                 f"Payback period: {rental.get('payback_period_years', 0):.1f} years",
@@ -190,7 +202,7 @@ class OpenAIService:
             lines += ["", "Similar properties in our database:"]
             for idx, prop in enumerate(similar_properties, start=1):
                 lines.append(
-                    f"{idx}. {prop.get('title','')} - €{prop.get('price',0):,.0f} - {prop.get('area',0)}m² - {prop.get('municipality','')} - Score: {prop.get('score_total',0):.1f}/100"
+                    f"{idx}. {prop.get('title', '')} - €{prop.get('price', 0):,.0f} - {prop.get('area', 0)}m² - {prop.get('municipality', '')} - Score: {prop.get('score_total', 0):.1f}/100"
                 )
 
         lines += [
@@ -217,12 +229,15 @@ class OpenAIService:
         similar_query = db.session.query(LandModel).filter(LandModel.id != land.id)
         if land.land_type:
             similar_query = similar_query.filter(LandModel.land_type == land.land_type)
-        similar_query = similar_query.filter(LandModel.score_total.isnot(None)).order_by(LandModel.score_total.desc().nullslast())
+        similar_query = similar_query.filter(
+            LandModel.score_total.isnot(None)
+        ).order_by(LandModel.score_total.desc().nullslast())
         similar_lands = similar_query.limit(3).all()
         similar_properties = [
             {
                 "id": p.id,
-                "title": (p.title or f"Property #{p.id}")[:60] + ("..." if p.title and len(p.title) > 60 else ""),
+                "title": (p.title or f"Property #{p.id}")[:60]
+                + ("..." if p.title and len(p.title) > 60 else ""),
                 "price": float(p.price) if p.price else 0,
                 "area": float(p.area) if p.area else 0,
                 "municipality": p.municipality or "",
@@ -233,7 +248,9 @@ class OpenAIService:
             for p in similar_lands
         ]
 
-        prompt = self._build_prompt(land, enriched_data=enriched_data, similar_properties=similar_properties)
+        prompt = self._build_prompt(
+            land, enriched_data=enriched_data, similar_properties=similar_properties
+        )
 
         started = datetime.now(timezone.utc)
         # One call through the host bridge: the Codex CLI carries the ChatGPT

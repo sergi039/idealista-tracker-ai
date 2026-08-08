@@ -147,6 +147,7 @@ def _validate_city(city: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     return {"name": name, "lat": lat, "lon": lon}
 
+
 def _coerce_int(value: Any) -> Optional[int]:
     try:
         if value is None:
@@ -154,6 +155,7 @@ def _coerce_int(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
 
 def _validate_classification_rule(rule: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     category = (rule.get("category") or "").strip()
@@ -172,6 +174,7 @@ def _validate_classification_rule(rule: Dict[str, Any]) -> Optional[Dict[str, An
         "pattern": pattern,
         "priority": priority,
     }
+
 
 def _validate_travel_target(target: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     name = (target.get("name") or "").strip()
@@ -300,7 +303,10 @@ class SettingsService:
                 return
 
             if not setting:
-                setting = AppSetting(key=REFERENCE_CITIES_KEY, value=[dict(c) for c in DEFAULT_REFERENCE_CITIES])
+                setting = AppSetting(
+                    key=REFERENCE_CITIES_KEY,
+                    value=[dict(c) for c in DEFAULT_REFERENCE_CITIES],
+                )
                 db.session.add(setting)
             else:
                 setting.value = [dict(c) for c in DEFAULT_REFERENCE_CITIES]
@@ -340,7 +346,9 @@ class SettingsService:
     def get_excluded_property_categories() -> List[str]:
         """Excluded categories for ingestion (DB override, fallback to env)."""
         try:
-            setting = AppSetting.query.filter_by(key=EXCLUDED_PROPERTY_CATEGORIES_KEY).first()
+            setting = AppSetting.query.filter_by(
+                key=EXCLUDED_PROPERTY_CATEGORIES_KEY
+            ).first()
             if setting:
                 return _normalize_excluded_categories(setting.value)
         except Exception:
@@ -349,7 +357,9 @@ class SettingsService:
         try:
             from config import Config
 
-            env_value = list(getattr(Config, "EXCLUDED_PROPERTY_CATEGORIES", set()) or [])
+            env_value = list(
+                getattr(Config, "EXCLUDED_PROPERTY_CATEGORIES", set()) or []
+            )
             return _normalize_excluded_categories(env_value)
         except Exception:
             return []
@@ -357,7 +367,9 @@ class SettingsService:
     @staticmethod
     def set_excluded_property_categories(categories: List[str]) -> None:
         normalized = _normalize_excluded_categories(categories)
-        setting = AppSetting.query.filter_by(key=EXCLUDED_PROPERTY_CATEGORIES_KEY).first()
+        setting = AppSetting.query.filter_by(
+            key=EXCLUDED_PROPERTY_CATEGORIES_KEY
+        ).first()
         if not setting:
             setting = AppSetting(key=EXCLUDED_PROPERTY_CATEGORIES_KEY, value=normalized)
             db.session.add(setting)
@@ -368,7 +380,9 @@ class SettingsService:
     @staticmethod
     def get_property_classification_rules() -> List[Dict[str, Any]]:
         """Return ordered regex-based classification rules (highest priority first)."""
-        setting = AppSetting.query.filter_by(key=PROPERTY_CLASSIFICATION_RULES_KEY).first()
+        setting = AppSetting.query.filter_by(
+            key=PROPERTY_CLASSIFICATION_RULES_KEY
+        ).first()
         if not setting or not isinstance(setting.value, list):
             SettingsService._ensure_default_property_classification_rules()
             rules = [dict(r) for r in DEFAULT_PROPERTY_CLASSIFICATION_RULES]
@@ -396,7 +410,9 @@ class SettingsService:
                 if valid:
                     validated.append(valid)
 
-        setting = AppSetting.query.filter_by(key=PROPERTY_CLASSIFICATION_RULES_KEY).first()
+        setting = AppSetting.query.filter_by(
+            key=PROPERTY_CLASSIFICATION_RULES_KEY
+        ).first()
         if not setting:
             setting = AppSetting(key=PROPERTY_CLASSIFICATION_RULES_KEY, value=validated)
             db.session.add(setting)
@@ -408,19 +424,26 @@ class SettingsService:
     @staticmethod
     def _ensure_default_property_classification_rules() -> None:
         try:
-            setting = AppSetting.query.filter_by(key=PROPERTY_CLASSIFICATION_RULES_KEY).first()
+            setting = AppSetting.query.filter_by(
+                key=PROPERTY_CLASSIFICATION_RULES_KEY
+            ).first()
             if setting and isinstance(setting.value, list):
                 return
 
             if not setting:
-                setting = AppSetting(key=PROPERTY_CLASSIFICATION_RULES_KEY, value=[dict(r) for r in DEFAULT_PROPERTY_CLASSIFICATION_RULES])
+                setting = AppSetting(
+                    key=PROPERTY_CLASSIFICATION_RULES_KEY,
+                    value=[dict(r) for r in DEFAULT_PROPERTY_CLASSIFICATION_RULES],
+                )
                 db.session.add(setting)
             else:
                 setting.value = [dict(r) for r in DEFAULT_PROPERTY_CLASSIFICATION_RULES]
 
             db.session.commit()
         except Exception as e:
-            logger.warning("Failed to ensure default property classification rules: %s", e)
+            logger.warning(
+                "Failed to ensure default property classification rules: %s", e
+            )
 
     @staticmethod
     def get_travel_targets() -> List[Dict[str, Any]]:
@@ -465,7 +488,10 @@ class SettingsService:
                 return
 
             if not setting:
-                setting = AppSetting(key=TRAVEL_TARGETS_KEY, value=[dict(t) for t in DEFAULT_TRAVEL_TARGETS])
+                setting = AppSetting(
+                    key=TRAVEL_TARGETS_KEY,
+                    value=[dict(t) for t in DEFAULT_TRAVEL_TARGETS],
+                )
                 db.session.add(setting)
             else:
                 setting.value = [dict(t) for t in DEFAULT_TRAVEL_TARGETS]
@@ -478,7 +504,11 @@ class SettingsService:
     def get_ai_market_context() -> str:
         """Return the default AI market context text (profiles may override)."""
         setting = AppSetting.query.filter_by(key=AI_MARKET_CONTEXT_KEY).first()
-        if not setting or not isinstance(setting.value, str) or not setting.value.strip():
+        if (
+            not setting
+            or not isinstance(setting.value, str)
+            or not setting.value.strip()
+        ):
             SettingsService._ensure_default_ai_market_context()
             return DEFAULT_AI_MARKET_CONTEXT
         return setting.value.strip()
@@ -505,7 +535,9 @@ class SettingsService:
                 return
 
             if not setting:
-                setting = AppSetting(key=AI_MARKET_CONTEXT_KEY, value=DEFAULT_AI_MARKET_CONTEXT)
+                setting = AppSetting(
+                    key=AI_MARKET_CONTEXT_KEY, value=DEFAULT_AI_MARKET_CONTEXT
+                )
                 db.session.add(setting)
             else:
                 setting.value = DEFAULT_AI_MARKET_CONTEXT

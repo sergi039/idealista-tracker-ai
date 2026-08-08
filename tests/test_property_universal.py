@@ -35,8 +35,14 @@ def app():
 
 
 def test_extract_url_supports_language_and_root_paths():
-    assert extract_url("https://www.idealista.com/en/inmueble/123/") == "https://www.idealista.com/en/inmueble/123/"
-    assert extract_url("https://www.idealista.com/inmueble/456/") == "https://www.idealista.com/inmueble/456/"
+    assert (
+        extract_url("https://www.idealista.com/en/inmueble/123/")
+        == "https://www.idealista.com/en/inmueble/123/"
+    )
+    assert (
+        extract_url("https://www.idealista.com/inmueble/456/")
+        == "https://www.idealista.com/inmueble/456/"
+    )
 
 
 def test_extract_listing_title_and_municipality_from_email_html():
@@ -89,7 +95,9 @@ def test_extract_price_change_from_strikethrough_only():
         ("1.234.567 €", 1234567.0),
     ],
 )
-def test_extract_price_handles_thousands_grouped_and_plain_listing_emails(price_text, expected):
+def test_extract_price_handles_thousands_grouped_and_plain_listing_emails(
+    price_text, expected
+):
     """Regression for GH #21: unanchored regexes matched the trailing "000"
     fragment of a thousands-grouped price and returned 0.0 for every price
     >= 1,000 EUR. Mirrors a plain (non price-change) listing alert email."""
@@ -107,12 +115,23 @@ def test_extract_price_handles_thousands_grouped_and_plain_listing_emails(price_
 @pytest.mark.parametrize(
     "price_text, expected",
     [
-        ("1.234,56 €", 1234.56),  # dot groups thousands, comma introduces the decimal (EU grammar)
-        ("1,234.56 €", 1234.56),  # comma groups thousands, dot introduces the decimal (US/UK grammar)
-        ("1.234,567 €", None),  # inconsistent: 3 "decimal" digits under the dot-group grammar -> reject
+        (
+            "1.234,56 €",
+            1234.56,
+        ),  # dot groups thousands, comma introduces the decimal (EU grammar)
+        (
+            "1,234.56 €",
+            1234.56,
+        ),  # comma groups thousands, dot introduces the decimal (US/UK grammar)
+        (
+            "1.234,567 €",
+            None,
+        ),  # inconsistent: 3 "decimal" digits under the dot-group grammar -> reject
     ],
 )
-def test_extract_price_enforces_one_consistent_separator_grammar_per_number(price_text, expected):
+def test_extract_price_enforces_one_consistent_separator_grammar_per_number(
+    price_text, expected
+):
     """Regression for a PR #33 review follow-up finding: decimal endings
     (dot or comma, 1-2 digits) must be supported, but a number's separator
     usage must be internally consistent -- a mixed/invalid number like
@@ -124,9 +143,21 @@ def test_extract_price_enforces_one_consistent_separator_grammar_per_number(pric
 @pytest.mark.parametrize(
     "sentence, expected_old, expected_new",
     [
-        ("The price of this listing has dropped from 1.234,56€ to 1.200,00€", 1234.56, 1200.0),
-        ("The price of this listing has dropped from 1,234.56€ to 1,200.00€", 1234.56, 1200.0),
-        ("The price of this listing has dropped from 1.234,567€ to 1.234,000€", None, None),
+        (
+            "The price of this listing has dropped from 1.234,56€ to 1.200,00€",
+            1234.56,
+            1200.0,
+        ),
+        (
+            "The price of this listing has dropped from 1,234.56€ to 1,200.00€",
+            1234.56,
+            1200.0,
+        ),
+        (
+            "The price of this listing has dropped from 1.234,567€ to 1.234,000€",
+            None,
+            None,
+        ),
     ],
 )
 def test_extract_price_change_enforces_one_consistent_separator_grammar_per_number(
@@ -154,7 +185,9 @@ def test_extract_price_change_strikethrough_supports_decimal_endings():
     assert extract_price(html) == 1200.0
 
 
-def test_reingestion_with_thousands_grouped_price_does_not_zero_existing_price(app, monkeypatch):
+def test_reingestion_with_thousands_grouped_price_does_not_zero_existing_price(
+    app, monkeypatch
+):
     """Regression for GH #21: before the fix, extract_price("59.000 €") returned
     0.0 (a fragment match), and property_imap_service.py's update path (which
     only checks `price is not None`, see :447) would then overwrite an
@@ -196,7 +229,9 @@ def test_reingestion_with_thousands_grouped_price_does_not_zero_existing_price(a
         # extract_price(subject) at property_imap_service.py:331.
         subject = "Flat / apartment in calle Foo, Bar - 59.000 €"
         extracted_price = extract_price(subject)
-        assert extracted_price == 59000.0  # sanity: proves the fixed parser is exercised, not a hardcoded value
+        assert (
+            extracted_price == 59000.0
+        )  # sanity: proves the fixed parser is exercised, not a hardcoded value
 
         emails = [
             {
@@ -212,7 +247,9 @@ def test_reingestion_with_thousands_grouped_price_does_not_zero_existing_price(a
         ]
 
         service = PropertyIMAPService()
-        monkeypatch.setattr(service, "get_idealista_emails", lambda max_results=None: list(emails))
+        monkeypatch.setattr(
+            service, "get_idealista_emails", lambda max_results=None: list(emails)
+        )
 
         service.run_ingestion(sync_type="test")
 
@@ -259,7 +296,9 @@ def test_reingestion_with_zero_price_never_zeroes_existing_price(app, monkeypatc
 
         subject = "Price: 0 €"
         extracted_price = extract_price(subject)
-        assert extracted_price == 0.0  # sanity: 0 is a legitimately parsed number, not a parse failure
+        assert (
+            extracted_price == 0.0
+        )  # sanity: 0 is a legitimately parsed number, not a parse failure
 
         emails = [
             {
@@ -275,7 +314,9 @@ def test_reingestion_with_zero_price_never_zeroes_existing_price(app, monkeypatc
         ]
 
         service = PropertyIMAPService()
-        monkeypatch.setattr(service, "get_idealista_emails", lambda max_results=None: list(emails))
+        monkeypatch.setattr(
+            service, "get_idealista_emails", lambda max_results=None: list(emails)
+        )
 
         service.run_ingestion(sync_type="test")
 
@@ -349,7 +390,15 @@ def test_property_travel_service_populates_travel_for_enabled_presets(app):
             is_default=True,
             travel_targets={
                 "presets": presets,
-                "custom": [{"id": "home", "name": "Home", "lat": 40.41, "lon": -3.69, "mode": "driving"}],
+                "custom": [
+                    {
+                        "id": "home",
+                        "name": "Home",
+                        "lat": 40.41,
+                        "lon": -3.69,
+                        "mode": "driving",
+                    }
+                ],
             },
         )
         db.session.add(profile)
@@ -379,7 +428,9 @@ def test_property_travel_service_populates_travel_for_enabled_presets(app):
                                     "name": "Airport A",
                                     "place_id": "pid-air",
                                     "types": ["airport"],
-                                    "geometry": {"location": {"lat": 40.50, "lng": -3.60}},
+                                    "geometry": {
+                                        "location": {"lat": 40.50, "lng": -3.60}
+                                    },
                                 }
                             ],
                         },
@@ -394,12 +445,17 @@ def test_property_travel_service_populates_travel_for_enabled_presets(app):
                                     "name": "Market",
                                     "place_id": "pid-sup",
                                     "types": ["supermarket"],
-                                    "geometry": {"location": {"lat": 40.42, "lng": -3.70}},
+                                    "geometry": {
+                                        "location": {"lat": 40.42, "lng": -3.70}
+                                    },
                                 }
                             ],
                         },
                     )
-                return Mock(status_code=200, json=lambda: {"status": "ZERO_RESULTS", "results": []})
+                return Mock(
+                    status_code=200,
+                    json=lambda: {"status": "ZERO_RESULTS", "results": []},
+                )
 
             if "distancematrix" in url:
                 dests = (params or {}).get("destinations", "").split("|")
@@ -412,12 +468,18 @@ def test_property_travel_service_populates_travel_for_enabled_presets(app):
                             "duration": {"value": 600 * (idx + 1)},
                         }
                     )
-                return Mock(status_code=200, json=lambda: {"rows": [{"elements": elements}]})
+                return Mock(
+                    status_code=200, json=lambda: {"rows": [{"elements": elements}]}
+                )
 
             raise AssertionError(f"Unexpected URL: {url}")
 
-        with patch("services.property_travel_service.requests.get", side_effect=mock_get):
-            svc = PropertyTravelService(google_maps_key="maps", google_places_key="places")
+        with patch(
+            "services.property_travel_service.requests.get", side_effect=mock_get
+        ):
+            svc = PropertyTravelService(
+                google_maps_key="maps", google_places_key="places"
+            )
             ok = svc.calculate_for_property(prop, commit=True)
             assert ok is True
 

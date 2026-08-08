@@ -5,27 +5,33 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
+
 class ScoringService:
     def __init__(self):
         self.weights = Config.DEFAULT_SCORING_WEIGHTS
         self.load_custom_weights()
-    
+
     def load_custom_weights(self):
         """Load custom scoring weights from database and normalize using MCDM methodology
         Falls back to Config profiles when no profile-specific DB weights exist"""
         try:
             from models import ScoringCriteria
-            
+
             # Load legacy weights (profile=NULL or 'combined') for backward compatibility
-            criteria = ScoringCriteria.query.filter_by(active=True).filter(
-                (ScoringCriteria.profile == 'combined') | (ScoringCriteria.profile == None)
-            ).all()
-            
+            criteria = (
+                ScoringCriteria.query.filter_by(active=True)
+                .filter(
+                    (ScoringCriteria.profile == "combined")
+                    | (ScoringCriteria.profile == None)
+                )
+                .all()
+            )
+
             if criteria:
                 custom_weights = {}
                 for criterion in criteria:
                     custom_weights[criterion.criteria_name] = float(criterion.weight)
-                
+
                 # MCDM normalization: ensure weights sum to 1.0
                 if custom_weights:
                     total_weight = sum(custom_weights.values())
@@ -33,16 +39,18 @@ class ScoringService:
                         # Normalize weights to sum to 1.0 (ISO 31000, RICS standards)
                         for key in custom_weights:
                             custom_weights[key] = custom_weights[key] / total_weight
-                    
+
                     self.weights.update(custom_weights)
-                    logger.info(f"Loaded and normalized legacy MCDM weights (sum={sum(custom_weights.values()):.3f}): {custom_weights}")
-            
+                    logger.info(
+                        f"Loaded and normalized legacy MCDM weights (sum={sum(custom_weights.values()):.3f}): {custom_weights}"
+                    )
+
             # Validate profiles on load
             self._validate_profiles()
-            
+
         except Exception as e:
             logger.error("Failed to load custom weights", exc_info=True)
-    
+
     def calculate_score(self, land) -> Decimal:
         """Calculate dual scores using MCDM methodology (Multi-Criteria Decision Making)
         Computes Investment Score, Lifestyle Score, and Combined Score
@@ -62,92 +70,112 @@ class ScoringService:
                 land.neighborhood,
                 land.services_quality,
                 land.legal_status,
-                getattr(land, 'development_potential', None),
+                getattr(land, "development_potential", None),
             ]
             if not any(core_fields):
-                land.score_investment = Decimal('0')
-                land.score_lifestyle = Decimal('0')
-                land.score_total = Decimal('0')
+                land.score_investment = Decimal("0")
+                land.score_lifestyle = Decimal("0")
+                land.score_total = Decimal("0")
                 if not land.environment:
                     land.environment = {}
-                land.environment['scoring'] = {
-                    'individual_scores': {},
-                    'profiles': {},
-                    'combined_mix': self._load_combined_mix(),
-                    'combined_score': 0,
+                land.environment["scoring"] = {
+                    "individual_scores": {},
+                    "profiles": {},
+                    "combined_mix": self._load_combined_mix(),
+                    "combined_score": 0,
                 }
-                land.environment['score_breakdown'] = {}
+                land.environment["score_breakdown"] = {}
                 return land.score_total
 
             # Calculate individual criterion scores once (each returns 0-100 or None)
             raw_scores = {
-                'investment_yield': self._score_investment_yield(land),
-                'location_quality': self._score_location_quality(land),
-                'transport': self._score_transport(land),
-                'infrastructure_basic': self._score_infrastructure_basic(land),
-                'infrastructure_extended': self._score_infrastructure_extended(land),
-                'environment': self._score_environment(land),
-                'physical_characteristics': self._score_physical_characteristics(land),
-                'services_quality': self._score_services_quality(land),
-                'legal_status': self._score_legal_status(land),
-                'development_potential': self._score_development_potential(land),
+                "investment_yield": self._score_investment_yield(land),
+                "location_quality": self._score_location_quality(land),
+                "transport": self._score_transport(land),
+                "infrastructure_basic": self._score_infrastructure_basic(land),
+                "infrastructure_extended": self._score_infrastructure_extended(land),
+                "environment": self._score_environment(land),
+                "physical_characteristics": self._score_physical_characteristics(land),
+                "services_quality": self._score_services_quality(land),
+                "legal_status": self._score_legal_status(land),
+                "development_potential": self._score_development_potential(land),
             }
             # Clamp all non-None scores to [0, 100] before aggregation
             individual_scores = {
                 k: min(100, max(0, v)) if v is not None else None
                 for k, v in raw_scores.items()
             }
-            
+
             # Calculate Investment Score using Investment Profile
-            investment_score = self._calculate_profile_score(individual_scores, 'investment')
-            
+            investment_score = self._calculate_profile_score(
+                individual_scores, "investment"
+            )
+
             # Calculate Lifestyle Score using Lifestyle Profile
-            lifestyle_score = self._calculate_profile_score(individual_scores, 'lifestyle')
-            
+            lifestyle_score = self._calculate_profile_score(
+                individual_scores, "lifestyle"
+            )
+
             # Calculate Combined Score using COMBINED_MIX (DB first, Config fallback)
             mix = self._load_combined_mix()
-            combined_score = (investment_score * mix['investment'] +
-                            lifestyle_score * mix['lifestyle'])
+            combined_score = (
+                investment_score * mix["investment"]
+                + lifestyle_score * mix["lifestyle"]
+            )
             combined_score_rounded = round(combined_score, 2)
-            
+
             # Update land record with all three scores
             land.score_investment = Decimal(str(round(investment_score, 2)))
             land.score_lifestyle = Decimal(str(round(lifestyle_score, 2)))
             land.score_total = Decimal(str(combined_score_rounded))
-            
+
             # Store comprehensive MCDM breakdown for transparency
             if not land.environment:
                 land.environment = {}
-            
-            land.environment['scoring'] = {
-                'individual_scores': individual_scores,
-                'profiles': {
-                    'investment': {
-                        'score': investment_score,
-                        'weights_used': self._get_profile_weights_used(individual_scores, 'investment'),
-                        'score_breakdown': self._get_profile_breakdown(individual_scores, 'investment')
+
+            land.environment["scoring"] = {
+                "individual_scores": individual_scores,
+                "profiles": {
+                    "investment": {
+                        "score": investment_score,
+                        "weights_used": self._get_profile_weights_used(
+                            individual_scores, "investment"
+                        ),
+                        "score_breakdown": self._get_profile_breakdown(
+                            individual_scores, "investment"
+                        ),
                     },
-                    'lifestyle': {
-                        'score': lifestyle_score,
-                        'weights_used': self._get_profile_weights_used(individual_scores, 'lifestyle'),
-                        'score_breakdown': self._get_profile_breakdown(individual_scores, 'lifestyle')
-                    }
+                    "lifestyle": {
+                        "score": lifestyle_score,
+                        "weights_used": self._get_profile_weights_used(
+                            individual_scores, "lifestyle"
+                        ),
+                        "score_breakdown": self._get_profile_breakdown(
+                            individual_scores, "lifestyle"
+                        ),
+                    },
                 },
-                'combined_mix': mix,
-                'combined_score': combined_score_rounded
+                "combined_mix": mix,
+                "combined_score": combined_score_rounded,
             }
             # Backward-compatible top-level breakdown for templates/tests.
-            land.environment['score_breakdown'] = individual_scores
-            
-            logger.info(f"Dual MCDM scores calculated for land {land.id}: "
-                       f"Investment={investment_score:.1f}, Lifestyle={lifestyle_score:.1f}, "
-                       f"Combined={combined_score:.1f}")
+            land.environment["score_breakdown"] = individual_scores
+
+            logger.info(
+                f"Dual MCDM scores calculated for land {land.id}: "
+                f"Investment={investment_score:.1f}, Lifestyle={lifestyle_score:.1f}, "
+                f"Combined={combined_score:.1f}"
+            )
             return land.score_total
-            
+
         except Exception as e:
-            logger.error("Failed to calculate dual MCDM scores for land %s", land.id, exc_info=True)
-            return Decimal('0')
-    
+            logger.error(
+                "Failed to calculate dual MCDM scores for land %s",
+                land.id,
+                exc_info=True,
+            )
+            return Decimal("0")
+
     def _score_infrastructure_basic(self, land) -> Optional[float]:
         """Score basic infrastructure (electricity, water, internet, gas)"""
         try:
@@ -159,40 +187,42 @@ class ScoringService:
 
             score = 0
             max_score = 4  # 4 basic utilities
-            
+
             utilities = {
-                'electricity': ['electricidad', 'luz', 'eléctrico'],
-                'water': ['agua', 'suministro agua', 'abastecimiento'],
-                'internet': ['internet', 'fibra', 'adsl', 'wifi'],
-                'gas': ['gas', 'butano', 'propano']
+                "electricity": ["electricidad", "luz", "eléctrico"],
+                "water": ["agua", "suministro agua", "abastecimiento"],
+                "internet": ["internet", "fibra", "adsl", "wifi"],
+                "gas": ["gas", "butano", "propano"],
             }
-            
+
             for utility, keywords in utilities.items():
-                if basic_infra.get(utility) or any(kw in description for kw in keywords):
+                if basic_infra.get(utility) or any(
+                    kw in description for kw in keywords
+                ):
                     score += 1
-            
+
             return (score / max_score) * 100
-            
+
         except Exception as e:
             logger.error("Failed to score basic infrastructure", exc_info=True)
             return None
-    
+
     def _score_infrastructure_extended(self, land) -> Optional[float]:
         """Score extended infrastructure (supermarket, school, restaurants, hospital)"""
         try:
             if not land.infrastructure_extended:
                 return None
-            
+
             extended_infra = land.infrastructure_extended
             score = 0
-            
+
             # Score based on availability and distance
-            amenities = ['supermarket', 'school', 'restaurant', 'hospital']
-            
+            amenities = ["supermarket", "school", "restaurant", "hospital"]
+
             for amenity in amenities:
-                if extended_infra.get(f'{amenity}_available'):
-                    distance = extended_infra.get(f'{amenity}_distance', float('inf'))
-                    
+                if extended_infra.get(f"{amenity}_available"):
+                    distance = extended_infra.get(f"{amenity}_distance", float("inf"))
+
                     # Score based on distance (closer is better)
                     if distance <= 1000:  # Within 1km
                         score += 25
@@ -202,13 +232,13 @@ class ScoringService:
                         score += 10
                     else:
                         score += 5
-            
+
             return min(score, 100)  # Cap at 100
-            
+
         except Exception as e:
             logger.error("Failed to score extended infrastructure", exc_info=True)
             return None
-    
+
     def _score_transport(self, land) -> Optional[float]:
         """Score transport accessibility"""
         try:
@@ -221,16 +251,16 @@ class ScoringService:
 
             # Score transport options
             transport_options = {
-                'train_station': 30,
-                'bus_station': 20,
-                'airport': 25,
-                'highway': 25,
+                "train_station": 30,
+                "bus_station": 20,
+                "airport": 25,
+                "highway": 25,
             }
 
             for option, max_points in transport_options.items():
-                if transport.get(f'{option}_available'):
+                if transport.get(f"{option}_available"):
                     max_possible += max_points
-                    distance = transport.get(f'{option}_distance', float('inf'))
+                    distance = transport.get(f"{option}_distance", float("inf"))
 
                     # Score based on distance (more forgiving, then normalize by available options)
                     if distance <= 2000:  # Within 2km
@@ -247,123 +277,127 @@ class ScoringService:
                 return None
 
             return min((score / max_possible) * 100, 100)
-            
+
         except Exception as e:
             logger.error("Failed to score transport", exc_info=True)
             return None
-    
+
     def _score_environment(self, land) -> Optional[float]:
         """Score environment features"""
         try:
             if not land.environment:
                 return None
-            
+
             environment = land.environment
             score = 0
-            
+
             # View bonuses
-            if environment.get('sea_view'):
+            if environment.get("sea_view"):
                 score += 40
-            if environment.get('mountain_view'):
+            if environment.get("mountain_view"):
                 score += 30
-            if environment.get('forest_view'):
+            if environment.get("forest_view"):
                 score += 20
-            
+
             # Orientation bonus (south-facing is preferred in Spain)
-            orientation = environment.get('orientation', '').lower()
-            if 'south' in orientation:
+            orientation = environment.get("orientation", "").lower()
+            if "south" in orientation:
                 score += 20
-            elif 'southeast' in orientation or 'southwest' in orientation:
+            elif "southeast" in orientation or "southwest" in orientation:
                 score += 15
-            elif 'east' in orientation or 'west' in orientation:
+            elif "east" in orientation or "west" in orientation:
                 score += 10
-            
+
             return min(score, 100)  # Cap at 100
-            
+
         except Exception as e:
             logger.error("Failed to score environment", exc_info=True)
             return None
-    
+
     def _score_neighborhood(self, land) -> Optional[float]:
         """Score neighborhood characteristics"""
         try:
             if not land.neighborhood:
                 return 50  # Default neutral score
-            
+
             neighborhood = land.neighborhood
             score = 50  # Start with neutral score
-            
+
             # Price level impact
-            price_level = neighborhood.get('area_price_level', 'medium')
-            if price_level == 'high':
+            price_level = neighborhood.get("area_price_level", "medium")
+            if price_level == "high":
                 score += 20
-            elif price_level == 'medium':
+            elif price_level == "medium":
                 score += 10
-            
+
             # New houses nearby (indicates development)
-            if neighborhood.get('new_houses'):
+            if neighborhood.get("new_houses"):
                 score += 15
-            
+
             # Noise level impact
-            noise_level = neighborhood.get('noise', 'medium')
-            if noise_level == 'low':
+            noise_level = neighborhood.get("noise", "medium")
+            if noise_level == "low":
                 score += 15
-            elif noise_level == 'high':
+            elif noise_level == "high":
                 score -= 15
-            
+
             return min(max(score, 0), 100)  # Keep between 0-100
-            
+
         except Exception as e:
             logger.error("Failed to score neighborhood", exc_info=True)
             return None
-    
+
     def _score_services_quality(self, land) -> Optional[float]:
         """Score quality of nearby services"""
         try:
             if not land.services_quality:
                 return None
-            
+
             services = land.services_quality
             score = 0
             count = 0
-            
+
             # Average ratings of nearby services
-            service_types = ['school_avg_rating', 'restaurant_avg_rating', 'cafe_avg_rating']
-            
+            service_types = [
+                "school_avg_rating",
+                "restaurant_avg_rating",
+                "cafe_avg_rating",
+            ]
+
             for service_type in service_types:
                 rating = services.get(service_type)
                 if rating and rating > 0:
                     # Convert rating (1-5 scale) to percentage
                     score += (rating / 5) * 100
                     count += 1
-            
+
             if count > 0:
                 return score / count
             else:
                 return None
-            
+
         except Exception as e:
             logger.error("Failed to score services quality", exc_info=True)
             return None
-    
+
     def _score_legal_status(self, land) -> Optional[float]:
         """Score legal status"""
         try:
             legal_status = (land.legal_status or "").lower()
             land_type = (land.land_type or "").lower()
-            
+
             # Only developed and buildable are acceptable
-            if 'developed' in legal_status or land_type == 'developed':
+            if "developed" in legal_status or land_type == "developed":
                 return 100  # Fully developed land
-            elif 'buildable' in legal_status or land_type == 'buildable':
-                return 80   # Buildable land (some risk)
+            elif "buildable" in legal_status or land_type == "buildable":
+                return 80  # Buildable land (some risk)
             else:
-                return 0    # Rustic or other (not suitable)
-            
+                return 0  # Rustic or other (not suitable)
+
         except Exception as e:
             logger.error("Failed to score legal status", exc_info=True)
             return None
-    
+
     def _score_location_quality(self, land) -> Optional[float]:
         """Score location quality based on neighborhood and proximity to urban centers"""
         try:
@@ -373,38 +407,47 @@ class ScoringService:
                 return None
 
             score = 50  # Base score
-            
+
             # Premium locations in Spain
-            premium_locations = ['madrid', 'barcelona', 'valencia', 'sevilla', 'bilbao', 
-                                'málaga', 'santander', 'oviedo', 'gijón']
-            secondary_locations = ['suances', 'ribadedeva', 'llanes', 'ribadesella']
-            
+            premium_locations = [
+                "madrid",
+                "barcelona",
+                "valencia",
+                "sevilla",
+                "bilbao",
+                "málaga",
+                "santander",
+                "oviedo",
+                "gijón",
+            ]
+            secondary_locations = ["suances", "ribadedeva", "llanes", "ribadesella"]
+
             for loc in premium_locations:
                 if loc in municipality:
                     score = 90
                     break
-            
+
             for loc in secondary_locations:
                 if loc in municipality:
                     score = 70
                     break
-            
+
             # Use neighborhood data if available
             if land.neighborhood:
                 # Adjust based on neighborhood factors
-                if land.neighborhood.get('population_density'):
-                    density = land.neighborhood.get('population_density')
+                if land.neighborhood.get("population_density"):
+                    density = land.neighborhood.get("population_density")
                     if density > 1000:  # High density urban
                         score += 10
                     elif density > 100:  # Suburban
                         score += 5
-            
+
             return min(100, score)
-            
+
         except Exception as e:
             logger.error("Failed to score location quality", exc_info=True)
             return None
-    
+
     def _score_physical_characteristics(self, land) -> Optional[float]:
         """Score physical characteristics like size, shape, topography"""
         try:
@@ -422,7 +465,7 @@ class ScoringService:
                 score += 15  # Large, good for development
             elif land.area > 10000:
                 score += 10  # Very large, may have challenges
-            
+
             # Price per m² indicator (if price and area available)
             if land.price and land.area and land.area > 0:
                 price_per_sqm = land.price / land.area
@@ -430,13 +473,13 @@ class ScoringService:
                     score += 10
                 elif price_per_sqm < 100:  # Reasonable
                     score += 5
-            
+
             return min(100, score)
-            
+
         except Exception as e:
             logger.error("Failed to score physical characteristics", exc_info=True)
             return None
-    
+
     def _score_development_potential(self, land) -> Optional[float]:
         """Score future development potential"""
         try:
@@ -450,32 +493,43 @@ class ScoringService:
             # Land type is key indicator
             land_type = (land.land_type or "").lower()
 
-            if land_type == 'developed':
+            if land_type == "developed":
                 score = 30  # Already developed, less potential
-            elif land_type == 'buildable':
+            elif land_type == "buildable":
                 score = 80  # High development potential
-            
-            positive_keywords = ['urbanizable', 'desarrollo', 'proyecto aprobado', 
-                               'plan parcial', 'licencia', 'permiso']
-            negative_keywords = ['protegido', 'rustico', 'no urbanizable', 
-                               'restricción', 'zona verde']
-            
+
+            positive_keywords = [
+                "urbanizable",
+                "desarrollo",
+                "proyecto aprobado",
+                "plan parcial",
+                "licencia",
+                "permiso",
+            ]
+            negative_keywords = [
+                "protegido",
+                "rustico",
+                "no urbanizable",
+                "restricción",
+                "zona verde",
+            ]
+
             for keyword in positive_keywords:
                 if keyword in description:
                     score += 10
                     break
-            
+
             for keyword in negative_keywords:
                 if keyword in description:
                     score -= 20
                     break
-            
+
             return min(100, max(0, score))
-            
+
         except Exception as e:
             logger.error("Failed to score development potential", exc_info=True)
             return None
-    
+
     def _score_investment_yield(self, land) -> Optional[float]:
         """Score investment yield based on rental potential and cap rate
         Uses MarketAnalysisService to calculate rental analysis metrics"""
@@ -484,22 +538,22 @@ class ScoringService:
                 return None
 
             from services.market_analysis_service import MarketAnalysisService
-            
+
             market_service = MarketAnalysisService()
             rental_analysis = market_service.calculate_rental_analysis(land)
-            
+
             if not rental_analysis:
                 logger.debug(f"No rental analysis data available for land {land.id}")
                 return None
-            
+
             # Extract key metrics
-            rental_yield = rental_analysis.get('rental_yield')
-            cap_rate = rental_analysis.get('cap_rate')
-            
+            rental_yield = rental_analysis.get("rental_yield")
+            cap_rate = rental_analysis.get("cap_rate")
+
             if rental_yield is None and cap_rate is None:
                 logger.debug(f"No yield or cap rate data available for land {land.id}")
                 return None
-            
+
             # Score rental yield (0-100 scale)
             yield_score = 0
             if rental_yield is not None:
@@ -515,7 +569,7 @@ class ScoringService:
                 else:
                     # 0-2% yield = 20 points
                     yield_score = 20
-            
+
             # Score cap rate (0-100 scale, similar logic)
             cap_score = 0
             if cap_rate is not None:
@@ -527,52 +581,57 @@ class ScoringService:
                     cap_score = 50
                 else:
                     cap_score = 20
-            
+
             # Combine scores: rental_yield (60%) + cap_rate (40%)
             final_score = 0
             weight_sum = 0
-            
+
             if rental_yield is not None:
                 final_score += yield_score * 0.6
                 weight_sum += 0.6
-            
+
             if cap_rate is not None:
                 final_score += cap_score * 0.4
                 weight_sum += 0.4
-            
+
             if weight_sum > 0:
                 # Normalize by available weights
                 normalized_score = final_score / weight_sum
                 result = min(100, max(0, normalized_score))
-                
-                logger.info(f"Investment yield score for land {land.id}: {result:.1f} "
-                           f"(rental_yield={rental_yield}%, cap_rate={cap_rate}%)")
+
+                logger.info(
+                    f"Investment yield score for land {land.id}: {result:.1f} "
+                    f"(rental_yield={rental_yield}%, cap_rate={cap_rate}%)"
+                )
                 return result
             else:
                 return None
-            
+
         except Exception as e:
-            logger.error("Failed to score investment yield for land %s", land.id, exc_info=True)
+            logger.error(
+                "Failed to score investment yield for land %s", land.id, exc_info=True
+            )
             return None
-    
-    def update_weights(self, new_weights: Dict[str, float], profile: str = 'combined') -> bool:
+
+    def update_weights(
+        self, new_weights: Dict[str, float], profile: str = "combined"
+    ) -> bool:
         """Update scoring weights for a specific profile and rescore all lands"""
         try:
             from models import ScoringCriteria, Land
             from app import db
-            
+
             # Validate profile
-            if profile not in ['combined', 'investment', 'lifestyle']:
+            if profile not in ["combined", "investment", "lifestyle"]:
                 logger.error(f"Invalid profile: {profile}")
                 return False
-            
+
             # Update or create criteria records for this profile
             for criteria_name, weight in new_weights.items():
                 criterion = ScoringCriteria.query.filter_by(
-                    criteria_name=criteria_name,
-                    profile=profile
+                    criteria_name=criteria_name, profile=profile
                 ).first()
-                
+
                 if criterion:
                     criterion.weight = weight
                 else:
@@ -581,13 +640,13 @@ class ScoringService:
                     criterion.profile = profile
                     criterion.weight = weight
                     db.session.add(criterion)
-            
+
             db.session.commit()
-            
+
             # Update local weights only if profile is 'combined' (legacy compatibility)
-            if profile == 'combined':
+            if profile == "combined":
                 self.weights.update(new_weights)
-            
+
             # Rescore all lands in batches (they will use new profile weights)
             batch_size = 100
             offset = 0
@@ -605,20 +664,26 @@ class ScoringService:
                 total_rescored += len(lands)
                 offset += batch_size
 
-            logger.info(f"Updated {profile} profile weights and rescored {total_rescored} lands")
+            logger.info(
+                f"Updated {profile} profile weights and rescored {total_rescored} lands"
+            )
             return True
-            
+
         except Exception as e:
-            logger.error("Failed to update weights for profile %s", profile, exc_info=True)
+            logger.error(
+                "Failed to update weights for profile %s", profile, exc_info=True
+            )
             return False
-    
+
     def get_current_weights(self) -> Dict[str, float]:
         """Get current scoring weights"""
         # Refresh from DB in case weights changed after service initialization.
         self.load_custom_weights()
         return self.weights.copy()
-    
-    def _calculate_profile_score(self, individual_scores: Dict[str, float], profile: str) -> float:
+
+    def _calculate_profile_score(
+        self, individual_scores: Dict[str, float], profile: str
+    ) -> float:
         """Calculate MCDM score for a specific profile (investment or lifestyle)"""
         try:
             profile_weights = self._load_profile_weights(profile)
@@ -626,25 +691,34 @@ class ScoringService:
             if not profile_weights:
                 logger.error(f"No weights found for scoring profile: {profile}")
                 return 0
-            
+
             # Ensure profile weights are normalized (MCDM requirement)
             total_weight = sum(profile_weights.values())
             if abs(total_weight - 1.0) > 0.001:
-                logger.warning(f"Profile '{profile}' weights not properly normalized (sum={total_weight:.3f})")
+                logger.warning(
+                    f"Profile '{profile}' weights not properly normalized (sum={total_weight:.3f})"
+                )
                 # Normalize on the fly
-                profile_weights = {k: v / total_weight for k, v in profile_weights.items() if total_weight > 0}
-            
+                profile_weights = {
+                    k: v / total_weight
+                    for k, v in profile_weights.items()
+                    if total_weight > 0
+                }
+
             # Calculate MCDM weighted score for this profile
             total_score = 0
             weight_sum_used = 0
-            
+
             for criterion, weight in profile_weights.items():
-                if criterion in individual_scores and individual_scores[criterion] is not None:
+                if (
+                    criterion in individual_scores
+                    and individual_scores[criterion] is not None
+                ):
                     score = individual_scores[criterion]
                     # MCDM: score * normalized_weight (where weights sum to 1.0)
                     total_score += score * weight
                     weight_sum_used += weight
-            
+
             # Final score with MCDM validation - normalize by actually used weights
             if weight_sum_used > 0:
                 # Correct MCDM: normalize by used weights to account for missing data
@@ -653,37 +727,50 @@ class ScoringService:
             else:
                 # No valid criteria found for this profile
                 final_score = 0
-            
-            logger.debug(f"Profile '{profile}' score: {final_score:.1f} (weights_sum={weight_sum_used:.3f})")
+
+            logger.debug(
+                f"Profile '{profile}' score: {final_score:.1f} (weights_sum={weight_sum_used:.3f})"
+            )
             return final_score
-            
+
         except Exception as e:
-            logger.error("Failed to calculate profile score for '%s'", profile, exc_info=True)
+            logger.error(
+                "Failed to calculate profile score for '%s'", profile, exc_info=True
+            )
             return 0
-    
-    def _get_profile_weights_used(self, individual_scores: Dict[str, float], profile: str) -> Dict[str, float]:
+
+    def _get_profile_weights_used(
+        self, individual_scores: Dict[str, float], profile: str
+    ) -> Dict[str, float]:
         """Get the actual weights used for a profile (excluding criteria with None scores)
         Loads from database first, falls back to Config if not found"""
         try:
             # Get profile weights (DB first, then Config fallback)
             profile_weights = self._load_profile_weights(profile)
-            
+
             if not profile_weights:
                 return {}
-            
+
             weights_used = {}
-            
+
             for criterion, weight in profile_weights.items():
-                if criterion in individual_scores and individual_scores[criterion] is not None:
+                if (
+                    criterion in individual_scores
+                    and individual_scores[criterion] is not None
+                ):
                     weights_used[criterion] = weight
-            
+
             return weights_used
-            
+
         except Exception as e:
-            logger.error("Failed to get profile weights used for '%s'", profile, exc_info=True)
+            logger.error(
+                "Failed to get profile weights used for '%s'", profile, exc_info=True
+            )
             return {}
-    
-    def _get_profile_breakdown(self, individual_scores: Dict[str, float], profile: str) -> Dict[str, float]:
+
+    def _get_profile_breakdown(
+        self, individual_scores: Dict[str, float], profile: str
+    ) -> Dict[str, float]:
         """Get score breakdown for a profile (only criteria with non-None scores)"""
         try:
             profile_weights = self._load_profile_weights(profile)
@@ -694,50 +781,65 @@ class ScoringService:
             breakdown = {}
 
             for criterion, weight in profile_weights.items():
-                if criterion in individual_scores and individual_scores[criterion] is not None:
+                if (
+                    criterion in individual_scores
+                    and individual_scores[criterion] is not None
+                ):
                     breakdown[criterion] = individual_scores[criterion]
 
             return breakdown
 
         except Exception as e:
-            logger.error("Failed to get profile breakdown for '%s'", profile, exc_info=True)
+            logger.error(
+                "Failed to get profile breakdown for '%s'", profile, exc_info=True
+            )
             return {}
-    
+
     def _load_profile_weights(self, profile: str) -> Dict[str, float]:
         """Load weights for a specific profile from database, fallback to Config"""
         try:
             from models import ScoringCriteria
             from config import Config
-            
+
             # First try to load from database
             criteria = ScoringCriteria.query.filter_by(
-                active=True,
-                profile=profile
+                active=True, profile=profile
             ).all()
-            
+
             if criteria:
                 db_weights = {}
                 for criterion in criteria:
                     db_weights[criterion.criteria_name] = float(criterion.weight)
-                
+
                 # Normalize DB weights (MCDM requirement)
                 total_weight = sum(db_weights.values())
                 if total_weight > 0:
-                    normalized_weights = {k: v / total_weight for k, v in db_weights.items()}
-                    logger.info(f"Loaded {profile} profile weights from DB: {normalized_weights}")
+                    normalized_weights = {
+                        k: v / total_weight for k, v in db_weights.items()
+                    }
+                    logger.info(
+                        f"Loaded {profile} profile weights from DB: {normalized_weights}"
+                    )
                     return normalized_weights
-            
+
             # Fallback to Config if no DB weights found
-            if hasattr(Config, 'SCORING_PROFILES') and profile in Config.SCORING_PROFILES:
+            if (
+                hasattr(Config, "SCORING_PROFILES")
+                and profile in Config.SCORING_PROFILES
+            ):
                 config_weights = Config.SCORING_PROFILES[profile].copy()
-                logger.info(f"Using Config fallback for {profile} profile: {config_weights}")
+                logger.info(
+                    f"Using Config fallback for {profile} profile: {config_weights}"
+                )
                 return config_weights
-            
+
             logger.warning(f"No weights found for profile '{profile}' in DB or Config")
             return {}
-            
+
         except Exception as e:
-            logger.error("Failed to load profile weights for '%s'", profile, exc_info=True)
+            logger.error(
+                "Failed to load profile weights for '%s'", profile, exc_info=True
+            )
             return {}
 
     def _load_combined_mix(self) -> Dict[str, float]:
@@ -747,74 +849,83 @@ class ScoringService:
             from config import Config
 
             criteria = ScoringCriteria.query.filter_by(
-                active=True,
-                profile='combined'
+                active=True, profile="combined"
             ).all()
 
             if criteria:
                 db_mix = {}
                 for criterion in criteria:
                     db_mix[criterion.criteria_name] = float(criterion.weight)
-                if 'investment' in db_mix and 'lifestyle' in db_mix:
-                    total = db_mix['investment'] + db_mix['lifestyle']
+                if "investment" in db_mix and "lifestyle" in db_mix:
+                    total = db_mix["investment"] + db_mix["lifestyle"]
                     if total > 0:
                         normalized = {k: v / total for k, v in db_mix.items()}
                         return normalized
 
-            if hasattr(Config, 'COMBINED_MIX'):
+            if hasattr(Config, "COMBINED_MIX"):
                 return Config.COMBINED_MIX.copy()
 
-            return {'investment': 0.32, 'lifestyle': 0.68}
+            return {"investment": 0.32, "lifestyle": 0.68}
 
         except Exception as e:
             logger.error("Failed to load combined mix", exc_info=True)
-            return {'investment': 0.32, 'lifestyle': 0.68}
+            return {"investment": 0.32, "lifestyle": 0.68}
 
     def _validate_profiles(self):
         """Validate that SCORING_PROFILES and COMBINED_MIX are properly configured
         Called during service initialization to ensure data integrity"""
         try:
             from config import Config
-            
+
             # Validate SCORING_PROFILES
-            if not hasattr(Config, 'SCORING_PROFILES'):
+            if not hasattr(Config, "SCORING_PROFILES"):
                 logger.error("SCORING_PROFILES not found in config")
                 return
-            
+
             for profile_name, weights in Config.SCORING_PROFILES.items():
                 if not isinstance(weights, dict):
-                    logger.error(f"Profile '{profile_name}' weights must be a dictionary")
+                    logger.error(
+                        f"Profile '{profile_name}' weights must be a dictionary"
+                    )
                     continue
-                
+
                 # Check that weights sum to 1.0 (±0.001 tolerance)
                 total_weight = sum(weights.values())
                 if abs(total_weight - 1.0) > 0.001:
-                    logger.warning(f"Profile '{profile_name}' weights sum to {total_weight:.3f}, expected 1.0. "
-                                 f"Weights will be normalized at runtime.")
-                
+                    logger.warning(
+                        f"Profile '{profile_name}' weights sum to {total_weight:.3f}, expected 1.0. "
+                        f"Weights will be normalized at runtime."
+                    )
+
                 # Check for unknown criteria
                 valid_criteria = set(Config.DEFAULT_SCORING_WEIGHTS.keys())
                 for criterion in weights.keys():
                     if criterion not in valid_criteria:
-                        logger.warning(f"Profile '{profile_name}' contains unknown criterion: '{criterion}'")
-            
+                        logger.warning(
+                            f"Profile '{profile_name}' contains unknown criterion: '{criterion}'"
+                        )
+
             # Validate COMBINED_MIX
-            if not hasattr(Config, 'COMBINED_MIX'):
+            if not hasattr(Config, "COMBINED_MIX"):
                 logger.error("COMBINED_MIX not found in config")
                 return
-            
+
             mix = Config.COMBINED_MIX
-            required_keys = {'investment', 'lifestyle'}
+            required_keys = {"investment", "lifestyle"}
             mix_keys = set(mix.keys())
-            
+
             if mix_keys != required_keys:
-                logger.error(f"COMBINED_MIX must contain exactly {required_keys}, got {mix_keys}")
-            
+                logger.error(
+                    f"COMBINED_MIX must contain exactly {required_keys}, got {mix_keys}"
+                )
+
             mix_sum = sum(mix.values())
             if abs(mix_sum - 1.0) > 0.001:
-                logger.warning(f"COMBINED_MIX weights sum to {mix_sum:.3f}, expected 1.0")
-            
+                logger.warning(
+                    f"COMBINED_MIX weights sum to {mix_sum:.3f}, expected 1.0"
+                )
+
             logger.info("Profile validation completed successfully")
-            
+
         except Exception as e:
             logger.error("Failed to validate profiles", exc_info=True)

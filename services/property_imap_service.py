@@ -33,7 +33,9 @@ class PropertyIMAPService:
     """Universal IMAP ingestion into Property (sale-first)."""
 
     _PROPERTY_ID_RE = re.compile(r"/inmueble/(\d+)", re.IGNORECASE)
-    _RENTAL_RE = re.compile(r"\b(alquiler|en\s+alquiler|for\s+rent|to\s+rent|rental)\b", re.IGNORECASE)
+    _RENTAL_RE = re.compile(
+        r"\b(alquiler|en\s+alquiler|for\s+rent|to\s+rent|rental)\b", re.IGNORECASE
+    )
 
     def __init__(self):
         self.host = Config.IMAP_HOST
@@ -80,7 +82,10 @@ class PropertyIMAPService:
 
     def _get_last_seen_uid(self) -> int:
         try:
-            uid_file = getattr(Config, "LAST_SEEN_UID_PROPERTIES_PATH", None) or Config.LAST_SEEN_UID_PATH
+            uid_file = (
+                getattr(Config, "LAST_SEEN_UID_PROPERTIES_PATH", None)
+                or Config.LAST_SEEN_UID_PATH
+            )
             legacy_uid_file = os.path.join(Config.BASE_DIR, ".last_seen_uid_properties")
 
             for path in (uid_file, legacy_uid_file):
@@ -93,7 +98,10 @@ class PropertyIMAPService:
 
     def _save_last_seen_uid(self, uid: int) -> None:
         try:
-            uid_file = getattr(Config, "LAST_SEEN_UID_PROPERTIES_PATH", None) or Config.LAST_SEEN_UID_PATH
+            uid_file = (
+                getattr(Config, "LAST_SEEN_UID_PROPERTIES_PATH", None)
+                or Config.LAST_SEEN_UID_PATH
+            )
             os.makedirs(os.path.dirname(uid_file), exist_ok=True)
             with open(uid_file, "w") as f:
                 f.write(str(uid))
@@ -167,10 +175,14 @@ class PropertyIMAPService:
                 continue
         return None, None
 
-    def _classify_with_rules(self, subject: str, body: str, rules: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
+    def _classify_with_rules(
+        self, subject: str, body: str, rules: List[Dict[str, Any]]
+    ) -> Tuple[Optional[str], Optional[str]]:
         return self._classify_text_with_rules(f"{subject}\n{body}", rules)
 
-    def _classify_text_with_rules(self, text: str, rules: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
+    def _classify_text_with_rules(
+        self, text: str, rules: List[Dict[str, Any]]
+    ) -> Tuple[Optional[str], Optional[str]]:
         return PropertyClassificationService.classify_text(text or "", rules)
 
     @staticmethod
@@ -184,7 +196,9 @@ class PropertyIMAPService:
                 return {str(c).strip().lower() for c in raw if str(c).strip()}
             return set()
 
-    def get_idealista_emails(self, max_results: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_idealista_emails(
+        self, max_results: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
         if not self.user or not self.password:
             logger.error("IMAP credentials not configured")
             return []
@@ -270,8 +284,13 @@ class PropertyIMAPService:
                         email_source_id = f"imap_{uid}"
                         email_sender = msg.get("From")
 
-                        is_price_change = any(p in subject_low for p in price_change_subjects)
-                        is_no_longer = any(p in subject_low or p in body.lower() for p in no_longer_patterns)
+                        is_price_change = any(
+                            p in subject_low for p in price_change_subjects
+                        )
+                        is_no_longer = any(
+                            p in subject_low or p in body.lower()
+                            for p in no_longer_patterns
+                        )
 
                         url = extract_url(body) or extract_url(subject)
                         if not url:
@@ -281,16 +300,26 @@ class PropertyIMAPService:
                         if deal_type == "rent" and sale_only:
                             continue
                         idealista_id = extract_idealista_property_id(url)
-                        listing_title = extract_listing_title(body, idealista_property_id=idealista_id)
+                        listing_title = extract_listing_title(
+                            body, idealista_property_id=idealista_id
+                        )
 
                         # Pre-classify using global rules so we can skip excluded categories
                         # without auto-creating SearchProfiles.
-                        global_rules = SettingsService.get_property_classification_rules()
-                        category, subtype = self._classify_text_with_rules(listing_title or "", rules=global_rules)
+                        global_rules = (
+                            SettingsService.get_property_classification_rules()
+                        )
+                        category, subtype = self._classify_text_with_rules(
+                            listing_title or "", rules=global_rules
+                        )
                         if not category:
-                            category, subtype = self._classify_text_with_rules(subject or "", rules=global_rules)
+                            category, subtype = self._classify_text_with_rules(
+                                subject or "", rules=global_rules
+                            )
                         if not category:
-                            category, subtype = self._classify_text_with_rules(body or "", rules=global_rules)
+                            category, subtype = self._classify_text_with_rules(
+                                body or "", rules=global_rules
+                            )
 
                         if category and category.strip().lower() in excluded_categories:
                             continue
@@ -305,7 +334,9 @@ class PropertyIMAPService:
                                     "email_received_at": internal_date,
                                     "url": url,
                                     "idealista_property_id": idealista_id,
-                                    "search_profile_id": profile.id if profile else None,
+                                    "search_profile_id": profile.id
+                                    if profile
+                                    else None,
                                     "deal_type": deal_type,
                                 }
                             )
@@ -313,11 +344,21 @@ class PropertyIMAPService:
 
                         # Re-classify using profile-specific rules (if any). This can override defaults.
                         rules = SearchProfileService.get_classification_rules(profile)
-                        category_profile, subtype_profile = self._classify_text_with_rules(listing_title or "", rules=rules)
+                        category_profile, subtype_profile = (
+                            self._classify_text_with_rules(
+                                listing_title or "", rules=rules
+                            )
+                        )
                         if not category_profile:
-                            category_profile, subtype_profile = self._classify_text_with_rules(subject or "", rules=rules)
+                            category_profile, subtype_profile = (
+                                self._classify_text_with_rules(
+                                    subject or "", rules=rules
+                                )
+                            )
                         if not category_profile:
-                            category_profile, subtype_profile = self._classify_text_with_rules(body or "", rules=rules)
+                            category_profile, subtype_profile = (
+                                self._classify_text_with_rules(body or "", rules=rules)
+                            )
                         if category_profile:
                             category, subtype = category_profile, subtype_profile
 
@@ -328,13 +369,29 @@ class PropertyIMAPService:
                         if is_price_change:
                             old_price_hint, new_price_hint = extract_price_change(body)
 
-                        price = new_price_hint or extract_price(subject) or extract_price(body)
+                        price = (
+                            new_price_hint
+                            or extract_price(subject)
+                            or extract_price(body)
+                        )
                         area = extract_area_m2(subject) or extract_area_m2(body)
-                        attrs = extract_property_attributes(body) or extract_property_attributes(subject)
+                        attrs = extract_property_attributes(
+                            body
+                        ) or extract_property_attributes(subject)
 
-                        description = self.email_parser._clean_description(body) if body else None
-                        title = (listing_title or "").strip() or (subject or "").strip() or None
-                        municipality = extract_municipality_from_title(listing_title) if listing_title else None
+                        description = (
+                            self.email_parser._clean_description(body) if body else None
+                        )
+                        title = (
+                            (listing_title or "").strip()
+                            or (subject or "").strip()
+                            or None
+                        )
+                        municipality = (
+                            extract_municipality_from_title(listing_title)
+                            if listing_title
+                            else None
+                        )
                         if category == "land":
                             area_type = "plot"
                         elif area is not None:
@@ -344,7 +401,9 @@ class PropertyIMAPService:
 
                         email_data.append(
                             {
-                                "type": "price_change" if is_price_change else "listing",
+                                "type": "price_change"
+                                if is_price_change
+                                else "listing",
                                 "source_email_id": email_source_id,
                                 "email_received_at": internal_date,
                                 "email_subject": subject,
@@ -379,7 +438,9 @@ class PropertyIMAPService:
 
     def run_ingestion(self, sync_type: str = "incremental") -> int:
         start_time = datetime.now(timezone.utc)
-        sync_history = SyncHistory(sync_type=sync_type, backend="imap", started_at=start_time)
+        sync_history = SyncHistory(
+            sync_type=sync_type, backend="imap", started_at=start_time
+        )
         db.session.add(sync_history)
         db.session.commit()
 
@@ -399,13 +460,19 @@ class PropertyIMAPService:
                     deal_type = (email_data.get("deal_type") or "sale").strip().lower()
                     if deal_type == "rent" and sale_only:
                         continue
-                    if (email_data.get("type") or "").strip().lower() != "no_longer_listed":
-                        category = (email_data.get("property_category") or "").strip().lower()
+                    if (
+                        email_data.get("type") or ""
+                    ).strip().lower() != "no_longer_listed":
+                        category = (
+                            (email_data.get("property_category") or "").strip().lower()
+                        )
                         if category and category in excluded_categories:
                             continue
                     if email_data.get("type") == "no_longer_listed":
                         url = email_data.get("url")
-                        idealista_id = email_data.get("idealista_property_id") or extract_idealista_property_id(url)
+                        idealista_id = email_data.get(
+                            "idealista_property_id"
+                        ) or extract_idealista_property_id(url)
                         matches: List[Property] = []
                         if idealista_id:
                             matches = Property.query.filter_by(
@@ -413,7 +480,9 @@ class PropertyIMAPService:
                                 search_profile_id=profile_id,
                             ).all()
                         if not matches and url:
-                            matches = Property.query.filter_by(url=url, search_profile_id=profile_id).all()
+                            matches = Property.query.filter_by(
+                                url=url, search_profile_id=profile_id
+                            ).all()
 
                         updated = 0
                         for prop in matches:
@@ -433,7 +502,9 @@ class PropertyIMAPService:
                         continue
 
                     url = email_data.get("url")
-                    idealista_id = email_data.get("idealista_property_id") or extract_idealista_property_id(url)
+                    idealista_id = email_data.get(
+                        "idealista_property_id"
+                    ) or extract_idealista_property_id(url)
 
                     existing: List[Property] = []
                     if idealista_id:
@@ -442,7 +513,9 @@ class PropertyIMAPService:
                             search_profile_id=profile_id,
                         ).all()
                     if not existing and url:
-                        existing = Property.query.filter_by(url=url, search_profile_id=profile_id).all()
+                        existing = Property.query.filter_by(
+                            url=url, search_profile_id=profile_id
+                        ).all()
 
                     raw_price = email_data.get("price")
                     new_price = None
@@ -460,7 +533,9 @@ class PropertyIMAPService:
 
                     if existing and new_price is not None:
                         previous_price_hint = email_data.get("previous_price_hint")
-                        email_date_obj = self._parse_email_received_at(email_data.get("email_received_at"))
+                        email_date_obj = self._parse_email_received_at(
+                            email_data.get("email_received_at")
+                        )
                         any_updated = False
                         for prop in existing:
                             if idealista_id and prop.idealista_property_id is None:
@@ -470,13 +545,19 @@ class PropertyIMAPService:
                             if old_price is None:
                                 # Backfill missing price (rare) or create a price history baseline
                                 # using the hint from the email if available.
-                                hint = float(previous_price_hint) if previous_price_hint is not None else None
+                                hint = (
+                                    float(previous_price_hint)
+                                    if previous_price_hint is not None
+                                    else None
+                                )
                                 prop.previous_price = hint
                                 prop.price = new_price
                                 if hint is not None and hint > 0:
                                     price_change = new_price - hint
                                     prop.price_change_amount = price_change
-                                    prop.price_change_percentage = (price_change / hint) * 100
+                                    prop.price_change_percentage = (
+                                        price_change / hint
+                                    ) * 100
                                 prop.price_changed_date = datetime.now(timezone.utc)
                                 prop.email_date = email_date_obj
                                 any_updated = True
@@ -486,7 +567,9 @@ class PropertyIMAPService:
                                 continue
 
                             price_change = new_price - old_price
-                            price_change_percentage = (price_change / old_price) * 100 if old_price > 0 else 0
+                            price_change_percentage = (
+                                (price_change / old_price) * 100 if old_price > 0 else 0
+                            )
 
                             prop.previous_price = old_price
                             prop.price = new_price
@@ -499,11 +582,15 @@ class PropertyIMAPService:
                         if any_updated:
                             if getattr(Config, "AUTO_PROPERTY_SCORING", False):
                                 try:
-                                    from services.property_scoring_service import PropertyScoringService
+                                    from services.property_scoring_service import (
+                                        PropertyScoringService,
+                                    )
 
                                     scoring_service = PropertyScoringService()
                                     for prop in existing:
-                                        scoring_service.calculate_for_property(prop, commit=False)
+                                        scoring_service.calculate_for_property(
+                                            prop, commit=False
+                                        )
                                 except Exception as scoring_error:
                                     logger.warning(
                                         "Property scoring failed after price update for %s: %s",
@@ -517,7 +604,9 @@ class PropertyIMAPService:
                     if existing:
                         continue
 
-                    email_date = self._parse_email_received_at(email_data.get("email_received_at"))
+                    email_date = self._parse_email_received_at(
+                        email_data.get("email_received_at")
+                    )
 
                     prop = Property()
                     prop.source_email_id = email_data["source_email_id"]
@@ -547,7 +636,11 @@ class PropertyIMAPService:
                                 new_f = float(prop.price)
                                 prop.previous_price = hint_f
                                 prop.price_change_amount = new_f - hint_f
-                                prop.price_change_percentage = (prop.price_change_amount / hint_f) * 100 if hint_f > 0 else None
+                                prop.price_change_percentage = (
+                                    (prop.price_change_amount / hint_f) * 100
+                                    if hint_f > 0
+                                    else None
+                                )
                                 prop.price_changed_date = datetime.now(timezone.utc)
                             except Exception:
                                 pass
@@ -558,7 +651,9 @@ class PropertyIMAPService:
 
                     if getattr(Config, "AUTO_TRAVEL_ENRICHMENT", False):
                         try:
-                            from services.property_travel_service import PropertyTravelService
+                            from services.property_travel_service import (
+                                PropertyTravelService,
+                            )
 
                             travel_service = PropertyTravelService()
                             travel_service.calculate_for_property(prop, commit=True)
@@ -572,7 +667,9 @@ class PropertyIMAPService:
 
                     if getattr(Config, "AUTO_PROPERTY_SCORING", False):
                         try:
-                            from services.property_scoring_service import PropertyScoringService
+                            from services.property_scoring_service import (
+                                PropertyScoringService,
+                            )
 
                             scoring_service = PropertyScoringService()
                             scoring_service.calculate_for_property(prop, commit=True)
@@ -584,7 +681,11 @@ class PropertyIMAPService:
                             )
                             db.session.rollback()
                 except Exception as e:
-                    logger.error("Failed to process email %s: %s", email_data.get("source_email_id"), e)
+                    logger.error(
+                        "Failed to process email %s: %s",
+                        email_data.get("source_email_id"),
+                        e,
+                    )
                     db.session.rollback()
                     continue
 
@@ -593,16 +694,20 @@ class PropertyIMAPService:
             sync_history.expired_count = expired_count
             sync_history.status = "completed"
             sync_history.completed_at = datetime.now(timezone.utc)
-            sync_history.sync_duration = int((datetime.now(timezone.utc) - start_time).total_seconds())
+            sync_history.sync_duration = int(
+                (datetime.now(timezone.utc) - start_time).total_seconds()
+            )
             db.session.commit()
             return processed_count
 
         except Exception as e:
             logger.error("Property IMAP ingestion failed: %s", e)
             sync_history.status = "failed"
-            sync_history.error_message = 'Property IMAP ingestion failed'
+            sync_history.error_message = "Property IMAP ingestion failed"
             sync_history.completed_at = datetime.now(timezone.utc)
-            sync_history.sync_duration = int((datetime.now(timezone.utc) - start_time).total_seconds())
+            sync_history.sync_duration = int(
+                (datetime.now(timezone.utc) - start_time).total_seconds()
+            )
             db.session.commit()
             return 0
 

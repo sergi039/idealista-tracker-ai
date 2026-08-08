@@ -60,6 +60,7 @@ def test_gmail_prefers_direct_folder_selection():
 
 class _FakeIMAPClientFolderFail:
     """IMAP client where direct folder selection fails, forcing X-GM-RAW fallback."""
+
     last_instance = None
 
     def __init__(self, host, port=None, ssl=None):

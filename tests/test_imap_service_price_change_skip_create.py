@@ -49,4 +49,3 @@ def test_price_change_email_does_not_create_new_land(app, monkeypatch):
         processed = service.run_ingestion(sync_type="incremental")
         assert processed == 0
         assert Land.query.count() == 0
-

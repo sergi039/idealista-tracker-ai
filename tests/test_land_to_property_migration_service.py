@@ -88,7 +88,10 @@ def test_land_to_property_migration_endpoint(client, app):
         db.session.add(land)
         db.session.commit()
 
-    resp = client.post("/api/migrate/lands-to-properties", json={"dry_run": False, "limit": 10, "profile_name": "Legacy Lands API"})
+    resp = client.post(
+        "/api/migrate/lands-to-properties",
+        json={"dry_run": False, "limit": 10, "profile_name": "Legacy Lands API"},
+    )
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["success"] is True

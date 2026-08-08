@@ -40,7 +40,9 @@ def _build_geocoding_queries(prop: Property) -> List[str]:
         if not q:
             continue
         # Prefer explicit Spain bias without overriding full addresses.
-        q_with_country = q if re.search(r"\bspain\b|\bespaña\b", q, re.IGNORECASE) else f"{q}, Spain"
+        q_with_country = (
+            q if re.search(r"\bspain\b|\bespaña\b", q, re.IGNORECASE) else f"{q}, Spain"
+        )
         key = q_with_country.lower()
         if key in seen:
             continue

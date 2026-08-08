@@ -13,6 +13,7 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
+
 class IMAPService:
     _PROPERTY_ID_RE = re.compile(r"/inmueble/(\d+)", re.IGNORECASE)
 
@@ -70,7 +71,7 @@ class IMAPService:
         except Exception as e:
             logger.warning("Failed to parse email date: %s", e)
             return None
-    
+
     def _get_last_seen_uid(self) -> int:
         """Get the last processed UID from database to avoid reprocessing"""
         try:
@@ -79,33 +80,37 @@ class IMAPService:
 
             for path in (uid_file, legacy_uid_file):
                 if os.path.exists(path):
-                    with open(path, 'r') as f:
+                    with open(path, "r") as f:
                         uid = int(f.read().strip() or "0")
                     # Migrate legacy UID file into data dir for persistence
-                    if path == legacy_uid_file and uid > 0 and uid_file != legacy_uid_file:
+                    if (
+                        path == legacy_uid_file
+                        and uid > 0
+                        and uid_file != legacy_uid_file
+                    ):
                         self._save_last_seen_uid(uid)
                     return uid
             return 0
         except Exception:
             return 0
-    
+
     def _save_last_seen_uid(self, uid: int):
         """Save the last processed UID"""
         try:
             uid_file = Config.LAST_SEEN_UID_PATH
             os.makedirs(os.path.dirname(uid_file), exist_ok=True)
-            with open(uid_file, 'w') as f:
+            with open(uid_file, "w") as f:
                 f.write(str(uid))
         except Exception as e:
             logger.error("Failed to save last UID", exc_info=True)
-    
+
     def authenticate(self) -> bool:
         """Test IMAP connection and authentication"""
         try:
             if not self.user or not self.password:
                 logger.error("IMAP credentials not configured")
                 return False
-            
+
             with IMAPClient(self.host, port=self.port, ssl=self.ssl) as client:
                 client.login(self.user, self.password)
                 logger.info(f"IMAP authentication successful for {self.user}")
@@ -113,7 +118,7 @@ class IMAPService:
         except Exception as e:
             logger.error("IMAP authentication failed", exc_info=True)
             return False
-    
+
     def _decode_header_value(self, value: str) -> str:
         """Decode email header value"""
         try:
@@ -122,53 +127,53 @@ class IMAPService:
             for part, encoding in decoded_parts:
                 if isinstance(part, bytes):
                     if encoding:
-                        result.append(part.decode(encoding, errors='ignore'))
+                        result.append(part.decode(encoding, errors="ignore"))
                     else:
-                        result.append(part.decode('utf-8', errors='ignore'))
+                        result.append(part.decode("utf-8", errors="ignore"))
                 else:
                     result.append(part)
-            return ' '.join(result)
+            return " ".join(result)
         except Exception:
             return value
-    
+
     def _extract_html_parts(self, msg) -> List[str]:
         """Extract HTML parts from email message"""
         html_parts = []
-        
+
         if msg.is_multipart():
             for part in msg.walk():
                 content_type = part.get_content_type()
                 if content_type == "text/html":
                     payload = part.get_payload(decode=True)
                     if payload:
-                        html_parts.append(payload.decode('utf-8', errors='ignore'))
+                        html_parts.append(payload.decode("utf-8", errors="ignore"))
         else:
             if msg.get_content_type() == "text/html":
                 payload = msg.get_payload(decode=True)
                 if payload:
-                    html_parts.append(payload.decode('utf-8', errors='ignore'))
-        
+                    html_parts.append(payload.decode("utf-8", errors="ignore"))
+
         return html_parts
-    
+
     def _extract_text_parts(self, msg) -> str:
         """Extract plain text parts from email message"""
         text_parts = []
-        
+
         if msg.is_multipart():
             for part in msg.walk():
                 content_type = part.get_content_type()
                 if content_type == "text/plain":
                     payload = part.get_payload(decode=True)
                     if payload:
-                        text_parts.append(payload.decode('utf-8', errors='ignore'))
+                        text_parts.append(payload.decode("utf-8", errors="ignore"))
         else:
             if msg.get_content_type() == "text/plain":
                 payload = msg.get_payload(decode=True)
                 if payload:
-                    text_parts.append(payload.decode('utf-8', errors='ignore'))
-        
-        return '\n'.join(text_parts)
-    
+                    text_parts.append(payload.decode("utf-8", errors="ignore"))
+
+        return "\n".join(text_parts)
+
     def get_idealista_emails(self, max_results: int = None) -> List[Dict]:
         """Fetch and parse Idealista emails via IMAP"""
         if not self.user or not self.password:
@@ -185,42 +190,50 @@ class IMAPService:
                 # Gmail: prefer direct folder selection for completeness,
                 # fall back to All Mail + X-GM-RAW if folder unavailable.
                 folder_selected = False
-                if self.folder and 'gmail' in self.host.lower():
+                if self.folder and "gmail" in self.host.lower():
                     try:
                         client.select_folder(self.folder, readonly=True)
-                        uids = client.search(['ALL'])
-                        logger.info(f"Selected folder '{self.folder}': {len(uids)} emails")
+                        uids = client.search(["ALL"])
+                        logger.info(
+                            f"Selected folder '{self.folder}': {len(uids)} emails"
+                        )
                         folder_selected = True
                     except Exception:
-                        logger.info(f"Folder '{self.folder}' not selectable, trying All Mail")
+                        logger.info(
+                            f"Folder '{self.folder}' not selectable, trying All Mail"
+                        )
 
-                if not folder_selected and 'gmail' in self.host.lower():
+                if not folder_selected and "gmail" in self.host.lower():
                     try:
-                        client.select_folder('[Gmail]/All Mail', readonly=True)
+                        client.select_folder("[Gmail]/All Mail", readonly=True)
                         logger.info("Selected [Gmail]/All Mail")
                     except Exception:
-                        client.select_folder('INBOX', readonly=True)
+                        client.select_folder("INBOX", readonly=True)
                         logger.info("Fallback to INBOX")
-                    gm_query = 'from:noresponder@idealista.com'
+                    gm_query = "from:noresponder@idealista.com"
                     label_part = self._gmail_label_query(self.folder)
                     if label_part:
                         gm_query = f"{gm_query} {label_part}"
                     try:
-                        uids = client.search(['X-GM-RAW', gm_query])
+                        uids = client.search(["X-GM-RAW", gm_query])
                         logger.info(f"Gmail X-GM-RAW search found {len(uids)} emails")
                     except Exception as e:
-                        logger.warning(f"X-GM-RAW not available: {e}, falling back to ALL")
-                        uids = client.search(['ALL'])
+                        logger.warning(
+                            f"X-GM-RAW not available: {e}, falling back to ALL"
+                        )
+                        uids = client.search(["ALL"])
                 elif not folder_selected:
                     client.select_folder(self.folder or "INBOX", readonly=True)
-                    uids = client.search(['ALL'])
+                    uids = client.search(["ALL"])
 
                 logger.info(f"Total emails found: {len(uids)}")
 
                 if self.last_seen_uid > 0:
                     uids = [u for u in uids if u > self.last_seen_uid]
-                    logger.info(f"Filtering by last_seen_uid ({self.last_seen_uid}): {len(uids)} new emails")
-                    
+                    logger.info(
+                        f"Filtering by last_seen_uid ({self.last_seen_uid}): {len(uids)} new emails"
+                    )
+
                 # Limit processed emails per run (defaults to config MAX_EMAILS_PER_RUN)
                 limit = self.max_emails if max_results is None else max_results
                 uids = sorted(uids)[:limit]
@@ -229,131 +242,175 @@ class IMAPService:
                     return []
 
                 logger.info(f"Processing {len(uids)} emails...")
-                fetch_data = client.fetch(uids, ['RFC822', 'INTERNALDATE'])
-                
+                fetch_data = client.fetch(uids, ["RFC822", "INTERNALDATE"])
+
                 for uid in uids:
                     try:
-                        raw_email = fetch_data[uid][b'RFC822']
+                        raw_email = fetch_data[uid][b"RFC822"]
                         msg = message_from_bytes(raw_email)
 
                         html_parts = self._extract_html_parts(msg)
-                        body = '\n'.join(html_parts) or self._extract_text_parts(msg)
+                        body = "\n".join(html_parts) or self._extract_text_parts(msg)
                         if not body:
                             logger.warning(f"No body found in email UID {uid}")
                             continue
 
-                        subject = self._decode_header_value(msg.get('Subject', ''))
+                        subject = self._decode_header_value(msg.get("Subject", ""))
                         email_sender = msg.get("From")
                         logger.info(f"Processing email UID {uid}: {subject[:50]}...")
-                        
+
                         # Skip non-property emails (explicit blacklist)
                         skip_subjects = [
-                            'Welcome to Idealista',
-                            'Bienvenido a Idealista',
-                            'Contactos que ha recibido',
-                            'You have received contacts',
-                            'Weekly digest',
-                            'Resumen semanal',
-                            'Update your preferences',
-                            'Actualiza tus preferencias',
-                            'Respuesta de',  # Skip user responses/replies
-                            'detached house',  # Skip house listings
-                            'casa adosada',
-                            'vivienda',
-                            'chalet',
-                            'piso',
-                            'apartamento',
-                            'ático',
-                            'dúplex',
-                            'Bilbao homes'
+                            "Welcome to Idealista",
+                            "Bienvenido a Idealista",
+                            "Contactos que ha recibido",
+                            "You have received contacts",
+                            "Weekly digest",
+                            "Resumen semanal",
+                            "Update your preferences",
+                            "Actualiza tus preferencias",
+                            "Respuesta de",  # Skip user responses/replies
+                            "detached house",  # Skip house listings
+                            "casa adosada",
+                            "vivienda",
+                            "chalet",
+                            "piso",
+                            "apartamento",
+                            "ático",
+                            "dúplex",
+                            "Bilbao homes",
                         ]
 
                         # Price change emails - process to update existing properties
                         price_change_subjects = [
-                            'Price change',
-                            'Price reduction',
-                            'Price drop',
-                            'Cambio de precio',
-                            'Bajada de precio'
+                            "Price change",
+                            "Price reduction",
+                            "Price drop",
+                            "Cambio de precio",
+                            "Bajada de precio",
                         ]
 
-                        is_price_change = any(pc.lower() in subject.lower() for pc in price_change_subjects)
-                        
+                        is_price_change = any(
+                            pc.lower() in subject.lower()
+                            for pc in price_change_subjects
+                        )
+
                         if any(skip_text in subject for skip_text in skip_subjects):
                             logger.info(f"Skipping non-property email: {subject[:50]}")
                             continue
-                        
+
                         # Check for "no longer listed" emails first
                         no_longer_subjects = [
-                            'One of your favourites is no longer listed',
-                            'Tu favorito ya no está disponible'
+                            "One of your favourites is no longer listed",
+                            "Tu favorito ya no está disponible",
                         ]
 
-                        is_no_longer_listed = any(nl in subject for nl in no_longer_subjects)
+                        is_no_longer_listed = any(
+                            nl in subject for nl in no_longer_subjects
+                        )
                         if is_no_longer_listed:
                             # Handle "no longer listed" email
-                            email_content = {'subject': subject, 'body': body, 'message_id': f"imap_{uid}"}
-                            no_longer_data = self.email_parser.parse_no_longer_listed_email(email_content)
+                            email_content = {
+                                "subject": subject,
+                                "body": body,
+                                "message_id": f"imap_{uid}",
+                            }
+                            no_longer_data = (
+                                self.email_parser.parse_no_longer_listed_email(
+                                    email_content
+                                )
+                            )
                             if no_longer_data:
-                                property_id = self.extract_idealista_property_id(no_longer_data.get("url"))
-                                email_data.append({
-                                    'source_email_id': f"imap_{uid}",
-                                    'email_received_at': fetch_data[uid][b'INTERNALDATE'],
-                                    'type': 'no_longer_listed',
-                                    'url': no_longer_data['url'],
-                                    'idealista_property_id': property_id,
-                                })
-                                logger.info(f"Found 'no longer listed' email for URL: {no_longer_data['url']}")
+                                property_id = self.extract_idealista_property_id(
+                                    no_longer_data.get("url")
+                                )
+                                email_data.append(
+                                    {
+                                        "source_email_id": f"imap_{uid}",
+                                        "email_received_at": fetch_data[uid][
+                                            b"INTERNALDATE"
+                                        ],
+                                        "type": "no_longer_listed",
+                                        "url": no_longer_data["url"],
+                                        "idealista_property_id": property_id,
+                                    }
+                                )
+                                logger.info(
+                                    f"Found 'no longer listed' email for URL: {no_longer_data['url']}"
+                                )
                             continue
 
                         # Only process property listing emails (whitelist approach)
                         valid_subjects = [
-                            'New plot of land in your search',
-                            'Nuevo terreno en tu búsqueda',
-                            'Price reduction in your search',
-                            'Bajada de precio en tu búsqueda'
+                            "New plot of land in your search",
+                            "Nuevo terreno en tu búsqueda",
+                            "Price reduction in your search",
+                            "Bajada de precio en tu búsqueda",
                         ]
 
-                        is_valid = any(valid_text in subject for valid_text in valid_subjects)
+                        is_valid = any(
+                            valid_text in subject for valid_text in valid_subjects
+                        )
                         if not is_valid:
-                            logger.warning(f"Unknown email type, skipping: {subject[:50]}")
+                            logger.warning(
+                                f"Unknown email type, skipping: {subject[:50]}"
+                            )
                             continue
-                        
+
                         # Parse email content and validate
-                        email_content = {'subject': subject, 'body': body, 'message_id': f"imap_{uid}"}
+                        email_content = {
+                            "subject": subject,
+                            "body": body,
+                            "message_id": f"imap_{uid}",
+                        }
                         parsed = self.email_parser.parse_idealista_email(email_content)
-                        
+
                         if not parsed:
-                            logger.warning(f"Could not parse property data from email UID {uid}")
+                            logger.warning(
+                                f"Could not parse property data from email UID {uid}"
+                            )
                             continue
-                            
+
                         # Validate URL quality - skip emails with homepage/UTM-only links
-                        if parsed.get('url'):
-                            url = parsed['url']
+                        if parsed.get("url"):
+                            url = parsed["url"]
                             # Good URLs contain '/inmueble/' or '/venta-' or '/alquiler-'
-                            is_property_url = any(path in url for path in ['/inmueble/', '/venta-', '/alquiler-'])
+                            is_property_url = any(
+                                path in url
+                                for path in ["/inmueble/", "/venta-", "/alquiler-"]
+                            )
                             # Bad URLs are just homepage with UTM parameters
                             is_homepage_only = (
-                                url.startswith('https://www.idealista.com/?') or
-                                url.startswith('https://www.idealista.com/#') or
-                                url.endswith('idealista.com/') or
-                                'utm_link=logo' in url
+                                url.startswith("https://www.idealista.com/?")
+                                or url.startswith("https://www.idealista.com/#")
+                                or url.endswith("idealista.com/")
+                                or "utm_link=logo" in url
                             )
-                            
+
                             if is_homepage_only or not is_property_url:
-                                logger.warning(f"Skipping email with invalid URL: {url[:100]}")
+                                logger.warning(
+                                    f"Skipping email with invalid URL: {url[:100]}"
+                                )
                                 continue
                         if parsed:
-                            parsed['idealista_property_id'] = self.extract_idealista_property_id(parsed.get('url'))
-                            parsed['source_email_id'] = f"imap_{uid}"
-                            parsed['email_received_at'] = fetch_data[uid][b'INTERNALDATE']
-                            parsed['type'] = 'price_change' if is_price_change else 'listing'
-                            parsed['email_subject'] = subject
-                            parsed['email_sender'] = email_sender
+                            parsed["idealista_property_id"] = (
+                                self.extract_idealista_property_id(parsed.get("url"))
+                            )
+                            parsed["source_email_id"] = f"imap_{uid}"
+                            parsed["email_received_at"] = fetch_data[uid][
+                                b"INTERNALDATE"
+                            ]
+                            parsed["type"] = (
+                                "price_change" if is_price_change else "listing"
+                            )
+                            parsed["email_subject"] = subject
+                            parsed["email_sender"] = email_sender
                             email_data.append(parsed)
                             logger.info(f"Successfully parsed email UID {uid}")
                         else:
-                            logger.warning(f"Could not parse Idealista data from email UID {uid}")
+                            logger.warning(
+                                f"Could not parse Idealista data from email UID {uid}"
+                            )
                     except Exception as e:
                         logger.error("Failed to process UID %s", uid, exc_info=True)
                         continue
@@ -364,45 +421,47 @@ class IMAPService:
                     self._save_last_seen_uid(self.last_seen_uid)
                     logger.info(f"Saved last seen UID: {self.last_seen_uid}")
 
-                logger.info(f"Successfully processed {len(email_data)} Idealista emails")
+                logger.info(
+                    f"Successfully processed {len(email_data)} Idealista emails"
+                )
 
         except Exception as e:
             logger.error("Failed to fetch via IMAP", exc_info=True)
 
         return email_data
-    
+
     def run_ingestion(self, sync_type: str = "incremental") -> int:
         """Main method to run email ingestion via IMAP"""
         start_time = datetime.now(timezone.utc)
-        
+
         # Create sync history record
         sync_history = SyncHistory(
-            sync_type=sync_type,
-            backend='imap',
-            started_at=start_time
+            sync_type=sync_type, backend="imap", started_at=start_time
         )
         db.session.add(sync_history)
         db.session.commit()
-        
+
         try:
             logger.info(f"Starting IMAP ingestion process ({sync_type})")
-            
+
             # Fetch and parse emails
             emails = self.get_idealista_emails()
             sync_history.total_emails_found = len(emails)
-            
+
             if not emails:
                 logger.warning("No emails found for ingestion")
                 sync_history.new_properties_added = 0
-                sync_history.status = 'completed'
+                sync_history.status = "completed"
                 sync_history.completed_at = datetime.now(timezone.utc)
-                sync_history.sync_duration = int((datetime.now(timezone.utc) - start_time).total_seconds())
+                sync_history.sync_duration = int(
+                    (datetime.now(timezone.utc) - start_time).total_seconds()
+                )
                 db.session.commit()
                 return 0
-            
+
             # Import here to avoid circular imports
             from services.enrichment_service import EnrichmentService
-            
+
             processed_count = 0
             price_updated_count = 0
             expired_count = 0
@@ -410,38 +469,54 @@ class IMAPService:
 
             for email_data in emails:
                 try:
-                    email_id = email_data['source_email_id']
+                    email_id = email_data["source_email_id"]
 
                     # Skip if we already processed this email in this run
                     if email_id in processed_email_ids:
                         continue
                     processed_email_ids.add(email_id)
                     # Handle "no longer listed" emails
-                    if email_data.get('type') == 'no_longer_listed':
-                        url = email_data.get('url')
-                        property_id = email_data.get('idealista_property_id') or self.extract_idealista_property_id(url)
+                    if email_data.get("type") == "no_longer_listed":
+                        url = email_data.get("url")
+                        property_id = email_data.get(
+                            "idealista_property_id"
+                        ) or self.extract_idealista_property_id(url)
                         matches = []
                         if property_id:
-                            matches = Land.query.filter_by(idealista_property_id=property_id).all()
+                            matches = Land.query.filter_by(
+                                idealista_property_id=property_id
+                            ).all()
                         if not matches and url:
                             matches = Land.query.filter_by(url=url).all()
 
                         if matches:
                             updated = 0
                             for existing_property in matches:
-                                if property_id and existing_property.idealista_property_id is None:
-                                    existing_property.idealista_property_id = property_id
+                                if (
+                                    property_id
+                                    and existing_property.idealista_property_id is None
+                                ):
+                                    existing_property.idealista_property_id = (
+                                        property_id
+                                    )
 
-                                if existing_property.listing_status != 'active':
+                                if existing_property.listing_status != "active":
                                     continue
 
-                                existing_property.listing_status = 'removed'
-                                existing_property.listing_removed_date = datetime.now(timezone.utc)
+                                existing_property.listing_status = "removed"
+                                existing_property.listing_removed_date = datetime.now(
+                                    timezone.utc
+                                )
 
                                 if existing_property.is_favorite:
-                                    snapshot = LandHistory.create_snapshot(existing_property, 'removed_from_listing')
+                                    snapshot = LandHistory.create_snapshot(
+                                        existing_property, "removed_from_listing"
+                                    )
                                     db.session.add(snapshot)
-                                    logger.info("Created removal snapshot for favorite land %s", existing_property.id)
+                                    logger.info(
+                                        "Created removal snapshot for favorite land %s",
+                                        existing_property.id,
+                                    )
 
                                 updated += 1
                                 expired_count += 1
@@ -453,17 +528,23 @@ class IMAPService:
                                 property_id,
                             )
                         else:
-                            logger.debug("Property not found for no_longer_listed URL: %s", url)
+                            logger.debug(
+                                "Property not found for no_longer_listed URL: %s", url
+                            )
                         continue
 
                     # Check if property already exists by property ID from URL (for price updates)
                     # URLs have different UTM params, so we extract the property ID (e.g., /inmueble/109365344/)
-                    url = email_data.get('url')
-                    property_id = email_data.get('idealista_property_id') or self.extract_idealista_property_id(url)
+                    url = email_data.get("url")
+                    property_id = email_data.get(
+                        "idealista_property_id"
+                    ) or self.extract_idealista_property_id(url)
 
                     existing_properties = []
                     if property_id:
-                        existing_properties = Land.query.filter_by(idealista_property_id=property_id).all()
+                        existing_properties = Land.query.filter_by(
+                            idealista_property_id=property_id
+                        ).all()
 
                     # Fallback to exact URL match (legacy data without property_id)
                     if not existing_properties and url:
@@ -471,46 +552,68 @@ class IMAPService:
 
                     # If property exists, update price if changed
                     new_price = None
-                    if existing_properties and email_data.get('price'):
+                    if existing_properties and email_data.get("price"):
                         try:
-                            new_price = float(email_data['price'])
+                            new_price = float(email_data["price"])
                             if new_price <= 0:
                                 new_price = None
                         except (ValueError, TypeError):
-                            logger.warning("Invalid price value: %r", email_data['price'])
+                            logger.warning(
+                                "Invalid price value: %r", email_data["price"]
+                            )
 
                     if existing_properties and new_price is not None:
-                        email_date_obj = self._parse_email_received_at(email_data.get('email_received_at'))
+                        email_date_obj = self._parse_email_received_at(
+                            email_data.get("email_received_at")
+                        )
 
                         any_updated = False
                         for existing_property in existing_properties:
-                            if property_id and existing_property.idealista_property_id is None:
+                            if (
+                                property_id
+                                and existing_property.idealista_property_id is None
+                            ):
                                 existing_property.idealista_property_id = property_id
 
-                            old_price = float(existing_property.price) if existing_property.price else None
+                            old_price = (
+                                float(existing_property.price)
+                                if existing_property.price
+                                else None
+                            )
                             if not old_price or new_price == old_price:
                                 continue
 
                             price_change = new_price - old_price
-                            price_change_percentage = (price_change / old_price) * 100 if old_price > 0 else 0
+                            price_change_percentage = (
+                                (price_change / old_price) * 100 if old_price > 0 else 0
+                            )
 
                             if existing_property.is_favorite:
                                 snapshot = LandHistory.create_snapshot(
                                     existing_property,
-                                    'price_change',
+                                    "price_change",
                                     price_previous=old_price,
                                 )
                                 snapshot.price = new_price
                                 snapshot.price_change_amount = price_change
-                                snapshot.price_change_percentage = price_change_percentage
+                                snapshot.price_change_percentage = (
+                                    price_change_percentage
+                                )
                                 db.session.add(snapshot)
-                                logger.info("Created price change snapshot for favorite land %s", existing_property.id)
+                                logger.info(
+                                    "Created price change snapshot for favorite land %s",
+                                    existing_property.id,
+                                )
 
                             existing_property.previous_price = old_price
                             existing_property.price = new_price
                             existing_property.price_change_amount = price_change
-                            existing_property.price_change_percentage = price_change_percentage
-                            existing_property.price_changed_date = datetime.now(timezone.utc)
+                            existing_property.price_change_percentage = (
+                                price_change_percentage
+                            )
+                            existing_property.price_changed_date = datetime.now(
+                                timezone.utc
+                            )
                             existing_property.email_date = email_date_obj
 
                             any_updated = True
@@ -551,7 +654,7 @@ class IMAPService:
                     # Safety: do NOT create new Land rows from a price-change email.
                     # Those emails are not land-specific and can cause housing listings to be ingested as lands
                     # when running multiple Idealista searches.
-                    if email_data.get('type') == 'price_change':
+                    if email_data.get("type") == "price_change":
                         logger.info(
                             "Skipping price change email for unknown listing (property_id=%s, url=%s)",
                             property_id,
@@ -562,7 +665,11 @@ class IMAPService:
                     # Extra guard (legacy app is land-only): do not create Land rows from non-land listing emails.
                     # Listing subjects should explicitly mention plots/land; otherwise skip to avoid cross-ingestion.
                     subject_text = str(email_data.get("email_subject") or "")
-                    if not re.search(r"\b(plot\s+of\s+land|terreno|parcela|finca|suelo|solar)\b", subject_text, re.IGNORECASE):
+                    if not re.search(
+                        r"\b(plot\s+of\s+land|terreno|parcela|finca|suelo|solar)\b",
+                        subject_text,
+                        re.IGNORECASE,
+                    ):
                         logger.info(
                             "Skipping non-land listing email subject for unknown listing (property_id=%s)",
                             property_id,
@@ -571,26 +678,28 @@ class IMAPService:
 
                     # Create new land record
                     # Parse email date if available
-                    email_date = self._parse_email_received_at(email_data.get('email_received_at'))
+                    email_date = self._parse_email_received_at(
+                        email_data.get("email_received_at")
+                    )
 
                     land = Land()
-                    land.source_email_id = email_data['source_email_id']
+                    land.source_email_id = email_data["source_email_id"]
                     land.idealista_property_id = property_id
-                    land.title = email_data.get('title')
-                    land.url = email_data.get('url')
-                    land.price = email_data.get('price')
-                    land.area = email_data.get('area')
-                    land.municipality = email_data.get('municipality')
-                    land.land_type = email_data.get('land_type')
-                    land.description = email_data.get('description')
-                    land.legal_status = email_data.get('legal_status')
+                    land.title = email_data.get("title")
+                    land.url = email_data.get("url")
+                    land.price = email_data.get("price")
+                    land.area = email_data.get("area")
+                    land.municipality = email_data.get("municipality")
+                    land.land_type = email_data.get("land_type")
+                    land.description = email_data.get("description")
+                    land.legal_status = email_data.get("legal_status")
                     land.email_date = email_date
 
                     # Use savepoint so a constraint violation only rolls back this email
                     db.session.begin_nested()
                     db.session.add(land)
                     db.session.commit()  # commits the savepoint
-                    
+
                     # Try enrichment but continue if it fails
                     try:
                         enrichment_service = EnrichmentService()
@@ -598,77 +707,101 @@ class IMAPService:
                         if enriched:
                             logger.info(f"Successfully enriched land {land.id}")
                         else:
-                            logger.warning(f"Failed to enrich land {land.id}, continuing without enrichment")
+                            logger.warning(
+                                f"Failed to enrich land {land.id}, continuing without enrichment"
+                            )
                     except Exception as enrich_error:
-                        logger.warning(f"Enrichment failed for land {land.id}: {str(enrich_error)}, continuing")
-                    
+                        logger.warning(
+                            f"Enrichment failed for land {land.id}: {str(enrich_error)}, continuing"
+                        )
+
                     # Enhance description with AI
                     try:
                         from services.description_service import DescriptionService
+
                         description_service = DescriptionService()
-                        
+
                         if land.description:
                             property_data = {
-                                'price': land.price,
-                                'area': land.area,
-                                'municipality': land.municipality,
-                                'land_type': land.land_type,
-                                'title': land.title
+                                "price": land.price,
+                                "area": land.area,
+                                "municipality": land.municipality,
+                                "land_type": land.land_type,
+                                "title": land.title,
                             }
-                            
-                            result = description_service.enhance_description(land.description, property_data)
-                            if result.get('processing_status') in ['success', 'fallback']:
+
+                            result = description_service.enhance_description(
+                                land.description, property_data
+                            )
+                            if result.get("processing_status") in [
+                                "success",
+                                "fallback",
+                            ]:
                                 land.enhanced_description = result
                                 db.session.commit()
                                 logger.info(f"Enhanced description for land {land.id}")
                     except Exception as e:
-                        logger.warning("Description enhancement failed for land %s", land.id, exc_info=True)
-                    
+                        logger.warning(
+                            "Description enhancement failed for land %s",
+                            land.id,
+                            exc_info=True,
+                        )
+
                     processed_count += 1
                     logger.info(f"Processed new land: {land.title}")
-                    
+
                 except Exception as e:
-                    logger.error("Failed to process email %s", email_data.get('source_email_id'), exc_info=True)
+                    logger.error(
+                        "Failed to process email %s",
+                        email_data.get("source_email_id"),
+                        exc_info=True,
+                    )
                     db.session.rollback()
                     continue
-            
+
             # Update sync history
             sync_history.new_properties_added = processed_count
             sync_history.price_updated_count = price_updated_count
             sync_history.expired_count = expired_count
-            sync_history.status = 'completed'
+            sync_history.status = "completed"
             sync_history.completed_at = datetime.now(timezone.utc)
-            sync_history.sync_duration = int((datetime.now(timezone.utc) - start_time).total_seconds())
+            sync_history.sync_duration = int(
+                (datetime.now(timezone.utc) - start_time).total_seconds()
+            )
             db.session.commit()
-            
-            logger.info(f"IMAP ingestion completed. Processed {processed_count} new properties")
+
+            logger.info(
+                f"IMAP ingestion completed. Processed {processed_count} new properties"
+            )
             return processed_count
-            
+
         except Exception as e:
             logger.error("IMAP ingestion failed", exc_info=True)
 
             # Update sync history with error
-            sync_history.status = 'failed'
-            sync_history.error_message = 'IMAP ingestion failed'
+            sync_history.status = "failed"
+            sync_history.error_message = "IMAP ingestion failed"
             sync_history.completed_at = datetime.now(timezone.utc)
-            sync_history.sync_duration = int((datetime.now(timezone.utc) - start_time).total_seconds())
+            sync_history.sync_duration = int(
+                (datetime.now(timezone.utc) - start_time).total_seconds()
+            )
             db.session.commit()
-            
+
             return 0
-    
+
     def run_full_sync(self) -> int:
         """Run a full synchronization - reset last seen UID and process all emails"""
         logger.info("Starting full email synchronization")
-        
+
         # Temporarily reset last seen UID for full sync
         original_uid = self.last_seen_uid
         self.last_seen_uid = 0
-        
+
         try:
             # Run ingestion with full sync type
             result = self.run_ingestion(sync_type="full")
             return result
-            
+
         finally:
             # Restore original UID only if full sync failed
             # If successful, the new UID will be saved automatically

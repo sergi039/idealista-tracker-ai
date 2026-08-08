@@ -28,7 +28,11 @@ def request_with_retries(
     if max_attempts < 1:
         max_attempts = 1
 
-    statuses = tuple(retryable_statuses) if retryable_statuses is not None else _DEFAULT_RETRY_STATUSES
+    statuses = (
+        tuple(retryable_statuses)
+        if retryable_statuses is not None
+        else _DEFAULT_RETRY_STATUSES
+    )
     if timeout is not None and "timeout" not in kwargs:
         kwargs["timeout"] = timeout
 
@@ -42,7 +46,9 @@ def request_with_retries(
             if attempt >= max_attempts:
                 raise
             if logger:
-                logger.warning("Request failed (%s). Retrying %s/%s.", exc, attempt, max_attempts)
+                logger.warning(
+                    "Request failed (%s). Retrying %s/%s.", exc, attempt, max_attempts
+                )
             time.sleep(_compute_backoff(attempt, backoff_base, backoff_max))
             continue
 

@@ -38,7 +38,9 @@ def _has_investment_rating(land: Land) -> bool:
     return bool(str(rating).strip()) if rating is not None else False
 
 
-def _build_property_data(land: Land, existing_analysis: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _build_property_data(
+    land: Land, existing_analysis: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     return {
         "id": land.id,
         "title": land.title,
@@ -62,10 +64,7 @@ def _iter_lands(batch_size: int):
     offset = 0
     while True:
         batch = (
-            Land.query.order_by(Land.id.asc())
-            .limit(batch_size)
-            .offset(offset)
-            .all()
+            Land.query.order_by(Land.id.asc()).limit(batch_size).offset(offset).all()
         )
         if not batch:
             return
@@ -76,11 +75,21 @@ def _iter_lands(batch_size: int):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run structured AI analysis in bulk")
-    parser.add_argument("--force", action="store_true", help="Re-run even if rating already exists")
-    parser.add_argument("--enrich", action="store_true", help="Enrich existing analysis instead of replace")
+    parser.add_argument(
+        "--force", action="store_true", help="Re-run even if rating already exists"
+    )
+    parser.add_argument(
+        "--enrich",
+        action="store_true",
+        help="Enrich existing analysis instead of replace",
+    )
     parser.add_argument("--batch-size", type=int, default=50)
-    parser.add_argument("--limit", type=int, default=0, help="Process only first N matching lands")
-    parser.add_argument("--sleep", type=float, default=0.0, help="Sleep seconds between requests")
+    parser.add_argument(
+        "--limit", type=int, default=0, help="Process only first N matching lands"
+    )
+    parser.add_argument(
+        "--sleep", type=float, default=0.0, help="Sleep seconds between requests"
+    )
     args = parser.parse_args()
 
     # Keep the log readable even if DEV_MODE enables DEBUG elsewhere.
@@ -131,9 +140,18 @@ def main() -> int:
                 property_data = _build_property_data(land, existing_analysis=existing)
                 result = anthropic_service.analyze_property_structured(property_data)
 
-                if result and result.get("status") == "success" and result.get("structured_analysis"):
+                if (
+                    result
+                    and result.get("status") == "success"
+                    and result.get("structured_analysis")
+                ):
                     new_analysis = result.get("structured_analysis")
-                    if args.enrich and existing and isinstance(existing, dict) and isinstance(new_analysis, dict):
+                    if (
+                        args.enrich
+                        and existing
+                        and isinstance(existing, dict)
+                        and isinstance(new_analysis, dict)
+                    ):
                         merged = dict(existing)
                         merged.update(new_analysis)
                         land.ai_analysis = merged
@@ -145,15 +163,27 @@ def main() -> int:
 
                     rating_full = None
                     try:
-                        rating_full = _as_dict(land.ai_analysis).get("rental_market_analysis", {}).get("investment_rating")
+                        rating_full = (
+                            _as_dict(land.ai_analysis)
+                            .get("rental_market_analysis", {})
+                            .get("investment_rating")
+                        )
                     except Exception:
                         rating_full = None
-                    rating_short = str(rating_full).split("-")[0].strip().upper() if rating_full else "-"
+                    rating_short = (
+                        str(rating_full).split("-")[0].strip().upper()
+                        if rating_full
+                        else "-"
+                    )
                     print(f"{prefix} OK ({rating_short})", flush=True)
                 else:
                     failed += 1
                     db.session.rollback()
-                    error = (result or {}).get("error") if isinstance(result, dict) else "Unknown error"
+                    error = (
+                        (result or {}).get("error")
+                        if isinstance(result, dict)
+                        else "Unknown error"
+                    )
                     print(f"{prefix} FAILED: {error}", file=sys.stderr, flush=True)
 
             except Exception as e:
@@ -164,7 +194,10 @@ def main() -> int:
             if args.sleep > 0:
                 time.sleep(args.sleep)
 
-        print(f"Done. processed={processed} ok={ok} failed={failed} skipped={skipped}", flush=True)
+        print(
+            f"Done. processed={processed} ok={ok} failed={failed} skipped={skipped}",
+            flush=True,
+        )
         return 0 if failed == 0 else 1
 
 

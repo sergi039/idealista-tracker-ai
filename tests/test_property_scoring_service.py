@@ -32,7 +32,12 @@ def _profile_with_travel_disabled():
         "school": {"enabled": False, "mode": "driving"},
         "subway_station": {"enabled": False, "mode": "driving"},
     }
-    return SearchProfile(name="Test Profile", is_active=True, is_default=True, travel_targets={"presets": presets, "custom": []})
+    return SearchProfile(
+        name="Test Profile",
+        is_active=True,
+        is_default=True,
+        travel_targets={"presets": presets, "custom": []},
+    )
 
 
 def test_property_scoring_housing_uses_value_percentile(app):
@@ -91,7 +96,10 @@ def test_property_scoring_housing_uses_value_percentile(app):
         assert refreshed is not None
         assert refreshed.score_total is not None
         assert refreshed.scoring["category"] == "housing"
-        assert refreshed.scoring["profiles"]["investment"]["components"]["value_score"] is not None
+        assert (
+            refreshed.scoring["profiles"]["investment"]["components"]["value_score"]
+            is not None
+        )
 
 
 def test_property_scoring_land_uses_value_percentile(app):
@@ -151,4 +159,7 @@ def test_property_scoring_land_uses_value_percentile(app):
         assert refreshed is not None
         assert refreshed.score_total is not None
         assert refreshed.scoring["category"] == "land"
-        assert refreshed.scoring["profiles"]["investment"]["components"]["value_score"] is not None
+        assert (
+            refreshed.scoring["profiles"]["investment"]["components"]["value_score"]
+            is not None
+        )

@@ -9,7 +9,9 @@ class PropertyClassificationService:
     """Centralized category/subtype classification for Properties (regex-driven)."""
 
     @staticmethod
-    def classify_text(text: str, rules: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
+    def classify_text(
+        text: str, rules: List[Dict[str, Any]]
+    ) -> Tuple[Optional[str], Optional[str]]:
         """Apply ordered regex rules to text, returning (category, subtype)."""
         for rule in rules:
             if not isinstance(rule, dict):
@@ -25,7 +27,9 @@ class PropertyClassificationService:
         return None, None
 
     @classmethod
-    def classify_property(cls, prop: Property, profile: Optional[SearchProfile] = None) -> Tuple[Optional[str], Optional[str]]:
+    def classify_property(
+        cls, prop: Property, profile: Optional[SearchProfile] = None
+    ) -> Tuple[Optional[str], Optional[str]]:
         """Classify a Property using profile-specific rules (fallback to global defaults)."""
         rules = SearchProfileService.get_classification_rules(profile)
         texts = [

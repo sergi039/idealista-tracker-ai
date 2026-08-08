@@ -15,34 +15,34 @@ _PROPERTY_ID_RE = re.compile(r"/inmueble/(\d+)", re.IGNORECASE)
 # a genuinely mixed/invalid number like "1.234,567" (3 "decimal" digits under
 # the dot-group grammar) matches neither grammar and is correctly rejected
 # rather than silently truncated (PR #33 review follow-up finding).
-_NUMBER_DOT_GROUP = r'(?<![\d.,])(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2}))?(?![\d.,])'
-_NUMBER_COMMA_GROUP = r'(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?![\d.,])'
+_NUMBER_DOT_GROUP = r"(?<![\d.,])(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2}))?(?![\d.,])"
+_NUMBER_COMMA_GROUP = r"(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?![\d.,])"
 # Either grammar as one alternation with 4 capture groups: exactly one
 # (dot_int, dot_dec) or (comma_int, comma_dec) pair is populated, depending on
 # which grammar matched. Parse with _parse_number_groups().
-_PRICE_NUMBER = rf'(?:{_NUMBER_DOT_GROUP}|{_NUMBER_COMMA_GROUP})'
+_PRICE_NUMBER = rf"(?:{_NUMBER_DOT_GROUP}|{_NUMBER_COMMA_GROUP})"
 
 # Price patterns (supports Spanish/English thousand separators, decimal
 # endings, and plain digits with no separator at all, e.g. "59000 €").
 _PRICE_PATTERNS = [
-    rf'(?:Price|Precio):?\s*{_PRICE_NUMBER}\s*€',
-    rf'{_PRICE_NUMBER}\s*€',
+    rf"(?:Price|Precio):?\s*{_PRICE_NUMBER}\s*€",
+    rf"{_PRICE_NUMBER}\s*€",
 ]
 
 # Price change patterns: extract (old, new) from "from X€ to Y€" / "de X€ a Y€".
 # Groups 1-4 are the old price (dot_int, dot_dec, comma_int, comma_dec);
 # groups 5-8 are the new price, in the same layout.
 _PRICE_CHANGE_PATTERNS = [
-    rf'\bfrom\s+{_PRICE_NUMBER}\s*€\s+to\s+{_PRICE_NUMBER}\s*€',
-    rf'\bde\s+{_PRICE_NUMBER}\s*€\s+a\s+{_PRICE_NUMBER}\s*€',
+    rf"\bfrom\s+{_PRICE_NUMBER}\s*€\s+to\s+{_PRICE_NUMBER}\s*€",
+    rf"\bde\s+{_PRICE_NUMBER}\s*€\s+a\s+{_PRICE_NUMBER}\s*€",
 ]
 
 # Area patterns (m² / m2; no minimum threshold)
 _AREA_PATTERNS = [
-    r'(\d{1,3}(?:,\d{3})*)\s*m[²2]',
-    r'(\d{1,3}(?:\.\d{3})*)\s*m[²2]',
-    r'(\d+)\s*m[²2]',
-    r'Superficie:?\s*(\d+(?:,\d+)?)\s*m[²2]',
+    r"(\d{1,3}(?:,\d{3})*)\s*m[²2]",
+    r"(\d{1,3}(?:\.\d{3})*)\s*m[²2]",
+    r"(\d+)\s*m[²2]",
+    r"Superficie:?\s*(\d+(?:,\d+)?)\s*m[²2]",
 ]
 
 _ANCHOR_RE = re.compile(
@@ -109,23 +109,25 @@ def extract_url(text: str) -> Optional[str]:
     property_pattern = r'https?://www\.idealista\.com(?:/[a-z]{2})?/inmueble/\d+[^"\s]*'
     match = re.search(property_pattern, text, re.IGNORECASE)
     if match:
-        return match.group(0).strip().rstrip('"\'')
+        return match.group(0).strip().rstrip("\"'")
 
     # Fallback: first idealista URL (skip logo links)
-    generic_pattern = r'https?://www\.idealista\.com/[^\s]+'
+    generic_pattern = r"https?://www\.idealista\.com/[^\s]+"
     match = re.search(generic_pattern, text, re.IGNORECASE)
     if not match:
         return None
 
-    url = match.group(0).strip().rstrip('"\'')
-    if 'logo' in url:
+    url = match.group(0).strip().rstrip("\"'")
+    if "logo" in url:
         return None
-    if not url.startswith('http'):
+    if not url.startswith("http"):
         return None
     return url
 
 
-def _parse_price_match(int_part: Optional[str], dec_part: Optional[str]) -> Optional[float]:
+def _parse_price_match(
+    int_part: Optional[str], dec_part: Optional[str]
+) -> Optional[float]:
     """Combine a group-separated integer part with an optional 1-2 digit
     decimal part into a float. `int_part` is expected to contain only digits
     and a single, consistent group separator (already enforced by whichever
@@ -244,7 +246,7 @@ def extract_area_m2(text: str) -> Optional[float]:
         if not match:
             continue
         area_str = match.group(1)
-        area_str = area_str.replace(',', '').replace('.', '')
+        area_str = area_str.replace(",", "").replace(".", "")
         try:
             return float(area_str)
         except ValueError:
@@ -279,7 +281,9 @@ def _rank_title_candidate(text: str) -> Tuple[int, int]:
     return (score, len(t))
 
 
-def extract_listing_title(text: str, idealista_property_id: Optional[int] = None) -> Optional[str]:
+def extract_listing_title(
+    text: str, idealista_property_id: Optional[int] = None
+) -> Optional[str]:
     """Extract listing title (card headline) from an Idealista email body."""
     if not text:
         return None

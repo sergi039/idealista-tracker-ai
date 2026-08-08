@@ -144,7 +144,10 @@ def complete_codex(prompt: str, system: str, model: str, timeout: int) -> dict:
         except ValueError:
             continue
         item = event.get("item") or {}
-        if event.get("type") == "item.completed" and item.get("type") == "agent_message":
+        if (
+            event.get("type") == "item.completed"
+            and item.get("type") == "agent_message"
+        ):
             text_parts.append(str(item.get("text") or ""))
         elif event.get("type") == "turn.completed":
             usage = event.get("usage") or {}
@@ -161,7 +164,11 @@ def complete_codex(prompt: str, system: str, model: str, timeout: int) -> dict:
     }
 
 
-PROVIDERS = {"claude": complete_claude, "codex": complete_codex, "openai": complete_codex}
+PROVIDERS = {
+    "claude": complete_claude,
+    "codex": complete_codex,
+    "openai": complete_codex,
+}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -231,7 +238,12 @@ class Handler(BaseHTTPRequestHandler):
 
         timeout = min(int(request.get("timeout") or DEFAULT_TIMEOUT), 900)
         try:
-            result = handler(prompt, str(request.get("system") or ""), str(request.get("model") or ""), timeout)
+            result = handler(
+                prompt,
+                str(request.get("system") or ""),
+                str(request.get("model") or ""),
+                timeout,
+            )
         except BridgeError as exc:
             LOG.error("%s call failed: %s", provider, exc)
             self._reply(502, {"error": str(exc)})
@@ -241,9 +253,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
     if not TOKEN:
-        LOG.error("AI_BRIDGE_TOKEN is not set - refusing to start without authentication")
+        LOG.error(
+            "AI_BRIDGE_TOKEN is not set - refusing to start without authentication"
+        )
         return 1
 
     LOG.info(

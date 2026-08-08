@@ -243,14 +243,17 @@ class PropertyAIService:
         if prop.municipality:
             q = q.filter(Property.municipality == prop.municipality)
 
-        q = q.filter(Property.score_total.isnot(None)).order_by(Property.score_total.desc().nullslast())
+        q = q.filter(Property.score_total.isnot(None)).order_by(
+            Property.score_total.desc().nullslast()
+        )
         peers = q.limit(3).all()
         result: List[Dict[str, Any]] = []
         for p in peers:
             result.append(
                 {
                     "id": p.id,
-                    "title": (p.title or f"Property #{p.id}")[:60] + ("..." if p.title and len(p.title) > 60 else ""),
+                    "title": (p.title or f"Property #{p.id}")[:60]
+                    + ("..." if p.title and len(p.title) > 60 else ""),
                     "price": _safe_float(p.price) or 0,
                     "area": _safe_float(p.area) or 0,
                     "municipality": p.municipality or "",
@@ -274,7 +277,9 @@ class PropertyAIService:
         if prop.municipality:
             q = q.filter(Property.municipality == prop.municipality)
 
-        q = q.filter(Property.price.isnot(None), Property.area.isnot(None), Property.area > 0)
+        q = q.filter(
+            Property.price.isnot(None), Property.area.isnot(None), Property.area > 0
+        )
         peers = q.limit(250).all()
         ppm2_values: List[float] = []
         for p in peers:
@@ -282,7 +287,10 @@ class PropertyAIService:
             if v is not None:
                 ppm2_values.append(v)
 
-        snapshot: Dict[str, Any] = {"price_per_m2_subject": ppm2, "sample_size": len(ppm2_values)}
+        snapshot: Dict[str, Any] = {
+            "price_per_m2_subject": ppm2,
+            "sample_size": len(ppm2_values),
+        }
         if not ppm2_values:
             snapshot["status"] = "no_peers"
             return snapshot
@@ -298,7 +306,9 @@ class PropertyAIService:
         travel = prop.travel if isinstance(prop.travel, dict) else {}
         targets = (travel.get("targets") if isinstance(travel, dict) else None) or {}
 
-        preset_defs = {d["key"]: d for d in SearchProfileService.get_travel_preset_defs()}
+        preset_defs = {
+            d["key"]: d for d in SearchProfileService.get_travel_preset_defs()
+        }
         lines: List[str] = []
         for key, data in sorted(targets.items(), key=lambda item: item[0]):
             if not isinstance(data, dict):
@@ -353,9 +363,15 @@ class PropertyAIService:
             f"PROPERTY: {prop.title or f'Property #{prop.id}'}",
             f"CATEGORY: {prop.property_category or 'unknown'}",
             f"SUBTYPE: {prop.property_subtype or 'unknown'}",
-            f"PRICE: €{_safe_float(prop.price):,.0f}" if prop.price is not None else "PRICE: N/A",
-            f"AREA: {_safe_float(prop.area):,.0f} m²" if prop.area is not None else "AREA: N/A",
-            f"PRICE PER M²: €{ppm2:,.0f}/m²" if ppm2 is not None else "PRICE PER M²: N/A",
+            f"PRICE: €{_safe_float(prop.price):,.0f}"
+            if prop.price is not None
+            else "PRICE: N/A",
+            f"AREA: {_safe_float(prop.area):,.0f} m²"
+            if prop.area is not None
+            else "AREA: N/A",
+            f"PRICE PER M²: €{ppm2:,.0f}/m²"
+            if ppm2 is not None
+            else "PRICE PER M²: N/A",
             f"LOCATION: {prop.municipality or 'N/A'}",
         ]
 
@@ -389,7 +405,7 @@ class PropertyAIService:
             parts += ["", "Similar properties in our database:"]
             for idx, s in enumerate(similar, start=1):
                 parts.append(
-                    f"{idx}. ID:{s.get('id')} - {s.get('title','')} - €{s.get('price',0):,.0f} - {s.get('area',0)}m² - {s.get('municipality','')} - Score: {s.get('score_total',0):.1f}/100"
+                    f"{idx}. ID:{s.get('id')} - {s.get('title', '')} - €{s.get('price', 0):,.0f} - {s.get('area', 0)}m² - {s.get('municipality', '')} - Score: {s.get('score_total', 0):.1f}/100"
                 )
 
         parts += [
@@ -401,7 +417,9 @@ class PropertyAIService:
         prompt = "\n".join(parts)
         return prompt, schema
 
-    def analyze_property_structured(self, prop: Property, provider: str = "claude") -> Dict[str, Any]:
+    def analyze_property_structured(
+        self, prop: Property, provider: str = "claude"
+    ) -> Dict[str, Any]:
         provider = (provider or "claude").strip().lower()
         prompt, _ = self._build_prompt(prop)
 
@@ -423,7 +441,10 @@ class PropertyAIService:
             )
         except subscription_transport.SubscriptionTransportError as exc:
             logger.error("OpenAI analysis via subscription bridge failed: %s", exc)
-            return {"status": "failed", "error": "AI analysis service is temporarily unavailable"}
+            return {
+                "status": "failed",
+                "error": "AI analysis service is temporarily unavailable",
+            }
 
         cleaned = _clean_json_text(result.get("text", ""))
         try:
@@ -431,8 +452,11 @@ class PropertyAIService:
         except ValueError:
             logger.error("OpenAI returned a non-JSON analysis payload")
             return {"status": "failed", "error": "AI analysis returned malformed data"}
-        return {"status": "success", "structured_analysis": analysis_data, "model": self.openai_model}
-
+        return {
+            "status": "success",
+            "structured_analysis": analysis_data,
+            "model": self.openai_model,
+        }
 
     def _analyze_claude(self, prompt: str) -> Dict[str, Any]:
         if not self.bridge_configured:
@@ -448,7 +472,14 @@ class PropertyAIService:
             )
             cleaned = _clean_json_text(result.get("text", ""))
             analysis_data = json.loads(cleaned)
-            return {"status": "success", "structured_analysis": analysis_data, "model": self.anthropic_model}
+            return {
+                "status": "success",
+                "structured_analysis": analysis_data,
+                "model": self.anthropic_model,
+            }
         except Exception:
             logger.error("Claude analysis failed", exc_info=True)
-            return {"status": "failed", "error": "AI analysis service is temporarily unavailable"}
+            return {
+                "status": "failed",
+                "error": "AI analysis service is temporarily unavailable",
+            }

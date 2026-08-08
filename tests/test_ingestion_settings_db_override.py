@@ -52,7 +52,9 @@ def test_sale_only_can_be_overridden_via_db_setting(app, monkeypatch):
         ]
 
         service = PropertyIMAPService()
-        monkeypatch.setattr(service, "get_idealista_emails", lambda max_results=None: list(emails))
+        monkeypatch.setattr(
+            service, "get_idealista_emails", lambda max_results=None: list(emails)
+        )
 
         Config.SALE_ONLY = True
         SettingsService.set_sale_only(False)
@@ -94,7 +96,9 @@ def test_excluded_categories_can_be_overridden_via_db_setting(app, monkeypatch):
         ]
 
         service = PropertyIMAPService()
-        monkeypatch.setattr(service, "get_idealista_emails", lambda max_results=None: list(emails))
+        monkeypatch.setattr(
+            service, "get_idealista_emails", lambda max_results=None: list(emails)
+        )
 
         SettingsService.set_excluded_property_categories(["land"])
         created = service.run_ingestion(sync_type="test")
@@ -105,4 +109,3 @@ def test_excluded_categories_can_be_overridden_via_db_setting(app, monkeypatch):
         created2 = service.run_ingestion(sync_type="test")
         assert created2 == 1
         assert Property.query.count() == 1
-

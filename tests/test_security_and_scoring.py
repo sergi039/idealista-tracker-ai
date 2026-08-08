@@ -26,9 +26,9 @@ from tests import setup_test_environment
 def app():
     setup_test_environment()
     app = create_app()
-    app.config['TESTING'] = True
-    app.config['WTF_CSRF_ENABLED'] = False
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
     with app.app_context():
         db.create_all()
         yield app
@@ -59,21 +59,21 @@ def isolated_app():
     uncontended in-memory database instead.
     """
     setup_test_environment()
-    orig_db_url = os.environ.get('DATABASE_URL')
-    os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
+    orig_db_url = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = "sqlite:///:memory:"
     try:
         app = create_app()
-        app.config['TESTING'] = True
-        app.config['WTF_CSRF_ENABLED'] = False
+        app.config["TESTING"] = True
+        app.config["WTF_CSRF_ENABLED"] = False
         with app.app_context():
             db.create_all()
             yield app
             db.drop_all()
     finally:
         if orig_db_url is not None:
-            os.environ['DATABASE_URL'] = orig_db_url
+            os.environ["DATABASE_URL"] = orig_db_url
         else:
-            os.environ.pop('DATABASE_URL', None)
+            os.environ.pop("DATABASE_URL", None)
 
 
 @pytest.fixture
@@ -86,12 +86,12 @@ def isolated_test_land(isolated_app):
     """Create a land in the isolated_app's private in-memory DB."""
     with isolated_app.app_context():
         land = Land(
-            source_email_id='isolated_test_1',
-            title='Isolated Test Land',
-            municipality='Valencia',
-            land_type='developed',
-            price=Decimal('150000.00'),
-            area=Decimal('1500.00'),
+            source_email_id="isolated_test_1",
+            title="Isolated Test Land",
+            municipality="Valencia",
+            land_type="developed",
+            price=Decimal("150000.00"),
+            area=Decimal("1500.00"),
         )
         db.session.add(land)
         db.session.commit()
@@ -103,13 +103,13 @@ def isolated_test_property(isolated_app):
     """Create a property in the isolated_app's private in-memory DB."""
     with isolated_app.app_context():
         prop = Property(
-            source_email_id='isolated_test_prop_1',
-            title='Isolated Test Property',
-            municipality='Barcelona',
-            property_category='housing',
-            property_subtype='apartment',
-            price=Decimal('250000.00'),
-            area=Decimal('90.00'),
+            source_email_id="isolated_test_prop_1",
+            title="Isolated Test Property",
+            municipality="Barcelona",
+            property_category="housing",
+            property_subtype="apartment",
+            price=Decimal("250000.00"),
+            area=Decimal("90.00"),
         )
         db.session.add(prop)
         db.session.commit()
@@ -121,17 +121,17 @@ def auth_disabled_app():
     """App fixture with TESTING=False so auth checks are enforced.
     ADMIN_API_TOKEN is NOT set so all requests are denied (fail-closed)."""
     setup_test_environment()
-    orig_token = os.environ.pop('ADMIN_API_TOKEN', None)
+    orig_token = os.environ.pop("ADMIN_API_TOKEN", None)
     app = create_app()
-    app.config['TESTING'] = False
-    app.config['WTF_CSRF_ENABLED'] = False
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+    app.config["TESTING"] = False
+    app.config["WTF_CSRF_ENABLED"] = False
+    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
     with app.app_context():
         db.create_all()
         yield app
         db.drop_all()
     if orig_token is not None:
-        os.environ['ADMIN_API_TOKEN'] = orig_token
+        os.environ["ADMIN_API_TOKEN"] = orig_token
 
 
 @pytest.fixture
@@ -144,39 +144,50 @@ def test_land(app):
     """Create a land with enriched data for scoring tests."""
     with app.app_context():
         land = Land(
-            source_email_id='sec_test_1',
-            title='Security Test Land',
-            municipality='Valencia',
-            land_type='developed',
-            price=Decimal('150000.00'),
-            area=Decimal('1500.00'),
-            location_lat=Decimal('39.4699'),
-            location_lon=Decimal('-0.3763'),
-            description='Parcela urbana con vistas al mar y orientación sur',
-            legal_status='Developed',
+            source_email_id="sec_test_1",
+            title="Security Test Land",
+            municipality="Valencia",
+            land_type="developed",
+            price=Decimal("150000.00"),
+            area=Decimal("1500.00"),
+            location_lat=Decimal("39.4699"),
+            location_lon=Decimal("-0.3763"),
+            description="Parcela urbana con vistas al mar y orientación sur",
+            legal_status="Developed",
             infrastructure_basic={
-                'electricity': True, 'water': True,
-                'internet': False, 'gas': True,
+                "electricity": True,
+                "water": True,
+                "internet": False,
+                "gas": True,
             },
             infrastructure_extended={
-                'supermarket_available': True, 'supermarket_distance': 800,
-                'school_available': True, 'school_distance': 1200,
-                'hospital_available': True, 'hospital_distance': 2500,
-                'restaurant_available': True, 'restaurant_distance': 500,
+                "supermarket_available": True,
+                "supermarket_distance": 800,
+                "school_available": True,
+                "school_distance": 1200,
+                "hospital_available": True,
+                "hospital_distance": 2500,
+                "restaurant_available": True,
+                "restaurant_distance": 500,
             },
             transport={
-                'train_station_available': True, 'train_station_distance': 3000,
-                'bus_station_available': True, 'bus_station_distance': 600,
-                'airport_available': True, 'airport_distance': 45000,
+                "train_station_available": True,
+                "train_station_distance": 3000,
+                "bus_station_available": True,
+                "bus_station_distance": 600,
+                "airport_available": True,
+                "airport_distance": 45000,
             },
             environment={
-                'sea_view': True, 'mountain_view': False,
-                'forest_view': False, 'orientation': 'south',
+                "sea_view": True,
+                "mountain_view": False,
+                "forest_view": False,
+                "orientation": "south",
             },
             services_quality={
-                'school_avg_rating': 4.2,
-                'restaurant_avg_rating': 4.5,
-                'cafe_avg_rating': 4.0,
+                "school_avg_rating": 4.2,
+                "restaurant_avg_rating": 4.5,
+                "cafe_avg_rating": 4.0,
             },
         )
         db.session.add(land)
@@ -189,13 +200,13 @@ def test_property(app):
     """Create a universal Property for endpoint auth tests."""
     with app.app_context():
         prop = Property(
-            source_email_id='sec_test_prop_1',
-            title='Security Test Property',
-            municipality='Barcelona',
-            property_category='housing',
-            property_subtype='apartment',
-            price=Decimal('250000.00'),
-            area=Decimal('90.00'),
+            source_email_id="sec_test_prop_1",
+            title="Security Test Property",
+            municipality="Barcelona",
+            property_category="housing",
+            property_subtype="apartment",
+            price=Decimal("250000.00"),
+            area=Decimal("90.00"),
         )
         db.session.add(prop)
         db.session.commit()
@@ -207,12 +218,12 @@ def auth_disabled_test_land(auth_disabled_app):
     """Create a land in the auth-disabled app context."""
     with auth_disabled_app.app_context():
         land = Land(
-            source_email_id='auth_test_1',
-            title='Auth Test Land',
-            municipality='Madrid',
-            land_type='buildable',
-            price=Decimal('100000.00'),
-            area=Decimal('1000.00'),
+            source_email_id="auth_test_1",
+            title="Auth Test Land",
+            municipality="Madrid",
+            land_type="buildable",
+            price=Decimal("100000.00"),
+            area=Decimal("1000.00"),
         )
         db.session.add(land)
         db.session.commit()
@@ -224,13 +235,13 @@ def auth_disabled_test_property(auth_disabled_app):
     """Create a property in the auth-disabled app context."""
     with auth_disabled_app.app_context():
         prop = Property(
-            source_email_id='auth_prop_test_1',
-            title='Auth Test Property',
-            municipality='Barcelona',
-            property_category='housing',
-            property_subtype='apartment',
-            price=Decimal('250000.00'),
-            area=Decimal('90.00'),
+            source_email_id="auth_prop_test_1",
+            title="Auth Test Property",
+            municipality="Barcelona",
+            property_category="housing",
+            property_subtype="apartment",
+            price=Decimal("250000.00"),
+            area=Decimal("90.00"),
         )
         db.session.add(prop)
         db.session.commit()
@@ -244,22 +255,24 @@ class TestUnauthorizedAccess:
     """Admin-only endpoints must return 401 for anonymous requests."""
 
     PROTECTED_POST_ENDPOINTS = [
-        '/api/ingest/email/run',
-        '/api/lands/enrich-all',
+        "/api/ingest/email/run",
+        "/api/lands/enrich-all",
     ]
 
-    def test_anonymous_post_returns_401(self, auth_disabled_client, auth_disabled_test_land):
+    def test_anonymous_post_returns_401(
+        self, auth_disabled_client, auth_disabled_test_land
+    ):
         """All protected Land POST endpoints must reject anonymous requests."""
         lid = auth_disabled_test_land
         endpoints = self.PROTECTED_POST_ENDPOINTS + [
-            f'/api/land/{lid}/enrich',
-            f'/api/analyze/property/{lid}/structured',
-            f'/api/analysis/generate/{lid}/openai',
-            f'/api/enhance/description/{lid}',
-            f'/api/land/{lid}/environment',
-            f'/api/analyze/property/{lid}',
-            f'/api/land/{lid}/set-status',
-            f'/api/land/{lid}/check-status',
+            f"/api/land/{lid}/enrich",
+            f"/api/analyze/property/{lid}/structured",
+            f"/api/analysis/generate/{lid}/openai",
+            f"/api/enhance/description/{lid}",
+            f"/api/land/{lid}/environment",
+            f"/api/analyze/property/{lid}",
+            f"/api/land/{lid}/set-status",
+            f"/api/land/{lid}/check-status",
         ]
 
         for endpoint in endpoints:
@@ -268,7 +281,7 @@ class TestUnauthorizedAccess:
                 f"{endpoint} returned {resp.status_code}, expected 401"
             )
             data = json.loads(resp.data)
-            assert data['success'] is False
+            assert data["success"] is False
 
     def test_anonymous_property_post_returns_401(
         self, auth_disabled_client, auth_disabled_test_property
@@ -276,10 +289,10 @@ class TestUnauthorizedAccess:
         """All protected Property POST endpoints must reject anonymous requests."""
         pid = auth_disabled_test_property
         property_endpoints = [
-            f'/api/property/{pid}/enrich',
-            f'/api/property/{pid}/set-status',
-            f'/api/property/{pid}/analyze/structured',
-            f'/api/property/{pid}/environment',
+            f"/api/property/{pid}/enrich",
+            f"/api/property/{pid}/set-status",
+            f"/api/property/{pid}/analyze/structured",
+            f"/api/property/{pid}/environment",
         ]
 
         for endpoint in property_endpoints:
@@ -295,30 +308,30 @@ class TestUnauthorizedAccess:
         lid = auth_disabled_test_land
         pid = auth_disabled_test_property
 
-        land_resp = auth_disabled_client.post(f'/api/land/{lid}/favorite')
+        land_resp = auth_disabled_client.post(f"/api/land/{lid}/favorite")
         assert land_resp.status_code == 200
         land_data = json.loads(land_resp.data)
-        assert land_data['success'] is True
-        assert land_data['is_favorite'] is True
+        assert land_data["success"] is True
+        assert land_data["is_favorite"] is True
 
-        property_resp = auth_disabled_client.post(f'/api/property/{pid}/favorite')
+        property_resp = auth_disabled_client.post(f"/api/property/{pid}/favorite")
         assert property_resp.status_code == 200
         property_data = json.loads(property_resp.data)
-        assert property_data['success'] is True
-        assert property_data['is_favorite'] is True
+        assert property_data["success"] is True
+        assert property_data["is_favorite"] is True
 
     def test_anonymous_put_returns_401(self, auth_disabled_client):
         """PUT /api/criteria must reject anonymous requests."""
         resp = auth_disabled_client.put(
-            '/api/criteria',
-            data=json.dumps({'criteria': {'test': 0.5}}),
-            content_type='application/json',
+            "/api/criteria",
+            data=json.dumps({"criteria": {"test": 0.5}}),
+            content_type="application/json",
         )
         assert resp.status_code == 401
 
     def test_health_check_accessible_without_auth(self, auth_disabled_client):
         """The health check must stay public (used by Docker/monitoring)."""
-        resp = auth_disabled_client.get('/api/healthz')
+        resp = auth_disabled_client.get("/api/healthz")
         assert resp.status_code == 200
 
 
@@ -328,8 +341,8 @@ class TestPropertyDataRequiresAuth:
     listing data must reject anonymous requests."""
 
     PROTECTED_API_GET_ENDPOINTS = [
-        '/api/lands',
-        '/api/stats',
+        "/api/lands",
+        "/api/stats",
     ]
 
     def test_anonymous_get_returns_401_on_api_endpoints(self, auth_disabled_client):
@@ -340,7 +353,7 @@ class TestPropertyDataRequiresAuth:
                 f"{endpoint} returned {resp.status_code}, expected 401"
             )
             data = json.loads(resp.data)
-            assert data['success'] is False
+            assert data["success"] is False
 
     def test_anonymous_get_returns_401_on_land_scoped_endpoints(
         self, auth_disabled_client, auth_disabled_test_land
@@ -348,10 +361,10 @@ class TestPropertyDataRequiresAuth:
         """Anonymous GET to per-land data endpoints must return 401."""
         lid = auth_disabled_test_land
         endpoints = [
-            f'/api/lands/{lid}',
-            f'/api/land/{lid}/history',
-            f'/api/analysis/compare/{lid}',
-            f'/api/description/variants/{lid}',
+            f"/api/lands/{lid}",
+            f"/api/land/{lid}/history",
+            f"/api/analysis/compare/{lid}",
+            f"/api/description/variants/{lid}",
         ]
         for endpoint in endpoints:
             resp = auth_disabled_client.get(endpoint)
@@ -365,8 +378,8 @@ class TestPropertyDataRequiresAuth:
         """Anonymous GET to per-property data endpoints must return 401."""
         pid = auth_disabled_test_property
         endpoints = [
-            f'/api/properties/{pid}',
-            f'/api/property/{pid}/analysis/compare',
+            f"/api/properties/{pid}",
+            f"/api/property/{pid}/analysis/compare",
         ]
         for endpoint in endpoints:
             resp = auth_disabled_client.get(endpoint)
@@ -376,9 +389,9 @@ class TestPropertyDataRequiresAuth:
 
     def test_anonymous_get_properties_returns_401(self, auth_disabled_client):
         """/api/properties (the ?full=1-capable bulk dump) must require auth."""
-        resp = auth_disabled_client.get('/api/properties')
+        resp = auth_disabled_client.get("/api/properties")
         assert resp.status_code == 401
-        resp_full = auth_disabled_client.get('/api/properties?full=1')
+        resp_full = auth_disabled_client.get("/api/properties?full=1")
         assert resp_full.status_code == 401
 
     def test_anonymous_page_access_redirects_to_login(
@@ -389,11 +402,11 @@ class TestPropertyDataRequiresAuth:
         lid = auth_disabled_test_land
         pid = auth_disabled_test_property
         pages = [
-            '/properties',
-            f'/properties/{pid}',
-            '/map',
-            '/criteria',
-            f'/lands/{lid}',
+            "/properties",
+            f"/properties/{pid}",
+            "/map",
+            "/criteria",
+            f"/lands/{lid}",
         ]
         for page in pages:
             resp = auth_disabled_client.get(page)
@@ -401,19 +414,19 @@ class TestPropertyDataRequiresAuth:
                 f"{page} returned {resp.status_code}, expected a redirect to login"
             )
             if resp.status_code == 302:
-                assert '/login' in resp.headers.get('Location', ''), (
+                assert "/login" in resp.headers.get("Location", ""), (
                     f"{page} redirected to {resp.headers.get('Location')}, expected /login"
                 )
 
     def test_anonymous_csv_export_denied(self, auth_disabled_client):
         """The bulk CSV export endpoints must not leak data anonymously."""
-        for endpoint in ['/export.csv', '/properties/export.csv']:
+        for endpoint in ["/export.csv", "/properties/export.csv"]:
             resp = auth_disabled_client.get(endpoint)
             assert resp.status_code in (302, 401), (
                 f"{endpoint} returned {resp.status_code}, expected a redirect/401, "
                 "not the exported CSV"
             )
-            assert 'text/csv' not in resp.headers.get('Content-Type', '')
+            assert "text/csv" not in resp.headers.get("Content-Type", "")
 
     # Sanity checks below confirm the TESTING bypass (acting as an authenticated
     # admin) can still reach every endpoint we just locked down. Split into
@@ -423,15 +436,22 @@ class TestPropertyDataRequiresAuth:
     # DB-heavy view renders back-to-back.
     def test_authenticated_admin_can_view_property_pages(self, client, test_property):
         pid = test_property
-        for endpoint in ['/properties', f'/properties/{pid}', '/api/properties', f'/api/properties/{pid}']:
+        for endpoint in [
+            "/properties",
+            f"/properties/{pid}",
+            "/api/properties",
+            f"/api/properties/{pid}",
+        ]:
             resp = client.get(endpoint)
             assert resp.status_code == 200, (
                 f"{endpoint} returned {resp.status_code}, expected 200 for an admin"
             )
 
-    def test_authenticated_admin_can_view_land_pages(self, disposed_client, isolated_test_land):
+    def test_authenticated_admin_can_view_land_pages(
+        self, disposed_client, isolated_test_land
+    ):
         lid = isolated_test_land
-        for endpoint in ['/map', '/criteria', f'/lands/{lid}']:
+        for endpoint in ["/map", "/criteria", f"/lands/{lid}"]:
             resp = disposed_client.get(endpoint)
             assert resp.status_code == 200, (
                 f"{endpoint} returned {resp.status_code}, expected 200 for an admin"
@@ -440,7 +460,7 @@ class TestPropertyDataRequiresAuth:
     def test_authenticated_admin_can_export_csv(
         self, disposed_client, isolated_test_land, isolated_test_property
     ):
-        for endpoint in ['/export.csv', '/properties/export.csv']:
+        for endpoint in ["/export.csv", "/properties/export.csv"]:
             resp = disposed_client.get(endpoint)
             assert resp.status_code == 200, (
                 f"{endpoint} returned {resp.status_code}, expected 200 for an admin"
@@ -448,15 +468,17 @@ class TestPropertyDataRequiresAuth:
 
     def test_authenticated_admin_can_read_land_apis(self, client, test_land):
         lid = test_land
-        for endpoint in ['/api/lands', f'/api/lands/{lid}', '/api/stats']:
+        for endpoint in ["/api/lands", f"/api/lands/{lid}", "/api/stats"]:
             resp = client.get(endpoint)
             assert resp.status_code == 200, (
                 f"{endpoint} returned {resp.status_code}, expected 200 for an admin"
             )
 
-    def test_authenticated_admin_can_read_land_history_and_comparison(self, client, test_land):
+    def test_authenticated_admin_can_read_land_history_and_comparison(
+        self, client, test_land
+    ):
         lid = test_land
-        for endpoint in [f'/api/land/{lid}/history', f'/api/analysis/compare/{lid}']:
+        for endpoint in [f"/api/land/{lid}/history", f"/api/analysis/compare/{lid}"]:
             resp = client.get(endpoint)
             assert resp.status_code == 200, (
                 f"{endpoint} returned {resp.status_code}, expected 200 for an admin"
@@ -480,17 +502,17 @@ class TestSourceArchiveNotServed:
     fix removes the archives (and the dead route) from the repo entirely."""
 
     ARCHIVE_STATIC_PATHS = [
-        '/static/idealista-project-new.zip',
-        '/static/idealista-project.tar.gz',
-        '/static/all_code.txt',
-        '/static/download.html',
+        "/static/idealista-project-new.zip",
+        "/static/idealista-project.tar.gz",
+        "/static/all_code.txt",
+        "/static/download.html",
     ]
 
     def test_archive_route_no_longer_exists(self, auth_disabled_client, client):
         """The dead /api/download/project endpoint must not come back as a
         live route, for anonymous or authenticated callers."""
         for c in (auth_disabled_client, client):
-            resp = c.get('/api/download/project')
+            resp = c.get("/api/download/project")
             assert resp.status_code == 404, (
                 f"/api/download/project returned {resp.status_code}, expected 404 (route removed)"
             )
@@ -519,11 +541,19 @@ class TestSourceArchiveNotServed:
         clean, so also assert the files aren't sitting in static/ at all."""
         import os as _os
 
-        static_dir = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), 'static')
-        for name in ('idealista-project-new.zip', 'idealista-project.tar.gz', 'all_code.txt', 'download.html'):
+        static_dir = _os.path.join(
+            _os.path.dirname(_os.path.dirname(__file__)), "static"
+        )
+        for name in (
+            "idealista-project-new.zip",
+            "idealista-project.tar.gz",
+            "all_code.txt",
+            "download.html",
+        ):
             assert not _os.path.exists(_os.path.join(static_dir, name)), (
                 f"static/{name} must not be committed (issue #29: unauthenticated source disclosure)"
             )
+
 
 # ---------------------------------------------------------------------------
 # Security: error messages don't leak internals
@@ -534,14 +564,14 @@ class TestErrorSanitization:
     def test_internal_error_no_leak(self, client):
         """Simulated internal error should return generic message."""
         with patch(
-            'services.scheduler_service.get_scheduler_status',
+            "services.scheduler_service.get_scheduler_status",
             side_effect=Exception("secret DB creds"),
         ):
-            resp = client.get('/api/scheduler/status')
+            resp = client.get("/api/scheduler/status")
             assert resp.status_code == 500
             data = json.loads(resp.data)
-            assert 'secret' not in data.get('error', '')
-            assert 'creds' not in data.get('error', '')
+            assert "secret" not in data.get("error", "")
+            assert "creds" not in data.get("error", "")
 
 
 # ---------------------------------------------------------------------------
@@ -564,17 +594,17 @@ class TestScoringWeights:
 
             # Patch Config.SCORING_PROFILES to heavily favor environment
             alt_profiles = {
-                'investment': {
-                    'environment': 0.90,
-                    'infrastructure_basic': 0.02,
-                    'transport': 0.02,
-                    'legal_status': 0.02,
-                    'investment_yield': 0.02,
-                    'location_quality': 0.02,
+                "investment": {
+                    "environment": 0.90,
+                    "infrastructure_basic": 0.02,
+                    "transport": 0.02,
+                    "legal_status": 0.02,
+                    "investment_yield": 0.02,
+                    "location_quality": 0.02,
                 },
-                'lifestyle': Config.SCORING_PROFILES.get('lifestyle', {}),
+                "lifestyle": Config.SCORING_PROFILES.get("lifestyle", {}),
             }
-            with patch.object(Config, 'SCORING_PROFILES', alt_profiles):
+            with patch.object(Config, "SCORING_PROFILES", alt_profiles):
                 svc.calculate_score(land)
                 db.session.commit()
                 new_investment = float(land.score_investment)
@@ -595,17 +625,17 @@ class TestScoringWeights:
             default_lifestyle = float(land.score_lifestyle)
 
             alt_profiles = {
-                'investment': Config.SCORING_PROFILES.get('investment', {}),
-                'lifestyle': {
-                    'investment_yield': 0.90,
-                    'environment': 0.02,
-                    'services_quality': 0.02,
-                    'transport': 0.02,
-                    'infrastructure_basic': 0.02,
-                    'location_quality': 0.02,
+                "investment": Config.SCORING_PROFILES.get("investment", {}),
+                "lifestyle": {
+                    "investment_yield": 0.90,
+                    "environment": 0.02,
+                    "services_quality": 0.02,
+                    "transport": 0.02,
+                    "infrastructure_basic": 0.02,
+                    "location_quality": 0.02,
                 },
             }
-            with patch.object(Config, 'SCORING_PROFILES', alt_profiles):
+            with patch.object(Config, "SCORING_PROFILES", alt_profiles):
                 svc.calculate_score(land)
                 db.session.commit()
                 new_lifestyle = float(land.score_lifestyle)
@@ -628,10 +658,14 @@ class TestScoringWeights:
             life = float(land.score_lifestyle)
 
             if abs(inv - life) < 0.01:
-                pytest.skip("Investment and lifestyle scores identical; cannot test mix effect")
+                pytest.skip(
+                    "Investment and lifestyle scores identical; cannot test mix effect"
+                )
 
             # Patch COMBINED_MIX to 100% investment
-            with patch.object(Config, 'COMBINED_MIX', {'investment': 1.0, 'lifestyle': 0.0}):
+            with patch.object(
+                Config, "COMBINED_MIX", {"investment": 1.0, "lifestyle": 0.0}
+            ):
                 svc.calculate_score(land)
                 db.session.commit()
                 inv_only_total = float(land.score_total)
@@ -644,19 +678,21 @@ class TestScoringWeights:
         """ScoringService.__init__ must load combined weights from DB."""
         with app.app_context():
             # Seed DB combined weights
-            for name, weight in [('environment', 0.80), ('transport', 0.20)]:
-                db.session.add(ScoringCriteria(
-                    criteria_name=name,
-                    profile='combined',
-                    weight=Decimal(str(weight)),
-                    active=True,
-                ))
+            for name, weight in [("environment", 0.80), ("transport", 0.20)]:
+                db.session.add(
+                    ScoringCriteria(
+                        criteria_name=name,
+                        profile="combined",
+                        weight=Decimal(str(weight)),
+                        active=True,
+                    )
+                )
             db.session.commit()
 
             svc = ScoringService()
             # After normalization, these should be in self.weights
-            assert 'environment' in svc.weights
-            assert 'transport' in svc.weights
+            assert "environment" in svc.weights
+            assert "transport" in svc.weights
 
     def test_profile_weights_fallback_to_config(self, app, test_land):
         """When no DB weights exist, scoring falls back to Config defaults."""
