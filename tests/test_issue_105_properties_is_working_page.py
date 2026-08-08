@@ -320,6 +320,147 @@ class TestUnavailableControlsAreHonest:
         ) == _order(default, "LifestylePickUniqueTitle", "InvestorPickUniqueTitle")
 
 
+class TestCsvExportMatchesThePageOrder:
+    """Export CSV has to hand back the rows in the order shown on screen.
+
+    The page offers "Inv. Metr." as a sort and puts `sort=investment_metrics`
+    into the export link. If the export's allow-list does not know that value
+    it silently reorders by date: same rows, different order, no error.
+    """
+
+    @pytest.fixture
+    def rated_properties(self, app):
+        from datetime import datetime
+
+        with app.app_context():
+            profile = SearchProfile(
+                name="Rated",
+                is_active=True,
+                is_default=True,
+                travel_targets={"presets": {}, "custom": []},
+            )
+            db.session.add(profile)
+            db.session.commit()
+
+            # Every sortable field disagrees with the date order on purpose:
+            # a silent fallback to created_at would otherwise be invisible
+            # because the rows happened to line up.
+            rows = [
+                # slug, rating, created, title, price, area, total, inv, life
+                (
+                    "excellent",
+                    "EXCELLENT - strong",
+                    datetime(2026, 8, 1),
+                    "ZuluRatedUniqueTitle",
+                    300000,
+                    50,
+                    40,
+                    90,
+                    20,
+                ),
+                (
+                    "good",
+                    "GOOD - steady",
+                    datetime(2026, 8, 4),
+                    "AlphaRatedUniqueTitle",
+                    100000,
+                    300,
+                    90,
+                    30,
+                    80,
+                ),
+                (
+                    "moderate",
+                    "MODERATE - thin",
+                    datetime(2026, 8, 8),
+                    "MikeRatedUniqueTitle",
+                    200000,
+                    150,
+                    65,
+                    60,
+                    55,
+                ),
+            ]
+            ids = {}
+            for slug, rating, created, title, price, area, total, inv, life in rows:
+                prop = Property(
+                    source_email_id=f"issue105_csv_{slug}",
+                    title=title,
+                    search_profile_id=profile.id,
+                    listing_status="active",
+                    created_at=created,
+                    price=price,
+                    area=area,
+                    score_total=total,
+                    score_investment=inv,
+                    score_lifestyle=life,
+                    ai_analysis={
+                        "rental_market_analysis": {"investment_rating": rating}
+                    },
+                )
+                db.session.add(prop)
+                db.session.commit()
+                ids[slug] = prop.id
+
+            return {"profile_id": profile.id, "ids": ids}
+
+    def _page_ids(self, client, query):
+        body = client.get(f"/properties?{query}&view_type=list").get_data(as_text=True)
+        return re.findall(r'data-property-id="(\d+)"', body)
+
+    def _csv_ids(self, client, query):
+        import csv
+        import io
+
+        text = client.get(f"/properties/export.csv?{query}").get_data(as_text=True)
+        rows = list(csv.reader(io.StringIO(text)))
+        id_column = rows[0].index("ID")
+        return [row[id_column] for row in rows[1:]]
+
+    def test_export_keeps_the_investment_rating_order(self, client, rated_properties):
+        query = "sort=investment_metrics&order=desc"
+        expected = [
+            str(rated_properties["ids"][slug])
+            for slug in ("excellent", "good", "moderate")
+        ]
+        assert self._page_ids(client, query) == expected
+        assert self._csv_ids(client, query) == expected
+
+    def test_export_keeps_the_ascending_rating_order(self, client, rated_properties):
+        query = "sort=investment_metrics&order=asc"
+        expected = [
+            str(rated_properties["ids"][slug])
+            for slug in ("moderate", "good", "excellent")
+        ]
+        assert self._page_ids(client, query) == expected
+        assert self._csv_ids(client, query) == expected
+
+    def test_export_and_page_agree_on_the_score_sorts_too(
+        self, client, rated_properties
+    ):
+        for sort_by in (
+            "title",
+            "created_at",
+            "price",
+            "area",
+            "score_total",
+            "score_investment",
+            "score_lifestyle",
+        ):
+            query = f"sort={sort_by}&order=desc"
+            page_ids = self._page_ids(client, query)
+            # Guard the guard: every one of these sorts must differ from a
+            # plain date sort, or the comparison below proves nothing.
+            date_ids = self._page_ids(client, "sort=created_at&order=desc")
+            if sort_by != "created_at":
+                assert page_ids != date_ids, (
+                    f"fixture is too weak: sort={sort_by} matches the date order"
+                )
+            assert page_ids == self._csv_ids(client, query), (
+                f"export disagrees with the page for sort={sort_by}"
+            )
+
+
 class TestPropertiesPageSurvivesAFailure:
     def test_error_fallback_still_renders_the_page(self, client, monkeypatch):
         """The route swallows any failure and re-renders with an empty filter

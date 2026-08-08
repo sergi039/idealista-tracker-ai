@@ -2848,7 +2848,11 @@ def export_properties_csv():
         if hide_removed_filter:
             query = query.filter(Property.listing_status.notin_(["removed", "sold"]))
 
+        # Same ordering as /properties, tiebreaker included: the export link
+        # forwards whatever the page is sorted by, so an allow-list that does
+        # not know a value would hand back the same rows in another order.
         sort_columns = {
+            "title": Property.title,
             "created_at": Property.created_at,
             "price": Property.price,
             "area": Property.area,
@@ -2856,11 +2860,18 @@ def export_properties_csv():
             "score_investment": Property.score_investment,
             "score_lifestyle": Property.score_lifestyle,
         }
-        sort_column = sort_columns.get(sort_by, Property.created_at)
-        if sort_order == "asc":
-            props = query.order_by(sort_column.asc().nullslast()).all()
+        if sort_by == "investment_metrics":
+            rank = _investment_rating_rank(Property)
+            rank_order = rank.asc() if sort_order == "asc" else rank.desc()
+            props = query.order_by(
+                rank_order.nullslast(), Property.score_total.desc().nullslast()
+            ).all()
         else:
-            props = query.order_by(sort_column.desc().nullslast()).all()
+            sort_column = sort_columns.get(sort_by, Property.created_at)
+            if sort_order == "asc":
+                props = query.order_by(sort_column.asc().nullslast()).all()
+            else:
+                props = query.order_by(sort_column.desc().nullslast()).all()
 
         travel_display_targets = []
         if selected_profile_id is not None:
