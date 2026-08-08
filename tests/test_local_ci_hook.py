@@ -213,3 +213,32 @@ def test_gate_runs_with_a_clean_git_environment(tmp_path):
         if line.split("=", 1)[0] in GIT_ENV_VARS
     )
     assert leaked == [], f"gate inherited git environment: {leaked}"
+
+
+def test_gate_restores_mutated_shared_config_and_fails(tmp_path):
+    """The canary: a config write during the gate must be loud, not fatal later.
+
+    The environment scrub above closes the known leak, but the failure mode
+    (a check writing core.bare/user.* into the real repo's shared config,
+    quietly killing every worktree) is bad enough to deserve a runtime
+    tripwire too: the hook snapshots the shared config before the gate and,
+    if anything mutated it, restores the snapshot and fails the push.
+    """
+    repo = _make_repo(tmp_path, committed_gate_exit=0)
+    _write_gate_script(
+        repo,
+        "#!/bin/bash\ngit config user.email gate-mutant@example.invalid\nexit 0\n",
+    )
+    _commit_all(repo, "gate that mutates the shared config")
+    config = repo / ".git" / "config"
+    before = config.read_text()
+
+    res = _run_hook(repo)
+
+    assert res.returncode != 0, (
+        "a gate run that mutates the shared config must fail the push:\n"
+        + res.stdout
+        + res.stderr
+    )
+    assert "mutated" in (res.stdout + res.stderr)
+    assert config.read_text() == before, "shared config must be restored byte-for-byte"

@@ -80,6 +80,23 @@ if [ -z "$(echo "$pushed_shas" | tr -d '[:space:]')" ]; then
     exit 0
 fi
 
+# Canary for the corruption class handled above (issue #74, incident
+# 2026-08-08): no check the gate spawns may mutate this repository's shared
+# config. If it happens anyway, the epilogue after the loop restores this
+# snapshot and fails the push loudly, instead of leaving core.bare=true to
+# quietly kill every worktree of this clone.
+shared_config="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)/config"
+config_snapshot="$(mktemp "${TMPDIR:-/tmp}/local-ci-gate-config.XXXXXX")" || config_snapshot=""
+if [ -n "$config_snapshot" ] && ! cp "$shared_config" "$config_snapshot" 2>/dev/null; then
+    rm -f "$config_snapshot"
+    config_snapshot=""
+fi
+# A dead canary must not block the push (the env scrub above is the actual
+# fix), but it must not die silently either.
+if [ -z "$config_snapshot" ]; then
+    echo "pre-push: warning: could not snapshot ${shared_config}; the config-mutation canary is OFF for this run"
+fi
+
 run_gate_on_commit() {
     local sha="$1"
     local tmp_worktree
@@ -120,6 +137,19 @@ for sha in $pushed_shas; do
     echo "pre-push: validating pushed commit $sha in a clean snapshot ..."
     run_gate_on_commit "$sha" || overall_rc=1
 done
+
+if [ -n "$config_snapshot" ]; then
+    if ! cmp -s "$config_snapshot" "$shared_config"; then
+        echo
+        echo "pre-push: FATAL: this gate run mutated ${shared_config}:"
+        diff "$config_snapshot" "$shared_config" | sed 's/^/    /'
+        cp "$config_snapshot" "$shared_config"
+        echo "pre-push: restored the pre-push copy. Some check is writing to the real"
+        echo "pre-push: repo config again - find and fix it before pushing (issue #74)."
+        overall_rc=1
+    fi
+    rm -f "$config_snapshot"
+fi
 
 if [ "$overall_rc" -ne 0 ]; then
     echo
