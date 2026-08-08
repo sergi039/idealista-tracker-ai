@@ -29,6 +29,21 @@ pytest tests/ -v                             # test suite
 pytest tests/ --cov=app --cov-report=html    # coverage report
 ```
 
+### Local CI gate
+
+`tools/ci/local_ci.sh` runs the same checks as `.github/workflows/ci.yml`
+(ruff check, ruff format --check, no-source-bundles, `uv run pytest tests/
+-q`) locally, standalone or as a git `pre-push` hook — a red run costs agent
+cycles even though the repo's Actions minutes are free (issue #74). Enable it
+once per clone:
+
+```bash
+tools/ci/install_hooks.sh    # git config core.hooksPath .githooks
+```
+
+Bypass a single push with `SKIP_LOCAL_CI=1 git push`. `.github/workflows/
+ci.yml` itself is unchanged and stays the merge gate for autopilot.
+
 **Working UI is `/lands`** (owner decision, 2026-08-07): the lands view —
 cards/list with Land Type, Sea View and to-beach filters — is what the app
 serves from `/`. The universal `/properties` page and its search-profile
