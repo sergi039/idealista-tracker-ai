@@ -1,10 +1,25 @@
 #!/bin/bash
-# Pre-push gate: runs tools/ci/local_ci.sh before letting a push reach GitHub
-# (issue #74). Enabled per-clone via tools/ci/install_hooks.sh.
+# Pre-push gate: runs tools/ci/local_ci.sh against the commit(s) actually
+# being pushed, before letting the push reach GitHub (issue #74).
+# Enabled per-clone via tools/ci/install_hooks.sh.
+#
+# Why not just "cd repo_root && run the script": the working tree can differ
+# from the commit being pushed (an uncommitted fix, or a stash). If a synced
+# ruff/pytest issue exists only in the committed blob and was "fixed" on
+# disk without committing, testing the working tree would pass while the
+# pushed commit is still broken. Reviewed and hardened in PR #78.
+#
+# Strategy:
+#   - working tree clean  -> run the gate in place (fast path, no overhead)
+#   - working tree dirty  -> run the gate against a throwaway `git worktree`
+#     checked out at each distinct commit SHA actually being pushed, so the
+#     verdict reflects exactly what `git push` sends, not the dirty tree.
 #
 # Bypass for one push:      SKIP_LOCAL_CI=1 git push
 # Bypass for the autopilot: run_issue.sh sets AUTOPILOT_LOCAL_CI_DONE=1 after
 #   it already ran the full suite itself, so the hook does not run it twice.
+
+set -u
 
 if [ "${SKIP_LOCAL_CI:-0}" = "1" ]; then
     echo "pre-push: SKIP_LOCAL_CI=1 set, skipping local CI gate"
@@ -17,8 +32,75 @@ if [ "${AUTOPILOT_LOCAL_CI_DONE:-0}" = "1" ]; then
 fi
 
 repo_root="$(git rev-parse --show-toplevel)"
+zero_sha="0000000000000000000000000000000000000000"
 
-if ! "${repo_root}/tools/ci/local_ci.sh"; then
+# git feeds "<local-ref> <local-sha> <remote-ref> <remote-sha>" lines on
+# stdin, one per ref being pushed (a single `git push` can carry several).
+# Collect the distinct non-deletion local SHAs - a branch-deletion push has
+# local-sha == zero_sha and carries no tree to validate.
+pushed_shas=""
+# shellcheck disable=SC2034  # local_ref/remote_ref/remote_sha are positional-only
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -z "${local_sha:-}" ] && continue
+    [ "$local_sha" = "$zero_sha" ] && continue
+    case " $pushed_shas " in
+        *" $local_sha "*) ;;
+        *) pushed_shas="$pushed_shas $local_sha" ;;
+    esac
+done
+
+if [ -z "$(echo "$pushed_shas" | tr -d '[:space:]')" ]; then
+    echo "pre-push: push carries no new commits (e.g. branch deletion), skipping local CI gate"
+    exit 0
+fi
+
+run_gate_on_commit() {
+    local sha="$1"
+    local tmp_worktree
+    tmp_worktree="$(mktemp -d "${TMPDIR:-/tmp}/local-ci-gate.XXXXXX")" || {
+        echo "pre-push: could not create a temp dir for a clean snapshot of $sha"
+        return 1
+    }
+    # mktemp already created the directory; `git worktree add` requires the
+    # target to not exist (or be empty), so hand it a path inside instead.
+    local wt="${tmp_worktree}/wt"
+
+    cleanup() {
+        cd "$repo_root" 2>/dev/null || true
+        git worktree remove --force "$wt" >/dev/null 2>&1
+        rm -rf "$tmp_worktree"
+    }
+    trap cleanup EXIT INT TERM
+
+    if ! git worktree add --detach --quiet "$wt" "$sha" >/dev/null 2>&1; then
+        echo "pre-push: could not create a clean worktree for commit $sha"
+        trap - EXIT INT TERM
+        cleanup
+        return 1
+    fi
+
+    ( cd "$wt" && "${wt}/tools/ci/local_ci.sh" )
+    local rc=$?
+
+    trap - EXIT INT TERM
+    cleanup
+    return "$rc"
+}
+
+overall_rc=0
+
+if [ -z "$(git status --porcelain)" ]; then
+    "${repo_root}/tools/ci/local_ci.sh" || overall_rc=1
+else
+    echo "pre-push: working tree has uncommitted changes - validating the pushed commit(s) in a clean snapshot instead."
+    for sha in $pushed_shas; do
+        echo
+        echo "pre-push: checking pushed commit $sha ..."
+        run_gate_on_commit "$sha" || overall_rc=1
+    done
+fi
+
+if [ "$overall_rc" -ne 0 ]; then
     echo
     echo "pre-push: local CI gate failed - push aborted."
     echo "Fix the failures above, or bypass once with: SKIP_LOCAL_CI=1 git push"

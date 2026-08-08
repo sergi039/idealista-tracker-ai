@@ -166,6 +166,11 @@ a `pre-push` hook once per clone:
 tools/ci/install_hooks.sh
 ```
 
+The hook validates what is actually being pushed, not your working tree: if
+the tree is clean it runs in place, and if it's dirty it checks out the
+pushed commit(s) into a throwaway `git worktree` and runs the gate there, so
+an uncommitted "fix" can't hide a broken committed blob.
+
 Bypass a single push with `SKIP_LOCAL_CI=1 git push` if you need to push
 work-in-progress.
 
