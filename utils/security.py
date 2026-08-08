@@ -4,9 +4,51 @@ Security utilities for API key validation and security configuration
 
 import os
 import logging
-from typing import List, Dict, Tuple
+from typing import List, Dict, Optional, Tuple
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+
+def is_safe_redirect_target(target: Optional[str]) -> bool:
+    """Return True only for a safe, same-origin relative redirect path.
+
+    Rejects absolute URLs (`https://evil.example`), protocol-relative URLs
+    (`//evil.example`), and the backslash variant browsers normalize to a
+    protocol-relative URL (`/\\evil.example`). Only a path that starts with
+    a single `/` and carries no scheme/netloc is considered safe.
+
+    Used to close open-redirect holes such as login's `?next=` parameter
+    (issue #17): never redirect to a caller-supplied value without this
+    check first.
+    """
+    if not target or not isinstance(target, str):
+        return False
+    if not target.startswith("/"):
+        return False
+    normalized = target.replace("\\", "/")
+    if normalized.startswith("//"):
+        return False
+    parsed = urlparse(normalized)
+    return not parsed.scheme and not parsed.netloc
+
+
+def safe_redirect_target(candidate: Optional[str], fallback: str) -> str:
+    """Return `candidate` if it passes `is_safe_redirect_target`, else `fallback`."""
+    return candidate if is_safe_redirect_target(candidate) else fallback
+
+
+def safe_referrer_target(referrer: Optional[str], host_url: str, fallback: str) -> str:
+    """Return `referrer` only when it points back at this app's own origin.
+
+    `host_url` is Flask's `request.host_url`. The `Referer` header is
+    entirely client-controlled, so a cross-origin form post could otherwise
+    bounce an authenticated admin's browser to an attacker-controlled origin
+    after a POST action completes (issue #17).
+    """
+    if referrer and referrer.startswith(host_url):
+        return referrer
+    return fallback
 
 
 class SecurityValidator:

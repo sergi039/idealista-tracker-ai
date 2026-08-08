@@ -19,6 +19,7 @@ from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
 from app import db
 from utils.auth import admin_required, login_admin, logout_admin
+from utils.security import safe_redirect_target, safe_referrer_target
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +44,16 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 def login():
     """Admin login page"""
     if session.get("admin_authenticated"):
-        return redirect(request.args.get("next") or url_for("main.lands"))
+        return redirect(
+            safe_redirect_target(request.args.get("next"), url_for("main.lands"))
+        )
 
     if request.method == "POST":
         token = request.form.get("token", "").strip()
         if login_admin(token):
-            next_url = request.form.get("next") or url_for("main.lands")
+            next_url = safe_redirect_target(
+                request.form.get("next"), url_for("main.lands")
+            )
             return redirect(next_url)
         flash("Invalid admin token.", "error")
 
@@ -1181,7 +1186,11 @@ def recalculate_property_travel(property_id: int):
             flash("Travel not updated (missing coordinates or targets).", "error")
 
         return redirect(
-            request.referrer or url_for("main.property_detail", property_id=property_id)
+            safe_referrer_target(
+                request.referrer,
+                request.host_url,
+                url_for("main.property_detail", property_id=property_id),
+            )
         )
     except Exception as e:
         logger.error(
@@ -1213,7 +1222,11 @@ def recalculate_property_score(property_id: int):
             flash("Scoring not updated.", "error")
 
         return redirect(
-            request.referrer or url_for("main.property_detail", property_id=property_id)
+            safe_referrer_target(
+                request.referrer,
+                request.host_url,
+                url_for("main.property_detail", property_id=property_id),
+            )
         )
     except Exception as e:
         logger.error(
@@ -1271,7 +1284,11 @@ def recalculate_profile_travel(profile_id: int):
             "success",
         )
         return redirect(
-            request.referrer or url_for("main.properties", profile_id=profile_id)
+            safe_referrer_target(
+                request.referrer,
+                request.host_url,
+                url_for("main.properties", profile_id=profile_id),
+            )
         )
     except Exception as e:
         logger.error(
@@ -1330,7 +1347,11 @@ def recalculate_profile_scoring(profile_id: int):
             "success",
         )
         return redirect(
-            request.referrer or url_for("main.properties", profile_id=profile_id)
+            safe_referrer_target(
+                request.referrer,
+                request.host_url,
+                url_for("main.properties", profile_id=profile_id),
+            )
         )
 
     except Exception as e:
@@ -1423,7 +1444,11 @@ def recalculate_profile_classification(profile_id: int):
         else:
             flash(f"Reclassified {updated} / {len(properties)} properties", "success")
         return redirect(
-            request.referrer or url_for("main.edit_profile", profile_id=profile_id)
+            safe_referrer_target(
+                request.referrer,
+                request.host_url,
+                url_for("main.edit_profile", profile_id=profile_id),
+            )
         )
 
     except Exception as e:
@@ -1462,7 +1487,11 @@ def set_property_status_form(property_id: int):
         db.session.commit()
         flash(f"Status updated to {new_status}", "success")
         return redirect(
-            request.referrer or url_for("main.property_detail", property_id=property_id)
+            safe_referrer_target(
+                request.referrer,
+                request.host_url,
+                url_for("main.property_detail", property_id=property_id),
+            )
         )
     except Exception as e:
         logger.error("Failed to set property status %s", property_id, exc_info=True)
@@ -1525,8 +1554,11 @@ def set_property_classification_form(property_id: int):
             db.session.commit()
             flash("Classification updated", "success")
             return redirect(
-                request.referrer
-                or url_for("main.property_detail", property_id=property_id)
+                safe_referrer_target(
+                    request.referrer,
+                    request.host_url,
+                    url_for("main.property_detail", property_id=property_id),
+                )
             )
 
         if action == "auto":
@@ -1553,13 +1585,20 @@ def set_property_classification_form(property_id: int):
                     "success",
                 )
             return redirect(
-                request.referrer
-                or url_for("main.property_detail", property_id=property_id)
+                safe_referrer_target(
+                    request.referrer,
+                    request.host_url,
+                    url_for("main.property_detail", property_id=property_id),
+                )
             )
 
         flash("Unknown action", "error")
         return redirect(
-            request.referrer or url_for("main.property_detail", property_id=property_id)
+            safe_referrer_target(
+                request.referrer,
+                request.host_url,
+                url_for("main.property_detail", property_id=property_id),
+            )
         )
 
     except Exception as e:
@@ -1673,7 +1712,11 @@ def set_property_profile_form(property_id: int):
         db.session.commit()
         flash("Profile updated", "success")
         return redirect(
-            request.referrer or url_for("main.property_detail", property_id=property_id)
+            safe_referrer_target(
+                request.referrer,
+                request.host_url,
+                url_for("main.property_detail", property_id=property_id),
+            )
         )
     except Exception as e:
         logger.error(

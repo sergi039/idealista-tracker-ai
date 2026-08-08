@@ -575,6 +575,170 @@ class TestErrorSanitization:
 
 
 # ---------------------------------------------------------------------------
+# Security: open redirects via login `?next=` and Referer (issue #17)
+# ---------------------------------------------------------------------------
+class TestOpenRedirectProtection:
+    """Neither the login `next` param nor an admin action's Referer header
+    may send the browser to an off-site URL. Both are attacker-controlled
+    input reflected straight into a redirect."""
+
+    def test_get_login_next_external_url_falls_back(self, client):
+        """Already-authenticated GET /login?next=<external> must not honor it."""
+        with client.session_transaction() as sess:
+            sess["admin_authenticated"] = True
+
+        resp = client.get("/login?next=https://evil.example/steal")
+        assert resp.status_code == 302
+        location = resp.headers.get("Location", "")
+        assert "evil.example" not in location
+        assert location.endswith("/lands") or location == "/lands"
+
+    def test_get_login_next_protocol_relative_falls_back(self, client):
+        """`next=//evil.example` (protocol-relative) is also an off-site target."""
+        with client.session_transaction() as sess:
+            sess["admin_authenticated"] = True
+
+        resp = client.get("/login?next=//evil.example/steal")
+        assert resp.status_code == 302
+        location = resp.headers.get("Location", "")
+        assert "evil.example" not in location
+
+    def test_get_login_next_safe_relative_path_preserved(self, client):
+        """A same-origin relative `next` must still work normally."""
+        with client.session_transaction() as sess:
+            sess["admin_authenticated"] = True
+
+        resp = client.get("/login?next=/properties")
+        assert resp.status_code == 302
+        assert resp.headers.get("Location", "") == "/properties"
+
+    def test_post_login_next_external_url_falls_back(self, client):
+        """POST /login with a valid token and an external `next` must not honor it."""
+        orig_token = os.environ.get("ADMIN_API_TOKEN")
+        os.environ["ADMIN_API_TOKEN"] = "test-admin-token"
+        try:
+            resp = client.post(
+                "/login",
+                data={
+                    "token": "test-admin-token",
+                    "next": "https://evil.example/phish",
+                },
+            )
+            assert resp.status_code == 302
+            location = resp.headers.get("Location", "")
+            assert "evil.example" not in location
+            assert location.endswith("/lands") or location == "/lands"
+        finally:
+            if orig_token is not None:
+                os.environ["ADMIN_API_TOKEN"] = orig_token
+            else:
+                os.environ.pop("ADMIN_API_TOKEN", None)
+
+    def test_post_login_next_safe_relative_path_preserved(self, client):
+        """POST /login with a valid token and a safe relative `next` still redirects there."""
+        orig_token = os.environ.get("ADMIN_API_TOKEN")
+        os.environ["ADMIN_API_TOKEN"] = "test-admin-token"
+        try:
+            resp = client.post(
+                "/login",
+                data={"token": "test-admin-token", "next": "/properties?profile_id=2"},
+            )
+            assert resp.status_code == 302
+            assert resp.headers.get("Location", "") == "/properties?profile_id=2"
+        finally:
+            if orig_token is not None:
+                os.environ["ADMIN_API_TOKEN"] = orig_token
+            else:
+                os.environ.pop("ADMIN_API_TOKEN", None)
+
+    def test_referer_redirect_cross_origin_falls_back(self, client, test_property):
+        """A cross-origin Referer on an admin POST must not be honored."""
+        resp = client.post(
+            f"/properties/{test_property}/set-status",
+            data={"status": "removed"},
+            headers={"Referer": "https://evil.example/lure"},
+        )
+        assert resp.status_code == 302
+        location = resp.headers.get("Location", "")
+        assert "evil.example" not in location
+        assert f"/properties/{test_property}" in location
+
+    def test_referer_redirect_same_origin_preserved(self, client, test_property):
+        """A same-origin Referer is still honored so the admin lands back where
+        they came from (e.g. a filtered/paginated list view)."""
+        resp = client.post(
+            f"/properties/{test_property}/set-status",
+            data={"status": "active"},
+            headers={"Referer": "http://localhost/properties?profile_id=2"},
+        )
+        assert resp.status_code == 302
+        assert (
+            resp.headers.get("Location", "") == "http://localhost/properties?profile_id=2"
+        )
+
+    def test_referer_redirect_missing_falls_back(self, client, test_property):
+        """No Referer header at all must still fall back cleanly (no crash)."""
+        resp = client.post(
+            f"/properties/{test_property}/set-status",
+            data={"status": "sold"},
+        )
+        assert resp.status_code == 302
+        location = resp.headers.get("Location", "")
+        assert f"/properties/{test_property}" in location
+
+
+class TestSafeRedirectHelpers:
+    """Unit coverage for utils.security's redirect-target validators."""
+
+    def test_is_safe_redirect_target_accepts_relative_paths(self):
+        from utils.security import is_safe_redirect_target
+
+        assert is_safe_redirect_target("/properties") is True
+        assert is_safe_redirect_target("/properties?profile_id=2") is True
+        assert is_safe_redirect_target("/lands#section") is True
+
+    def test_is_safe_redirect_target_rejects_absolute_and_protocol_relative(self):
+        from utils.security import is_safe_redirect_target
+
+        assert is_safe_redirect_target("https://evil.example") is False
+        assert is_safe_redirect_target("http://evil.example/x") is False
+        assert is_safe_redirect_target("//evil.example") is False
+        assert is_safe_redirect_target("/\\evil.example") is False
+        assert is_safe_redirect_target("javascript:alert(1)") is False
+
+    def test_is_safe_redirect_target_rejects_empty_or_non_string(self):
+        from utils.security import is_safe_redirect_target
+
+        assert is_safe_redirect_target(None) is False
+        assert is_safe_redirect_target("") is False
+        assert is_safe_redirect_target("relative-no-slash") is False
+
+    def test_safe_redirect_target_falls_back_on_unsafe_candidate(self):
+        from utils.security import safe_redirect_target
+
+        assert safe_redirect_target("https://evil.example", "/lands") == "/lands"
+        assert safe_redirect_target("/properties", "/lands") == "/properties"
+        assert safe_redirect_target(None, "/lands") == "/lands"
+
+    def test_safe_referrer_target_requires_matching_host_url(self):
+        from utils.security import safe_referrer_target
+
+        host_url = "http://localhost:5001/"
+        assert (
+            safe_referrer_target(
+                "http://localhost:5001/properties", host_url, "/fallback"
+            )
+            == "http://localhost:5001/properties"
+        )
+        assert (
+            safe_referrer_target("https://evil.example", host_url, "/fallback")
+            == "/fallback"
+        )
+        assert safe_referrer_target(None, host_url, "/fallback") == "/fallback"
+        assert safe_referrer_target("", host_url, "/fallback") == "/fallback"
+
+
+# ---------------------------------------------------------------------------
 # Scoring: Config profile weights drive calculation, DB combined weights loaded
 # ---------------------------------------------------------------------------
 class TestScoringWeights:
