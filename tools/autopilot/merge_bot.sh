@@ -138,6 +138,17 @@ review_is_pass() {
         return 1
     fi
 
+    # The fetch happens after the listing, so it can pick up a different commit
+    # than the one the merge will pin with --match-head-commit. A force-push to
+    # B and back to A would otherwise get A merged on B's PASS. Review only the
+    # commit that is actually going to be merged.
+    local fetched_sha
+    fetched_sha="$(git rev-parse "$ref" 2>/dev/null || true)"
+    if [ "$fetched_sha" != "$head_sha" ]; then
+        log "  PR #${pr}: head moved during fetch (${head_sha:0:7} -> ${fetched_sha:0:7}) - skipping"
+        return 1
+    fi
+
     log "  PR #${pr}: requesting independent review of ${base_sha:0:7}..${head_sha:0:7}"
     set +e
     rx --range "${base_sha}..${ref}" \
@@ -184,18 +195,21 @@ parameterised queries)." >>"$LOG_FILE" 2>&1
 verify_merged_onto_reviewed_base() {
     local pr="$1" reviewed_base="$2" merge_sha actual_base
 
+    # "Could not check" is not "checked and fine". Both unreadable cases return
+    # non-zero so the caller reports the merge as needing eyes, rather than
+    # logging a warning nobody acts on and carrying on as if verified.
     merge_sha="$(gh pr view "$pr" --repo "$REPO_SLUG" \
         --json mergeCommit --jq '.mergeCommit.oid // empty' 2>/dev/null || true)"
     if [ -z "$merge_sha" ]; then
-        log "  WARNING: #${pr} merged but the merge commit could not be read - base unverified"
-        return 0
+        log "  ALERT: #${pr} merged but the merge commit could not be read - base UNVERIFIED"
+        return 1
     fi
 
     actual_base="$(gh api "repos/${REPO_SLUG}/commits/${merge_sha}" \
         --jq '.parents[0].sha // empty' 2>/dev/null || true)"
     if [ -z "$actual_base" ]; then
-        log "  WARNING: #${pr} merged but its base could not be read - unverified"
-        return 0
+        log "  ALERT: #${pr} merged (${merge_sha:0:7}) but its base could not be read - UNVERIFIED"
+        return 1
     fi
 
     if [ "$actual_base" != "$reviewed_base" ]; then
@@ -272,7 +286,11 @@ printf '%s' "$pr_query" | jq -c '.[]' | while read -r pr_json; do
     if gh pr merge "$number" --repo "$REPO_SLUG" --squash --delete-branch \
         --match-head-commit "$head_sha" >>"$LOG_FILE" 2>&1; then
         log "  MERGED #${number}"
-        verify_merged_onto_reviewed_base "$number" "$BASE_SHA"
+        # Explicit `if`: a bare call returning non-zero would trip `set -e` and
+        # abort the whole pass right after a successful merge.
+        if ! verify_merged_onto_reviewed_base "$number" "$BASE_SHA"; then
+            log "  #${number} NEEDS MANUAL INSPECTION - see the ALERT above"
+        fi
     else
         # --match-head-commit fails the merge if someone pushed after the
         # review; that is the desired outcome, not an error to work around.
