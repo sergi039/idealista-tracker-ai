@@ -116,6 +116,39 @@ ci_is_green() {
     return 0
 }
 
+# A BLOCKER that only reaches data/autopilot-merge.log is a verdict nobody
+# sees: the PR just sits there looking mergeable. Put the reason where the work
+# is. Failure to comment is logged but never blocks - the merge was refused
+# either way, which is the part that matters.
+post_blocker_comment() {
+    local pr="$1" base_sha="$2" head_sha="$3" verdict
+
+    # The reviewer's own words, from the tail of the log it just wrote. This
+    # script's own lines carry a timestamp prefix and are dropped, so the
+    # comment quotes the review rather than the plumbing around it.
+    verdict="$(awk '/^rx: .*outcome=BLOCKER/{found=NR} {lines[NR]=$0} END {
+        if (found) for (i = found; i <= NR; i++) print lines[i]
+    }' "$LOG_FILE" 2>/dev/null | grep -v '^20[0-9][0-9]-[0-9][0-9]-[0-9][0-9] ' | head -40)"
+
+    if [ -z "$verdict" ]; then
+        verdict="(the reviewer returned BLOCKER; see data/autopilot-merge.log)"
+    fi
+
+    gh pr comment "$pr" --repo "$REPO_SLUG" --body "## Automated review: BLOCKER
+
+\`tools/autopilot/merge_bot.sh\` took this PR through both gates — CI green,
+branch up to date — and stopped at the independent review. Not merged.
+
+\`\`\`
+${verdict}
+\`\`\`
+
+Reviewed range: \`${base_sha:0:7}..${head_sha:0:7}\`. Push a fix and the bot
+re-reviews automatically: verdicts are keyed to the base..head pair, so a new
+commit is never covered by this one." >>"$LOG_FILE" 2>&1 \
+        || log "  PR #${pr}: could not post the BLOCKER comment (merge still refused)"
+}
+
 # --- gate 2: independent review -------------------------------------------
 review_is_pass() {
     local pr="$1" head_sha="$2" base_sha="$3" cached rc ref key
@@ -192,6 +225,7 @@ parameterised queries)." >>"$LOG_FILE" 2>&1
            return 0 ;;
         4) log "  PR #${pr}: review BLOCKER - left open"
            record_verdict "$key" BLOCKER "pr-${pr}"
+           post_blocker_comment "$pr" "$base_sha" "$head_sha"
            return 1 ;;
         *) log "  PR #${pr}: review UNAVAILABLE (rc=${rc}) - not a pass, retrying next tick"
            return 1 ;;
@@ -257,7 +291,9 @@ else
 fi
 
 count="$(printf '%s' "$pr_query" | jq 'length')"
-log "evaluating ${count} open PR(s)${DRY_RUN:+ (dry run)}"
+dry_run_note=""
+[ "$DRY_RUN" = "1" ] && dry_run_note=" (dry run)"
+log "evaluating ${count} open PR(s)${dry_run_note}"
 
 printf '%s' "$pr_query" | jq -c '.[]' | while read -r pr_json; do
     number="$(printf '%s' "$pr_json" | jq -r '.number')"

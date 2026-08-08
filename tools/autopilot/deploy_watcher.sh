@@ -24,6 +24,12 @@ ROLLBACK_TAG="${IMAGE}:autopilot-rollback"
 HEALTH_URL="${AUTOPILOT_HEALTH_URL:-http://127.0.0.1:5001/api/healthz}"
 LOCK_DIR="${AUTOPILOT_LOCK_DIR:-/tmp/idealista-autopilot-deploy.lock.d}"
 LOG_FILE="${AUTOPILOT_LOG_FILE:-${REPO_DIR}/data/autopilot-deploy.log}"
+# What is actually running, as opposed to what is checked out. Comparing
+# local git against remote git only answers "is the checkout current", and the
+# container can be older than the checkout - a `git pull` by hand is enough to
+# make the watcher believe there is nothing to do while the app still serves
+# the previous build. Observed on the very first run.
+DEPLOYED_MARKER="${AUTOPILOT_DEPLOYED_MARKER:-${REPO_DIR}/data/.deployed_sha}"
 
 # The app has to answer healthz within this window after a rebuild.
 HEALTH_TIMEOUT_SECONDS="${AUTOPILOT_HEALTH_TIMEOUT:-180}"
@@ -66,17 +72,29 @@ git fetch --quiet origin "$BRANCH" || die "git fetch failed"
 
 local_sha="$(git rev-parse HEAD)"
 remote_sha="$(git rev-parse "origin/${BRANCH}")"
+deployed_sha="$(cat "$DEPLOYED_MARKER" 2>/dev/null || true)"
 
-if [ "$local_sha" = "$remote_sha" ]; then
+# Two separate questions: is the checkout current, and is the container built
+# from it. Answering only the first is what let a hand-run `git pull` convince
+# the watcher that a stale container was up to date.
+if [ "$local_sha" = "$remote_sha" ] && [ "$remote_sha" = "$deployed_sha" ]; then
     # Nothing new. Stay quiet: this runs every few minutes and the log is read
     # by a human.
     exit 0
 fi
 
-log "new ${BRANCH}: ${local_sha:0:7} -> ${remote_sha:0:7}"
-git --no-pager log --oneline "${local_sha}..${remote_sha}" | while read -r line; do
-    log "    $line"
-done
+if [ "$local_sha" != "$remote_sha" ]; then
+    log "new ${BRANCH}: ${local_sha:0:7} -> ${remote_sha:0:7}"
+    git --no-pager log --oneline "${local_sha}..${remote_sha}" | while read -r line; do
+        log "    $line"
+    done
+elif [ -z "$deployed_sha" ]; then
+    # First run after installing the watcher, or the marker was removed. The
+    # running image cannot be identified, so redeploy rather than assume.
+    log "no deployment marker - redeploying ${remote_sha:0:7} to establish one"
+else
+    log "checkout is current (${remote_sha:0:7}) but the deployed build is ${deployed_sha:0:7}"
+fi
 
 # --- checkpoint for rollback ----------------------------------------------
 if docker image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -87,6 +105,35 @@ else
     log "WARNING: no existing '${IMAGE}' image to tag; rollback will be code-only"
     have_rollback_image=0
 fi
+
+# Written only after health passes, so the marker always names a build that
+# actually served traffic. Atomic rename: a half-written marker would be read
+# as a SHA that never existed.
+record_deployed() {
+    local sha="$1" tmp
+    tmp="$(mktemp "${DEPLOYED_MARKER}.XXXXXX")" || return 1
+    printf '%s\n' "$sha" >"$tmp" || { rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$DEPLOYED_MARKER" || { rm -f "$tmp"; return 1; }
+    return 0
+}
+
+# Removing the marker is the fallback whenever the truth cannot be recorded,
+# so its own failure cannot be ignored: an unwritable directory fails the write
+# *and* the delete, leaving the previous commit's marker in place while a
+# different one serves. The next tick still redeploys (marker != HEAD), so the
+# app is never stale - but it will redeploy on every tick until someone fixes
+# the permissions, and that deserves to be shouted rather than hidden.
+clear_marker() {
+    local reason="$1"
+    if rm -f "$DEPLOYED_MARKER" 2>/dev/null && [ ! -e "$DEPLOYED_MARKER" ]; then
+        log "  cleared the deployment marker (${reason})"
+        return 0
+    fi
+    log "  ALERT: could not clear the deployment marker (${reason})."
+    log "  ${DEPLOYED_MARKER} still names an older commit; expect a redeploy every"
+    log "  tick until the file is writable again."
+    return 1
+}
 
 rollback() {
     local reason="$1"
@@ -122,10 +169,29 @@ rollback() {
             || log "  rollback rebuild failed"
     fi
 
-    if check_health; then
-        log "rollback healthy - previous version is serving again"
-    else
+    if ! check_health; then
         log "ROLLBACK IS ALSO UNHEALTHY - THE APP IS DOWN, MANUAL ATTENTION NEEDED"
+        clear_marker "the rollback itself is unhealthy"
+        return
+    fi
+    log "rollback healthy - previous version is serving again"
+
+    # The marker must name the commit that is *serving*, and only the rebuild
+    # path knows that: it built from local_sha and then passed health.
+    #
+    # The saved image carries no such guarantee. With no marker to start from,
+    # that image can predate the checkout entirely - built from B while the tree
+    # sits at A. Writing local_sha then claims A is deployed while B serves, and
+    # the next tick sees local=remote=marker and skips the redeploy forever.
+    # No marker is the honest answer: one wasted rebuild beats a permanently
+    # wrong belief about what is running.
+    if [ "$restored" = "1" ]; then
+        clear_marker "restored from the saved image, whose commit is unknown"
+        return
+    fi
+
+    if ! record_deployed "$local_sha"; then
+        clear_marker "the rollback rebuilt ${local_sha:0:7} but the marker could not be written"
     fi
 }
 
@@ -167,7 +233,15 @@ if ! check_health; then
 fi
 
 deployed_sha="$(git rev-parse HEAD)"
-log "DEPLOYED ${deployed_sha:0:7} successfully"
+if record_deployed "$deployed_sha"; then
+    log "DEPLOYED ${deployed_sha:0:7} successfully"
+else
+    # The deploy worked; only the bookkeeping failed. Leave no marker rather
+    # than a wrong one - the next tick then redeploys this same commit, which
+    # is wasteful but never wrong.
+    log "DEPLOYED ${deployed_sha:0:7} successfully, but the marker could not be written"
+    clear_marker "the deploy succeeded but its marker could not be written"
+fi
 
 # Scheduler state is worth a line in the log: a 'not_initialized' scheduler is
 # the difference between an app that ingests and one that only looks alive
