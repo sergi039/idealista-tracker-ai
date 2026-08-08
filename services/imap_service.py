@@ -277,9 +277,13 @@ class IMAPService:
                         continue
 
                     # Emails we hand back still need DB work, so they stay
-                    # unresolved until run_ingestion() commits them. Everything
-                    # else (filtered out, or unparseable) is done right here.
+                    # unresolved until run_ingestion() commits them. Emails we
+                    # deliberately filtered out are done right here. An email
+                    # that *raised* is neither - see the same guard in
+                    # property_imap_service.py: resolving its UID would drop a
+                    # real listing on a transient failure, which is #24 again.
                     emitted = False
+                    failed = False
                     try:
                         msg = message_from_bytes(raw_email)
 
@@ -448,9 +452,15 @@ class IMAPService:
                                 f"Could not parse Idealista data from email UID {uid}"
                             )
                     except Exception:
-                        logger.error("Failed to process UID %s", uid, exc_info=True)
+                        failed = True
+                        logger.error(
+                            "Failed to process UID %s - holding last_seen_uid "
+                            "behind it so the email is re-read next run",
+                            uid,
+                            exc_info=True,
+                        )
                     finally:
-                        if not emitted:
+                        if not emitted and not failed:
                             self._advance_uid_cursor({"uid": uid})
 
                 logger.info(

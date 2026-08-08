@@ -18,6 +18,7 @@ import pytest
 from app import create_app, db
 from config import Config
 from models import Land, Property
+import services.property_imap_service as property_imap_module
 from services.imap_service import IMAPService
 from services.property_imap_service import PropertyIMAPService
 from tests import setup_test_environment
@@ -304,3 +305,106 @@ class TestUidBatchCursor:
         assert cursor.resolve("nope") is False
         assert cursor.resolve(99) is False
         assert cursor.watermark == 4
+
+
+class TestParsingFailureHoldsTheCursor:
+    """An email that raised is neither committed nor deliberately skipped.
+
+    The first version of this fix resolved a UID in `finally` whenever nothing
+    was emitted, which lumped "filtered out" together with "blew up". A
+    transient parser failure - a decode error, a dependency hiccup, a bug hit by
+    one odd email - therefore advanced the cursor past a real listing and lost
+    it permanently: issue #24 again, one layer further in.
+
+    Both services must instead hold the cursor behind the failing email so the
+    next run re-reads it. A permanently broken email keeps the cursor parked and
+    logs why, which is the trade #24 chose: visibly stuck beats silently lost.
+    """
+
+    def test_property_pipeline_holds_the_cursor_at_a_raising_email(
+        self, app, uid_file, monkeypatch
+    ):
+        Config.AUTO_TRAVEL_ENRICHMENT = False
+        Config.AUTO_PROPERTY_SCORING = False
+
+        _FakeIMAPClient.payloads = {uid: _land_email(uid) for uid in (1, 2, 3)}
+
+        real_extract = property_imap_module.extract_idealista_property_id
+        failing_url = f"https://www.idealista.com/inmueble/{100000 + 2}/"
+
+        def explode_on_uid_2(url):
+            if url == failing_url:
+                raise ValueError("temporary parser failure")
+            return real_extract(url)
+
+        with app.app_context():
+            monkeypatch.setattr(
+                property_imap_module,
+                "extract_idealista_property_id",
+                explode_on_uid_2,
+            )
+
+            service = _make_service(monkeypatch)
+            service.run_ingestion(sync_type="test")
+
+            assert Property.query.filter_by(source_email_id="imap_1").one_or_none()
+            assert Property.query.filter_by(source_email_id="imap_2").one_or_none() is None
+
+            # UID 2 raised, so the cursor may not pass UID 1 - not 2, and not 3.
+            assert read_uid_file(str(uid_file)) == 1
+            assert service.last_seen_uid == 1
+
+        # Once the transient failure is gone the email comes back and lands.
+        with app.app_context():
+            monkeypatch.setattr(
+                property_imap_module,
+                "extract_idealista_property_id",
+                real_extract,
+            )
+            _FakeIMAPClient.fetched_uids = []
+
+            second = _make_service(monkeypatch)
+            assert second.last_seen_uid == 1
+            second.run_ingestion(sync_type="test")
+
+            assert _FakeIMAPClient.fetched_uids == [2, 3]
+            assert Property.query.filter_by(source_email_id="imap_2").one_or_none()
+            assert read_uid_file(str(uid_file)) == 3
+
+    def test_legacy_pipeline_holds_the_cursor_at_a_raising_email(
+        self, app, uid_file, monkeypatch
+    ):
+        Config.AUTO_TRAVEL_ENRICHMENT = False
+
+        _FakeIMAPClient.payloads = {uid: _land_email(uid) for uid in (1, 2, 3)}
+
+        monkeypatch.setattr(
+            "services.imap_service.IMAPClient", _FakeIMAPClient, raising=True
+        )
+        service = IMAPService()
+        service.user = "owner@example.com"
+        service.password = "dummy"
+        service.host = "imap.example.com"
+        service.folder = "Idealista"
+
+        real_parse = service.email_parser.parse_idealista_email
+        seen = {"count": 0}
+
+        def explode_on_second_email(email_content):
+            seen["count"] += 1
+            if seen["count"] == 2:
+                raise ValueError("temporary parser failure")
+            return real_parse(email_content)
+
+        with app.app_context():
+            monkeypatch.setattr(
+                service.email_parser,
+                "parse_idealista_email",
+                explode_on_second_email,
+            )
+
+            service.run_ingestion(sync_type="test")
+
+            assert Land.query.filter_by(source_email_id="imap_1").one_or_none()
+            assert Land.query.filter_by(source_email_id="imap_2").one_or_none() is None
+            assert read_uid_file(str(Config.LAST_SEEN_UID_PATH)) == 1

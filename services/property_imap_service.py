@@ -306,9 +306,19 @@ class PropertyIMAPService:
                         continue
 
                     # Emails we hand back still need DB work, so they stay
-                    # unresolved until run_ingestion() commits them. Everything
-                    # else (filtered out, or unparseable) is done right here.
+                    # unresolved until run_ingestion() commits them. Emails we
+                    # deliberately filtered out are done right here.
+                    #
+                    # An email that *raised* is neither: the failure may be
+                    # transient (a parser bug, a bad decode, a momentary
+                    # dependency error), and resolving its UID would drop a real
+                    # listing exactly the way #24 dropped them. `failed` keeps
+                    # the cursor behind such an email so the next run re-reads
+                    # it. A permanently broken email therefore holds the cursor
+                    # and says so in the log - the trade #24 already chose:
+                    # visibly stuck beats silently lost.
                     emitted = False
+                    failed = False
                     try:
                         msg = message_from_bytes(raw_email)
 
@@ -471,9 +481,15 @@ class PropertyIMAPService:
                             }
                         )
                     except Exception as e:
-                        logger.error("Failed to process UID %s: %s", uid, e)
+                        failed = True
+                        logger.error(
+                            "Failed to process UID %s: %s - holding last_seen_uid "
+                            "behind it so the email is re-read next run",
+                            uid,
+                            e,
+                        )
                     finally:
-                        if not emitted:
+                        if not emitted and not failed:
                             self._advance_uid_cursor({"uid": uid})
         except Exception as e:
             logger.error("Failed to fetch via IMAP: %s", e)
