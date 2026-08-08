@@ -117,9 +117,7 @@ def _run_node(script_js: str, driver_js: str) -> dict:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(harness)
-        proc = subprocess.run(
-            [NODE, path], capture_output=True, text=True, timeout=15
-        )
+        proc = subprocess.run([NODE, path], capture_output=True, text=True, timeout=15)
     finally:
         os.unlink(path)
 
@@ -233,9 +231,7 @@ class TestDetailTemplateEscapesUntrustedHtml:
     def test_render_structured_ai_analysis_escapes_payload(self, template_name):
         script = _extract_inline_script(template_name)
         driver = (
-            "const analysis = "
-            + json.dumps(_malicious_analysis())
-            + ";\n"
+            "const analysis = " + json.dumps(_malicious_analysis()) + ";\n"
             "const html = renderStructuredAIAnalysis(analysis);\n"
             "console.log(JSON.stringify({ html }));\n"
         )
@@ -259,16 +255,28 @@ class TestDetailTemplateEscapesUntrustedHtml:
         )
 
     def test_raw_text_fallback_escapes_payload(self, template_name):
+        """Drive the real production sink: renderAnalysisInto() ->
+        _normalizeAnalysisData() -> the `_raw_text` innerHTML assignment.
+        A fake target element (with a real getElementById stub scoped to
+        this test) captures what the production code actually writes, so
+        reverting the escapeHtml() call in the template fails this test."""
         script = _extract_inline_script(template_name)
         driver = (
-            "const target = { innerHTML: '' };\n"
-            "const html = `<div class=\"analysis-text\">${escapeHtml(String("
+            "const fakeTarget = { innerHTML: '' };\n"
+            "document.getElementById = function (id) {\n"
+            "  return id === 'target' ? fakeTarget : null;\n"
+            "};\n"
+            "renderAnalysisInto('target', "
             + json.dumps(SCRIPT_XSS + "\nsecond line")
-            + ")).replace(/\\n/g, '<br>')}</div>`;\n"
-            "console.log(JSON.stringify({ html }));\n"
+            + ", null);\n"
+            "console.log(JSON.stringify({ html: fakeTarget.innerHTML }));\n"
         )
         result = _run_node(script, driver)
         html = result["html"]
+        assert html, (
+            f"{template_name}: renderAnalysisInto() left the target's "
+            "innerHTML empty; the _raw_text branch did not run"
+        )
         assert not DANGEROUS_TAG_RE.search(html), (
             f"{template_name}: the _raw_text fallback path did not escape "
             f"a raw <script> payload:\n{html}"
@@ -300,9 +308,9 @@ class TestDetailTemplateEscapesUntrustedHtml:
     def test_escape_html_neutralizes_all_html_metacharacters(self, template_name):
         script = _extract_inline_script(template_name)
         driver = (
-            "console.log(JSON.stringify({ out: escapeHtml(" + json.dumps(
-                "<script>&\"'</script>"
-            ) + ") }));\n"
+            "console.log(JSON.stringify({ out: escapeHtml("
+            + json.dumps("<script>&\"'</script>")
+            + ") }));\n"
         )
         result = _run_node(script, driver)
         assert result["out"] == "&lt;script&gt;&amp;&quot;&#39;&lt;/script&gt;"
