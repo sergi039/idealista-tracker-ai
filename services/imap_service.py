@@ -406,8 +406,19 @@ class IMAPService:
                         parsed = self.email_parser.parse_idealista_email(email_content)
 
                         if not parsed:
+                            # The email already passed the subject and sender
+                            # filters, so it is one we expect to understand. A
+                            # None from the parser is a parser gap - a new
+                            # Idealista template, a changed layout - not a
+                            # decision to skip. Resolving the UID here would
+                            # bury the listing for good: parser support could
+                            # land tomorrow and the email would never be re-read.
+                            failed = True
                             logger.warning(
-                                f"Could not parse property data from email UID {uid}"
+                                "Could not parse property data from email UID %s - "
+                                "holding last_seen_uid behind it so a future parser "
+                                "fix can still pick it up",
+                                uid,
                             )
                             continue
 
@@ -448,8 +459,19 @@ class IMAPService:
                             email_data.append(parsed)
                             logger.info(f"Successfully parsed email UID {uid}")
                         else:
+                            # By this point the email passed the subject and URL
+                            # filters, so it is one we expect to understand. A
+                            # None from the parser is a parser gap - a new
+                            # Idealista template, a changed layout - not a
+                            # decision to skip. Resolving the UID here would
+                            # bury the listing for good: support could be added
+                            # tomorrow and the email would never be re-read.
+                            failed = True
                             logger.warning(
-                                f"Could not parse Idealista data from email UID {uid}"
+                                "Could not parse Idealista data from email UID %s - "
+                                "holding last_seen_uid behind it so a future parser "
+                                "fix can still pick it up",
+                                uid,
                             )
                     except Exception:
                         failed = True

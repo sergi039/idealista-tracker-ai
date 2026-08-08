@@ -408,3 +408,68 @@ class TestParsingFailureHoldsTheCursor:
             assert Land.query.filter_by(source_email_id="imap_1").one_or_none()
             assert Land.query.filter_by(source_email_id="imap_2").one_or_none() is None
             assert read_uid_file(str(Config.LAST_SEEN_UID_PATH)) == 1
+
+    def test_legacy_pipeline_holds_the_cursor_when_the_parser_returns_none(
+        self, app, uid_file, monkeypatch
+    ):
+        """A parser gap is not a decision to skip.
+
+        `parse_idealista_email` returns None rather than raising when it meets a
+        layout it does not understand - a new Idealista template, say. The email
+        has already passed the subject and URL filters at that point, so it is
+        one we expected to read. Resolving its UID buries the listing forever:
+        parser support could land tomorrow and the email would never be fetched
+        again.
+        """
+        Config.AUTO_TRAVEL_ENRICHMENT = False
+
+        _FakeIMAPClient.payloads = {uid: _land_email(uid) for uid in (1, 2, 3)}
+
+        monkeypatch.setattr(
+            "services.imap_service.IMAPClient", _FakeIMAPClient, raising=True
+        )
+        service = IMAPService()
+        service.user = "owner@example.com"
+        service.password = "dummy"
+        service.host = "imap.example.com"
+        service.folder = "Idealista"
+
+        real_parse = service.email_parser.parse_idealista_email
+        # Keyed on the listing URL rather than a call counter: the parser is not
+        # guaranteed to be called exactly once per email.
+        uid_2_marker = f"/inmueble/{100000 + 2}/"
+
+        def unparseable_second_email(email_content):
+            if uid_2_marker in str(email_content):
+                return None  # no exception: just a layout we do not know
+            return real_parse(email_content)
+
+        with app.app_context():
+            monkeypatch.setattr(
+                service.email_parser,
+                "parse_idealista_email",
+                unparseable_second_email,
+            )
+
+            service.run_ingestion(sync_type="test")
+
+            assert Land.query.filter_by(source_email_id="imap_1").one_or_none()
+            assert Land.query.filter_by(source_email_id="imap_2").one_or_none() is None
+            assert read_uid_file(str(Config.LAST_SEEN_UID_PATH)) == 1
+
+        # Parser support lands; the email is still there to be read.
+        with app.app_context():
+            monkeypatch.setattr(
+                service.email_parser, "parse_idealista_email", real_parse
+            )
+            _FakeIMAPClient.fetched_uids = []
+
+            second = IMAPService()
+            second.user = "owner@example.com"
+            second.password = "dummy"
+            second.host = "imap.example.com"
+            second.folder = "Idealista"
+            second.run_ingestion(sync_type="test")
+
+            assert _FakeIMAPClient.fetched_uids == [2, 3]
+            assert Land.query.filter_by(source_email_id="imap_2").one_or_none()
