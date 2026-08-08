@@ -1,7 +1,10 @@
+import subprocess
+import shutil
+import sys
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, event, inspect, text
 
 from app import create_app, db
 from tests import setup_test_environment
@@ -134,6 +137,171 @@ def test_migration_runner_fails_on_changed_applied_migration(tmp_path):
 
     with pytest.raises(MigrationError, match="checksum"):
         run_migrations(engine, migrations_dir=tmp_path)
+
+
+def test_populated_historical_schema_is_baselined_without_replay(tmp_path, monkeypatch):
+    from migrations.runner import (
+        BASELINE_IDENTIFIERS,
+        discover_migrations,
+        run_migrations,
+    )
+
+    database_path = tmp_path / "historical.db"
+    database_url = f"sqlite:///{database_path}"
+    engine = create_engine(database_url)
+    db.metadata.create_all(engine)
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO lands "
+                "(source_email_id, url, idealista_property_id, title) "
+                "VALUES (:source_email_id, :url, NULL, :title)"
+            ),
+            {
+                "source_email_id": "historical-land",
+                "url": "https://www.idealista.com/inmueble/12345678/",
+                "title": "Keep this row unchanged",
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO sync_history "
+                "(sync_type, backend, price_updated_count, expired_count) "
+                "VALUES ('full', 'imap', NULL, NULL)"
+            )
+        )
+        connection.execute(
+            text("CREATE INDEX idx_lands_is_favorite ON lands (is_favorite)")
+        )
+
+    with engine.connect() as connection:
+        land_before = dict(
+            connection.execute(
+                text("SELECT * FROM lands WHERE source_email_id = 'historical-land'")
+            )
+            .mappings()
+            .one()
+        )
+        sync_before = dict(
+            connection.execute(text("SELECT * FROM sync_history")).mappings().one()
+        )
+
+    executed_statements = []
+
+    def record_statement(
+        _connection, _cursor, statement, _parameters, _context, _executemany
+    ):
+        executed_statements.append(statement.strip())
+
+    event.listen(engine, "before_cursor_execute", record_statement)
+    try:
+        executed = run_migrations(engine)
+    finally:
+        event.remove(engine, "before_cursor_execute", record_statement)
+
+    with engine.connect() as connection:
+        applied = connection.execute(
+            text("SELECT version, name FROM schema_migrations ORDER BY version")
+        ).all()
+        land_after = dict(
+            connection.execute(
+                text("SELECT * FROM lands WHERE source_email_id = 'historical-land'")
+            )
+            .mappings()
+            .one()
+        )
+        sync_after = dict(
+            connection.execute(text("SELECT * FROM sync_history")).mappings().one()
+        )
+
+    assert executed == []
+    migration_sql = {migration.sql.strip() for migration in discover_migrations()}
+    assert migration_sql.isdisjoint(executed_statements)
+    assert [f"{version}_{name}" for version, name in applied] == list(
+        BASELINE_IDENTIFIERS
+    )
+    assert land_after == land_before
+    assert sync_after == sync_before
+    assert "idx_lands_is_favorite" in {
+        index["name"] for index in inspect(engine).get_indexes("lands")
+    }
+
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("AUTO_START_SCHEDULER", "false")
+    monkeypatch.setattr(
+        "services.scheduler_service.get_scheduler_status",
+        lambda: {"status": "running"},
+    )
+    app = create_app(testing=True)
+
+    response = app.test_client().get("/api/healthz")
+
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+
+    project_root = Path(__file__).parent.parent
+    entrypoint = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from migrations.runner import main as migrate; "
+            "migrate(); import main; assert main.app",
+        ],
+        cwd=project_root,
+        env={
+            "DATABASE_URL": database_url,
+            "SECRET_KEY": "historical-entrypoint-secret",
+            "SESSION_SECRET": "historical-entrypoint-session-secret",
+            "AUTO_START_SCHEDULER": "false",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert entrypoint.returncode == 0, entrypoint.stderr
+    engine.dispose()
+
+
+def test_historical_baseline_runs_only_genuinely_new_migrations(tmp_path):
+    from migrations.runner import MIGRATIONS_DIR, run_migrations
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'future.db'}")
+    db.metadata.create_all(engine)
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    for migration_path in MIGRATIONS_DIR.glob("[0-9][0-9][0-9]_*.sql"):
+        shutil.copy(migration_path, migrations_dir / migration_path.name)
+    _write_migration(
+        migrations_dir,
+        "013_create_future_marker.sql",
+        "CREATE TABLE future_marker (id INTEGER PRIMARY KEY);",
+    )
+
+    executed = run_migrations(engine, migrations_dir=migrations_dir)
+
+    assert executed == ["013_create_future_marker"]
+    assert inspect(engine).has_table("future_marker")
+    engine.dispose()
+
+
+def test_migration_runner_rejects_ambiguous_schema_without_partial_replay(tmp_path):
+    from migrations.runner import MigrationError, run_migrations
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'ambiguous.db'}")
+    db.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE unexpected_table (id INTEGER)"))
+
+    with pytest.raises(MigrationError, match="unexpected tables: unexpected_table"):
+        run_migrations(engine)
+
+    inspector = inspect(engine)
+    assert inspector.has_table("unexpected_table")
+    assert not inspector.has_table("schema_migrations")
+    engine.dispose()
 
 
 def test_repository_migrations_are_uniquely_numbered():
