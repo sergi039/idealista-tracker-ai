@@ -44,8 +44,17 @@ class ScoringService:
             )
 
             if criteria:
+                # Criteria only. profile='combined' is a shared namespace with
+                # no discriminator column: POST /criteria/update_combined_mix
+                # keeps the investment/lifestyle ratio there, and rows written
+                # before the write path validated names (#48) can hold anything.
+                # Neither is a criterion weight, and letting them into the
+                # normalization total below halves every genuine weight (#47).
+                valid_criteria = known_criteria_names()
                 custom_weights = {}
                 for criterion in criteria:
+                    if criterion.criteria_name not in valid_criteria:
+                        continue
                     custom_weights[criterion.criteria_name] = float(criterion.weight)
 
                 # MCDM normalization: ensure weights sum to 1.0
