@@ -75,6 +75,22 @@ def _investment_rating_rank(model):
     )
 
 
+def _list_view_profile_id(resolved_profile_id):
+    """What `/map` should hand to `/properties` so both show the same rows.
+
+    Forwards the request's own `profile_id` values untouched when there are
+    any -- `all` stays `all`, and a repeated parameter stays a list, which is
+    the shape issue #104 will send. Nothing to forward means the map
+    auto-selected on its own (by "most mappable rows", where /properties uses
+    "richest active profile"), so the resolved id has to travel explicitly or
+    the list would auto-select a *different* subscription.
+    """
+    requested = request.args.getlist("profile_id")
+    if requested:
+        return requested
+    return resolved_profile_id
+
+
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance between two points, in kilometers."""
     r = 6371.0
@@ -1951,6 +1967,7 @@ def map_view():
             markers=markers,
             profiles=profiles,
             selected_profile_id=selected_profile_id,
+            list_view_profile_id=_list_view_profile_id(selected_profile_id),
             travel_display_targets=travel_display_targets,
         )
 
@@ -1962,6 +1979,7 @@ def map_view():
             markers=[],
             profiles=[],
             selected_profile_id=None,
+            list_view_profile_id=None,
             travel_display_targets=[],
         )
 

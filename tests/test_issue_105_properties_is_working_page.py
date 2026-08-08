@@ -18,13 +18,30 @@ These tests pin the reversal on the real routes through the Flask test client:
   exists to prevent.
 """
 
+import html
 import re
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
 from app import create_app, db
 from models import Land, Property, SearchProfile
 from tests import setup_test_environment
+
+
+def _query_params(href):
+    """Query parameters of an href, parsed rather than string-matched.
+
+    A substring check would pass on a wrongly serialised link (`profile_id`
+    concatenated into another value, HTML-escaped separators, a repeated
+    parameter collapsed into `[6, 8]`), which is exactly the failure mode
+    these navigation tests exist to catch.
+    """
+    return parse_qs(urlparse(html.unescape(href)).query, keep_blank_values=True)
+
+
+def _hrefs_containing(body, needle):
+    return [href for href in re.findall(r'href="([^"]+)"', body) if needle in href]
 
 
 @pytest.fixture
@@ -318,6 +335,154 @@ class TestUnavailableControlsAreHonest:
         assert _order(
             fallback, "LifestylePickUniqueTitle", "InvestorPickUniqueTitle"
         ) == _order(default, "LifestylePickUniqueTitle", "InvestorPickUniqueTitle")
+
+
+class TestSubscriptionContextSurvivesMapNavigation:
+    """Jumping between the list and the map must not change which
+    subscription you are looking at.
+
+    Both pages auto-select a profile when none is given, and they do it by
+    *different* rules -- /properties takes the richest active profile, /map
+    the one with the most mappable rows. So a link that drops the selection
+    does not merely lose a filter: it silently swaps the data set, and on the
+    map the focused listing may not even be loaded.
+
+    The links forward whatever selection is in play rather than interpreting
+    it, so the `auto | all | selected(ids)` model coming with #104 -- where
+    `profile_id` repeats -- passes through unchanged.
+    """
+
+    @pytest.fixture
+    def mappable_properties(self, app):
+        """Two profiles whose auto-selection rules disagree.
+
+        `listed` is the default and has properties, so /properties picks it.
+        `mapped` has more rows with coordinates, so /map picks that one
+        instead. Any link that drops the selection therefore lands the user
+        on the other subscription -- which is the defect under test, not a
+        contrived setup.
+        """
+        with app.app_context():
+            listed = SearchProfile(
+                name="Listed default",
+                is_active=True,
+                is_default=True,
+                travel_targets={"presets": {}, "custom": []},
+            )
+            mapped = SearchProfile(
+                name="Mostly mapped",
+                is_active=True,
+                is_default=False,
+                travel_targets={"presets": {}, "custom": []},
+            )
+            db.session.add_all([listed, mapped])
+            db.session.commit()
+
+            def _make(slug, profile_id, coords):
+                prop = Property(
+                    source_email_id=f"issue105_nav_{slug}",
+                    title=f"{slug}UniqueTitle",
+                    search_profile_id=profile_id,
+                    listing_status="active",
+                    location_lat=coords[0] if coords else None,
+                    location_lon=coords[1] if coords else None,
+                )
+                db.session.add(prop)
+                db.session.commit()
+                return prop.id
+
+            listed_flat = _make("ListedFlat", listed.id, None)
+            listed_pinned = _make("ListedPinned", listed.id, (43.50, -6.50))
+            mapped_first = _make("MappedFirst", mapped.id, (43.55, -6.55))
+            mapped_second = _make("MappedSecond", mapped.id, (43.60, -6.60))
+
+            return {
+                "listed_profile_id": listed.id,
+                "mapped_profile_id": mapped.id,
+                "listed_flat_id": listed_flat,
+                "listed_pinned_id": listed_pinned,
+                "mapped_ids": [mapped_first, mapped_second],
+            }
+
+    def _map_links(self, client, query):
+        body = client.get(f"/properties?{query}").get_data(as_text=True)
+        return [_query_params(href) for href in _hrefs_containing(body, "focus=")]
+
+    def _list_view_link(self, client, query):
+        body = client.get(f"/map?{query}").get_data(as_text=True)
+        match = re.search(r'<a id="map-list-view-link"[^>]*href="([^"]+)"', body)
+        if match is None:
+            match = re.search(r'href="([^"]+)"[^>]*id="map-list-view-link"', body)
+        assert match, "the map needs a stable link back to the list view"
+        return _query_params(match.group(1))
+
+    @pytest.mark.parametrize("view_type", ["cards", "list"])
+    def test_card_map_link_keeps_the_selected_profile(
+        self, client, mappable_properties, view_type
+    ):
+        profile_id = mappable_properties["mapped_profile_id"]
+        links = self._map_links(
+            client, f"profile_id={profile_id}&view_type={view_type}"
+        )
+        assert links, f"no map link rendered in the {view_type} view"
+
+        focused = sorted(params["focus"][0] for params in links)
+        assert focused == sorted(str(i) for i in mappable_properties["mapped_ids"])
+        for params in links:
+            assert params.get("profile_id") == [str(profile_id)]
+
+    @pytest.mark.parametrize("view_type", ["cards", "list"])
+    def test_card_map_link_keeps_an_explicit_all(
+        self, client, mappable_properties, view_type
+    ):
+        links = self._map_links(client, f"profile_id=all&view_type={view_type}")
+        assert links
+        for params in links:
+            assert params.get("profile_id") == ["all"]
+
+    def test_card_map_link_carries_the_auto_resolved_profile(
+        self, client, mappable_properties
+    ):
+        """No profile_id in the URL still means the list resolved one, and
+        the map must be told which -- otherwise it resolves its own (here:
+        the other profile) and the focused listing is not even loaded."""
+        links = self._map_links(client, "view_type=cards")
+        assert links, "the auto-selected profile has a mappable row"
+        for params in links:
+            assert params.get("profile_id") == [
+                str(mappable_properties["listed_profile_id"])
+            ], "the map link dropped the profile the list auto-selected"
+
+    def test_map_list_link_keeps_a_specific_profile(self, client, mappable_properties):
+        profile_id = mappable_properties["mapped_profile_id"]
+        params = self._list_view_link(client, f"profile_id={profile_id}")
+        assert params.get("profile_id") == [str(profile_id)]
+
+    def test_map_list_link_keeps_an_explicit_all(self, client, mappable_properties):
+        params = self._list_view_link(client, "profile_id=all")
+        assert params.get("profile_id") == ["all"]
+
+    def test_map_list_link_carries_the_auto_resolved_profile(
+        self, client, mappable_properties
+    ):
+        """/map auto-selects the profile with mappable rows; /properties would
+        auto-select the default one instead. Without the parameter the user
+        comes back to a different set of listings than the map showed."""
+        params = self._list_view_link(client, "")
+        assert params.get("profile_id") == [
+            str(mappable_properties["mapped_profile_id"])
+        ]
+
+    def test_map_list_link_passes_a_repeated_profile_id_through(
+        self, client, mappable_properties
+    ):
+        """#104 turns `profile_id` into a repeated parameter. The link only
+        forwards what arrived, so it must survive as two parameters rather
+        than being collapsed into one value or a stringified list."""
+        first = mappable_properties["mapped_profile_id"]
+        second = mappable_properties["listed_profile_id"]
+        params = self._list_view_link(client, f"profile_id={first}&profile_id={second}")
+        assert params.get("profile_id") == [str(first), str(second)]
 
 
 class TestCsvExportMatchesThePageOrder:

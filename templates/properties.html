@@ -458,7 +458,9 @@
                             <td>
                                 <div class="d-flex gap-1 flex-nowrap properties-actions">
                                     {% if p.location_lat and p.location_lon %}
-                                        <a href="{{ url_for('main.map_view', focus=p.id) }}"
+                                        {# Carry the selection: /map auto-selects a different
+                                           profile, and the focused listing may not be in it. #}
+                                        <a href="{{ url_for('main.map_view', focus=p.id, profile_id=current_filters.profile_id) }}"
                                            class="btn btn-info btn-sm"
                                            aria-label="Show on map"
                                            title="Show on Map">
@@ -602,7 +604,9 @@
                         <div class="card-footer d-flex justify-content-between align-items-center">
                             <div class="d-flex gap-2">
                                 {% if p.location_lat and p.location_lon %}
-                                    <a href="{{ url_for('main.map_view', focus=p.id) }}"
+                                    {# Same as the table view: `focus` alone is not enough,
+                                       /map would resolve its own profile. #}
+                                    <a href="{{ url_for('main.map_view', focus=p.id, profile_id=current_filters.profile_id) }}"
                                        class="btn btn-outline-info btn-sm" title="Show on Map">
                                         <i class="fas fa-map"></i>
                                     </a>
