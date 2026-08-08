@@ -417,36 +417,96 @@ def test_a_profile_holding_two_recoverable_names_is_never_promoted(app):
         assert sorted(g["name"] for g in report["blocked_groups"]) == ["Alpha", "Beta"]
 
 
-def test_a_mixed_profile_becomes_promotable_once_the_plan_empties_it(app):
-    """Ambiguity the plan *removes* must stop blocking, in the same run.
+def test_planning_reruns_until_no_further_group_can_be_repaired(app):
+    """Alphabetical order must not decide how much gets repaired.
 
-    Profile 6 starts mixed, so it cannot be renamed after either saved search.
-    But the Alpha group takes its Alpha listings away, and from that point it
-    holds nothing but Beta -- so the Beta group may promote it. Tracking the
-    plan's own effects is what lets one run finish the job instead of leaving
-    work for a second.
+    Alpha is spread over two profiles, but both also hold Beta listings, so
+    on the first pass neither can be promoted. Beta then leaves for the
+    profile that already carries its name -- and *that* is what makes the two
+    Alpha profiles promotable. Planning has to come back for Alpha instead of
+    leaving it to a second run the runbook does not promise.
     """
     with app.app_context():
         db.session.add_all(
             [
-                SearchProfile(id=5, name="pure alpha", is_active=True),
-                SearchProfile(id=6, name="Mixed bag", is_active=True),
+                SearchProfile(id=1, name="Mixed A", is_active=True),
+                SearchProfile(id=2, name="Mixed B", is_active=True),
+                SearchProfile(id=3, name="Beta", is_active=True),
             ]
         )
-        _add_listings(5, "New home in your search: Alpha!", 3, "alpha_pure")
-        _add_listings(6, "New home in your search: Alpha!", 2, "alpha_mixed")
-        _add_listings(6, "New home in your search: Beta!", 4, "beta")
+        _add_listings(1, "New home in your search: Alpha!", 2, "a1")
+        _add_listings(1, "New home in your search: Beta!", 3, "b1")
+        _add_listings(2, "New home in your search: Alpha!", 4, "a2")
+        _add_listings(2, "New home in your search: Beta!", 1, "b2")
+        _add_listings(3, "New home in your search: Beta!", 2, "b3")
         db.session.commit()
 
         report = SearchProfileRepairService.apply()
 
-        assert db.session.get(SearchProfile, 5).name == "Alpha"
-        assert _count(5) == 5, "both runs of Alpha listings land on the promoted row"
-        assert db.session.get(SearchProfile, 6).name == "Beta"
-        assert _count(6) == 4
         assert report["blocked_groups"] == []
-        assert report["profiles_deleted"] == []
+        assert db.session.get(SearchProfile, 2).name == "Alpha", "the richer of the two"
+        assert _count(2) == 6
+        assert db.session.get(SearchProfile, 3).name == "Beta"
+        assert _count(3) == 6
+        assert db.session.get(SearchProfile, 1) is None, "emptied by both groups"
         _assert_every_listing_matches_its_profile_name()
+
+
+def test_a_single_profile_with_a_mismatched_name_is_not_renamed(app):
+    """One profile, one saved search, a name someone chose. Not fragmentation.
+
+    A profile filled by ProfileAssignmentService's location matching, or
+    named by hand, holds a subscription's listings under a name of its own.
+    Nothing here is broken, so renaming it would only overwrite the owner's
+    decision.
+    """
+    with app.app_context():
+        db.session.add(SearchProfile(id=5, name="Norte hand-picked", is_active=True))
+        _add_listings(5, "New home in your search: Alpha!", 4, "alpha")
+        db.session.commit()
+
+        report = SearchProfileRepairService.apply()
+
+        assert db.session.get(SearchProfile, 5).name == "Norte hand-picked"
+        assert _count(5) == 4
+        assert report["properties_moved"] == 0
+        assert report["profiles_deleted"] == []
+        assert [g["name"] for g in report["blocked_groups"]] == ["Alpha"]
+
+
+def test_a_manually_reassigned_listing_is_never_moved_back(fragmented):
+    """The profile-change form pins a listing; the repair must leave it pinned.
+
+    `ProfileAssignmentService` already refuses to move these. A repair that
+    dragged them back to the profile their subject names -- and deleted the
+    profile the owner chose, once it looked empty -- would quietly undo a
+    decision made through the UI.
+    """
+    with fragmented.app_context():
+        pinned = Property.query.filter_by(search_profile_id=7).first()
+        pinned.enrichment = {
+            "profile_assignment": {
+                "method": "manual_override",
+                "profile_id": 7,
+                "manual_override": True,
+            }
+        }
+        db.session.commit()
+        pinned_id = pinned.id
+
+        report = SearchProfileRepairService.apply()
+
+        assert report["status"] == "applied"
+        assert report["manually_pinned_properties"] == 1
+        assert report["properties_moved"] == TOTAL_LISTINGS - FRAGMENTS[8][2] - 1
+
+        assert db.session.get(Property, pinned_id).search_profile_id == 7
+        assert db.session.get(SearchProfile, 7) is not None, (
+            "the profile the owner chose must not be deleted out from under it"
+        )
+        assert _count(7) == 1
+        assert _count(TARGET_ID) == TOTAL_LISTINGS - 1
+        assert sorted(report["profiles_deleted"]) == [9, 10]
 
 
 def _flaky_counts(monkeypatch):
@@ -528,50 +588,62 @@ def test_a_rename_frees_a_name_that_another_group_must_not_inherit(app):
             [
                 SearchProfile(id=1, name="Beta", is_active=True),
                 SearchProfile(id=2, name="scratch", is_active=True),
+                SearchProfile(id=3, name="other", is_active=True),
+                SearchProfile(id=4, name="another", is_active=True),
             ]
         )
-        _add_listings(1, "New home in your search: Alpha!", 2, "alpha")
-        _add_listings(2, "New home in your search: Beta!", 1, "beta")
+        # Both saved searches are genuinely fragmented, so both may be repaired.
+        _add_listings(1, "New home in your search: Alpha!", 3, "a1")
+        _add_listings(2, "New home in your search: Alpha!", 1, "a2")
+        _add_listings(3, "New home in your search: Beta!", 2, "b3")
+        _add_listings(4, "New home in your search: Beta!", 1, "b4")
         db.session.commit()
 
         SearchProfileRepairService.apply()
 
         assert db.session.get(SearchProfile, 1).name == "Alpha"
-        assert _count(1) == 2
-        survivor = db.session.get(SearchProfile, 2)
-        assert survivor is not None, "the Beta listing must keep a home of its own"
+        assert _count(1) == 4
+        survivor = db.session.get(SearchProfile, 3)
+        assert survivor is not None, "the Beta listings must keep a home of their own"
         assert survivor.name == "Beta"
-        assert _count(2) == 1
+        assert _count(3) == 3
+        assert db.session.get(SearchProfile, 2) is None
+        assert db.session.get(SearchProfile, 4) is None
         _assert_every_listing_matches_its_profile_name()
 
 
 def test_a_profile_that_gains_a_saved_search_while_planning_is_blocked(app):
     """Ambiguity the plan creates itself must block just like pre-existing.
 
-    Profile 1 is called "Alpha" but holds only Zeta listings. The Alpha group
-    legitimately moves Alpha listings into it -- and that is what makes it
-    ambiguous. The Zeta group must not then promote it and rename it "Zeta",
-    which would drag the freshly moved Alpha listings along.
+    Zeta is fragmented across profiles 1 and 2, and both start out holding
+    nothing but Zeta -- so on the pre-repair snapshot both look promotable.
+    The Alpha and Beta groups then legitimately move their own listings into
+    them, and *that* is what makes both ambiguous. Zeta must end up blocked,
+    not renaming a profile it has just come to share.
     """
     with app.app_context():
         db.session.add_all(
             [
                 SearchProfile(id=1, name="Alpha", is_active=True),
-                SearchProfile(id=2, name="scratch", is_active=True),
+                SearchProfile(id=2, name="Beta", is_active=True),
+                SearchProfile(id=3, name="scratch a", is_active=True),
+                SearchProfile(id=4, name="scratch b", is_active=True),
             ]
         )
-        _add_listings(1, "New home in your search: Zeta!", 3, "zeta")
-        _add_listings(2, "New home in your search: Alpha!", 2, "alpha")
+        _add_listings(1, "New home in your search: Zeta!", 3, "z1")
+        _add_listings(2, "New home in your search: Zeta!", 2, "z2")
+        _add_listings(3, "New home in your search: Alpha!", 2, "a3")
+        _add_listings(4, "New home in your search: Beta!", 1, "b4")
         db.session.commit()
 
         report = SearchProfileRepairService.apply()
 
-        assert db.session.get(SearchProfile, 1).name == "Alpha", (
-            "Zeta must not rename a profile it has just come to share"
-        )
-        assert _count(1) == 5  # 3 Zeta squatters + the 2 Alpha listings moved in
-        assert _profile_ids() == [1], "profile 2 emptied out and was removed"
         assert [g["name"] for g in report["blocked_groups"]] == ["Zeta"]
+        assert db.session.get(SearchProfile, 1).name == "Alpha"
+        assert db.session.get(SearchProfile, 2).name == "Beta"
+        assert _count(1) == 5  # 3 Zeta squatters + the 2 Alpha listings moved in
+        assert _count(2) == 3  # 2 Zeta squatters + the 1 Beta listing moved in
+        assert _profile_ids() == [1, 2], "the two emptied fragments were removed"
 
 
 def _commit_raises(monkeypatch):

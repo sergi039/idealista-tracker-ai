@@ -154,7 +154,46 @@ the database. It recomputes each listing's saved-search name from its own
 stored `properties.email_subject` — same unfolding, same extractor as
 ingestion — and never guesses from name similarity.
 
-**Stop ingestion before applying** — but know what that buys you.
+### What it will never do
+
+De-fragmentation is its whole job. Anything that is not a fold fragment is a
+decision somebody made, and it is left alone:
+
+- **It never moves a listing you reassigned by hand.** A listing pinned
+  through the profile-change form (`manual_override`, which
+  `ProfileAssignmentService` already refuses to override) stays exactly where
+  you put it — and because it stays, the profile holding it is not empty, so
+  that profile is not deleted either. Pinned listings still count towards what
+  a profile holds, so they can stop a rename; nothing makes them move.
+- **It never renames a profile without evidence of fragmentation.** A rename
+  needs the same saved search in two or more profiles with none of them
+  carrying its name. One profile whose name simply differs from the subject
+  line — named by hand, or filled by `ProfileAssignmentService` matching on
+  location — is not fragmented, and is reported `BLOCKED:` instead.
+- **It never renames a profile holding a second saved search**, whether it
+  already did or the plan moved one in, and **never gives one profile to two
+  saved searches**.
+- **It never deletes a profile that still holds a listing**, for any reason.
+- **It never creates a profile**, and **never adopts an already-orphaned
+  listing** — both are reported, neither is acted on.
+- **It never touches a listing whose saved-search name cannot be recomputed.**
+
+One thing it *does* do, so it is not mistaken for a promise: it moves listings
+into the profile that already carries their name even when that profile also
+holds a stray listing of another saved search. Ingestion routes those listings
+to that same profile anyway, so the repair reaches no state the system would
+not reach on its own — and the stray's own group is reported `BLOCKED:` rather
+than hidden. What is protected is that a profile is never *renamed* out from
+under what it holds.
+
+A `BLOCKED:` group means nothing about it was changed. Read the report; the
+exit code does not change for it.
+
+One run does the whole job: planning re-examines groups until nothing more can
+be repaired, so the result never depends on alphabetical order and re-running
+only picks up what genuinely changed in the database since.
+
+### Stop ingestion before applying — but know what that buys you
 
 `properties.search_profile_id` is `ON DELETE SET NULL`, so a listing written
 into a fragment while it is being removed would be silently left with a NULL

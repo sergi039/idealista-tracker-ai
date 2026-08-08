@@ -20,6 +20,45 @@ tell a truncated name from a genuinely narrower saved search ("Homes in
 Ciudad Quesada" versus "Homes in Ciudad Quesada Norte") and would silently
 collapse two real subscriptions into one.
 
+What the repair will never do
+-----------------------------
+
+Its whole job is de-fragmentation. Anything that is not a fold fragment is
+somebody's decision, and it is left alone:
+
+- **It never moves a listing you reassigned by hand.** A listing whose
+  ``enrichment.profile_assignment.manual_override`` is set -- what the
+  profile-change form writes, and what `ProfileAssignmentService` already
+  refuses to override -- stays exactly where you put it. Because it stays,
+  the profile holding it is not empty, so that profile is not deleted either.
+  Pinned listings still count towards what a profile holds, so they can stop
+  a rename; nothing can make them move.
+- **It never renames a profile without evidence of fragmentation.** A rename
+  needs the same saved search sitting in two or more profiles with none of
+  them carrying its name. A single profile whose name merely differs from the
+  subject line -- filled by hand, or by `ProfileAssignmentService` matching on
+  location -- is not fragmented, and the group is reported BLOCKED instead.
+- **It never renames a profile that holds a second saved search**, whether it
+  already did or the plan itself moved one in.
+- **It never gives one profile to two saved searches.**
+- **It never deletes a profile that still holds a listing**, for any reason:
+  a pinned listing, a subject whose name cannot be recomputed, another
+  subscription.
+- **It never creates a profile**, and **never adopts a listing that is
+  already orphaned** -- both are reported, neither is acted on.
+- **It never touches a listing whose saved-search name cannot be recomputed.**
+
+One thing it *does* do, stated plainly so it is not mistaken for a promise:
+it moves listings into the profile that already carries their name even when
+that profile also holds a stray listing of some other saved search. Ingestion
+routes those listings to exactly that profile anyway, so the repair reaches no
+state the system would not reach on its own -- and the stray's own group is
+reported BLOCKED rather than hidden. The rule being protected is that a
+profile is never *renamed* out from under what it holds.
+
+A BLOCKED group means nothing about it was changed. It does not affect the
+exit code; read the report.
+
 Deleting a profile is the dangerous half. `properties.search_profile_id` is
 ``ON DELETE SET NULL``: a listing that lands in a fragment while it is being
 removed is not rejected, it is silently orphaned with a NULL profile.
@@ -86,16 +125,13 @@ the owner it rolled back is exactly the wrong thing to say before they
 decide whether to re-run. The report carries a best-effort read-back under
 `post_commit_observation`, which is an observation and not a verdict.
 
-A saved search whose listings sit in a profile that also holds *another*
-saved search is reported as BLOCKED and left completely alone -- renaming
-such a profile would mislabel the other listings. That does not change the
-exit code; read the report. This covers ambiguity the plan creates as much
-as ambiguity it finds: planning is done against a running projection of the
-renames and moves already decided, so a profile that *gains* a second saved
-search mid-plan blocks too, and one the plan *empties* stops blocking within
-the same run. Whatever put genuinely mixed rows together
-(ProfileAssignmentService reassigns by location, and profiles can be edited
-by hand) is an owner decision, not this tool's.
+One run is the whole run. Planning is done against a running projection of
+the renames and moves already decided -- names as they will read, profiles as
+they will be -- and groups are re-examined until a whole pass produces
+nothing new. So a profile that *gains* a second saved search mid-plan blocks
+too, one the plan *empties* stops blocking, and how much gets repaired never
+depends on alphabetical order. Re-running only ever finds what genuinely
+changed in the database since.
 """
 
 from __future__ import annotations
@@ -178,6 +214,19 @@ def _profile_property_counts() -> Dict[Optional[int], int]:
     return {profile_id: int(total) for profile_id, total in rows}
 
 
+def _is_manually_pinned(enrichment: Any) -> bool:
+    """True when the owner reassigned this listing through the profile form.
+
+    `routes/main_routes.py` writes `manual_override` into
+    `enrichment.profile_assignment`, and `ProfileAssignmentService` already
+    refuses to move such a row. So does this repair.
+    """
+    if not isinstance(enrichment, dict):
+        return False
+    assignment = enrichment.get("profile_assignment")
+    return bool(isinstance(assignment, dict) and assignment.get("manual_override"))
+
+
 def _is_set(value: Any) -> bool:
     """True when a JSON config column actually carries a configuration."""
     if value is None:
@@ -230,6 +279,7 @@ class RepairPlan:
     profile_names: Dict[int, str] = field(default_factory=dict)
     unresolved_properties: int = 0
     orphan_properties: int = 0
+    manually_pinned_properties: int = 0
 
     @property
     def properties_to_move(self) -> int:
@@ -345,39 +395,218 @@ def _plan_settings_merge(
     return updates, preserved, conflicts
 
 
+class _Planner:
+    """Decides the whole repair, re-examining groups until nothing more moves.
+
+    Every decision is taken against a *projection* of the decisions already
+    made -- names as they will read, contents as they will be -- because a
+    rename frees a name and a move changes what a profile holds. And because
+    one group's move can unblock another, groups are retried until a whole
+    pass produces nothing new; otherwise how much gets repaired would depend
+    on alphabetical order.
+    """
+
+    def __init__(self, plan: RepairPlan, profiles: Sequence[SearchProfile]):
+        self.plan = plan
+        self.profiles = list(profiles)
+        self.by_id = {profile.id: profile for profile in profiles}
+        # {canonical name: {current profile id: [movable property ids]}}
+        self.grouped: Dict[str, Dict[int, List[int]]] = {}
+        # {canonical name: {exact spelling: how many listings use it}}
+        self.spellings: Dict[str, Dict[str, int]] = {}
+        self.display_names: Dict[str, str] = {}
+        # {profile id: every canonical name inside it}, pinned rows included:
+        # they are exactly what makes a rename wrong.
+        self.projected_names: Dict[int, set] = {}
+        self.effective_names: Dict[int, str] = dict(plan.profile_names)
+        # A target belongs to one group. The eligibility rule already makes a
+        # second claim impossible, but this operation deletes rows, so the
+        # reservation is written down rather than left to hold by argument.
+        self.claimed_by: Dict[int, str] = {}
+        self.moved_out: Dict[int, int] = {}
+        self.moved_in: Dict[int, int] = {}
+
+    def add_listing(
+        self, property_id: int, profile_id: int, name: str, canonical: str, pinned: bool
+    ) -> None:
+        self.projected_names.setdefault(profile_id, set()).add(canonical)
+        counts = self.spellings.setdefault(canonical, {})
+        counts[name] = counts.get(name, 0) + 1
+        if pinned:
+            # Owner's choice. It still counts towards what the profile holds --
+            # so it can stop a rename and keep the profile from being deleted --
+            # but nothing in this tool may move it.
+            self.plan.manually_pinned_properties += 1
+            return
+        self.grouped.setdefault(canonical, {}).setdefault(profile_id, []).append(
+            property_id
+        )
+
+    def run(self) -> None:
+        # The spelling most of a group's listings use, ties alphabetical.
+        self.display_names = {
+            canonical: min(counts.items(), key=lambda item: (-item[1], item[0]))[0]
+            for canonical, counts in self.spellings.items()
+        }
+
+        pending = sorted(self.grouped)
+        blocked: Dict[str, Dict[str, Any]] = {}
+        while pending:
+            still_blocked: List[str] = []
+            for canonical in pending:
+                reason = self._attempt(canonical)
+                if reason is None:
+                    blocked.pop(canonical, None)
+                else:
+                    blocked[canonical] = reason
+                    still_blocked.append(canonical)
+            if len(still_blocked) == len(pending):
+                break  # a whole pass changed nothing: this is the fixed point
+            pending = still_blocked
+
+        self.plan.blocked_groups = [blocked[key] for key in sorted(blocked)]
+
+    def _block(
+        self, canonical: str, property_ids: Dict[int, List[int]], reason: str
+    ) -> Dict[str, Any]:
+        return {
+            "name": self.display_names[canonical],
+            "candidate_ids": sorted(property_ids),
+            "other_names": sorted(
+                {
+                    self.display_names.get(other, other)
+                    for pid in property_ids
+                    for other in self.projected_names.get(pid, set())
+                    if other != canonical
+                }
+            ),
+            "reason": reason,
+        }
+
+    def _attempt(self, canonical: str) -> Optional[Dict[str, Any]]:
+        """Plan one group. Returns None when planned, else why it is blocked."""
+        property_ids = self.grouped[canonical]
+        name = self.display_names[canonical]
+        target = _find_profile_by_name(
+            name, canonical, self.profiles, self.effective_names
+        )
+        rename_to: Optional[str] = None
+
+        if target is None:
+            # Renaming is only ever a repair for *fragmentation*, so it needs
+            # positive evidence of it: the same saved search sitting in two or
+            # more profiles. One profile whose name merely differs from the
+            # subject line is a name somebody chose -- by hand, or through
+            # ProfileAssignmentService's location matching -- and overwriting
+            # it is not this tool's business.
+            if len(property_ids) < 2:
+                return self._block(
+                    canonical,
+                    property_ids,
+                    "no profile carries this name and its listings all sit in "
+                    "one profile, so nothing here is fragmented; renaming it "
+                    "would overwrite a name that was chosen deliberately",
+                )
+            # Promote the fragment with the most listings rather than create a
+            # profile, so its settings survive; the ordering is the one
+            # merge_duplicate_profiles() already uses. Only a profile whose
+            # *entire* content resolves to this one name may be promoted.
+            candidates = [
+                self.by_id[pid]
+                for pid in property_ids
+                if pid in self.by_id and self.projected_names.get(pid) == {canonical}
+            ]
+            if not candidates:
+                return self._block(
+                    canonical,
+                    property_ids,
+                    "no profile carries this name, and every profile holding "
+                    "its listings also holds another saved search; renaming "
+                    "one would mislabel the rest",
+                )
+            target = sorted(
+                candidates,
+                key=lambda p: (not bool(p.is_default), -len(property_ids[p.id]), p.id),
+            )[0]
+            rename_to = name
+        # A profile that does exist keeps its own spelling: ingestion's
+        # get_or_create_profile_by_name() reuses a canonical match without
+        # renaming it, and this repair follows ingestion rather than tidying
+        # names behind the owner's back.
+
+        owner = self.claimed_by.get(target.id)
+        if owner is not None and owner != canonical:
+            return self._block(  # pragma: no cover - defensive
+                canonical,
+                property_ids,
+                f"profile {target.id} is already the survivor of another saved "
+                f"search in this plan; refusing to give one profile to two "
+                f"subscriptions",
+            )
+
+        fragment_ids = sorted(pid for pid in property_ids if pid != target.id)
+        if not fragment_ids and not rename_to:
+            return None  # already where it belongs
+
+        # Book this group's effects before the next group is decided.
+        self.claimed_by[target.id] = canonical
+        if rename_to:
+            self.effective_names[target.id] = rename_to
+        for fragment_id in fragment_ids:
+            # Every listing of this name leaves the fragment...
+            self.projected_names.get(fragment_id, set()).discard(canonical)
+        # ...and arrives at the target, which from here on counts as holding
+        # this saved search even if it held none of it a moment ago.
+        self.projected_names.setdefault(target.id, set()).add(canonical)
+
+        group = GroupPlan(
+            name=name,
+            target_id=target.id,
+            target_name=target.name,
+            rename_to=rename_to,
+            fragment_ids=fragment_ids,
+            property_ids={pid: sorted(ids) for pid, ids in property_ids.items()},
+        )
+        fragments = [self.by_id[pid] for pid in fragment_ids if pid in self.by_id]
+        (
+            group.updates,
+            group.settings_preserved,
+            group.settings_conflicts,
+        ) = _plan_settings_merge(target, fragments)
+        self.plan.groups.append(group)
+
+        for fragment_id in fragment_ids:
+            leaving = len(property_ids[fragment_id])
+            self.moved_out[fragment_id] = self.moved_out.get(fragment_id, 0) + leaving
+            self.moved_in[target.id] = self.moved_in.get(target.id, 0) + leaving
+        return None
+
+
 def build_plan() -> RepairPlan:
     """Work out the whole repair without touching a single row."""
     plan = RepairPlan()
     profiles = SearchProfile.query.order_by(SearchProfile.id.asc()).all()
     plan.profile_names = {profile.id: profile.name for profile in profiles}
-    by_id = {profile.id: profile for profile in profiles}
     plan.counts_before = _profile_property_counts()
 
-    # Keyed by *canonical* name throughout. "ALPHA" and "Alpha" are one saved
-    # search as far as ingestion is concerned -- get_or_create_profile_by_name()
-    # hands both to the same profile -- so planning them as two groups gives
-    # one target two independent settings merges, each reading the target's
-    # original state, and the second silently overwrites the first.
-    #
-    # {canonical name: {current profile id: [property ids]}}
-    grouped: Dict[str, Dict[int, List[int]]] = {}
-    # {canonical name: {exact spelling: how many listings use it}}, so a
-    # promotion renames to the spelling most of the listings actually use.
-    spellings: Dict[str, Dict[str, int]] = {}
-    # {profile id: every canonical name found inside it}. A profile holding
-    # more than one is not a fold fragment -- something else put those rows
-    # together (ProfileAssignmentService reassigns by location, and profiles
-    # can be edited by hand) -- and renaming it after one of those names would
-    # mislabel the others.
-    names_by_profile: Dict[int, set] = {}
+    # Everything is keyed by *canonical* name. "ALPHA" and "Alpha" are one
+    # saved search as far as ingestion is concerned -- get_or_create_profile_
+    # by_name() hands both to the same profile -- so planning them as two
+    # groups would give one target two independent settings merges, each
+    # reading the target's original state, and the second would silently
+    # overwrite the first.
+    planner = _Planner(plan, profiles)
     rows = (
         db.session.query(
-            Property.id, Property.search_profile_id, Property.email_subject
+            Property.id,
+            Property.search_profile_id,
+            Property.email_subject,
+            Property.enrichment,
         )
         .order_by(Property.id.asc())
         .all()
     )
-    for property_id, profile_id, subject in rows:
+    for property_id, profile_id, subject, enrichment in rows:
         name = SearchProfileRepairService.recompute_profile_name(subject)
         if not name:
             plan.unresolved_properties += 1
@@ -392,136 +621,13 @@ def build_plan() -> RepairPlan:
         if not canonical:  # pragma: no cover - extract_search_name cleans first
             plan.unresolved_properties += 1
             continue
-        grouped.setdefault(canonical, {}).setdefault(profile_id, []).append(property_id)
-        counts = spellings.setdefault(canonical, {})
-        counts[name] = counts.get(name, 0) + 1
-        names_by_profile.setdefault(profile_id, set()).add(canonical)
-
-    moved_out: Dict[int, int] = {}
-    moved_in: Dict[int, int] = {}
-
-    # Planning one group changes the ground the next group stands on: a rename
-    # frees a name, and a move gives a profile listings it did not have. Both
-    # are tracked as the plan is built, because deciding a later group against
-    # the pre-repair snapshot is how two saved searches end up in one profile.
-    effective_names: Dict[int, str] = dict(plan.profile_names)
-    projected_names: Dict[int, set] = {
-        profile_id: set(names) for profile_id, names in names_by_profile.items()
-    }
-
-    # A target belongs to one group. The eligibility rule below already makes
-    # a second claim impossible, but this is a destructive operation, so the
-    # reservation is written down rather than left to hold by argument.
-    claimed_by: Dict[int, str] = {}
-
-    # The spelling most of a group's listings use, ties broken alphabetically.
-    display_names: Dict[str, str] = {
-        canonical: min(counts.items(), key=lambda item: (-item[1], item[0]))[0]
-        for canonical, counts in spellings.items()
-    }
-
-    for canonical in sorted(grouped):
-        property_ids = grouped[canonical]
-        name = display_names[canonical]
-        target = _find_profile_by_name(name, canonical, profiles, effective_names)
-        rename_to: Optional[str] = None
-        if target is None:
-            # Nobody carries the correct name yet. Promote the fragment with
-            # the most listings instead of creating a fresh profile, so its
-            # settings survive; the ordering is the one merge_duplicate_
-            # profiles() already uses. A rename cannot collide here, because
-            # _find_profile_by_name() just proved no profile holds the name.
-            #
-            # Only a profile whose *entire* resolvable content is this one name
-            # may be promoted. That is also what keeps two groups from claiming
-            # the same profile: if everything in it resolves to N, no other
-            # group has it among its candidates, so no reservation bookkeeping
-            # is needed and no group can rename it out from under another.
-            candidates = [
-                by_id[pid]
-                for pid in property_ids
-                if pid in by_id and projected_names.get(pid) == {canonical}
-            ]
-            if not candidates:
-                plan.blocked_groups.append(
-                    {
-                        "name": name,
-                        "candidate_ids": sorted(property_ids),
-                        "other_names": sorted(
-                            display_names.get(other, other)
-                            for pid in property_ids
-                            for other in projected_names.get(pid, set())
-                            if other != canonical
-                        ),
-                        "reason": (
-                            "no profile carries this name, and every profile "
-                            "holding its listings also holds another saved "
-                            "search; renaming one would mislabel the rest"
-                        ),
-                    }
-                )
-                continue
-            target = sorted(
-                candidates,
-                key=lambda p: (not bool(p.is_default), -len(property_ids[p.id]), p.id),
-            )[0]
-            rename_to = name
-        # A profile that does exist keeps its own spelling: ingestion's
-        # get_or_create_profile_by_name() reuses a canonical match without
-        # renaming it, and this repair follows ingestion rather than tidying
-        # names behind the owner's back.
-
-        owner = claimed_by.get(target.id)
-        if owner is not None and owner != canonical:
-            plan.blocked_groups.append(  # pragma: no cover - defensive
-                {
-                    "name": name,
-                    "candidate_ids": sorted(property_ids),
-                    "other_names": [display_names.get(owner, owner)],
-                    "reason": (
-                        f"profile {target.id} is already the survivor of another "
-                        f"saved search in this plan; refusing to give one profile "
-                        f"to two subscriptions"
-                    ),
-                }
-            )
-            continue
-
-        fragment_ids = sorted(pid for pid in property_ids if pid != target.id)
-        if not fragment_ids and not rename_to:
-            continue
-
-        # Book the plan's own effects before moving on to the next group.
-        claimed_by[target.id] = canonical
-        if rename_to:
-            effective_names[target.id] = rename_to
-        for fragment_id in fragment_ids:
-            # Every listing of this name leaves the fragment...
-            projected_names.get(fragment_id, set()).discard(canonical)
-        # ...and arrives at the target, which from here on counts as holding
-        # this saved search even if it held none of it a moment ago.
-        projected_names.setdefault(target.id, set()).add(canonical)
-
-        group = GroupPlan(
-            name=name,
-            target_id=target.id,
-            target_name=target.name,
-            rename_to=rename_to,
-            fragment_ids=fragment_ids,
-            property_ids={pid: sorted(ids) for pid, ids in property_ids.items()},
+        planner.add_listing(
+            property_id, profile_id, name, canonical, _is_manually_pinned(enrichment)
         )
-        fragments = [by_id[pid] for pid in fragment_ids if pid in by_id]
-        (
-            group.updates,
-            group.settings_preserved,
-            group.settings_conflicts,
-        ) = _plan_settings_merge(target, fragments)
-        plan.groups.append(group)
 
-        for fragment_id in fragment_ids:
-            leaving = len(property_ids[fragment_id])
-            moved_out[fragment_id] = moved_out.get(fragment_id, 0) + leaving
-            moved_in[target.id] = moved_in.get(target.id, 0) + leaving
+    planner.run()
+    moved_out = planner.moved_out
+    moved_in = planner.moved_in
 
     target_ids = {group.target_id for group in plan.groups}
     for profile_id in sorted(set(moved_out) | set(moved_in)):
@@ -643,6 +749,7 @@ def _base_report(plan: RepairPlan, mode: str) -> Dict[str, Any]:
         "profiles_after": [],
         "unresolved_properties": plan.unresolved_properties,
         "orphan_properties": plan.orphan_properties,
+        "manually_pinned_properties": plan.manually_pinned_properties,
         "post_commit_observation": None,
         "errors": [],
     }
@@ -937,6 +1044,12 @@ def _format_report(report: Dict[str, Any]) -> Iterable[str]:
         yield (
             f"listings already without a profile: {report['orphan_properties']} "
             f"(left untouched)"
+        )
+    if report["manually_pinned_properties"]:
+        yield (
+            f"listings you reassigned by hand: "
+            f"{report['manually_pinned_properties']} (left exactly where they "
+            f"are, and their profile is kept)"
         )
     for message in report["errors"]:
         yield f"ERROR: {message}"
