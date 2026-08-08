@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🛟 Fixed: last_seen_uid no longer runs ahead of the database (2026-08-08, #24)
+- **What**: both IMAP services persisted `max(uids)` inside
+  `get_idealista_emails()`, before `run_ingestion()` had written anything. A
+  crash, restart or DB failure between fetch and commit lost those listings,
+  price changes and removal notices permanently and silently. The cursor now
+  advances per email, only after that email's rows are committed (or it was
+  deliberately filtered out), via the new `utils/uid_cursor.py`.
+- **Why**: silent, permanent data loss with no signal — `SyncHistory` could not
+  be reconciled against the cursor.
+- **Consequence to keep in mind**: the cursor file is now written atomically,
+  and an unreadable/corrupt cursor **raises** instead of silently resetting to 0
+  and reprocessing the whole mailbox. An email that keeps failing to commit
+  holds the cursor back (logged as `Holding last_seen_uid at …`), so a stuck
+  ingestion is now visible in the logs instead of losing mail.
+
 ### 🔓 Removed: admin authentication (2026-08-08)
 - **Login removed**: deleted `utils/auth.py`, the `/login` and `/logout` routes,
   `templates/login.html`, all 42 `@admin_required` decorators and every inline
