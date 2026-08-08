@@ -4,8 +4,15 @@ import hashlib
 import requests
 import time
 import unicodedata
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from utils.geocoding import GeocodingService
+from utils.google_api import (
+    REASON_MALFORMED_RESPONSE,
+    REASON_NO_API_KEY,
+    GoogleApiFailure,
+    failure_from_exception,
+    read_api_payload,
+)
 from utils.http import request_with_retries
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 from config import Config
@@ -53,10 +60,10 @@ class EnrichmentService:
                 return False
 
             # Step 2: Enrich with Google Places data
-            self._enrich_with_google_places(land)
+            places_failure = self._enrich_with_google_places(land)
 
             # Step 3: Enrich with Google Maps data (distances, travel times)
-            self._enrich_with_google_maps(land)
+            maps_failure = self._enrich_with_google_maps(land)
 
             # Step 4: Enrich with OSM data (fallback and additional POIs)
             self._enrich_with_osm_data(land)
@@ -75,6 +82,19 @@ class EnrichmentService:
             scoring_service.calculate_score(land)
 
             db.session.commit()
+
+            # Google refusing every request is not a successful enrichment, no
+            # matter how much local work ran afterwards (#98). Whatever was
+            # computed stays committed; the verdict is still failure.
+            refusals = [f for f in (places_failure, maps_failure) if f is not None]
+            if refusals:
+                logger.error(
+                    "Enrichment for land %s is incomplete: Google unavailable (%s)",
+                    land_id,
+                    "; ".join(f.describe() for f in refusals),
+                )
+                return False
+
             logger.info(f"Successfully enriched land {land_id}")
             return True
 
@@ -475,8 +495,13 @@ class EnrichmentService:
             logger.warning(f"Could not check for duplicate coordinates: {e}")
             return False
 
-    def _enrich_with_google_places(self, land):
-        """Enrich with Google Places API data"""
+    def _enrich_with_google_places(self, land) -> Optional[GoogleApiFailure]:
+        """Enrich with Google Places API data.
+
+        Returns the failure that stopped it, or None when Google answered.
+        A refused request never becomes `<amenity>_available: False` - that is
+        a claim about the world, and we did not get to look (#98).
+        """
         try:
             lat, lon = float(land.location_lat), float(land.location_lon)
 
@@ -496,11 +521,11 @@ class EnrichmentService:
                 land.transport = transport
                 land.services_quality = services_quality
                 logger.debug("Google Places cache hit for land %s", land.id)
-                return
+                return None
 
             if not self.google_places_key:
                 logger.warning("Google Places API key not available")
-                return
+                return GoogleApiFailure(reason=REASON_NO_API_KEY)
 
             # Search for nearby amenities
             amenities = {
@@ -518,8 +543,20 @@ class EnrichmentService:
             transport = land.transport or {}
             services_quality = land.services_quality or {}
 
+            first_failure: Optional[GoogleApiFailure] = None
+            failed_amenities: List[str] = []
+
             for amenity, place_types in amenities.items():
-                nearby_places = self._search_nearby_places(lat, lon, place_types)
+                nearby_places, failure = self._search_nearby_places(
+                    lat, lon, place_types
+                )
+                if failure is not None:
+                    first_failure = first_failure or failure
+                    failed_amenities.append(amenity)
+                    if not nearby_places:
+                        # No answer for this amenity: leave its keys untouched
+                        # rather than recording "not available".
+                        continue
 
                 if amenity in [
                     "supermarket",
@@ -566,9 +603,14 @@ class EnrichmentService:
                     places_for_transport = nearby_places
                     if not places_for_transport and amenity == "airport":
                         # For airports, check if there's one within 100km radius
-                        places_for_transport = self._search_nearby_places(
+                        places_for_transport, wide_failure = self._search_nearby_places(
                             lat, lon, place_types, radius=100000
                         )
+                        if wide_failure is not None:
+                            first_failure = first_failure or wide_failure
+                            failed_amenities.append(amenity)
+                            if not places_for_transport:
+                                continue
 
                     if places_for_transport:
                         transport[f"{amenity}_available"] = True
@@ -594,6 +636,17 @@ class EnrichmentService:
             land.transport = transport
             land.services_quality = services_quality
 
+            if first_failure is not None:
+                logger.error(
+                    "Google Places enrichment for land %s is incomplete: %s "
+                    "(no answer for %s)",
+                    land.id,
+                    first_failure.describe(),
+                    ", ".join(failed_amenities),
+                )
+                # A partial answer must not be cached as the full picture.
+                return first_failure
+
             cache_enrichment_data(
                 lat,
                 lon,
@@ -605,155 +658,82 @@ class EnrichmentService:
                 },
                 timeout=60 * 60 * 24 * 7,  # 7 days
             )
+            return None
 
-        except Exception:
+        except Exception as e:
             logger.error("Failed to enrich with Google Places", exc_info=True)
-            # Create fallback enrichment data when Google APIs fail
-            self._create_fallback_amenities_data(land)
+            return failure_from_exception(e)
 
     def _search_nearby_places(
         self, lat: float, lon: float, place_types: List[str], radius: int = 5000
-    ) -> List[Dict]:
-        """Search for nearby places using Google Places API"""
-        try:
-            places = []
+    ) -> Tuple[List[Dict], Optional[GoogleApiFailure]]:
+        """Search for nearby places using Google Places API.
 
-            for place_type in place_types:
-                url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
-                params = {
-                    "location": f"{lat},{lon}",
-                    "radius": radius,
-                    "type": place_type,
-                    "key": self.google_places_key,
-                }
+        Returns the places found and, separately, the first failure. An empty
+        list with no failure means Google answered and there is nothing there;
+        an empty list with a failure means we never got to look.
+        """
+        places: List[Dict] = []
+        first_failure: Optional[GoogleApiFailure] = None
 
+        for place_type in place_types:
+            url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+            params = {
+                "location": f"{lat},{lon}",
+                "radius": radius,
+                "type": place_type,
+                "key": self.google_places_key,
+            }
+
+            try:
                 response = request_with_retries(
                     requests.get, url, params=params, timeout=15, logger=logger
                 )
-                if response.status_code == 200:
-                    data = response.json()
-                    for place in data.get("results", []):
-                        place_info = {
-                            "name": place.get("name"),
-                            "rating": place.get("rating"),
-                            "place_id": place.get("place_id"),
-                            "types": place.get("types", []),
-                            "location": place.get("geometry", {}).get("location", {}),
-                            "distance": self._calculate_distance(
-                                lat,
-                                lon,
-                                place.get("geometry", {})
-                                .get("location", {})
-                                .get("lat", 0),
-                                place.get("geometry", {})
-                                .get("location", {})
-                                .get("lng", 0),
-                            ),
-                        }
-                        places.append(place_info)
+                payload, failure = read_api_payload(response)
+            except Exception as e:
+                payload, failure = None, failure_from_exception(e)
 
-                # Rate limiting
-                time.sleep(0.1)
-
-            return places
-
-        except Exception:
-            logger.error("Failed to search nearby places", exc_info=True)
-            return []
-
-    def _create_fallback_amenities_data(self, land):
-        """Create realistic fallback amenity data when Google APIs are not available"""
-        try:
-            if not land.location_lat or not land.location_lon:
-                return
-
-            infrastructure_extended = land.infrastructure_extended or {}
-
-            # Get municipality info for realistic estimates
-            municipality = (land.municipality or "").lower()
-
-            # Determine area type (urban/rural) for realistic distances
-            is_urban = False
-            try:
-                from services.settings_service import SettingsService
-
-                ref_names = [
-                    str((c or {}).get("name") or "").strip()
-                    for c in SettingsService.get_reference_cities()
-                ]
-                norm = self._normalize_search_text(municipality)
-                is_urban = any(
-                    self._normalize_search_text(n) in norm for n in ref_names if n
+            if failure is not None:
+                logger.warning(
+                    "Places search refused (%s): %s", place_type, failure.describe()
                 )
-            except Exception:
-                is_urban = False
+                first_failure = first_failure or failure
+                continue
 
-            is_coastal = self._is_coastal_location(land)
-
-            # Create realistic fallback data based on location type
-            if is_urban:
-                # Urban areas - closer amenities
-                infrastructure_extended.update(
+            for place in payload.get("results") or []:
+                if not isinstance(place, dict):
+                    continue
+                location = (place.get("geometry") or {}).get("location") or {}
+                places.append(
                     {
-                        "supermarket_distance": 800,  # 800m
-                        "supermarket_travel_time": 3,  # 3 minutes
-                        "school_distance": 600,
-                        "school_travel_time": 2,
-                        "hospital_distance": 2000,
-                        "hospital_travel_time": 5,
-                        "restaurant_distance": 400,
-                        "restaurant_travel_time": 2,
-                        "cafe_distance": 300,
-                        "cafe_travel_time": 1,
-                    }
-                )
-            elif is_coastal:
-                # Coastal towns - moderate distances
-                infrastructure_extended.update(
-                    {
-                        "supermarket_distance": 1500,  # 1.5km
-                        "supermarket_travel_time": 5,
-                        "school_distance": 1200,
-                        "school_travel_time": 4,
-                        "hospital_distance": 8000,  # May need to go to larger town
-                        "hospital_travel_time": 12,
-                        "restaurant_distance": 800,
-                        "restaurant_travel_time": 3,
-                        "cafe_distance": 600,
-                        "cafe_travel_time": 2,
-                    }
-                )
-            else:
-                # Rural areas - longer distances
-                infrastructure_extended.update(
-                    {
-                        "supermarket_distance": 5000,  # 5km
-                        "supermarket_travel_time": 10,
-                        "school_distance": 3000,
-                        "school_travel_time": 8,
-                        "hospital_distance": 15000,  # 15km to nearest hospital
-                        "hospital_travel_time": 20,
-                        "restaurant_distance": 2000,
-                        "restaurant_travel_time": 6,
-                        "cafe_distance": 4000,
-                        "cafe_travel_time": 8,
+                        "name": place.get("name"),
+                        "rating": place.get("rating"),
+                        "place_id": place.get("place_id"),
+                        "types": place.get("types", []),
+                        "location": location,
+                        "distance": self._calculate_distance(
+                            lat,
+                            lon,
+                            location.get("lat", 0),
+                            location.get("lng", 0),
+                        ),
                     }
                 )
 
-            land.infrastructure_extended = infrastructure_extended
-            logger.info(
-                f"Created fallback amenities data for land {land.id} ({'urban' if is_urban else 'coastal' if is_coastal else 'rural'} area)"
-            )
+            # Rate limiting
+            time.sleep(0.1)
 
-        except Exception:
-            logger.error("Failed to create fallback amenities data", exc_info=True)
+        return places, first_failure
 
-    def _enrich_with_google_maps(self, land):
-        """Enrich with Google Maps data (distances, travel times)"""
+    def _enrich_with_google_maps(self, land) -> Optional[GoogleApiFailure]:
+        """Enrich with Google Maps data (distances, travel times).
+
+        Returns the failure that stopped it, or None when Google answered.
+        """
         try:
             if not self.google_maps_key:
                 logger.warning("Google Maps API key not available")
-                return
+                return GoogleApiFailure(reason=REASON_NO_API_KEY)
 
             lat, lon = float(land.location_lat), float(land.location_lon)
 
@@ -776,9 +756,11 @@ class EnrichmentService:
                 transport.update(cached)
                 land.transport = transport
                 logger.debug("Distance matrix cache hit for land %s", land.id)
-                return
+                return None
 
-            distance_results = self._get_distance_matrix_batch(lat, lon, destinations)
+            distance_results, failure = self._get_distance_matrix_batch(
+                lat, lon, destinations
+            )
             for destination, distance_data in zip(destinations, distance_results):
                 if not distance_data:
                     continue
@@ -787,96 +769,93 @@ class EnrichmentService:
                 transport[f"duration_to_{dest_key}"] = distance_data.get("duration")
 
             land.transport = transport
+
+            if failure is not None:
+                logger.error(
+                    "Distance matrix enrichment for land %s is incomplete: %s",
+                    land.id,
+                    failure.describe(),
+                )
+                # Refused answers must not be cached as the computed result.
+                return failure
+
             cache_enrichment_data(
                 lat, lon, cache_type, transport, timeout=60 * 60 * 24 * 7
             )
+            return None
 
-        except Exception:
+        except Exception as e:
             logger.error("Failed to enrich with Google Maps", exc_info=True)
+            return failure_from_exception(e)
 
     def _get_distance_matrix_batch(
         self, lat: float, lon: float, destinations: List[str]
-    ) -> List[Optional[Dict]]:
-        """Batch distance matrix lookup (destinations <= 25)."""
+    ) -> Tuple[List[Optional[Dict]], Optional[GoogleApiFailure]]:
+        """Batch distance matrix lookup (destinations <= 25).
+
+        Returns per-destination results plus the failure, if any. A `None`
+        entry alongside no failure means Google answered "no route"; a failure
+        means the request never produced an answer at all.
+        """
         if not destinations:
-            return []
+            return [], None
+
+        url = "https://maps.googleapis.com/maps/api/distancematrix/json"
+        params = {
+            "origins": f"{lat},{lon}",
+            "destinations": "|".join(destinations),
+            "mode": "driving",
+            "key": self.google_maps_key,
+        }
 
         try:
-            url = "https://maps.googleapis.com/maps/api/distancematrix/json"
-            params = {
-                "origins": f"{lat},{lon}",
-                "destinations": "|".join(destinations),
-                "mode": "driving",
-                "key": self.google_maps_key,
-            }
-
             response = request_with_retries(
                 requests.get, url, params=params, timeout=15, logger=logger
             )
-            if response.status_code != 200:
-                return [None for _ in destinations]
-
-            data = response.json()
-            if not data.get("rows") or not data["rows"][0].get("elements"):
-                return [None for _ in destinations]
-
-            elements = data["rows"][0]["elements"]
-            out: List[Optional[Dict]] = []
-            for el in elements[: len(destinations)]:
-                if el.get("status") != "OK":
-                    out.append(None)
-                    continue
-                out.append(
-                    {
-                        "distance": el.get("distance", {}).get("value"),
-                        "duration": el.get("duration", {}).get("value"),
-                    }
-                )
-
-            while len(out) < len(destinations):
-                out.append(None)
-
-            return out
-
+            payload, failure = read_api_payload(response)
         except Exception as e:
-            logger.error("Failed to get distance matrix batch: %s", e)
-            return [None for _ in destinations]
+            payload, failure = None, failure_from_exception(e)
+
+        if failure is not None:
+            logger.warning("Distance matrix refused: %s", failure.describe())
+            return [None for _ in destinations], failure
+
+        rows = payload.get("rows")
+        if not isinstance(rows, list) or not rows or not rows[0].get("elements"):
+            failure = GoogleApiFailure(
+                reason=REASON_MALFORMED_RESPONSE,
+                message="no elements in Distance Matrix reply",
+            )
+            logger.warning("Distance matrix malformed: %s", failure.describe())
+            return [None for _ in destinations], failure
+
+        elements = rows[0]["elements"]
+        out: List[Optional[Dict]] = []
+        for el in elements[: len(destinations)]:
+            if not isinstance(el, dict) or el.get("status") != "OK":
+                out.append(None)
+                continue
+            out.append(
+                {
+                    "distance": (el.get("distance") or {}).get("value"),
+                    "duration": (el.get("duration") or {}).get("value"),
+                }
+            )
+
+        while len(out) < len(destinations):
+            out.append(None)
+
+        return out, None
 
     def _get_distance_matrix(
         self, lat: float, lon: float, destination: str
     ) -> Optional[Dict]:
-        """Get distance and duration to destination using Google Maps Distance Matrix API"""
-        try:
-            url = "https://maps.googleapis.com/maps/api/distancematrix/json"
-            params = {
-                "origins": f"{lat},{lon}",
-                "destinations": destination,
-                "mode": "driving",
-                "key": self.google_maps_key,
-            }
+        """Distance and duration to a single destination.
 
-            response = request_with_retries(
-                requests.get, url, params=params, timeout=15, logger=logger
-            )
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("rows") and data["rows"][0].get("elements"):
-                    element = data["rows"][0]["elements"][0]
-                    if element.get("status") == "OK":
-                        return {
-                            "distance": element.get("distance", {}).get(
-                                "value"
-                            ),  # in meters
-                            "duration": element.get("duration", {}).get(
-                                "value"
-                            ),  # in seconds
-                        }
-
-            return None
-
-        except Exception:
-            logger.error("Failed to get distance matrix", exc_info=True)
-            return None
+        Thin wrapper over the batch call so both share one response reader.
+        """
+        results, _failure = self._get_distance_matrix_batch(lat, lon, [destination])
+        return results[0] if results else None
 
     def _enrich_with_osm_data(self, land):
         """Enrich with OpenStreetMap data as fallback"""
@@ -1037,17 +1016,6 @@ class EnrichmentService:
 
         except Exception:
             logger.error("Failed to analyze environment", exc_info=True)
-
-    def _is_coastal_location(self, land):
-        """Check if location is in a known coastal area based on coordinates"""
-        try:
-            if land.environment and land.environment.get("sea_view"):
-                return True
-            if land.travel_time_nearest_beach and land.travel_time_nearest_beach <= 20:
-                return True
-            return False
-        except Exception:
-            return False
 
     def _calculate_distance(
         self, lat1: float, lon1: float, lat2: float, lon2: float

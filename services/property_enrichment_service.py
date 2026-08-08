@@ -6,7 +6,7 @@ from app import db
 from models import Property
 from services.property_location_service import PropertyLocationService
 from services.property_scoring_service import PropertyScoringService
-from services.property_travel_service import PropertyTravelService
+from services.property_travel_service import PropertyTravelService, travel_api_state
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,7 @@ class PropertyEnrichmentService:
             )
 
         ok = self.travel_service.calculate_for_property(prop, commit=False)
+        travel_state = travel_api_state(prop)
 
         if recalc_scoring:
             try:
@@ -79,7 +80,10 @@ class PropertyEnrichmentService:
             if isinstance(enrichment.get("google"), dict)
             else {}
         )
+        # An "updated_at" on its own claimed the property was enriched even when
+        # Google refused every request (#98). Record what actually happened.
         google_meta["updated_at"] = datetime.now(timezone.utc).isoformat()
+        google_meta["travel_state"] = travel_state
         enrichment["google"] = google_meta
         prop.enrichment = enrichment
 
