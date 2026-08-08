@@ -609,3 +609,106 @@ def test_cli_exit_code_marks_an_unknown_commit_outcome(fragmented, monkeypatch):
         # Not 1: 1 promises the database is untouched, which nobody can promise
         # once COMMIT has been sent.
         assert run_repair_cli(["--apply"]) == 3
+
+
+def test_a_listing_landing_after_the_zero_check_aborts_the_repair(
+    fragmented, monkeypatch
+):
+    """The ON DELETE SET NULL race, fired at the one instant it can bite.
+
+    A listing inserted into a fragment *after* its pre-delete zero-check and
+    *before* the DELETE reaches the database is not rejected: the FK nullifies
+    it and the row is orphaned. Leaving the DELETE pending until `commit()`
+    flushes it means nothing looks at the database between the two, so the
+    deletes have to be flushed and re-verified inside the pre-COMMIT phase.
+    """
+    from services import search_profile_repair_service as module
+
+    real = module._remaining_property_count
+    state = {"orphan_check_seen": False, "fired": False}
+    racing_fragment = FRAGMENT_IDS[0]
+
+    def racing(profile_id):
+        count = real(profile_id)
+        if profile_id is None:
+            # The orphan check closes the verification pass; every call after
+            # it belongs to the delete loop.
+            state["orphan_check_seen"] = True
+            return count
+        if (
+            state["orphan_check_seen"]
+            and profile_id == racing_fragment
+            and not state["fired"]
+        ):
+            state["fired"] = True
+            db.session.add(
+                Property(
+                    source_email_id="imap_race",
+                    email_subject=FRAGMENTS[racing_fragment][1],
+                    search_profile_id=profile_id,
+                    title="arrived mid-repair",
+                )
+            )
+            db.session.flush()
+        # The caller sees the count from *before* the insert -- that is the race.
+        return count
+
+    monkeypatch.setattr(module, "_remaining_property_count", racing)
+
+    with fragmented.app_context():
+        report = SearchProfileRepairService.apply()
+
+        assert state["fired"], "the race never fired; the test proves nothing"
+        assert report["status"] == "mismatch"
+        assert any("without a profile" in message for message in report["errors"])
+
+        # Nothing was committed, and above all nothing was orphaned.
+        db.session.expire_all()
+        assert db.session.get(SearchProfile, racing_fragment) is not None
+        assert _count(TARGET_ID) == FRAGMENTS[TARGET_ID][2]
+        assert Property.query.filter(Property.search_profile_id.is_(None)).count() == 0
+
+
+def test_canonically_equal_names_are_one_group_and_keep_one_setting(app):
+    """ "ALPHA" and "Alpha" are the same saved search to ingestion.
+
+    Planned as two groups they resolve to the same target, each merging
+    settings against the target's *original* state -- so both donors report
+    "preserved", the later one silently overwrites the earlier, and both get
+    deleted. One canonical group means one merge and one honest conflict.
+    """
+    with app.app_context():
+        db.session.add_all(
+            [
+                SearchProfile(id=1, name="Alpha", is_active=True),
+                SearchProfile(
+                    id=2, name="frag upper", is_active=True, ai_config={"who": "two"}
+                ),
+                SearchProfile(
+                    id=3, name="frag lower", is_active=True, ai_config={"who": "three"}
+                ),
+            ]
+        )
+        _add_listings(2, "New home in your search: ALPHA!", 2, "upper")
+        _add_listings(3, "New home in your search: Alpha!", 3, "lower")
+        db.session.commit()
+
+        report = SearchProfileRepairService.apply()
+
+        assert len(report["groups"]) == 1, "one saved search, one group"
+        group = report["groups"][0]
+        assert group["name"] == "Alpha", "the spelling most of the listings use"
+        assert group["target_id"] == 1
+        assert sorted(group["fragment_ids"]) == [2, 3]
+
+        target = db.session.get(SearchProfile, 1)
+        assert target.name == "Alpha"
+        assert target.ai_config == {"who": "two"}, "the first donor wins"
+        assert {"profile_id": 2, "field": "ai_config"} in group["settings_preserved"]
+        assert {"profile_id": 3, "field": "ai_config"} in group["settings_conflicts"]
+        assert {"profile_id": 3, "field": "ai_config"} not in group[
+            "settings_preserved"
+        ]
+
+        assert _count(1) == 5
+        assert _profile_ids() == [1]

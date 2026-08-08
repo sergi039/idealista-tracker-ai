@@ -154,13 +154,25 @@ the database. It recomputes each listing's saved-search name from its own
 stored `properties.email_subject` — same unfolding, same extractor as
 ingestion — and never guesses from name similarity.
 
-**Stop ingestion before applying.** `properties.search_profile_id` is
-`ON DELETE SET NULL`: a listing written into a fragment between the
-zero-check and the `DELETE` is not rejected, it is silently left with a NULL
-profile. The scheduler runs inside the app process, so stopping the app
-container is what stops ingestion. The repair aborts on any count mismatch
-and commits nothing, but it cannot prevent a concurrent writer — only notice
-one.
+**Stop ingestion before applying** — but know what that buys you.
+
+`properties.search_profile_id` is `ON DELETE SET NULL`, so a listing written
+into a fragment while it is being removed would be silently left with a NULL
+profile. The code defends against that on its own: the whole repair is one
+transaction, each profile is re-counted immediately before its `DELETE`, the
+deletes are flushed *inside* the transaction, and every touched profile plus
+the total number of NULL-profile listings is re-counted again afterwards. A
+listing that slipped in is caught there and the entire repair is rolled back.
+After that flush the database closes the window itself: the pending `DELETE`
+holds the profile row, so a concurrent insert referencing it waits for this
+transaction and then fails its foreign key instead of being orphaned.
+
+So stopping ingestion is not what makes the repair safe — it is what makes it
+**succeed**. A concurrent write turns the run into a clean abort (exit 1, no
+changes) that has to be repeated, and it would make the ingestion itself fail
+on a foreign key. The scheduler runs inside the app process, so stopping the
+app container is what stops ingestion; the repair command refuses to start a
+scheduler of its own but cannot stop yours.
 
 ```bash
 # 1. Back up first (the repair deletes profile rows).

@@ -21,14 +21,39 @@ Ciudad Quesada" versus "Homes in Ciudad Quesada Norte") and would silently
 collapse two real subscriptions into one.
 
 Deleting a profile is the dangerous half. `properties.search_profile_id` is
-``ON DELETE SET NULL``: a listing that lands in a fragment between the
-zero-check and the ``DELETE`` is not blocked, it is silently orphaned with a
-NULL profile. The repair therefore reassigns, re-counts and deletes inside one
-transaction, and aborts the whole thing if a single count disagrees -- but a
-transaction cannot stop a concurrent writer from inserting a new row, only
-notice it. **Apply with ingestion stopped** (`docker compose stop app`, which
-stops the in-process scheduler); see the "Repairing fragmented search
-profiles" section of MIGRATION_RUNBOOK.md.
+``ON DELETE SET NULL``: a listing that lands in a fragment while it is being
+removed is not rejected, it is silently orphaned with a NULL profile.
+
+What the code guarantees on its own, with another writer running
+--------------------------------------------------------------
+
+- **All or nothing.** Renames, reassignments and deletes are one transaction.
+- **No listing is silently orphaned.** Each profile is re-counted immediately
+  before its ``DELETE``; the deletes are then *flushed inside* the
+  transaction, and every touched profile plus the total number of
+  NULL-profile listings is re-counted again afterwards. A row that arrived
+  after the zero-check is nullified by that same flush and is caught by the
+  re-count that follows it, which aborts and rolls back the whole repair.
+  Between that flush and the ``COMMIT`` the database itself closes the
+  window: the pending ``DELETE`` holds the ``search_profiles`` row, and an
+  ``INSERT`` into ``properties`` referencing it needs a ``FOR KEY SHARE``
+  lock on that same row, so a concurrent ingestion waits for this
+  transaction and then fails its foreign key rather than slipping in.
+- **The counts in the report were verified**, twice, inside the transaction.
+- **The exit code does not overstate what is known** (table below).
+
+What still rests on stopping ingestion
+--------------------------------------
+
+Not safety -- *success*. A concurrent write does not corrupt anything, it
+makes the repair abort with exit 1 and no changes, so the run has to be
+repeated. Stopping ingestion is also what keeps the concurrent ingestion
+itself from failing on a foreign key. And the tool cannot stop the
+scheduler for you: it only refuses to start one of its own.
+
+**Apply with ingestion stopped** (`docker compose stop app`, which stops the
+in-process scheduler); see the "Repairing search profiles fragmented by
+folded subjects" section of MIGRATION_RUNBOOK.md.
 
 Dry run (default) writes nothing::
 
@@ -213,6 +238,7 @@ class RepairPlan:
 
 def _find_profile_by_name(
     name: str,
+    canonical: str,
     profiles: Sequence[SearchProfile],
     effective_names: Dict[int, str],
 ) -> Optional[SearchProfile]:
@@ -230,8 +256,7 @@ def _find_profile_by_name(
     for profile in profiles:
         if effective_names.get(profile.id) == name:
             return profile
-    canonical = _canonical_profile_name(name)
-    if not canonical:
+    if not canonical:  # pragma: no cover - callers pass a canonicalized name
         return None
     for profile in profiles:
         current = effective_names.get(profile.id)
@@ -328,9 +353,18 @@ def build_plan() -> RepairPlan:
     by_id = {profile.id: profile for profile in profiles}
     plan.counts_before = _profile_property_counts()
 
-    # {recomputed name: {current profile id: [property ids]}}
+    # Keyed by *canonical* name throughout. "ALPHA" and "Alpha" are one saved
+    # search as far as ingestion is concerned -- get_or_create_profile_by_name()
+    # hands both to the same profile -- so planning them as two groups gives
+    # one target two independent settings merges, each reading the target's
+    # original state, and the second silently overwrites the first.
+    #
+    # {canonical name: {current profile id: [property ids]}}
     grouped: Dict[str, Dict[int, List[int]]] = {}
-    # {profile id: every recomputed name found inside it}. A profile holding
+    # {canonical name: {exact spelling: how many listings use it}}, so a
+    # promotion renames to the spelling most of the listings actually use.
+    spellings: Dict[str, Dict[str, int]] = {}
+    # {profile id: every canonical name found inside it}. A profile holding
     # more than one is not a fold fragment -- something else put those rows
     # together (ProfileAssignmentService reassigns by location, and profiles
     # can be edited by hand) -- and renaming it after one of those names would
@@ -354,8 +388,14 @@ def build_plan() -> RepairPlan:
             # de-fragmenting profiles, and the operator should see it first.
             plan.orphan_properties += 1
             continue
-        grouped.setdefault(name, {}).setdefault(profile_id, []).append(property_id)
-        names_by_profile.setdefault(profile_id, set()).add(name)
+        canonical = _canonical_profile_name(name)
+        if not canonical:  # pragma: no cover - extract_search_name cleans first
+            plan.unresolved_properties += 1
+            continue
+        grouped.setdefault(canonical, {}).setdefault(profile_id, []).append(property_id)
+        counts = spellings.setdefault(canonical, {})
+        counts[name] = counts.get(name, 0) + 1
+        names_by_profile.setdefault(profile_id, set()).add(canonical)
 
     moved_out: Dict[int, int] = {}
     moved_in: Dict[int, int] = {}
@@ -369,9 +409,21 @@ def build_plan() -> RepairPlan:
         profile_id: set(names) for profile_id, names in names_by_profile.items()
     }
 
-    for name in sorted(grouped):
-        property_ids = grouped[name]
-        target = _find_profile_by_name(name, profiles, effective_names)
+    # A target belongs to one group. The eligibility rule below already makes
+    # a second claim impossible, but this is a destructive operation, so the
+    # reservation is written down rather than left to hold by argument.
+    claimed_by: Dict[int, str] = {}
+
+    # The spelling most of a group's listings use, ties broken alphabetically.
+    display_names: Dict[str, str] = {
+        canonical: min(counts.items(), key=lambda item: (-item[1], item[0]))[0]
+        for canonical, counts in spellings.items()
+    }
+
+    for canonical in sorted(grouped):
+        property_ids = grouped[canonical]
+        name = display_names[canonical]
+        target = _find_profile_by_name(name, canonical, profiles, effective_names)
         rename_to: Optional[str] = None
         if target is None:
             # Nobody carries the correct name yet. Promote the fragment with
@@ -388,7 +440,7 @@ def build_plan() -> RepairPlan:
             candidates = [
                 by_id[pid]
                 for pid in property_ids
-                if pid in by_id and projected_names.get(pid) == {name}
+                if pid in by_id and projected_names.get(pid) == {canonical}
             ]
             if not candidates:
                 plan.blocked_groups.append(
@@ -396,10 +448,10 @@ def build_plan() -> RepairPlan:
                         "name": name,
                         "candidate_ids": sorted(property_ids),
                         "other_names": sorted(
-                            other
+                            display_names.get(other, other)
                             for pid in property_ids
                             for other in projected_names.get(pid, set())
-                            if other != name
+                            if other != canonical
                         ),
                         "reason": (
                             "no profile carries this name, and every profile "
@@ -419,19 +471,36 @@ def build_plan() -> RepairPlan:
         # renaming it, and this repair follows ingestion rather than tidying
         # names behind the owner's back.
 
+        owner = claimed_by.get(target.id)
+        if owner is not None and owner != canonical:
+            plan.blocked_groups.append(  # pragma: no cover - defensive
+                {
+                    "name": name,
+                    "candidate_ids": sorted(property_ids),
+                    "other_names": [display_names.get(owner, owner)],
+                    "reason": (
+                        f"profile {target.id} is already the survivor of another "
+                        f"saved search in this plan; refusing to give one profile "
+                        f"to two subscriptions"
+                    ),
+                }
+            )
+            continue
+
         fragment_ids = sorted(pid for pid in property_ids if pid != target.id)
         if not fragment_ids and not rename_to:
             continue
 
         # Book the plan's own effects before moving on to the next group.
+        claimed_by[target.id] = canonical
         if rename_to:
             effective_names[target.id] = rename_to
         for fragment_id in fragment_ids:
             # Every listing of this name leaves the fragment...
-            projected_names.get(fragment_id, set()).discard(name)
+            projected_names.get(fragment_id, set()).discard(canonical)
         # ...and arrives at the target, which from here on counts as holding
         # this saved search even if it held none of it a moment ago.
-        projected_names.setdefault(target.id, set()).add(name)
+        projected_names.setdefault(target.id, set()).add(canonical)
 
         group = GroupPlan(
             name=name,
@@ -494,6 +563,31 @@ def _counts_report(
             {"profile_id": None, "name": None, "properties": counts.get(None, 0)}
         )
     return report
+
+
+def _verify_counts(plan: RepairPlan, orphans_before: int) -> List[str]:
+    """Re-read every touched profile and compare it with the plan.
+
+    Run twice inside the transaction -- once after the reassignment, once
+    after the DELETEs are flushed -- because a concurrent writer can land
+    between the two and the second pass is the only thing that sees it.
+    """
+    problems: List[str] = []
+    for profile_id, expected in plan.expected_after.items():
+        actual = _remaining_property_count(profile_id)
+        if actual != expected:
+            problems.append(
+                f"profile {profile_id}: expected {expected} listings, found {actual}"
+            )
+    # Every NULL-profile row, not just the ones with a recoverable name: the
+    # point is that the repair created none.
+    orphans_after = _remaining_property_count(None)
+    if orphans_after > orphans_before:
+        problems.append(
+            f"listings left without a profile: {orphans_before} before, "
+            f"{orphans_after} after"
+        )
+    return problems
 
 
 def _observe_repair_state(plan: RepairPlan) -> Dict[str, Any]:
@@ -649,22 +743,8 @@ class SearchProfileRepairService:
                     f"expected to move {plan.properties_to_move} listings, "
                     f"moved {moved}"
                 )
-            for profile_id, expected in plan.expected_after.items():
-                actual = _remaining_property_count(profile_id)
-                if actual != expected:
-                    errors.append(
-                        f"profile {profile_id}: expected {expected} listings "
-                        f"after the move, found {actual}"
-                    )
-            # Every NULL-profile row, not just the ones with a recoverable
-            # name: the point is that the repair created none.
             orphans_before = plan.counts_before.get(None, 0)
-            orphans_after = _remaining_property_count(None)
-            if orphans_after > orphans_before:
-                errors.append(
-                    f"listings left without a profile: {orphans_before} "
-                    f"before, {orphans_after} after"
-                )
+            errors.extend(_verify_counts(plan, orphans_before))
 
             deleted: List[int] = []
             if not errors:
@@ -685,6 +765,34 @@ class SearchProfileRepairService:
                         break
                     db.session.delete(profile)
                     deleted.append(profile_id)
+
+            if deleted and not errors:
+                # Send the DELETEs now instead of letting commit() flush them.
+                # Two things follow, and both matter:
+                #
+                # 1. Nothing looks at the database between the zero-check above
+                #    and the DELETE if the DELETE only leaves as part of the
+                #    commit. A listing inserted into a fragment in that window
+                #    is not rejected -- the FK is ON DELETE SET NULL, and
+                #    SQLAlchemy's own nullify pass hits it first -- so it is
+                #    silently orphaned. Flushing here puts the check and the
+                #    DELETE in the same inspectable step, and the re-count
+                #    below catches exactly that row.
+                # 2. Once the DELETE is on the wire the parent row is locked,
+                #    so a concurrent INSERT referencing it (which needs a
+                #    FOR KEY SHARE lock on that row) waits for us rather than
+                #    slipping in, and fails the FK if we commit.
+                #
+                # A failure in this flush is also a pre-COMMIT failure, which
+                # is an honest rollback, rather than an unknown COMMIT outcome.
+                db.session.flush()
+                db.session.expire_all()
+                errors.extend(_verify_counts(plan, orphans_before))
+                for profile_id in deleted:
+                    if db.session.get(SearchProfile, profile_id) is not None:
+                        errors.append(  # pragma: no cover - defensive
+                            f"profile {profile_id} survived its own DELETE"
+                        )
 
             if errors:
                 return abort(errors)
