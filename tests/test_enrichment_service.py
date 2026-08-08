@@ -117,6 +117,11 @@ class TestEnrichmentService:
             mock_scoring_instance = Mock()
             mock_scoring.return_value = mock_scoring_instance
 
+            # The Google steps report their failure by returning a
+            # GoogleApiFailure; None means "Google answered" (#98).
+            mock_places.return_value = None
+            mock_maps.return_value = None
+
             result = enrichment_service.enrich_land(test_land)
 
             assert result is True
@@ -372,10 +377,11 @@ class TestEnrichmentService:
         # Set API key
         enrichment_service.google_places_key = "test_key"
 
-        places = enrichment_service._search_nearby_places(
+        places, failure = enrichment_service._search_nearby_places(
             39.4699, -0.3763, ["restaurant"]
         )
 
+        assert failure is None
         assert len(places) == 1
         assert places[0]["name"] == "Test Restaurant"
         assert places[0]["rating"] == 4.5

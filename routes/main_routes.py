@@ -1107,11 +1107,22 @@ def recalculate_property_travel(property_id: int):
     """Recalculate travel for a single property."""
     try:
         prop = db.get_or_404(Property, property_id)
-        from services.property_travel_service import PropertyTravelService
+        from services.property_travel_service import (
+            TRAVEL_STATE_UNAVAILABLE,
+            PropertyTravelService,
+            travel_api_state,
+        )
 
         ok = PropertyTravelService().calculate_for_property(prop, commit=True)
         if ok:
             flash("Travel recalculated", "success")
+        elif travel_api_state(prop) == TRAVEL_STATE_UNAVAILABLE:
+            # Distinguish "Google refused" from "nothing to compute" (#98).
+            flash(
+                "Travel not updated: Google refused every request. "
+                "Check the API keys, billing and enabled APIs, then retry.",
+                "error",
+            )
         else:
             flash("Travel not updated (missing coordinates or targets).", "error")
 
@@ -1178,14 +1189,21 @@ def recalculate_profile_travel(profile_id: int):
 
         properties = query.order_by(Property.created_at.desc()).limit(limit).all()
 
-        from services.property_travel_service import PropertyTravelService
+        from services.property_travel_service import (
+            TRAVEL_STATE_UNAVAILABLE,
+            PropertyTravelService,
+            travel_api_state,
+        )
 
         service = PropertyTravelService()
         updated = 0
+        api_refused = 0
         for prop in properties:
             try:
                 if service.calculate_for_property(prop, commit=True):
                     updated += 1
+                elif travel_api_state(prop) == TRAVEL_STATE_UNAVAILABLE:
+                    api_refused += 1
             except Exception as inner:
                 logger.warning(
                     "Travel recalculation failed for property %s: %s", prop.id, inner
@@ -1193,10 +1211,19 @@ def recalculate_profile_travel(profile_id: int):
                 db.session.rollback()
                 continue
 
-        flash(
-            f"Recalculated travel for {updated} / {len(properties)} properties",
-            "success",
-        )
+        # A run where Google refused everything used to flash the same green
+        # count as a real one (#98); the refusals get their own number now.
+        summary = f"Recalculated travel for {updated} / {len(properties)} properties"
+        if api_refused:
+            summary += f"; {api_refused} skipped because Google was unavailable"
+            logger.error(
+                "Profile %s travel run: %s updated, %s refused by Google, %s total",
+                profile_id,
+                updated,
+                api_refused,
+                len(properties),
+            )
+        flash(summary, "warning" if api_refused else "success")
         return redirect(
             safe_referrer_redirect(url_for("main.properties", profile_id=profile_id))
         )
