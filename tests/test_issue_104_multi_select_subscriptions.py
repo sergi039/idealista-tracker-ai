@@ -408,12 +408,14 @@ class TestPropertiesPageShowsTheUnion:
     ):
         """Falling back to the auto-selected profile here would answer a
         question the user did not ask, and look like a working filter."""
-        unknown = max(
-            subscriptions.values(), key=lambda v: v if isinstance(v, int) else 0
+        unknown = (
+            max(
+                subscriptions[key]
+                for key in ("alpha_id", "beta_id", "gamma_id", "zeta_id")
+            )
+            + 5000
         )
-        body = client.get(f"/properties?profile_id={unknown + 5000}").get_data(
-            as_text=True
-        )
+        body = client.get(f"/properties?profile_id={unknown}").get_data(as_text=True)
         assert _listing_ids_in_order(body) == []
 
 
