@@ -5,6 +5,7 @@ Tests for scoring service functionality.
 import pytest
 from decimal import Decimal
 from app import create_app, db
+from config import Config
 from models import Land, ScoringCriteria
 from services.scoring_service import ScoringService
 from tests import setup_test_environment
@@ -427,3 +428,67 @@ class TestScoringService:
             assert isinstance(breakdown, dict)
             assert "infrastructure_basic" in breakdown
             assert "legal_status" in breakdown
+
+
+class TestConfigWeightsNotMutated:
+    """Regression tests for #44.
+
+    ScoringService used to bind Config.DEFAULT_SCORING_WEIGHTS by reference, so
+    every in-place update leaked into the class-level config dict for the rest
+    of the process: GET /api/criteria then served the polluted dict and
+    _validate_profiles' "unknown criterion" check silently widened.
+    """
+
+    @staticmethod
+    def _combined_profile_rows():
+        """Rows a real deployment ends up with.
+
+        One genuine combined-profile criterion weight, plus the two
+        investment/lifestyle rows written by POST /criteria/update_combined_mix.
+        Those two are the ratio between the profile scores, owned by
+        _load_combined_mix, not scoring criteria - but load_custom_weights'
+        `profile == 'combined' OR profile IS NULL` filter matches them too.
+        """
+        return [
+            ScoringCriteria(
+                criteria_name="transport", profile="combined", weight=Decimal("0.50")
+            ),
+            ScoringCriteria(
+                criteria_name="investment", profile="combined", weight=Decimal("0.32")
+            ),
+            ScoringCriteria(
+                criteria_name="lifestyle", profile="combined", weight=Decimal("0.68")
+            ),
+        ]
+
+    def test_init_does_not_mutate_config_defaults(self, app):
+        """Constructing the service must leave Config.DEFAULT_SCORING_WEIGHTS alone"""
+        with app.app_context():
+            db.session.add_all(self._combined_profile_rows())
+            db.session.commit()
+
+            before = dict(Config.DEFAULT_SCORING_WEIGHTS)
+
+            service = ScoringService()
+
+            assert Config.DEFAULT_SCORING_WEIGHTS == before
+
+            # The instance owns its dict and still picked the DB weights up, so
+            # this is a live copy rather than a frozen view of the defaults.
+            assert service.weights is not Config.DEFAULT_SCORING_WEIGHTS
+            assert (
+                service.weights["transport"]
+                != Config.DEFAULT_SCORING_WEIGHTS["transport"]
+            )
+
+    def test_update_weights_does_not_mutate_config_defaults(self, app):
+        """update_weights() must leave Config.DEFAULT_SCORING_WEIGHTS alone too"""
+        with app.app_context():
+            service = ScoringService()
+
+            before = dict(Config.DEFAULT_SCORING_WEIGHTS)
+
+            assert service.update_weights({"transport": 0.30}, profile="combined")
+
+            assert Config.DEFAULT_SCORING_WEIGHTS == before
+            assert service.weights["transport"] == 0.30
