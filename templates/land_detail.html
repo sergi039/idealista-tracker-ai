@@ -1502,6 +1502,43 @@ async function checkListingStatus(landId) {
 }
 
 // Formatting functions for AI analysis
+
+// Issue #23: listing descriptions/titles are untrusted third-party text (any
+// idealista advertiser controls them) and AI analysis derived from them is
+// persisted and later rendered here via innerHTML. Escape every string value
+// before it reaches a template literal that gets assigned to innerHTML.
+function escapeHtml(text) {
+    const str = String(text ?? '');
+    return str
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+// Recursively escapes every string leaf of an object/array, leaving numbers,
+// booleans and null/undefined untouched so numeric formatting (toFixed,
+// toLocaleString, comparisons) downstream keeps working unchanged.
+function deepEscapeStrings(value) {
+    if (typeof value === 'string') return escapeHtml(value);
+    if (Array.isArray(value)) return value.map(deepEscapeStrings);
+    if (value && typeof value === 'object') {
+        const out = {};
+        for (const key of Object.keys(value)) {
+            out[key] = deepEscapeStrings(value[key]);
+        }
+        return out;
+    }
+    return value;
+}
+
+// A listing's own url is DB/idealista-controlled text, not necessarily a
+// safe href. Only allow http(s) links through to an anchor's href attribute.
+function isSafeHttpUrl(value) {
+    return typeof value === 'string' && /^https?:\/\//i.test(value);
+}
+
 function renderListItems(items, label, colorClass) {
     if (!items || !Array.isArray(items) || items.length === 0) return '';
     
@@ -1553,7 +1590,7 @@ function renderSimilarProperties(similarProperties) {
                         <a href="/lands/${prop.id}" class="btn btn-outline-primary btn-sm">
                             <i class="fas fa-eye me-1"></i>View Details
                         </a>
-                        ${prop.url ? `<a href="${prop.url}" target="_blank" class="btn btn-outline-secondary btn-sm">
+                        ${isSafeHttpUrl(prop.url) ? `<a href="${prop.url}" target="_blank" rel="noopener" class="btn btn-outline-secondary btn-sm">
                             <i class="fas fa-external-link-alt me-1"></i>Idealista
                         </a>` : ''}
                     </div>
@@ -1619,7 +1656,12 @@ function renderStructuredAIAnalysis(analysis) {
     if (!analysis || typeof analysis !== 'object') {
         return '<div class="alert alert-warning">No analysis data available</div>';
     }
-    
+
+    // Issue #23: escape every string field once, here, before any of it is
+    // interpolated into the innerHTML template literals below (including
+    // the similar_properties_data consumed by renderSimilarProperties()).
+    analysis = deepEscapeStrings(analysis);
+
     try {
         return `
             <div class="row">
@@ -1904,14 +1946,14 @@ function renderAnalysisInto(targetId, rawData, placeholderId) {
     if (placeholder) placeholder.style.display = 'none';
 
     if (normalized._raw_text) {
-        target.innerHTML = `<div class="analysis-text">${String(normalized._raw_text).replace(/\n/g, '<br>')}</div>`;
+        target.innerHTML = `<div class="analysis-text">${escapeHtml(String(normalized._raw_text)).replace(/\n/g, '<br>')}</div>`;
         return;
     }
 
     try {
         target.innerHTML = renderStructuredAIAnalysis(normalized);
     } catch (e) {
-        target.innerHTML = `<div class="alert alert-warning mb-0">Error rendering analysis: ${e}</div>`;
+        target.innerHTML = `<div class="alert alert-warning mb-0">Error rendering analysis: ${escapeHtml(String((e && e.message) || e))}</div>`;
     }
 }
 
