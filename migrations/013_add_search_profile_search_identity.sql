@@ -61,3 +61,16 @@ BEGIN
             || quote_ident(unique_label_constraint);
     END IF;
 END $$;
+
+-- That constraint was also the only thing protecting the check-then-insert in
+-- get_or_create_profile_by_name() and get_default_profile(): gunicorn serves
+-- four threads and a manual ingest overlaps the scheduled one, so two
+-- identical profiles could now be committed side by side. Restore exactly the
+-- old invariant for rows that are not yet identified, while leaving two
+-- *different* subscriptions free to share a label.
+--
+-- Created after the DROP above, and it fails loudly if duplicates somehow
+-- already exist rather than silently skipping the protection.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_search_profiles_name_without_key
+    ON search_profiles (name)
+    WHERE source_search_key IS NULL;

@@ -22,11 +22,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Consequence to keep in mind**: `search_profiles.name` is no longer UNIQUE —
   two subscriptions may legitimately share a label with a different `shape`, so
   `merge_duplicate_profiles()` now refuses to merge a group holding different
-  search keys. Only labels the ingester invented (`is_auto_created`) are ever
+  search keys (and carries the single key onto the survivor when it merges one
+  that has it). Only labels the ingester invented (`is_auto_created`) are ever
   rewritten. Keys are **not** backfilled: existing profiles stay NULL until the
   next email for that subscription arrives. Identity conflicts (URL points at
-  one profile, label at another; several different search links in one email)
-  are logged and left alone, never merged automatically.
+  one profile, label at another) are logged and left alone, never merged
+  automatically. An email linking to **several different** searches resolves to
+  no profile at all — the listing is stored unassigned rather than guessed into
+  a same-named subscription.
+- **Concurrency**: the dropped UNIQUE was also what protected check-then-insert
+  in `get_or_create_profile_by_name()` / `get_default_profile()` from two
+  overlapping ingestions, so `013` adds a partial unique index on `name` for
+  rows with no search key — the old invariant, minus the case it wrongly
+  blocked. Binding a key to an existing profile is a conditional UPDATE that
+  fails and retries rather than re-pointing a row another ingestion just
+  claimed.
 - **CI**: the `pytest` job now runs a PostgreSQL service, because the migration
   SQL is PostgreSQL-only and cannot be executed by SQLite —
   `tests/test_postgres_migrations.py` applies the real files to a real server.

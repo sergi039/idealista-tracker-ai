@@ -92,7 +92,10 @@ def _add_operator_drift(engine):
 # that schema and a test that wants it has to say so explicitly.
 _POST_BASELINE_SCHEMA = {
     "search_profiles": (
-        "ux_search_profiles_source_search_key",
+        (
+            "ux_search_profiles_source_search_key",
+            "ux_search_profiles_name_without_key",
+        ),
         ("source_search_key", "source_search_url", "is_auto_created"),
     ),
 }
@@ -107,8 +110,9 @@ def _create_historical_schema(engine):
     """
     db.metadata.create_all(engine)
     with engine.begin() as connection:
-        for table, (index, columns) in _POST_BASELINE_SCHEMA.items():
-            connection.execute(text(f"DROP INDEX IF EXISTS {index}"))
+        for table, (indexes, columns) in _POST_BASELINE_SCHEMA.items():
+            for index in indexes:
+                connection.execute(text(f"DROP INDEX IF EXISTS {index}"))
             for column in columns:
                 connection.execute(
                     text(f"ALTER TABLE {table} DROP COLUMN {column}")  # noqa: S608

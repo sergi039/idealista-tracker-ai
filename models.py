@@ -25,6 +25,18 @@ class SearchProfile(db.Model):
         db.Index(
             "ux_search_profiles_source_search_key", "source_search_key", unique=True
         ),
+        # Dropping the UNIQUE on `name` (migration 013) also removed what used
+        # to protect the check-then-insert in get_or_create_profile_by_name()
+        # and get_default_profile() from two overlapping ingestions. Identified
+        # subscriptions may share a label; unidentified ones may not, which
+        # restores exactly the old invariant without blocking the new case.
+        db.Index(
+            "ux_search_profiles_name_without_key",
+            "name",
+            unique=True,
+            postgresql_where=db.text("source_search_key IS NULL"),
+            sqlite_where=db.text("source_search_key IS NULL"),
+        ),
     )
 
     id = db.Column(db.Integer, primary_key=True)

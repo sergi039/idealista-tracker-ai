@@ -22,12 +22,11 @@ jobs:
     # would first run in production - which is where migration 013 would have
     # died on a psycopg2 percent-sign collision (issue #102).
     #
-    # Pinned by tag, matching docker-compose.yml, because the digest could not
-    # be verified for linux/amd64 from the authoring machine and a wrong one
-    # would wedge this required check. Worth pinning by digest once verified.
+    # Pinned by digest; the tag stays alongside it as the readable label. The
+    # digest is the multi-arch OCI index, which carries linux/amd64.
     services:
       postgres:
-        image: postgres:15-alpine
+        image: postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f
         env:
           POSTGRES_USER: idealista_ci
           POSTGRES_PASSWORD: idealista_ci

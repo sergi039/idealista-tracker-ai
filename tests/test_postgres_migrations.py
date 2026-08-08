@@ -49,6 +49,7 @@ REQUIRE_ENV = "REQUIRE_POSTGRES_TESTS"
 IDENTITY_MIGRATION = "013_add_search_profile_search_identity"
 IDENTITY_COLUMNS = ("source_search_key", "source_search_url", "is_auto_created")
 IDENTITY_INDEX = "ux_search_profiles_source_search_key"
+LABEL_INDEX = "ux_search_profiles_name_without_key"
 
 _DATABASE_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 
@@ -160,6 +161,16 @@ def test_013_adds_the_identity_columns_and_a_unique_key_index(postgres_url):
         assert IDENTITY_INDEX in unique_indexes
         assert unique_indexes[IDENTITY_INDEX]["column_names"] == ["source_search_key"]
 
+        # The partial index that replaces the dropped UNIQUE on the label.
+        assert LABEL_INDEX in unique_indexes
+        assert unique_indexes[LABEL_INDEX]["column_names"] == ["name"]
+        assert "source_search_key IS NULL" in (
+            unique_indexes[LABEL_INDEX]
+            .get("dialect_options", {})
+            .get("postgresql_where")
+            or ""
+        )
+
         key = "idealista:v1:" + "a" * 64
         with engine.begin() as connection:
             _insert_profile(connection, name="First", source_search_key=key)
@@ -194,8 +205,20 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
 
         assert run_migrations(engine) == [IDENTITY_MIGRATION]
 
+        # Two *identified* subscriptions may now share the label...
         with engine.begin() as connection:
-            _insert_profile(connection, name="Terrenos norte")
+            _insert_profile(
+                connection,
+                name="Terrenos norte",
+                source_search_key="idealista:v1:" + "b" * 64,
+            )
+        # ... but two unidentified ones still may not: dropping the UNIQUE must
+        # not drop the protection around check-then-insert.
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                _insert_profile(connection, name="Terrenos norte")
+
+        with engine.begin() as connection:
             existing = (
                 connection.execute(
                     text(

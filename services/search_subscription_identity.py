@@ -52,7 +52,7 @@ import html
 import logging
 import re
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from urllib.parse import quote_from_bytes, unquote_to_bytes, urlsplit
 
 logger = logging.getLogger(__name__)
@@ -83,6 +83,29 @@ _LANGUAGE_SEGMENT_RE = re.compile(r"[a-z]{2}")
 # writes its filters that way; nothing in a query value is left literal.
 _PATH_SAFE = ","
 _QUERY_SAFE = ""
+
+
+@dataclass(frozen=True)
+class SearchIdentityResult:
+    """What an email says about which saved search it belongs to.
+
+    Three outcomes, and the caller must not collapse them:
+
+    * an identity - resolve against it;
+    * *absent* (no recognizable search link) - the caller may fall back to the
+      label and its own matchers;
+    * *ambiguous* (links to several different searches) - resolution stops.
+      Falling back to the label here would land the listing in whichever
+      same-named subscription happens to exist, which is precisely the guess
+      the extractor refused to make.
+    """
+
+    identity: Optional["SearchSubscriptionIdentity"] = None
+    conflicting: Tuple[str, ...] = ()
+
+    @property
+    def is_ambiguous(self) -> bool:
+        return len(self.conflicting) > 1
 
 
 @dataclass(frozen=True)
@@ -222,13 +245,12 @@ def _candidate_urls(body: str) -> List[str]:
     return [match.rstrip(".") for match in _BARE_URL_RE.findall(text)]
 
 
-def extract_search_identity(body: str) -> Optional[SearchSubscriptionIdentity]:
+def extract_search_identity(body: str) -> SearchIdentityResult:
     """Identify the saved search an alert email belongs to.
 
-    Returns None when the body carries no recognizable search link, and also
-    when it carries links to *several different* searches: picking one of them
-    would bind listings to the wrong subscription, so the conflict is logged
-    and left for a human (#102).
+    Never guesses. An email linking to several different searches yields an
+    *ambiguous* result, not an absent one: the conflict is logged and left for
+    a human, and the caller must stop rather than fall back (#102).
     """
     identities: dict[str, SearchSubscriptionIdentity] = {}
 
@@ -246,7 +268,7 @@ def extract_search_identity(body: str) -> Optional[SearchSubscriptionIdentity]:
         )
 
     if not identities:
-        return None
+        return SearchIdentityResult()
 
     if len(identities) > 1:
         logger.warning(
@@ -255,6 +277,6 @@ def extract_search_identity(body: str) -> Optional[SearchSubscriptionIdentity]:
             len(identities),
             ", ".join(sorted(identity.canonical for identity in identities.values())),
         )
-        return None
+        return SearchIdentityResult(conflicting=tuple(sorted(identities)))
 
-    return next(iter(identities.values()))
+    return SearchIdentityResult(identity=next(iter(identities.values())))

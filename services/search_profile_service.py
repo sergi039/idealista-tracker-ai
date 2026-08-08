@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PROFILE_NAME = "Default"
 
+# How many times identity resolution re-reads after losing a row to a
+# concurrent ingestion. Bounded: an unbounded retry would spin against a
+# livelock instead of reporting one.
+IDENTITY_RESOLUTION_ATTEMPTS = 3
+
 # Sentinel accepted in the `profile_id` query param to mean "no profile
 # filter, show every profile at once". An empty string means the same thing
 # (the "All profiles" <option value=""> in the filter form submits this).
@@ -242,9 +247,15 @@ class SearchProfileService:
             db.session.commit()
             return profile
         except Exception as e:
+            # Losing the insert race is normal now that the partial unique
+            # index enforces one keyless profile per label: read the winner
+            # instead of reporting "no default profile".
             logger.warning("Failed to auto-create default SearchProfile: %s", e)
             db.session.rollback()
-            return None
+            return (
+                SearchProfile.query.filter_by(is_default=True).first()
+                or SearchProfile.query.filter_by(name=DEFAULT_PROFILE_NAME).first()
+            )
 
     @staticmethod
     def list_profiles(active_only: bool = True) -> List[SearchProfile]:
@@ -357,6 +368,18 @@ class SearchProfileService:
             if cleaned_name and cleaned_name != primary.name:
                 primary.name = cleaned_name
 
+            # The group holds at most one search key (the guard above), and
+            # the primary is picked by property count, so the keyless row
+            # usually wins. Deleting the keyed one would delete the
+            # subscription's identity with it, and nothing records which saved
+            # search a stored row came from, so it could not be recovered.
+            carried_key = next(
+                (p.source_search_key for p in group_sorted if p.source_search_key), None
+            )
+            carried_url = next(
+                (p.source_search_url for p in group_sorted if p.source_search_key), None
+            )
+
             for dup in group_sorted[1:]:
                 if dup.is_default and not primary.is_default:
                     primary.is_default = True
@@ -404,6 +427,19 @@ class SearchProfileService:
                 reassigned += updated
                 db.session.delete(dup)
                 deleted += 1
+
+            if carried_key and not primary.source_search_key:
+                # Flush the deletes first: the unique index would reject the
+                # instant both rows hold the same key.
+                db.session.flush()
+                primary.source_search_key = carried_key
+                primary.source_search_url = carried_url
+                logger.info(
+                    "Merged group %r kept saved-search key %s on profile %s",
+                    canonical,
+                    carried_key,
+                    primary.id,
+                )
 
             merged += 1
             details.append(
@@ -499,8 +535,12 @@ class SearchProfileService:
     @staticmethod
     def _adopt_keyless_profile(
         identity: SearchSubscriptionIdentity, search_name: Optional[str]
-    ) -> Optional[SearchProfile]:
+    ) -> Tuple[Optional[SearchProfile], bool]:
         """Bind the search key to the existing profile of the same name.
+
+        Returns `(profile, contested)`. `contested` means a candidate existed
+        but was claimed by someone else first, so the caller should look again
+        rather than immediately create a twin.
 
         This is the upgrade path: profiles created before #102 have no key, so
         the first email that carries a URL attaches the identity to the row
@@ -512,11 +552,11 @@ class SearchProfileService:
         that keeps collecting unrelated mail.
         """
         if not search_name:
-            return None
+            return None, False
 
         canonical = _canonical_profile_name(search_name)
         if not canonical:
-            return None
+            return None, False
 
         candidates = [
             profile
@@ -529,24 +569,79 @@ class SearchProfileService:
             and _canonical_profile_name(profile.name) == canonical
         ]
         if not candidates:
-            return None
+            return None, False
 
-        profile = candidates[0]
         if len(candidates) > 1:
             logger.warning(
                 "Label %r matches %d keyless profiles %s; binding search key %s to "
-                "the oldest (%s) and leaving the rest untouched",
+                "the oldest one that is still free and leaving the rest untouched",
                 search_name,
                 len(candidates),
                 [candidate.id for candidate in candidates],
                 identity.key,
-                profile.id,
             )
 
-        profile.source_search_key = identity.key
-        profile.source_search_url = identity.url
-        SearchProfileService._commit_profile_change(profile, "bind the search key")
-        return SearchProfile.query.filter_by(source_search_key=identity.key).first()
+        for candidate in candidates:
+            if SearchProfileService._claim_keyless_profile(candidate, identity):
+                return (
+                    SearchProfile.query.filter_by(
+                        source_search_key=identity.key
+                    ).first(),
+                    False,
+                )
+
+        # Every candidate was taken between the SELECT and the UPDATE.
+        return None, True
+
+    @staticmethod
+    def _claim_keyless_profile(
+        profile: SearchProfile, identity: SearchSubscriptionIdentity
+    ) -> bool:
+        """Bind the key to a profile, but only while the row still has none.
+
+        The candidate list above is a snapshot. Two ingestions overlap
+        routinely - the scheduled run and a manual one, across four gunicorn
+        threads - and two subscriptions may share a label, so both can select
+        the same keyless row. An unconditional UPDATE lets the second one
+        silently re-point that profile and hand its stored listings to the
+        wrong saved search, so the claim is conditional on the row still being
+        unclaimed and the caller retries when it loses.
+        """
+        claimed = SearchProfile.query.filter(
+            SearchProfile.id == profile.id,
+            SearchProfile.source_search_key.is_(None),
+        ).update(
+            {
+                SearchProfile.source_search_key: identity.key,
+                SearchProfile.source_search_url: identity.url,
+            },
+            synchronize_session=False,
+        )
+
+        if not claimed:
+            # Rolling back also expires the stale snapshot, so the retry reads
+            # the row as it now is.
+            db.session.rollback()
+            logger.warning(
+                "Profile %s was claimed by another saved search before %s could "
+                "bind to it; not re-pointing it",
+                profile.id,
+                identity.key,
+            )
+            return False
+
+        try:
+            db.session.commit()
+            return True
+        except Exception as e:
+            logger.warning(
+                "Failed to bind search key %s to profile %s: %s",
+                identity.key,
+                profile.id,
+                e,
+            )
+            db.session.rollback()
+            return False
 
     @staticmethod
     def _create_profile_for_identity(
@@ -584,23 +679,49 @@ class SearchProfileService:
         key yet, then a new profile. Nothing here ever falls through to the
         default profile - an email that names its own saved search must not
         land in the catch-all.
+
+        The whole sequence retries when a concurrent ingestion claims the row
+        first: by then that row may even hold *this* key, so the retry starts
+        again from the key lookup rather than creating a twin.
         """
-        profile = SearchProfile.query.filter_by(source_search_key=identity.key).first()
-        if profile is None:
-            adopted = SearchProfileService._adopt_keyless_profile(identity, search_name)
-            return adopted or SearchProfileService._create_profile_for_identity(
+        for _ in range(IDENTITY_RESOLUTION_ATTEMPTS):
+            profile = SearchProfile.query.filter_by(
+                source_search_key=identity.key
+            ).first()
+            if profile is not None:
+                changed = SearchProfileService._relabel_if_auto_created(
+                    profile, search_name
+                )
+                if profile.source_search_url != identity.url:
+                    # Diagnostics: keep the most recent link, so the row shows
+                    # what the mailbox is actually sending for this search.
+                    profile.source_search_url = identity.url
+                    changed = True
+                if changed:
+                    SearchProfileService._commit_profile_change(
+                        profile, "update the label"
+                    )
+                return profile
+
+            adopted, contested = SearchProfileService._adopt_keyless_profile(
+                identity, search_name
+            )
+            if adopted is not None:
+                return adopted
+            if contested:
+                continue
+
+            return SearchProfileService._create_profile_for_identity(
                 identity, search_name
             )
 
-        changed = SearchProfileService._relabel_if_auto_created(profile, search_name)
-        if profile.source_search_url != identity.url:
-            # Diagnostics: keep the most recent link, so the row shows what the
-            # mailbox is actually sending for this subscription.
-            profile.source_search_url = identity.url
-            changed = True
-        if changed:
-            SearchProfileService._commit_profile_change(profile, "update the label")
-        return profile
+        logger.error(
+            "Gave up resolving saved search %s after %d contested attempts; the "
+            "email is left unassigned rather than bound to a guess",
+            identity.key,
+            IDENTITY_RESOLUTION_ATTEMPTS,
+        )
+        return None
 
     @staticmethod
     def resolve_profile(subject: str, body: str) -> Optional[SearchProfile]:
@@ -610,14 +731,29 @@ class SearchProfileService:
         the subject is only a label. Emails that carry no recognizable search
         URL keep the older resolution: saved-search name, then the profile's
         own `email_matchers`, then the default profile.
+
+        Returns None for an email that links to several *different* searches.
+        That is not the same as an email with no link: falling back to the
+        label there would bind the listing to whichever same-named
+        subscription happens to exist, which is the guess this whole change
+        exists to prevent. The listing is stored unassigned instead, and the
+        conflict is in the log.
         """
         search_name = extract_search_name(subject, body)
 
         # 1) The saved search's own URL, which encodes its filters.
-        identity = extract_search_identity(body)
-        if identity is not None:
+        found = extract_search_identity(body)
+        if found.is_ambiguous:
+            logger.warning(
+                "Refusing to resolve a profile for an email that links to %d "
+                "different saved searches (%s)",
+                len(found.conflicting),
+                ", ".join(found.conflicting),
+            )
+            return None
+        if found.identity is not None:
             profile = SearchProfileService.resolve_profile_by_identity(
-                identity, search_name
+                found.identity, search_name
             )
             if profile:
                 return profile

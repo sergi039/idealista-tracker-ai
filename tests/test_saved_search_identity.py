@@ -18,10 +18,13 @@ import logging
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from app import create_app, db
 from config import Config
 from models import Property, SearchProfile
+from services import search_profile_service
 from services.property_imap_service import PropertyIMAPService
 from services.search_profile_service import SearchProfileService
 from services.search_subscription_identity import (
@@ -239,11 +242,12 @@ def test_non_search_urls_have_no_key(url):
 def test_identity_is_extracted_from_the_body_and_ignores_listing_links():
     body = _alert_email(SUBJECT_FULL, LISTING_URL_ONE, TERRENOS_URL).decode("utf-8")
 
-    identity = extract_search_identity(body)
+    found = extract_search_identity(body)
 
-    assert identity is not None
-    assert identity.key == TERRENOS_KEY
-    assert identity.url == TERRENOS_URL
+    assert found.is_ambiguous is False
+    assert found.identity is not None
+    assert found.identity.key == TERRENOS_KEY
+    assert found.identity.url == TERRENOS_URL
 
 
 def test_repeated_links_to_the_same_search_are_one_identity():
@@ -252,10 +256,18 @@ def test_repeated_links_to_the_same_search_are_one_identity():
         f'<a href="{TERRENOS_URL_VARIANT_IN_HTML}">Modify your search</a>'
     )
 
-    identity = extract_search_identity(body)
+    found = extract_search_identity(body)
 
-    assert identity is not None
-    assert identity.key == TERRENOS_KEY
+    assert found.identity is not None
+    assert found.identity.key == TERRENOS_KEY
+
+
+def test_an_email_with_no_search_link_is_absent_not_ambiguous():
+    """The two outcomes drive different behaviour, so they must differ here."""
+    found = extract_search_identity(f'<a href="{LISTING_URL_ONE}">150,000 EUR</a>')
+
+    assert found.identity is None
+    assert found.is_ambiguous is False
 
 
 def test_two_different_searches_in_one_email_are_logged_and_refused(caplog):
@@ -263,9 +275,11 @@ def test_two_different_searches_in_one_email_are_logged_and_refused(caplog):
     body = f'<a href="{TERRENOS_URL}">A</a><a href="{VIVIENDAS_URL}">B</a>'
 
     with caplog.at_level(logging.WARNING):
-        identity = extract_search_identity(body)
+        found = extract_search_identity(body)
 
-    assert identity is None
+    assert found.identity is None
+    assert found.is_ambiguous is True
+    assert set(found.conflicting) == {TERRENOS_KEY, search_key_for_url(VIVIENDAS_URL)}
     assert any("search links" in record.message for record in caplog.records)
 
 
@@ -477,6 +491,191 @@ def test_merge_refuses_profiles_that_hold_different_search_keys(app):
         assert report["profiles_deleted"] == 0
         assert report["conflicts"]
         assert SearchProfile.query.count() == 2
+
+
+# --------------------------------------------------------------------------
+# Concurrency and conflict handling. Two ingestions overlap routinely: the
+# scheduled run and a manual one, across four gunicorn threads.
+# --------------------------------------------------------------------------
+
+
+def test_adopting_a_profile_that_was_claimed_meanwhile_does_not_steal_it(
+    app, monkeypatch
+):
+    """The candidate list is a snapshot; the row may be claimed before we write.
+
+    Two subscriptions can share a label, so two overlapping ingestions can
+    select the *same* keyless row and write different keys into it. An
+    unconditional UPDATE lets the second one silently re-point the profile -
+    and hand its existing properties to the wrong subscription.
+
+    The interleaving is forced deterministically: the competing write happens
+    while the candidate list is still being filtered, which is exactly the
+    window between the SELECT and the UPDATE.
+    """
+    with app.app_context():
+        candidate = SearchProfile(
+            # Same label, different spelling, so the seam below can tell the
+            # candidate's name apart from the label read out of the email.
+            name=SEARCH_NAME.title(),
+            is_active=True,
+            is_default=False,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(candidate)
+        db.session.commit()
+        candidate_id = candidate.id
+
+        other_key = search_key_for_url(VIVIENDAS_URL)
+        original = search_profile_service._canonical_profile_name
+
+        def canonical_with_a_racing_writer(value):
+            if value == SEARCH_NAME.title():
+                # "The other ingestion" claims the row first and commits.
+                db.session.execute(
+                    text(
+                        "UPDATE search_profiles SET source_search_key = :key "
+                        "WHERE id = :id"
+                    ),
+                    {"key": other_key, "id": candidate_id},
+                )
+                db.session.commit()
+            return original(value)
+
+        monkeypatch.setattr(
+            search_profile_service,
+            "_canonical_profile_name",
+            canonical_with_a_racing_writer,
+        )
+
+        resolved = SearchProfileService.resolve_profile(
+            SUBJECT_FULL, f'<a href="{TERRENOS_URL}">x</a>'
+        )
+
+        claimed = db.session.get(SearchProfile, candidate_id)
+        assert claimed.source_search_key == other_key, (
+            "the row was re-pointed at another subscription's search"
+        )
+        assert resolved is not None
+        assert resolved.id != candidate_id
+        assert resolved.source_search_key == TERRENOS_KEY
+
+
+def test_two_keyless_profiles_cannot_share_a_label(app):
+    """Dropping the UNIQUE on `name` must not drop check-then-insert safety.
+
+    Until #102 the UNIQUE constraint was what stopped two overlapping
+    ingestions both passing the "does a profile with this name exist?" check
+    and both inserting. Profiles that hold *different* search keys must still
+    be free to share a label; keyless ones must not.
+    """
+    with app.app_context():
+        db.session.add(
+            SearchProfile(
+                name="Same label",
+                is_active=True,
+                travel_targets={"presets": {}, "custom": []},
+            )
+        )
+        db.session.commit()
+
+        db.session.add(
+            SearchProfile(
+                name="Same label",
+                is_active=True,
+                travel_targets={"presets": {}, "custom": []},
+            )
+        )
+        with pytest.raises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
+
+        # ... but two identified subscriptions may legitimately share it.
+        for key in (TERRENOS_KEY, search_key_for_url(VIVIENDAS_URL)):
+            db.session.add(
+                SearchProfile(
+                    name="Same label",
+                    is_active=True,
+                    source_search_key=key,
+                    travel_targets={"presets": {}, "custom": []},
+                )
+            )
+        db.session.commit()
+
+        assert SearchProfile.query.filter_by(name="Same label").count() == 3
+
+
+def test_an_ambiguous_email_stops_resolution_instead_of_falling_back(app):
+    """ "Several searches" is not "no search".
+
+    Falling through to the label would land the listing in whichever
+    same-named subscription happens to exist - the guess the extractor just
+    refused to make.
+    """
+    with app.app_context():
+        existing = SearchProfile(
+            name=SEARCH_NAME,
+            is_active=True,
+            is_default=True,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(existing)
+        db.session.commit()
+
+        resolved = SearchProfileService.resolve_profile(
+            SUBJECT_FULL,
+            f'<a href="{TERRENOS_URL}">A</a><a href="{VIVIENDAS_URL}">B</a>',
+        )
+
+        assert resolved is None, "an ambiguous email must not pick a profile"
+        assert SearchProfile.query.count() == 1
+        assert db.session.get(SearchProfile, existing.id).source_search_key is None
+
+
+def test_merging_onto_a_keyless_primary_keeps_the_only_search_key(app):
+    """The surviving row must inherit the identity, not drop it.
+
+    The primary is chosen by property count, so the keyless row usually wins -
+    and deleting the keyed one used to delete the subscription's identity with
+    it, unrecoverably (nothing records which search a stored row came from).
+    """
+    with app.app_context():
+        keyless = SearchProfile(
+            name="Terrenos norte",
+            is_active=True,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        keyed = SearchProfile(
+            name="Terrenos Norte",
+            is_active=True,
+            is_auto_created=True,
+            source_search_key=TERRENOS_KEY,
+            source_search_url=TERRENOS_URL,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add_all([keyless, keyed])
+        db.session.commit()
+        keyless_id = keyless.id
+
+        # Property count decides the primary, so the keyless row wins.
+        db.session.add(
+            Property(
+                source_email_id="imap_1",
+                url="https://www.idealista.com/en/inmueble/1/",
+                search_profile_id=keyless_id,
+            )
+        )
+        db.session.commit()
+
+        report = SearchProfileService.merge_duplicate_profiles()
+
+        assert report["merged_groups"] == 1
+        survivor = db.session.get(SearchProfile, keyless_id)
+        assert survivor is not None, "the keyless row with the listings survives"
+        assert survivor.source_search_key == TERRENOS_KEY, (
+            "the merge deleted the subscription's identity"
+        )
+        assert survivor.source_search_url == TERRENOS_URL
 
 
 # --------------------------------------------------------------------------
