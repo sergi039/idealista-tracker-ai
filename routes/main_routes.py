@@ -18,7 +18,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
 from app import db
-from utils.auth import admin_required, login_admin, logout_admin
+from utils.auth import (
+    admin_required,
+    login_admin,
+    logout_admin,
+    safe_redirect_target,
+    safe_referrer_redirect,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +49,16 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 def login():
     """Admin login page"""
     if session.get("admin_authenticated"):
-        return redirect(request.args.get("next") or url_for("main.lands"))
+        return redirect(
+            safe_redirect_target(request.args.get("next"), url_for("main.lands"))
+        )
 
     if request.method == "POST":
         token = request.form.get("token", "").strip()
         if login_admin(token):
-            next_url = request.form.get("next") or url_for("main.lands")
+            next_url = safe_redirect_target(
+                request.form.get("next"), url_for("main.lands")
+            )
             return redirect(next_url)
         flash("Invalid admin token.", "error")
 
@@ -339,7 +349,7 @@ def properties():
                 "per_page": per_page,
             },
         )
-    except Exception as e:
+    except Exception:
         logger.error("Failed to load properties page", exc_info=True)
         flash("An error occurred while loading properties. Check server logs.", "error")
         return render_template(
@@ -583,7 +593,7 @@ def lands():
             },
         )
 
-    except Exception as e:
+    except Exception:
         logger.error("Failed to load lands page", exc_info=True)
         flash("An error occurred while loading lands. Check server logs.", "error")
         return render_template(
@@ -684,7 +694,7 @@ def property_detail(property_id):
             travel_display_targets=travel_display_targets,
             profiles=SearchProfileService.list_profiles(active_only=False),
         )
-    except Exception as e:
+    except Exception:
         logger.error("Failed to load property detail %s", property_id, exc_info=True)
         flash(
             "An error occurred while loading property details. Check server logs.",
@@ -720,7 +730,7 @@ def profiles():
             property_counts=counts,
             is_admin=check_admin_auth(),
         )
-    except Exception as e:
+    except Exception:
         logger.error("Failed to load profiles page", exc_info=True)
         flash("An error occurred while loading profiles. Check server logs.", "error")
         return render_template(
@@ -764,7 +774,7 @@ def create_profile():
         try:
             db.session.add(profile)
             db.session.commit()
-        except Exception as e:
+        except Exception:
             db.session.rollback()
             flash(
                 "An error occurred while creating profile. Check server logs.", "error"
@@ -958,7 +968,7 @@ def edit_profile(profile_id):
 
             try:
                 parsed = json.loads(raw)
-            except Exception as e:
+            except Exception:
                 flash(
                     "Invalid JSON for scoring config. Check syntax and try again.",
                     "error",
@@ -989,7 +999,7 @@ def edit_profile(profile_id):
 
             try:
                 parsed = json.loads(raw)
-            except Exception as e:
+            except Exception:
                 flash(
                     "Invalid JSON for classification rules. Check syntax and try again.",
                     "error",
@@ -1038,7 +1048,7 @@ def edit_profile(profile_id):
 
             try:
                 parsed = json.loads(raw)
-            except Exception as e:
+            except Exception:
                 flash(
                     "Invalid JSON for email matchers. Check syntax and try again.",
                     "error",
@@ -1181,9 +1191,11 @@ def recalculate_property_travel(property_id: int):
             flash("Travel not updated (missing coordinates or targets).", "error")
 
         return redirect(
-            request.referrer or url_for("main.property_detail", property_id=property_id)
+            safe_referrer_redirect(
+                url_for("main.property_detail", property_id=property_id)
+            )
         )
-    except Exception as e:
+    except Exception:
         logger.error(
             "Failed to recalculate travel for property %s", property_id, exc_info=True
         )
@@ -1213,9 +1225,11 @@ def recalculate_property_score(property_id: int):
             flash("Scoring not updated.", "error")
 
         return redirect(
-            request.referrer or url_for("main.property_detail", property_id=property_id)
+            safe_referrer_redirect(
+                url_for("main.property_detail", property_id=property_id)
+            )
         )
-    except Exception as e:
+    except Exception:
         logger.error(
             "Failed to recalculate score for property %s", property_id, exc_info=True
         )
@@ -1271,9 +1285,9 @@ def recalculate_profile_travel(profile_id: int):
             "success",
         )
         return redirect(
-            request.referrer or url_for("main.properties", profile_id=profile_id)
+            safe_referrer_redirect(url_for("main.properties", profile_id=profile_id))
         )
-    except Exception as e:
+    except Exception:
         logger.error(
             "Failed to recalculate travel for profile %s", profile_id, exc_info=True
         )
@@ -1330,10 +1344,10 @@ def recalculate_profile_scoring(profile_id: int):
             "success",
         )
         return redirect(
-            request.referrer or url_for("main.properties", profile_id=profile_id)
+            safe_referrer_redirect(url_for("main.properties", profile_id=profile_id))
         )
 
-    except Exception as e:
+    except Exception:
         logger.error(
             "Failed to recalculate scoring for profile %s", profile_id, exc_info=True
         )
@@ -1423,10 +1437,10 @@ def recalculate_profile_classification(profile_id: int):
         else:
             flash(f"Reclassified {updated} / {len(properties)} properties", "success")
         return redirect(
-            request.referrer or url_for("main.edit_profile", profile_id=profile_id)
+            safe_referrer_redirect(url_for("main.edit_profile", profile_id=profile_id))
         )
 
-    except Exception as e:
+    except Exception:
         logger.error("Failed to reclassify profile %s", profile_id, exc_info=True)
         flash(
             "An error occurred while reclassifying profile. Check server logs.", "error"
@@ -1462,9 +1476,11 @@ def set_property_status_form(property_id: int):
         db.session.commit()
         flash(f"Status updated to {new_status}", "success")
         return redirect(
-            request.referrer or url_for("main.property_detail", property_id=property_id)
+            safe_referrer_redirect(
+                url_for("main.property_detail", property_id=property_id)
+            )
         )
-    except Exception as e:
+    except Exception:
         logger.error("Failed to set property status %s", property_id, exc_info=True)
         db.session.rollback()
         flash("An error occurred while setting status. Check server logs.", "error")
@@ -1525,8 +1541,9 @@ def set_property_classification_form(property_id: int):
             db.session.commit()
             flash("Classification updated", "success")
             return redirect(
-                request.referrer
-                or url_for("main.property_detail", property_id=property_id)
+                safe_referrer_redirect(
+                    url_for("main.property_detail", property_id=property_id)
+                )
             )
 
         if action == "auto":
@@ -1553,16 +1570,19 @@ def set_property_classification_form(property_id: int):
                     "success",
                 )
             return redirect(
-                request.referrer
-                or url_for("main.property_detail", property_id=property_id)
+                safe_referrer_redirect(
+                    url_for("main.property_detail", property_id=property_id)
+                )
             )
 
         flash("Unknown action", "error")
         return redirect(
-            request.referrer or url_for("main.property_detail", property_id=property_id)
+            safe_referrer_redirect(
+                url_for("main.property_detail", property_id=property_id)
+            )
         )
 
-    except Exception as e:
+    except Exception:
         logger.error(
             "Failed to update classification for property %s",
             property_id,
@@ -1673,9 +1693,11 @@ def set_property_profile_form(property_id: int):
         db.session.commit()
         flash("Profile updated", "success")
         return redirect(
-            request.referrer or url_for("main.property_detail", property_id=property_id)
+            safe_referrer_redirect(
+                url_for("main.property_detail", property_id=property_id)
+            )
         )
-    except Exception as e:
+    except Exception:
         logger.error(
             "Failed to set profile for property %s", property_id, exc_info=True
         )
@@ -1769,7 +1791,7 @@ def land_detail(land_id):
             openai_model=openai_model,
         )
 
-    except Exception as e:
+    except Exception:
         logger.error("Failed to load land detail %s", land_id, exc_info=True)
         flash(
             "An error occurred while loading land details. Check server logs.", "error"
@@ -1936,7 +1958,7 @@ def map_view():
             travel_display_targets=travel_display_targets,
         )
 
-    except Exception as e:
+    except Exception:
         logger.error("Failed to load map view", exc_info=True)
         flash("An error occurred while loading map. Check server logs.", "error")
         return render_template(
@@ -2006,7 +2028,7 @@ def criteria():
             market_settings=market_settings,
         )
 
-    except Exception as e:
+    except Exception:
         logger.error("Failed to load criteria page", exc_info=True)
         flash("An error occurred while loading criteria. Check server logs.", "error")
         return render_template(
@@ -2050,7 +2072,7 @@ def property_settings():
                     "Reference cities updated. Re-enrich properties to update travel metrics.",
                     "success",
                 )
-            except Exception as e:
+            except Exception:
                 logger.error("Failed to update reference cities", exc_info=True)
                 flash(
                     "An error occurred while updating reference cities. Check server logs.",
@@ -2077,7 +2099,7 @@ def property_settings():
 
             try:
                 parsed = json.loads(raw)
-            except Exception as e:
+            except Exception:
                 flash(
                     "Invalid JSON for classification rules. Check syntax and try again.",
                     "error",
@@ -2231,7 +2253,7 @@ def update_criteria():
 
         return redirect(url_for("main.criteria"))
 
-    except Exception as e:
+    except Exception:
         logger.error("Failed to update criteria", exc_info=True)
         flash("An error occurred while updating criteria. Check server logs.", "error")
         return redirect(url_for("main.criteria"))
@@ -2273,7 +2295,7 @@ def update_criteria_profile(profile):
         else:
             flash(f"Failed to update {profile} profile weights.", "error")
 
-    except Exception as e:
+    except Exception:
         logger.error("Failed to update %s profile criteria", profile, exc_info=True)
         flash(
             "An error occurred while updating profile criteria. Check server logs.",
@@ -2384,7 +2406,7 @@ def update_reference_cities():
             "Reference cities updated. Re-enrich properties to update travel times.",
             "success",
         )
-    except Exception as e:
+    except Exception:
         logger.error("Failed to update reference cities", exc_info=True)
         flash(
             "An error occurred while updating reference cities. Check server logs.",
@@ -2478,7 +2500,7 @@ def update_market_settings():
             "success",
         )
 
-    except Exception as e:
+    except Exception:
         logger.error("Failed to update market settings", exc_info=True)
         db.session.rollback()
         flash(
@@ -2521,7 +2543,7 @@ def edit_environment(land_id):
 
         return render_template("edit_environment.html", land=land)
 
-    except Exception as e:
+    except Exception:
         logger.error("Failed to edit environment for land %s", land_id, exc_info=True)
         flash(
             "An error occurred while editing environment. Check server logs.", "error"
@@ -2561,7 +2583,7 @@ def update_score(land_id):
 
         return redirect(url_for("main.land_detail", land_id=land_id))
 
-    except Exception as e:
+    except Exception:
         logger.error("Failed to update score for land %s", land_id, exc_info=True)
         flash("An error occurred while updating score. Check server logs.", "error")
         return redirect(url_for("main.land_detail", land_id=land_id))
@@ -2770,7 +2792,7 @@ def export_csv():
 
         return response
 
-    except Exception as e:
+    except Exception:
         logger.error("Failed to export CSV", exc_info=True)
         flash("An error occurred while exporting CSV. Check server logs.", "error")
         return redirect(url_for("main.lands"))
@@ -3025,7 +3047,7 @@ def export_properties_csv():
         )
         return response
 
-    except Exception as e:
+    except Exception:
         logger.error("Failed to export properties CSV", exc_info=True)
         flash("An error occurred while exporting CSV. Check server logs.", "error")
         return redirect(url_for("main.properties"))
