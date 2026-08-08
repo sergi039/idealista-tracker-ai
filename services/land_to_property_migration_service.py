@@ -180,7 +180,13 @@ class LandToPropertyMigrationService:
         return True
 
     def _get_or_create_profile(self) -> Optional[SearchProfile]:
-        existing = SearchProfile.query.filter_by(name=self.profile_name).first()
+        """The archive profile - never a saved search that shares its label.
+
+        Profile names stopped being unique in #102, so a plain lookup by name
+        could return a live subscription labelled "Legacy Lands" and pour the
+        whole legacy archive into it.
+        """
+        existing = SearchProfileService.find_unidentified_by_name(self.profile_name)
         if existing:
             return existing
 
@@ -200,7 +206,7 @@ class LandToPropertyMigrationService:
                 "Failed to create migration profile %r: %s", self.profile_name, e
             )
             db.session.rollback()
-            return SearchProfile.query.filter_by(name=self.profile_name).first()
+            return SearchProfileService.find_unidentified_by_name(self.profile_name)
 
     def migrate(
         self, *, dry_run: bool = True, limit: Optional[int] = None

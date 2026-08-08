@@ -40,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key, the merge refuses any group pairing the default with an identified
   search, a label claimed by two different subscriptions resolves to neither,
   and the "Make default" checkbox is disabled for an identified profile.
+- **Every by-name profile lookup** now goes through
+  `SearchProfileService.find_unidentified_by_name()`, which ignores rows that
+  hold a search key. That includes the legacy-land migration, which would
+  otherwise have poured the 168-row archive into a live subscription labelled
+  "Legacy Lands". The only by-name scans that still see identified profiles are
+  the deliberate conflict detectors.
 - **Concurrency**: the dropped UNIQUE was also what protected check-then-insert
   in `get_or_create_profile_by_name()` / `get_default_profile()` from two
   overlapping ingestions, so `013` adds a partial unique index on `name` for

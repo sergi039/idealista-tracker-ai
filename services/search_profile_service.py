@@ -216,14 +216,17 @@ def normalize_travel_targets_config(value: Any) -> Dict[str, Any]:
 
 class SearchProfileService:
     @staticmethod
-    def _unidentified_named(name: str) -> Optional[SearchProfile]:
+    def find_unidentified_by_name(name: str) -> Optional[SearchProfile]:
         """A profile carrying this label that is not somebody's saved search.
 
-        Labels stopped being unique in #102, so a real subscription may be
-        called "Default" without being the catch-all. Promoting it would hand
-        one saved search every email that matches nothing, so the lookup is
-        restricted to rows with no search key - which the partial unique index
-        keeps at most one of.
+        Labels stopped being unique in #102, so any lookup by name may now hit
+        a real subscription: a saved search can be called "Default" without
+        being the catch-all, or "Legacy Lands" without being the archive.
+        Restricting to rows with no search key - of which the partial unique
+        index keeps at most one - is what makes a name lookup safe again.
+
+        This is the shared primitive for that. Every by-name lookup outside the
+        deliberate conflict *detectors* should go through it.
         """
         return SearchProfile.query.filter(
             SearchProfile.name == name,
@@ -237,7 +240,7 @@ class SearchProfileService:
         if profile:
             return profile
 
-        profile = SearchProfileService._unidentified_named(DEFAULT_PROFILE_NAME)
+        profile = SearchProfileService.find_unidentified_by_name(DEFAULT_PROFILE_NAME)
         if profile:
             if not profile.is_default:
                 profile.is_default = True
@@ -269,7 +272,9 @@ class SearchProfileService:
             db.session.rollback()
             return SearchProfile.query.filter_by(
                 is_default=True
-            ).first() or SearchProfileService._unidentified_named(DEFAULT_PROFILE_NAME)
+            ).first() or SearchProfileService.find_unidentified_by_name(
+                DEFAULT_PROFILE_NAME
+            )
 
     @staticmethod
     def list_profiles(active_only: bool = True) -> List[SearchProfile]:
@@ -295,7 +300,7 @@ class SearchProfileService:
         if not cleaned:
             return None
 
-        profile = SearchProfileService._unidentified_named(cleaned)
+        profile = SearchProfileService.find_unidentified_by_name(cleaned)
         if profile:
             return profile
 
@@ -335,9 +340,13 @@ class SearchProfileService:
             db.session.commit()
             return profile
         except Exception as e:
+            # Losing the insert race to a concurrent ingestion is normal. Read
+            # back the *unidentified* winner: a plain lookup by name could
+            # return a keyed profile that appeared alongside it, handing this
+            # email to somebody else's subscription.
             logger.warning("Failed to create SearchProfile %r: %s", cleaned, e)
             db.session.rollback()
-            return SearchProfile.query.filter_by(name=cleaned).first()
+            return SearchProfileService.find_unidentified_by_name(cleaned)
 
     @staticmethod
     def merge_duplicate_profiles(commit: bool = True) -> Dict[str, Any]:

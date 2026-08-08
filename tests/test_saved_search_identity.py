@@ -15,6 +15,7 @@ function agrees with itself.
 
 import hashlib
 import logging
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
@@ -23,8 +24,9 @@ from sqlalchemy.exc import IntegrityError
 
 from app import create_app, db
 from config import Config
-from models import Property, SearchProfile
+from models import Land, Property, SearchProfile
 from services import search_profile_service
+from services.land_to_property_migration_service import LandToPropertyMigrationService
 from services.property_imap_service import PropertyIMAPService
 from services.search_profile_service import SearchProfileService
 from services.search_subscription_identity import (
@@ -895,6 +897,106 @@ def test_a_label_shared_by_two_subscriptions_resolves_to_neither(app):
 
         assert by_label is None, "the label picked one of two subscriptions"
         assert SearchProfile.query.count() == 2, "and it must not add a third"
+
+
+def test_the_legacy_land_archive_never_joins_an_identified_subscription(app):
+    """168 migrated plots must not be poured into somebody's live search.
+
+    The migration looks its profile up by name, and names stopped being unique
+    in #102 - so a saved search labelled "Legacy Lands" would swallow the whole
+    legacy archive.
+    """
+    with app.app_context():
+        subscription = SearchProfile(
+            name=LandToPropertyMigrationService.DEFAULT_PROFILE_NAME,
+            is_active=True,
+            is_auto_created=True,
+            source_search_key=TERRENOS_KEY,
+            source_search_url=TERRENOS_URL,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(subscription)
+        db.session.commit()
+        subscription_id = subscription.id
+
+        db.session.add(
+            Land(
+                source_email_id="legacy_1",
+                url="https://www.idealista.com/en/inmueble/900001/",
+                title="Legacy plot",
+            )
+        )
+        db.session.commit()
+
+        report = LandToPropertyMigrationService().migrate(dry_run=False)
+
+        assert report["properties_created"] == 1
+        migrated = Property.query.one()
+        assert migrated.search_profile_id != subscription_id, (
+            "the legacy archive was migrated into a live subscription"
+        )
+        archive = db.session.get(SearchProfile, migrated.search_profile_id)
+        assert archive.source_search_key is None
+        assert archive.name == LandToPropertyMigrationService.DEFAULT_PROFILE_NAME
+
+
+def test_a_lost_insert_race_re_reads_the_unidentified_winner(app, monkeypatch):
+    """The recovery read must not hand the email to a keyed namesake.
+
+    Two URL-less ingestions can create the same keyless profile at once. The
+    loser falls into the recovery read, and an unconditional lookup by name can
+    return a *keyed* profile that appeared alongside it.
+
+    The interleaving is forced deterministically: the competitors are committed
+    while the losing row is still being constructed, i.e. after its checks and
+    before its INSERT.
+    """
+    with app.app_context():
+        original = search_profile_service.default_travel_targets_config
+
+        def commit_the_competitors():
+            # The keyed row goes in first, so an unordered `.first()` returns it.
+            db.session.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active, is_default, "
+                    "source_search_key, created_at, updated_at) VALUES "
+                    "(:name, 1, 0, :key, :now, :now)"
+                ),
+                {
+                    "name": SEARCH_NAME,
+                    "key": TERRENOS_KEY,
+                    "now": datetime(2026, 8, 8, tzinfo=timezone.utc),
+                },
+            )
+            db.session.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active, is_default, "
+                    "created_at, updated_at) VALUES (:name, 1, 0, :now, :now)"
+                ),
+                {
+                    "name": SEARCH_NAME,
+                    "now": datetime(2026, 8, 8, tzinfo=timezone.utc),
+                },
+            )
+            db.session.commit()
+            monkeypatch.setattr(
+                search_profile_service, "default_travel_targets_config", original
+            )
+            return original()
+
+        monkeypatch.setattr(
+            search_profile_service,
+            "default_travel_targets_config",
+            commit_the_competitors,
+        )
+
+        resolved = SearchProfileService.get_or_create_profile_by_name(SEARCH_NAME)
+
+        assert resolved is not None
+        assert resolved.source_search_key is None, (
+            "the losing insert was handed a profile owned by another search"
+        )
+        assert SearchProfile.query.count() == 2
 
 
 def test_merging_onto_a_keyless_primary_keeps_the_only_search_key(app):
