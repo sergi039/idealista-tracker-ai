@@ -2196,11 +2196,20 @@ def property_settings():
 def update_criteria():
     """Update scoring criteria weights"""
     try:
-        # Get form data
+        from services.scoring_service import known_criteria_names
+
+        # Get form data. Unknown names are rejected before any write: these
+        # weights are stored under profile='combined', the same namespace the
+        # investment/lifestyle mix lives in, so a field named weight_investment
+        # would silently repoint the combined score (#48).
+        valid_criteria = known_criteria_names()
         weights = {}
         for key, value in request.form.items():
             if key.startswith("weight_"):
                 criteria_name = key.replace("weight_", "")
+                if criteria_name not in valid_criteria:
+                    flash(f"Unknown scoring criterion: {criteria_name}", "error")
+                    return redirect(url_for("main.criteria"))
                 try:
                     weights[criteria_name] = float(value)
                 except ValueError:

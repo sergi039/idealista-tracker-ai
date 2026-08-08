@@ -1390,8 +1390,22 @@ def update_criteria():
 
         weights = data["criteria"]
 
-        # Validate weights
+        # Validate names and weights. Unknown names are rejected before any
+        # write: update_weights() stores them under profile='combined', the
+        # same namespace the investment/lifestyle mix lives in, so a name that
+        # is not a criterion silently repoints the combined score (#48).
+        from services.scoring_service import known_criteria_names
+
+        valid_criteria = known_criteria_names()
+
         for criteria_name, weight in weights.items():
+            if criteria_name not in valid_criteria:
+                return jsonify(
+                    {
+                        "success": False,
+                        "error": f"Unknown scoring criterion: {criteria_name}",
+                    }
+                ), 400
             if not isinstance(weight, (int, float)) or weight < 0 or weight > 1:
                 return jsonify(
                     {
