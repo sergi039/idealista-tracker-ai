@@ -142,13 +142,20 @@ review_is_pass() {
     set +e
     rx --range "${base_sha}..${ref}" \
         "Review this pull request for merge into ${BASE_BRANCH} of a self-hosted Flask
-app that ingests real estate listings. Judge correctness, security, error
-handling and whether the tests actually prove the claimed behaviour rather than
-mocking past it. This repository has a history of tests that mock the failing
-call itself and therefore pass against a broken fix. Return BLOCKER if the
-change is wrong, unproven, or weakens the existing security posture
-(admin_required on state-changing endpoints, CSRF, rate limits, parameterised
-queries)." >>"$LOG_FILE" 2>&1
+app that ingests real estate listings.
+
+Read the diff. Do NOT run gh, git push, docker or any other state-changing
+command: this review decides whether an automated merge happens, and a reviewer
+that runs 'gh pr merge' would perform the very action it is gating. Observed
+once in practice - the reviewer invoked gh pr merge and only a missing flag
+stopped it.
+
+Judge correctness, security, error handling and whether the tests actually
+prove the claimed behaviour rather than mocking past it. This repository has a
+history of tests that mock the failing call itself and therefore pass against a
+broken fix. Return BLOCKER if the change is wrong, unproven, or weakens the
+existing security posture (auth on state-changing endpoints, CSRF, rate limits,
+parameterised queries)." >>"$LOG_FILE" 2>&1
     rc=$?
     set -e
 
