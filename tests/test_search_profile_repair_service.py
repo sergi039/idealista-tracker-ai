@@ -417,8 +417,15 @@ def test_a_profile_holding_two_recoverable_names_is_never_promoted(app):
         assert sorted(g["name"] for g in report["blocked_groups"]) == ["Alpha", "Beta"]
 
 
-def test_a_pure_profile_is_still_promoted_next_to_a_mixed_one(app):
-    """Blocking the ambiguous group must not block the unambiguous one."""
+def test_a_mixed_profile_becomes_promotable_once_the_plan_empties_it(app):
+    """Ambiguity the plan *removes* must stop blocking, in the same run.
+
+    Profile 6 starts mixed, so it cannot be renamed after either saved search.
+    But the Alpha group takes its Alpha listings away, and from that point it
+    holds nothing but Beta -- so the Beta group may promote it. Tracking the
+    plan's own effects is what lets one run finish the job instead of leaving
+    work for a second.
+    """
     with app.app_context():
         db.session.add_all(
             [
@@ -435,10 +442,11 @@ def test_a_pure_profile_is_still_promoted_next_to_a_mixed_one(app):
 
         assert db.session.get(SearchProfile, 5).name == "Alpha"
         assert _count(5) == 5, "both runs of Alpha listings land on the promoted row"
-        assert db.session.get(SearchProfile, 6).name == "Mixed bag"
+        assert db.session.get(SearchProfile, 6).name == "Beta"
         assert _count(6) == 4
-        assert [g["name"] for g in report["blocked_groups"]] == ["Beta"]
-        assert report["profiles_deleted"] == [], "profile 6 still holds Beta listings"
+        assert report["blocked_groups"] == []
+        assert report["profiles_deleted"] == []
+        _assert_every_listing_matches_its_profile_name()
 
 
 def _flaky_counts(monkeypatch):
@@ -490,3 +498,114 @@ def test_cli_exit_code_separates_a_rollback_from_a_committed_repair(
         # 1 is reserved for "nothing was committed"; this is not that.
         assert run_repair_cli(["--apply"]) == 2
         assert _count(TARGET_ID) == TOTAL_LISTINGS
+
+
+def _assert_every_listing_matches_its_profile_name():
+    """The invariant the whole repair exists to establish."""
+    for prop in Property.query.all():
+        expected = SearchProfileRepairService.recompute_profile_name(prop.email_subject)
+        if expected is None:
+            continue
+        profile = db.session.get(SearchProfile, prop.search_profile_id)
+        assert profile is not None, f"{prop.source_email_id} lost its profile"
+        assert profile.name == expected, (
+            f"{prop.source_email_id} resolves to {expected!r} but sits in "
+            f"profile #{profile.id} {profile.name!r}"
+        )
+
+
+def test_a_rename_frees_a_name_that_another_group_must_not_inherit(app):
+    """Profile 1 is called "Beta" but holds only Alpha listings.
+
+    Promoting it renames it to "Alpha", which frees the name "Beta". The group
+    for Beta then looks the name up -- and against a pre-repair snapshot it
+    finds that very profile, merging two subscriptions under one row and
+    calling it applied. The lookup has to see the names the plan has already
+    changed.
+    """
+    with app.app_context():
+        db.session.add_all(
+            [
+                SearchProfile(id=1, name="Beta", is_active=True),
+                SearchProfile(id=2, name="scratch", is_active=True),
+            ]
+        )
+        _add_listings(1, "New home in your search: Alpha!", 2, "alpha")
+        _add_listings(2, "New home in your search: Beta!", 1, "beta")
+        db.session.commit()
+
+        SearchProfileRepairService.apply()
+
+        assert db.session.get(SearchProfile, 1).name == "Alpha"
+        assert _count(1) == 2
+        survivor = db.session.get(SearchProfile, 2)
+        assert survivor is not None, "the Beta listing must keep a home of its own"
+        assert survivor.name == "Beta"
+        assert _count(2) == 1
+        _assert_every_listing_matches_its_profile_name()
+
+
+def test_a_profile_that_gains_a_saved_search_while_planning_is_blocked(app):
+    """Ambiguity the plan creates itself must block just like pre-existing.
+
+    Profile 1 is called "Alpha" but holds only Zeta listings. The Alpha group
+    legitimately moves Alpha listings into it -- and that is what makes it
+    ambiguous. The Zeta group must not then promote it and rename it "Zeta",
+    which would drag the freshly moved Alpha listings along.
+    """
+    with app.app_context():
+        db.session.add_all(
+            [
+                SearchProfile(id=1, name="Alpha", is_active=True),
+                SearchProfile(id=2, name="scratch", is_active=True),
+            ]
+        )
+        _add_listings(1, "New home in your search: Zeta!", 3, "zeta")
+        _add_listings(2, "New home in your search: Alpha!", 2, "alpha")
+        db.session.commit()
+
+        report = SearchProfileRepairService.apply()
+
+        assert db.session.get(SearchProfile, 1).name == "Alpha", (
+            "Zeta must not rename a profile it has just come to share"
+        )
+        assert _count(1) == 5  # 3 Zeta squatters + the 2 Alpha listings moved in
+        assert _profile_ids() == [1], "profile 2 emptied out and was removed"
+        assert [g["name"] for g in report["blocked_groups"]] == ["Zeta"]
+
+
+def _commit_raises(monkeypatch):
+    """A COMMIT that never returns cleanly, the outcome unknowable from here."""
+
+    def boom():
+        raise RuntimeError("server closed the connection during COMMIT")
+
+    monkeypatch.setattr(db.session, "commit", boom)
+
+
+def test_a_commit_that_raises_is_unknown_not_a_confirmed_rollback(
+    fragmented, monkeypatch
+):
+    """A COMMIT can be applied by the server and lost on the way back.
+
+    Calling that a rollback tells the owner the database is untouched at the
+    exact moment it may not be.
+    """
+    _commit_raises(monkeypatch)
+
+    with fragmented.app_context():
+        report = SearchProfileRepairService.apply()
+
+        assert report["status"] == "commit_outcome_unknown"
+        assert report["status"] != "mismatch"
+        assert "UNKNOWN" in " ".join(report["errors"])
+        assert report["post_commit_observation"]["readable"] is True
+
+
+def test_cli_exit_code_marks_an_unknown_commit_outcome(fragmented, monkeypatch):
+    _commit_raises(monkeypatch)
+
+    with fragmented.app_context():
+        # Not 1: 1 promises the database is untouched, which nobody can promise
+        # once COMMIT has been sent.
+        assert run_repair_cli(["--apply"]) == 3

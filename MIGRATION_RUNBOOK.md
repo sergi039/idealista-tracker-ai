@@ -184,27 +184,37 @@ docker compose run --rm app python -m services.search_profile_repair_service --a
 docker compose up -d app
 ```
 
-The exit code says exactly what happened to the database:
+The exit code says exactly what is **known** about the database:
 
 | code | status | what it means |
 |------|--------|---------------|
 | 0 | `clean` / `pending` / `applied` | nothing needed doing, or the repair committed and verified. A second `--apply` is a clean no-op. |
-| 1 | `mismatch` | **nothing was committed.** A count disagreed, the transaction rolled back, the database is untouched. |
+| 1 | `mismatch` | it failed **before COMMIT**. Nothing was committed, the database is untouched. |
 | 2 | `applied_report_unavailable` | **the repair was committed** and only the after-report could not be read back. |
+| 3 | `commit_outcome_unknown` | COMMIT itself did not complete cleanly. **The outcome is unknown** — it may or may not have been applied. |
 
-On **1**, do not rerun blindly: read the `ERROR:` lines, confirm ingestion is
-really stopped, and re-run the dry run first. On **2** the destructive part is
-already durable — inspect the database (the verification query below) before
-doing anything else; re-running is safe only once you have confirmed the state,
-since the repair is idempotent.
+Only **1** means the database is untouched. On 1, read the `ERROR:` lines,
+confirm ingestion is really stopped, and re-run the dry run.
+
+On **2** the destructive part is already durable — inspect the database with
+the verification query below before doing anything else.
+
+On **3** assume nothing. The server may have applied the commit and lost the
+connection before acknowledging, so treat the state as unverified: run the
+verification query, and only then decide. The report prints a best-effort
+read-back under "read back afterwards" — that is an observation, not a
+verdict. The repair is idempotent, so once you have established the actual
+state a dry run followed by a re-run is safe.
 
 A saved search reported as `BLOCKED:` was **not** repaired and nothing about it
 was touched: its listings live in a profile that also holds a different saved
 search, so renaming that profile would mislabel the others. This does not
 change the exit code. It means something other than the fold put those rows
 together — `ProfileAssignmentService` reassigns by location, and profiles can
-be edited by hand — and untangling it is an owner decision. Once the profile
-holds only one saved search, a later run repairs it normally.
+be edited by hand — and untangling it is an owner decision. Blocking accounts
+for the plan's own effects too: a profile that acquires a second saved search
+part-way through the plan blocks as well, and one the plan empties out stops
+blocking within the same run.
 
 Verify afterwards:
 

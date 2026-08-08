@@ -38,25 +38,39 @@ Apply::
 
     docker compose run --rm app python -m services.search_profile_repair_service --apply
 
-Exit codes say exactly what happened to the database:
+Exit codes say exactly what is known about the database:
 
 ===  =============================  ======================================
   0  clean / pending / applied      either nothing needed doing, or the
                                     repair committed and verified
-  1  mismatch                       **nothing was committed**; the database
-                                    is untouched
+  1  mismatch                       it failed **before COMMIT**; nothing
+                                    was committed, the database is
+                                    untouched
   2  applied_report_unavailable     **the repair was committed** and only
-                                    the after-report could not be built;
-                                    inspect the database before re-running
+                                    the after-report could not be built
+  3  commit_outcome_unknown         COMMIT itself did not complete cleanly,
+                                    so the outcome is **unknown**: the
+                                    server may have applied it and lost the
+                                    connection before acknowledging
 ===  =============================  ======================================
+
+Only 1 licenses the conclusion "the database is untouched", and it is used
+only for failures that happen before COMMIT is sent. 3 is deliberately not
+folded into it: a raised COMMIT is unknowable from the client, and telling
+the owner it rolled back is exactly the wrong thing to say before they
+decide whether to re-run. The report carries a best-effort read-back under
+`post_commit_observation`, which is an observation and not a verdict.
 
 A saved search whose listings sit in a profile that also holds *another*
 saved search is reported as BLOCKED and left completely alone -- renaming
 such a profile would mislabel the other listings. That does not change the
-exit code; read the report. Repairing whatever put those rows together
+exit code; read the report. This covers ambiguity the plan creates as much
+as ambiguity it finds: planning is done against a running projection of the
+renames and moves already decided, so a profile that *gains* a second saved
+search mid-plan blocks too, and one the plan *empties* stops blocking within
+the same run. Whatever put genuinely mixed rows together
 (ProfileAssignmentService reassigns by location, and profiles can be edited
-by hand) is a separate decision for the owner. Once the ambiguity is gone a
-later run picks the group up normally.
+by hand) is an owner decision, not this tool's.
 """
 
 from __future__ import annotations
@@ -115,6 +129,7 @@ EXIT_CODES = {
     "applied": 0,
     "mismatch": 1,
     "applied_report_unavailable": 2,
+    "commit_outcome_unknown": 3,
 }
 
 
@@ -197,22 +212,30 @@ class RepairPlan:
 
 
 def _find_profile_by_name(
-    name: str, profiles: Sequence[SearchProfile]
+    name: str,
+    profiles: Sequence[SearchProfile],
+    effective_names: Dict[int, str],
 ) -> Optional[SearchProfile]:
     """The profile ingestion would reuse for `name`, or None.
 
     Mirrors `SearchProfileService.get_or_create_profile_by_name()` lookup
     order -- exact name first, then canonical -- minus the create half, which
     a dry run must never trigger.
+
+    Matches on `effective_names`, not on `profile.name`: an earlier group in
+    the same plan may already have renamed a profile, and a rename *frees* the
+    name it used to hold. Looking that freed name up in the pre-repair state
+    hands the renamed profile to a second saved search and merges the two.
     """
     for profile in profiles:
-        if profile.name == name:
+        if effective_names.get(profile.id) == name:
             return profile
     canonical = _canonical_profile_name(name)
     if not canonical:
         return None
     for profile in profiles:
-        if _canonical_profile_name(profile.name) == canonical:
+        current = effective_names.get(profile.id)
+        if current and _canonical_profile_name(current) == canonical:
             return profile
     return None
 
@@ -337,9 +360,18 @@ def build_plan() -> RepairPlan:
     moved_out: Dict[int, int] = {}
     moved_in: Dict[int, int] = {}
 
+    # Planning one group changes the ground the next group stands on: a rename
+    # frees a name, and a move gives a profile listings it did not have. Both
+    # are tracked as the plan is built, because deciding a later group against
+    # the pre-repair snapshot is how two saved searches end up in one profile.
+    effective_names: Dict[int, str] = dict(plan.profile_names)
+    projected_names: Dict[int, set] = {
+        profile_id: set(names) for profile_id, names in names_by_profile.items()
+    }
+
     for name in sorted(grouped):
         property_ids = grouped[name]
-        target = _find_profile_by_name(name, profiles)
+        target = _find_profile_by_name(name, profiles, effective_names)
         rename_to: Optional[str] = None
         if target is None:
             # Nobody carries the correct name yet. Promote the fragment with
@@ -356,7 +388,7 @@ def build_plan() -> RepairPlan:
             candidates = [
                 by_id[pid]
                 for pid in property_ids
-                if pid in by_id and names_by_profile.get(pid) == {name}
+                if pid in by_id and projected_names.get(pid) == {name}
             ]
             if not candidates:
                 plan.blocked_groups.append(
@@ -366,7 +398,7 @@ def build_plan() -> RepairPlan:
                         "other_names": sorted(
                             other
                             for pid in property_ids
-                            for other in names_by_profile.get(pid, set())
+                            for other in projected_names.get(pid, set())
                             if other != name
                         ),
                         "reason": (
@@ -390,6 +422,16 @@ def build_plan() -> RepairPlan:
         fragment_ids = sorted(pid for pid in property_ids if pid != target.id)
         if not fragment_ids and not rename_to:
             continue
+
+        # Book the plan's own effects before moving on to the next group.
+        if rename_to:
+            effective_names[target.id] = rename_to
+        for fragment_id in fragment_ids:
+            # Every listing of this name leaves the fragment...
+            projected_names.get(fragment_id, set()).discard(name)
+        # ...and arrives at the target, which from here on counts as holding
+        # this saved search even if it held none of it a moment ago.
+        projected_names.setdefault(target.id, set()).add(name)
 
         group = GroupPlan(
             name=name,
@@ -454,6 +496,32 @@ def _counts_report(
     return report
 
 
+def _observe_repair_state(plan: RepairPlan) -> Dict[str, Any]:
+    """Look at the database again after a COMMIT whose outcome is unknown.
+
+    Best effort and observation only -- it never decides what the COMMIT did.
+    The `rollback()` here resets the *session* so the connection is usable
+    again; it cannot undo a commit the server may already have applied.
+    """
+    try:
+        db.session.rollback()
+        return {
+            "readable": True,
+            "profiles_that_should_be_gone_still_present": sorted(
+                profile_id
+                for profile_id in plan.profiles_to_delete
+                if db.session.get(SearchProfile, profile_id) is not None
+            ),
+            "listings_per_target": {
+                group.target_id: _remaining_property_count(group.target_id)
+                for group in plan.groups
+            },
+        }
+    except Exception as exc:
+        logger.exception("Could not read the database back after an unknown COMMIT")
+        return {"readable": False, "error": str(exc)}
+
+
 def _base_report(plan: RepairPlan, mode: str) -> Dict[str, Any]:
     return {
         "mode": mode,
@@ -481,6 +549,7 @@ def _base_report(plan: RepairPlan, mode: str) -> Dict[str, Any]:
         "profiles_after": [],
         "unresolved_properties": plan.unresolved_properties,
         "orphan_properties": plan.orphan_properties,
+        "post_commit_observation": None,
         "errors": [],
     }
 
@@ -517,10 +586,16 @@ class SearchProfileRepairService:
         ``ON DELETE SET NULL``, so a listing inserted into a fragment while
         this runs would be orphaned rather than rejected.
 
-        The returned `status` states what happened to the database, and only
-        `"mismatch"` means nothing was committed. `"applied"` and
-        `"applied_report_unavailable"` both mean the repair is durable; the
-        second one only says the after-report could not be read back.
+        The returned `status` states what is *known* about the database:
+
+        - `"mismatch"` -- failed before COMMIT, nothing was committed.
+        - `"applied"` -- committed and verified.
+        - `"applied_report_unavailable"` -- committed; only the after-report
+          could not be read back.
+        - `"commit_outcome_unknown"` -- COMMIT did not complete cleanly and
+          the outcome cannot be determined from here. Not a rollback.
+
+        Only `"mismatch"` licenses "the database is untouched".
         """
         plan = build_plan()
         report = _base_report(plan, mode="apply")
@@ -613,13 +688,33 @@ class SearchProfileRepairService:
 
             if errors:
                 return abort(errors)
+        except Exception as exc:
+            # Everything above happens before COMMIT is sent, so this really is
+            # a rollback: the transaction never reached the server's commit
+            # point and nothing of it survives.
+            db.session.rollback()
+            logger.exception("Profile repair failed before COMMIT, nothing committed")
+            report["status"] = "mismatch"
+            report["errors"] = [f"repair failed before COMMIT: {exc}"]
+            return report
 
+        try:
             db.session.commit()
         except Exception as exc:
-            db.session.rollback()
-            logger.exception("Profile repair failed, nothing committed")
-            report["status"] = "mismatch"
-            report["errors"] = [f"repair failed: {exc}"]
+            # A COMMIT that raises is *not* a rollback. The server may have
+            # applied it and lost the connection before the acknowledgement
+            # got back, so the only honest answer is that the outcome is
+            # unknown -- and the operator must not read "untouched" into it.
+            logger.exception("COMMIT did not complete cleanly; outcome UNKNOWN")
+            report["status"] = "commit_outcome_unknown"
+            report["errors"] = [
+                "COMMIT did not complete cleanly, so the outcome is UNKNOWN: "
+                "the server may have applied it and lost the connection before "
+                f"acknowledging. Do not assume a rollback. Cause: {exc}"
+            ]
+            report["properties_moved"] = moved
+            report["profiles_deleted"] = deleted
+            report["post_commit_observation"] = _observe_repair_state(plan)
             return report
 
         # Past this point the destructive half is durable. Nothing below may
@@ -663,11 +758,27 @@ def _format_report(report: Dict[str, Any]) -> Iterable[str]:
     yield f"mode:   {report['mode']}"
     yield f"status: {report['status']}"
     if report["status"] == "mismatch":
-        yield "        nothing was committed; the database is untouched"
+        yield "        it failed before COMMIT; the database is untouched"
     elif report["status"] == "applied_report_unavailable":
         yield "        the repair WAS COMMITTED; only the after-report failed"
         yield "        do not re-run blindly - inspect the database first"
+    elif report["status"] == "commit_outcome_unknown":
+        yield "        COMMIT did not complete cleanly - the outcome is UNKNOWN"
+        yield "        this is NOT a rollback; the change may or may not be there"
+        yield "        inspect the database before doing anything else"
     yield ""
+    observation = report.get("post_commit_observation")
+    if observation:
+        yield "read back afterwards (observation only, proves nothing):"
+        if observation.get("readable"):
+            yield (
+                "  profiles that should be gone, still present: "
+                f"{observation['profiles_that_should_be_gone_still_present']}"
+            )
+            yield f"  listings per target: {observation['listings_per_target']}"
+        else:
+            yield f"  could not read the database back: {observation.get('error')}"
+        yield ""
     for group in report["groups"]:
         yield f"saved search: {group['name']!r}"
         yield (
@@ -700,10 +811,13 @@ def _format_report(report: Dict[str, Any]) -> Iterable[str]:
             yield f"  {_count_label(entry)}: {entry['properties']}"
     if report["profiles_before"] or report["profiles_after"]:
         yield ""
+    # Past tense would be a claim, and after an unknown COMMIT there is none
+    # to make: those rows were staged in the transaction, nothing more.
+    done = "attempted" if report["status"] == "commit_outcome_unknown" else "done"
     yield f"listings to move:   {report['properties_to_move']}"
-    yield f"listings moved:     {report['properties_moved']}"
+    yield f"listings moved ({done}):   {report['properties_moved']}"
     yield f"profiles to delete: {report['profiles_to_delete'] or 'none'}"
-    yield f"profiles deleted:   {report['profiles_deleted'] or 'none'}"
+    yield f"profiles deleted ({done}): {report['profiles_deleted'] or 'none'}"
     if report["profiles_retained"]:
         yield f"profiles kept (not empty): {report['profiles_retained']}"
     if report["unresolved_properties"]:
