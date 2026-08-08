@@ -32,11 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a same-named subscription, and so does an email whose search URL *was* read
   but could not be resolved (contested retries exhausted, or the insert
   failed). Unassigned listings are not yet surfaced in the UI.
-- **The catch-all stays a catch-all**: since a saved search may now legitimately
-  be labelled "Default", `get_default_profile()` only ever considers profiles
-  with no search key, the merge refuses any group pairing the default profile
-  with an identified search, and a label claimed by two different subscriptions
-  resolves to neither.
+- **The catch-all stays a catch-all**, enforced by the schema: `013` adds
+  `CHECK (source_search_key IS NULL OR is_default IS NOT TRUE)`, so a profile
+  tied to one saved search cannot be the fallback for everything else — through
+  the profile editor, the create form, the merge, or any route written later.
+  On top of that, `get_default_profile()` only considers profiles with no search
+  key, the merge refuses any group pairing the default with an identified
+  search, a label claimed by two different subscriptions resolves to neither,
+  and the "Make default" checkbox is disabled for an identified profile.
 - **Concurrency**: the dropped UNIQUE was also what protected check-then-insert
   in `get_or_create_profile_by_name()` / `get_default_profile()` from two
   overlapping ingestions, so `013` adds a partial unique index on `name` for

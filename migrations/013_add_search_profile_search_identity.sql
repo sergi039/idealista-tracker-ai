@@ -74,3 +74,20 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_search_profiles_name_without_key
     ON search_profiles (name)
     WHERE source_search_key IS NULL;
+
+-- The catch-all must not be anybody's saved search. It receives every email
+-- that carries no search URL and matches no rule, so a default profile holding
+-- a search key would quietly make one subscription the recipient of all
+-- unrouted mail.
+--
+-- This lives in the schema rather than in the application because is_default
+-- is written from four places (the profile editor, the create form, the
+-- duplicate merge, get_default_profile()) and read from several more. Each of
+-- those was patched individually and each round found the next one; a
+-- constraint closes the class, including for routes written later.
+DO $$ BEGIN
+    ALTER TABLE search_profiles
+        ADD CONSTRAINT ck_search_profiles_default_has_no_search_key
+        CHECK (source_search_key IS NULL OR is_default IS NOT TRUE);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;

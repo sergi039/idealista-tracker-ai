@@ -37,6 +37,20 @@ class SearchProfile(db.Model):
             postgresql_where=db.text("source_search_key IS NULL"),
             sqlite_where=db.text("source_search_key IS NULL"),
         ),
+        # The catch-all must not be anybody's saved search. It receives every
+        # email that carries no search URL and matches no rule, so a default
+        # profile holding a search key would quietly make one subscription the
+        # recipient of all unrouted mail.
+        #
+        # Enforced here rather than in each reader on purpose: `is_default` is
+        # written from the profile editor, the create form, the merge and
+        # `get_default_profile()`, and five separate read-side filters were
+        # needed before this constraint existed. A route written next year
+        # cannot get around it.
+        CheckConstraint(
+            "source_search_key IS NULL OR is_default IS NOT TRUE",
+            name="ck_search_profiles_default_has_no_search_key",
+        ),
     )
 
     id = db.Column(db.Integer, primary_key=True)

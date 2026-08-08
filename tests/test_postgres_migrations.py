@@ -50,6 +50,7 @@ IDENTITY_MIGRATION = "013_add_search_profile_search_identity"
 IDENTITY_COLUMNS = ("source_search_key", "source_search_url", "is_auto_created")
 IDENTITY_INDEX = "ux_search_profiles_source_search_key"
 LABEL_INDEX = "ux_search_profiles_name_without_key"
+CATCH_ALL_CONSTRAINT = "ck_search_profiles_default_has_no_search_key"
 
 _DATABASE_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 
@@ -182,6 +183,23 @@ def test_013_adds_the_identity_columns_and_a_unique_key_index(postgres_url):
         with engine.begin() as connection:
             _insert_profile(connection, name="Third")
             _insert_profile(connection, name="Fourth")
+
+        # The catch-all may not be anybody's saved search, and the database is
+        # what enforces it - not each caller that happens to write is_default.
+        assert CATCH_ALL_CONSTRAINT in {
+            constraint["name"]
+            for constraint in inspector.get_check_constraints("search_profiles")
+        }
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                _insert_profile(
+                    connection,
+                    name="Identified default",
+                    source_search_key="idealista:v1:" + "c" * 64,
+                    is_default=True,
+                )
+        with engine.begin() as connection:
+            _insert_profile(connection, name="Real catch-all", is_default=True)
     finally:
         engine.dispose()
 

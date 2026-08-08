@@ -158,6 +158,13 @@ def app():
         db.drop_all()
 
 
+@pytest.fixture
+def client_app(app):
+    """The same app plus a test client, for the profile-editor routes."""
+    app.config["WTF_CSRF_ENABLED"] = False
+    return app, app.test_client()
+
+
 # --------------------------------------------------------------------------
 # Canonicalization: only provably cosmetic differences may collapse.
 # --------------------------------------------------------------------------
@@ -672,6 +679,124 @@ def test_merge_never_pins_a_search_key_to_the_catch_all(app):
         assert report["merged_groups"] == 0
         assert report["profiles_deleted"] == 0
         assert report["conflicts"]
+
+
+def test_the_database_refuses_to_make_an_identified_profile_the_catch_all(app):
+    """The invariant is enforced by the schema, not by each reader.
+
+    Five separate entry points had to be patched to keep a search key off the
+    catch-all - merge, the label fallback, `get_default_profile()`, the profile
+    editor. A CHECK constraint closes the class instead of the next door: any
+    route written later, and any hand-written UPDATE, fails at the database.
+    """
+    with app.app_context():
+        subscription = SearchProfile(
+            name="Terrenos norte",
+            is_active=True,
+            is_default=False,
+            source_search_key=TERRENOS_KEY,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(subscription)
+        db.session.commit()
+
+        subscription.is_default = True
+        with pytest.raises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
+
+        # ... and from the other direction: the catch-all cannot acquire one.
+        catch_all = SearchProfile(
+            name="Catch all",
+            is_active=True,
+            is_default=True,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(catch_all)
+        db.session.commit()
+
+        catch_all.source_search_key = search_key_for_url(VIVIENDAS_URL)
+        with pytest.raises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
+
+
+def test_the_profile_editor_refuses_to_promote_an_identified_profile(client_app):
+    """The owner gets an explanation, not a 500 from the constraint."""
+    app, client = client_app
+    with app.app_context():
+        catch_all = SearchProfile(
+            name="Catch all",
+            is_active=True,
+            is_default=True,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        subscription = SearchProfile(
+            name="Terrenos norte",
+            is_active=True,
+            is_default=False,
+            source_search_key=TERRENOS_KEY,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add_all([catch_all, subscription])
+        db.session.commit()
+        catch_all_id, subscription_id = catch_all.id, subscription.id
+
+    response = client.post(
+        f"/profiles/{subscription_id}/edit",
+        data={
+            "action": "save_profile_settings",
+            "is_active": "on",
+            "is_default": "on",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        assert db.session.get(SearchProfile, subscription_id).is_default is False, (
+            "an identified saved search was promoted to the catch-all"
+        )
+        assert db.session.get(SearchProfile, catch_all_id).is_default is True
+        assert SearchProfileService.get_default_profile(create=False).id == catch_all_id
+
+    # The form should not offer the action in the first place.
+    page = client.get(f"/profiles/{subscription_id}/edit")
+    assert page.status_code == 200
+    checkbox = page.get_data(as_text=True).split('name="is_default"')[1].split(">")[0]
+    assert "disabled" in checkbox
+
+
+def test_the_profile_editor_still_promotes_an_unidentified_profile(client_app):
+    """The guard must not break the ordinary case it is wrapped around."""
+    app, client = client_app
+    with app.app_context():
+        old = SearchProfile(
+            name="Catch all",
+            is_active=True,
+            is_default=True,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        fresh = SearchProfile(
+            name="New catch all",
+            is_active=True,
+            is_default=False,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add_all([old, fresh])
+        db.session.commit()
+        old_id, fresh_id = old.id, fresh.id
+
+    response = client.post(
+        f"/profiles/{fresh_id}/edit",
+        data={"action": "save_profile_settings", "is_default": "on"},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        assert db.session.get(SearchProfile, fresh_id).is_default is True
+        assert db.session.get(SearchProfile, old_id).is_default is False
 
 
 def test_the_catch_all_is_never_a_subscription_that_is_merely_named_default(app):

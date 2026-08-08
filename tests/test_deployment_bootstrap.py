@@ -86,19 +86,34 @@ def _add_operator_drift(engine):
         connection.execute(text("CREATE TABLE operator_audit (id INTEGER)"))
 
 
-# Everything `db.metadata` gained after migration 012, as (index, columns).
-# The frozen fingerprint in migrations/runner.py describes the *pre-ledger*
-# schema, so once a migration adds a column, create_all() no longer produces
-# that schema and a test that wants it has to say so explicitly.
-_POST_BASELINE_SCHEMA = {
-    "search_profiles": (
-        (
-            "ux_search_profiles_source_search_key",
-            "ux_search_profiles_name_without_key",
-        ),
-        ("source_search_key", "source_search_url", "is_auto_created"),
-    ),
-}
+# `search_profiles` as migrations 008 + 009 left it, stated rather than
+# derived. The frozen fingerprint in migrations/runner.py describes the
+# *pre-ledger* schema, so create_all() stopped producing it the moment
+# migration 013 added columns. Deriving it by dropping those columns back off
+# is no longer possible either: SQLite refuses to drop a column that a CHECK
+# constraint mentions, and 013 adds one.
+_HISTORICAL_SEARCH_PROFILES = """
+CREATE TABLE search_profiles (
+    id INTEGER NOT NULL PRIMARY KEY,
+    name VARCHAR(120) NOT NULL UNIQUE,
+    description TEXT,
+    is_active BOOLEAN,
+    is_default BOOLEAN,
+    email_matchers JSON,
+    classification_rules JSON,
+    travel_targets JSON,
+    ui_config JSON,
+    scoring_config JSON,
+    ai_config JSON,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+)
+"""
+_HISTORICAL_SEARCH_PROFILE_INDEXES = (
+    ("ix_search_profiles_name", "name"),
+    ("ix_search_profiles_is_active", "is_active"),
+    ("ix_search_profiles_is_default", "is_default"),
+)
 
 
 def _create_historical_schema(engine):
@@ -110,13 +125,31 @@ def _create_historical_schema(engine):
     """
     db.metadata.create_all(engine)
     with engine.begin() as connection:
-        for table, (indexes, columns) in _POST_BASELINE_SCHEMA.items():
-            for index in indexes:
-                connection.execute(text(f"DROP INDEX IF EXISTS {index}"))
-            for column in columns:
-                connection.execute(
-                    text(f"ALTER TABLE {table} DROP COLUMN {column}")  # noqa: S608
-                )
+        connection.execute(text("DROP TABLE search_profiles"))
+        connection.execute(text(_HISTORICAL_SEARCH_PROFILES))
+        for index, column in _HISTORICAL_SEARCH_PROFILE_INDEXES:
+            connection.execute(
+                text(f"CREATE INDEX {index} ON search_profiles ({column})")  # noqa: S608
+            )
+
+
+def test_the_stated_historical_table_matches_the_runners_fingerprint(tmp_path):
+    """The hand-written table above must stay in step with the fingerprint.
+
+    If they drift, every baseline test below would exercise a schema the runner
+    never actually sees, and would keep passing while doing so.
+    """
+    from migrations.runner import HISTORICAL_SCHEMA_FINGERPRINT
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'fingerprint.db'}")
+    _create_historical_schema(engine)
+
+    columns = {
+        column["name"] for column in inspect(engine).get_columns("search_profiles")
+    }
+
+    assert columns == set(HISTORICAL_SCHEMA_FINGERPRINT["search_profiles"])
+    engine.dispose()
 
 
 def _baseline_migrations_dir(tmp_path: Path) -> Path:
