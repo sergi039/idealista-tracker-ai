@@ -504,6 +504,44 @@ class TestOpenRedirectGuard:
 
 
 # ---------------------------------------------------------------------------
+# Security: session cookie must be Secure/SameSite (issue #16)
+# ---------------------------------------------------------------------------
+class TestSessionCookieFlags:
+    """Issue #16: SESSION_COOKIE_SECURE/SAMESITE were never set anywhere.
+    The admin login is gone (#62), but the Flask session cookie is still
+    used -- to store the Flask-WTF CSRF token, flash messages and the
+    language preference -- so it still needs Secure/SameSite instead of
+    relying solely on browsers' Lax-by-default heuristics and riding along
+    over plain HTTP."""
+
+    def test_session_cookie_secure_and_samesite_outside_dev_mode(self):
+        setup_test_environment()
+        os.environ.pop("DEV_MODE", None)
+        try:
+            app = create_app()
+            assert app.config["SESSION_COOKIE_SAMESITE"] == "Lax"
+            assert app.config["SESSION_COOKIE_SECURE"] is True
+        finally:
+            os.environ.pop("DEV_MODE", None)
+
+    def test_session_cookie_not_secure_under_dev_mode(self):
+        """DEV_MODE serves plain HTTP with no TLS-terminating proxy, so a
+        Secure cookie would never round-trip back to the server."""
+        setup_test_environment()
+        os.environ["DEV_MODE"] = "true"
+        os.environ["AUTO_CREATE_DB"] = "false"
+        os.environ["AUTO_START_SCHEDULER"] = "false"
+        try:
+            app = create_app()
+            assert app.config["SESSION_COOKIE_SECURE"] is False
+            assert app.config["SESSION_COOKIE_SAMESITE"] == "Lax"
+        finally:
+            os.environ.pop("DEV_MODE", None)
+            os.environ.pop("AUTO_CREATE_DB", None)
+            os.environ.pop("AUTO_START_SCHEDULER", None)
+
+
+# ---------------------------------------------------------------------------
 # Security: error messages don't leak internals
 # ---------------------------------------------------------------------------
 class TestErrorSanitization:
