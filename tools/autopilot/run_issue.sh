@@ -147,9 +147,6 @@ fi
 log "suite green"
 
 # --- publish ---------------------------------------------------------------
-# Suite already ran green above; tell the pre-push hook (issue #74) not to
-# run it again.
-export AUTOPILOT_LOCAL_CI_DONE=1
 git push --quiet -u origin "$BRANCH" || { log "push failed"; exit 1; }
 
 pr_url="$(gh pr create --repo "$REPO_SLUG" --base "$BASE_BRANCH" --head "$BRANCH" \

@@ -18,19 +18,14 @@
 # Costs a few extra seconds (uv reuses its global cache for the snapshot's
 # .venv); the SKIP_LOCAL_CI bypass exists for the impatient case.
 #
-# Bypass for one push:      SKIP_LOCAL_CI=1 git push
-# Bypass for the autopilot: run_issue.sh sets AUTOPILOT_LOCAL_CI_DONE=1 after
-#   it already ran the full suite itself, so the hook does not run it twice.
+# Bypass for one push: SKIP_LOCAL_CI=1 git push
+# (No autopilot-specific bypass on purpose: "the suite already ran" proves
+# the working tree was green, not the pushed SHA - review round 4 on PR #78.)
 
 set -u
 
 if [ "${SKIP_LOCAL_CI:-0}" = "1" ]; then
     echo "pre-push: SKIP_LOCAL_CI=1 set, skipping local CI gate"
-    exit 0
-fi
-
-if [ "${AUTOPILOT_LOCAL_CI_DONE:-0}" = "1" ]; then
-    echo "pre-push: autopilot already ran the full suite this run, skipping local CI gate"
     exit 0
 fi
 
