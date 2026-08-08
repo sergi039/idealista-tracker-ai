@@ -154,26 +154,54 @@ the database. It recomputes each listing's saved-search name from its own
 stored `properties.email_subject` — same unfolding, same extractor as
 ingestion — and never guesses from name similarity.
 
+### What counts as a fold fragment
+
+Only a fold fragment is ever emptied or renamed. For a saved search N, profile
+P qualifies when **all three** hold:
+
+1. P's name is not N;
+2. every listing of N inside P still carries a **folded** `email_subject`;
+3. P's name is the start of N, **at a word boundary**.
+
+The prefix test on its own would be a guess. Together with the folded subject
+it checks exactly the damage folding does — the fold cut the tail off the name,
+so the fragment's name must be the head of the real one and the fold must still
+be there to prove it. Two profiles holding one saved search prove nothing by
+themselves: `ProfileAssignmentService` files listings by location, so "Coast"
+and "City" legitimately split one subscription between them, and neither passes
+clause 3.
+
+On the live database the separation is exact — the three fragments have 100% of
+their listings folded, the correctly named profile has 0%.
+
+**One consequence, and it is the right one:** since #101 stores subjects
+unfolded, this repair can only ever act on rows written **before** that fix.
+Those rows are precisely the damage; anything ingested afterwards is untouchable
+by construction.
+
 ### What it will never do
 
-De-fragmentation is its whole job. Anything that is not a fold fragment is a
-decision somebody made, and it is left alone:
+Anything that is not a fold fragment is a decision somebody made, and it is left
+alone:
 
-- **It never moves a listing you reassigned by hand.** A listing pinned
-  through the profile-change form (`manual_override`, which
-  `ProfileAssignmentService` already refuses to override) stays exactly where
-  you put it — and because it stays, the profile holding it is not empty, so
-  that profile is not deleted either. Pinned listings still count towards what
-  a profile holds, so they can stop a rename; nothing makes them move.
-- **It never renames a profile without evidence of fragmentation.** A rename
-  needs the same saved search in two or more profiles with none of them
-  carrying its name. One profile whose name simply differs from the subject
-  line — named by hand, or filled by `ProfileAssignmentService` matching on
-  location — is not fragmented, and is reported `BLOCKED:` instead.
-- **It never renames a profile holding a second saved search**, whether it
-  already did or the plan moved one in, and **never gives one profile to two
-  saved searches**.
+- **It never moves a listing you reassigned by hand.** A listing pinned through
+  the profile-change form (`manual_override`, which `ProfileAssignmentService`
+  already refuses to override) stays exactly where you put it — and because it
+  stays, the profile holding it is not empty, so that profile is not deleted
+  either. Pinned listings still count towards what a profile holds, so they can
+  stop a rename. Pinning is re-read inside the transaction as well: a listing
+  pinned or moved *after* planning aborts the repair instead of being dragged
+  back.
+- **It never renames a profile that is not a fold fragment**, and never renames
+  one holding a second saved search, whether it already did or the plan moved
+  one in.
+- **It never moves listings out of a profile that is not a fold fragment** —
+  they stay, and the report lists them under "left alone".
+- **It never gives one profile to two saved searches.**
 - **It never deletes a profile that still holds a listing**, for any reason.
+- **It never deletes the default profile and never makes another profile the
+  default.** One default goes in and the same one comes out, even if the repair
+  empties it.
 - **It never creates a profile**, and **never adopts an already-orphaned
   listing** — both are reported, neither is acted on.
 - **It never touches a listing whose saved-search name cannot be recomputed.**

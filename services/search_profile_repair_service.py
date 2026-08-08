@@ -20,30 +20,58 @@ tell a truncated name from a genuinely narrower saved search ("Homes in
 Ciudad Quesada" versus "Homes in Ciudad Quesada Norte") and would silently
 collapse two real subscriptions into one.
 
+What counts as a fold fragment
+------------------------------
+
+Only a *fold fragment* is ever emptied or renamed, and a profile has to show
+the mechanism to qualify. For a saved search N, profile P is a fold fragment
+of N when all three hold:
+
+1. P's name is not N;
+2. every listing of N inside P still carries a **folded** ``email_subject``;
+3. P's name is the start of N, **at a word boundary**.
+
+The prefix test alone would be a guess -- it was rejected as one at the
+outset. Together with the folded subject it stops being a guess and becomes a
+check of exactly the damage folding does: the fold cut the tail off the name,
+so the fragment's name must be the head of the real one, and the fold must
+still be there to prove it. Two profiles holding one saved search prove
+nothing by themselves: `ProfileAssignmentService` files listings by location,
+so "Coast" and "City" legitimately split one subscription, and neither passes
+clause 3.
+
+One consequence, and it is the right one: since #101 stores subjects
+unfolded, **this repair can only ever act on rows written before that fix**.
+Those rows are precisely the damage. Anything ingested afterwards is
+untouchable by construction.
+
 What the repair will never do
 -----------------------------
 
-Its whole job is de-fragmentation. Anything that is not a fold fragment is
-somebody's decision, and it is left alone:
+Anything that is not a fold fragment is somebody's decision, and is left
+alone:
 
 - **It never moves a listing you reassigned by hand.** A listing whose
   ``enrichment.profile_assignment.manual_override`` is set -- what the
   profile-change form writes, and what `ProfileAssignmentService` already
-  refuses to override -- stays exactly where you put it. Because it stays,
-  the profile holding it is not empty, so that profile is not deleted either.
-  Pinned listings still count towards what a profile holds, so they can stop
-  a rename; nothing can make them move.
-- **It never renames a profile without evidence of fragmentation.** A rename
-  needs the same saved search sitting in two or more profiles with none of
-  them carrying its name. A single profile whose name merely differs from the
-  subject line -- filled by hand, or by `ProfileAssignmentService` matching on
-  location -- is not fragmented, and the group is reported BLOCKED instead.
-- **It never renames a profile that holds a second saved search**, whether it
-  already did or the plan itself moved one in.
+  refuses to override -- stays exactly where you put it, and the profile
+  holding it is therefore never empty and never deleted. Pinned listings
+  still count towards what a profile holds, so they can stop a rename.
+  Pinning is re-read inside the transaction too: a listing pinned or moved
+  *after* planning aborts the repair rather than being dragged back.
+- **It never renames a profile that is not a fold fragment**, and never
+  renames one that holds a second saved search, whether it already did or the
+  plan itself moved one in.
+- **It never moves listings out of a profile that is not a fold fragment.**
+  They stay, and the report lists them under "left alone".
 - **It never gives one profile to two saved searches.**
 - **It never deletes a profile that still holds a listing**, for any reason:
   a pinned listing, a subject whose name cannot be recomputed, another
   subscription.
+- **It never deletes the default profile, and never makes another profile
+  the default.** One default goes in and the same one comes out, even if this
+  repair empties it -- the app assumes a single default, and which one it is
+  is the owner's call.
 - **It never creates a profile**, and **never adopts a listing that is
   already orphaned** -- both are reported, neither is acted on.
 - **It never touches a listing whose saved-search name cannot be recomputed.**
@@ -214,6 +242,17 @@ def _profile_property_counts() -> Dict[Optional[int], int]:
     return {profile_id: int(total) for profile_id, total in rows}
 
 
+def _is_folded_subject(subject: Any) -> bool:
+    """True when the stored subject still carries the fold that broke the name.
+
+    A folded subject *is* the mechanism: the old extractor stopped at the CR,
+    so the name it produced was the start of the real one. That makes it hard
+    evidence rather than a guess -- and, since #101 stores subjects unfolded,
+    it also means this repair only ever acts on rows written before the fix.
+    """
+    return isinstance(subject, str) and ("\r" in subject or "\n" in subject)
+
+
 def _is_manually_pinned(enrichment: Any) -> bool:
     """True when the owner reassigned this listing through the profile form.
 
@@ -277,6 +316,7 @@ class RepairPlan:
     profiles_to_delete: List[int] = field(default_factory=list)
     profiles_retained: List[Dict[str, int]] = field(default_factory=list)
     profile_names: Dict[int, str] = field(default_factory=dict)
+    left_in_place: List[Dict[str, Any]] = field(default_factory=list)
     unresolved_properties: int = 0
     orphan_properties: int = 0
     manually_pinned_properties: int = 0
@@ -370,17 +410,15 @@ def _plan_settings_merge(
             {"profile_id": donor, "field": "travel_targets"} for donor in donors
         )
 
-    # Flags and description follow merge_duplicate_profiles(): the survivor
-    # inherits a role none of its own columns claim. First fragment wins, so
-    # the outcome does not depend on how many fragments share the flag.
+    # `is_default` is deliberately NOT carried over. It is one global setting,
+    # not a per-profile preference to merge: a default fragment feeding two
+    # saved searches would hand the flag to both survivors and
+    # get_default_profile() would have two answers. The owner's default is
+    # left where it is -- and a default profile is never deleted, so it stays
+    # reachable even once this repair has emptied it. (Issue #110 adds a CHECK
+    # forbidding a keyed profile from carrying the flag, which this also
+    # respects.)
     for fragment in fragments:
-        if (
-            fragment.is_default
-            and not target.is_default
-            and "is_default" not in updates
-        ):
-            updates["is_default"] = True
-            preserved.append({"profile_id": fragment.id, "field": "is_default"})
         if fragment.is_active and not target.is_active and "is_active" not in updates:
             updates["is_active"] = True
             preserved.append({"profile_id": fragment.id, "field": "is_active"})
@@ -425,13 +463,29 @@ class _Planner:
         self.claimed_by: Dict[int, str] = {}
         self.moved_out: Dict[int, int] = {}
         self.moved_in: Dict[int, int] = {}
+        # {(profile id, canonical name): listings} and how many of them still
+        # carry a folded subject. Both count pinned rows: the question they
+        # answer is what broke this profile's *name*, not what may move.
+        self.totals: Dict[tuple, int] = {}
+        self.folded: Dict[tuple, int] = {}
+        self.left_in_place: Dict[tuple, Dict[str, Any]] = {}
 
     def add_listing(
-        self, property_id: int, profile_id: int, name: str, canonical: str, pinned: bool
+        self,
+        property_id: int,
+        profile_id: int,
+        name: str,
+        canonical: str,
+        pinned: bool,
+        folded: bool,
     ) -> None:
         self.projected_names.setdefault(profile_id, set()).add(canonical)
         counts = self.spellings.setdefault(canonical, {})
         counts[name] = counts.get(name, 0) + 1
+        key = (profile_id, canonical)
+        self.totals[key] = self.totals.get(key, 0) + 1
+        if folded:
+            self.folded[key] = self.folded.get(key, 0) + 1
         if pinned:
             # Owner's choice. It still counts towards what the profile holds --
             # so it can stop a rename and keep the profile from being deleted --
@@ -441,6 +495,36 @@ class _Planner:
         self.grouped.setdefault(canonical, {}).setdefault(profile_id, []).append(
             property_id
         )
+
+    def is_fold_fragment(self, profile_id: int, canonical: str) -> bool:
+        """Is this profile a *fold fragment* of `canonical`, or someone's choice?
+
+        Two profiles holding one saved search prove nothing on their own --
+        `ProfileAssignmentService` files listings by location, so "Coast" and
+        "City" can legitimately split one subscription between them. A fold
+        fragment has to show the mechanism that broke it:
+
+        1. its name is not the recomputed name;
+        2. every listing of that search inside it still carries a folded
+           subject -- the fold is what truncated the name in the first place;
+        3. its name is the start of the recomputed name, at a word boundary --
+           because a fold cuts the tail off, nothing else.
+
+        A prefix test alone would be a guess, which is why it was rejected at
+        the outset. Together with the folded subject it stops being one: it
+        checks precisely the damage folding does. "Coast" fails every clause.
+        """
+        current = self.effective_names.get(profile_id)
+        if not current:
+            return False
+        current_canonical = _canonical_profile_name(current)
+        if not current_canonical or current_canonical == canonical:
+            return False
+        if not canonical.startswith(current_canonical + " "):
+            return False
+        key = (profile_id, canonical)
+        total = self.totals.get(key, 0)
+        return total > 0 and self.folded.get(key, 0) == total
 
     def run(self) -> None:
         # The spelling most of a group's listings use, ties alphabetical.
@@ -465,6 +549,9 @@ class _Planner:
             pending = still_blocked
 
         self.plan.blocked_groups = [blocked[key] for key in sorted(blocked)]
+        self.plan.left_in_place = [
+            self.left_in_place[key] for key in sorted(self.left_in_place)
+        ]
 
     def _block(
         self, canonical: str, property_ids: Dict[int, List[int]], reason: str
@@ -492,20 +579,23 @@ class _Planner:
         )
         rename_to: Optional[str] = None
 
+        # Only a proven fold fragment may give up its listings or its name.
+        # Everything else holding this saved search was filled deliberately,
+        # and is left exactly as it is.
+        fragments_here = [
+            pid for pid in property_ids if self.is_fold_fragment(pid, canonical)
+        ]
+
         if target is None:
-            # Renaming is only ever a repair for *fragmentation*, so it needs
-            # positive evidence of it: the same saved search sitting in two or
-            # more profiles. One profile whose name merely differs from the
-            # subject line is a name somebody chose -- by hand, or through
-            # ProfileAssignmentService's location matching -- and overwriting
-            # it is not this tool's business.
-            if len(property_ids) < 2:
+            if not fragments_here:
                 return self._block(
                     canonical,
                     property_ids,
-                    "no profile carries this name and its listings all sit in "
-                    "one profile, so nothing here is fragmented; renaming it "
-                    "would overwrite a name that was chosen deliberately",
+                    "no profile carries this name, and none of the profiles "
+                    "holding its listings is a fold fragment of it -- none has "
+                    "a name that is the start of it, at a word boundary, with "
+                    "folded subjects to show the fold did the cutting. These "
+                    "look like deliberate placements, not damage",
                 )
             # Promote the fragment with the most listings rather than create a
             # profile, so its settings survive; the ordering is the one
@@ -513,7 +603,7 @@ class _Planner:
             # *entire* content resolves to this one name may be promoted.
             candidates = [
                 self.by_id[pid]
-                for pid in property_ids
+                for pid in fragments_here
                 if pid in self.by_id and self.projected_names.get(pid) == {canonical}
             ]
             if not candidates:
@@ -544,9 +634,21 @@ class _Planner:
                 f"subscriptions",
             )
 
-        fragment_ids = sorted(pid for pid in property_ids if pid != target.id)
+        fragment_ids = sorted(pid for pid in fragments_here if pid != target.id)
+        for profile_id in sorted(property_ids):
+            if profile_id == target.id or profile_id in fragment_ids:
+                continue
+            # Holds this saved search but is not a fold fragment of it. Its
+            # listings stay; the operator is told rather than left guessing
+            # why the counts do not add up to the whole subscription.
+            self.left_in_place[(profile_id, canonical)] = {
+                "profile_id": profile_id,
+                "name": self.effective_names.get(profile_id),
+                "saved_search": name,
+                "listings": len(property_ids[profile_id]),
+            }
         if not fragment_ids and not rename_to:
-            return None  # already where it belongs
+            return None  # nothing here is repairable
 
         # Book this group's effects before the next group is decided.
         self.claimed_by[target.id] = canonical
@@ -622,7 +724,12 @@ def build_plan() -> RepairPlan:
             plan.unresolved_properties += 1
             continue
         planner.add_listing(
-            property_id, profile_id, name, canonical, _is_manually_pinned(enrichment)
+            property_id,
+            profile_id,
+            name,
+            canonical,
+            _is_manually_pinned(enrichment),
+            _is_folded_subject(subject),
         )
 
     planner.run()
@@ -637,17 +744,40 @@ def build_plan() -> RepairPlan:
             + moved_in.get(profile_id, 0)
         )
 
+    by_id = {profile.id: profile for profile in profiles}
     for profile_id in sorted(moved_out):
         remaining = plan.expected_after.get(profile_id, 0)
-        if remaining == 0 and profile_id not in target_ids:
-            plan.profiles_to_delete.append(profile_id)
-        else:
-            # A fragment that still holds listings after the move -- listings
-            # whose name could not be recomputed, or another saved search --
-            # is kept. Only an empty profile is safe to delete.
+        if remaining:
+            # A fragment that still holds listings after the move -- pinned
+            # ones, a name that could not be recomputed, another saved search
+            # -- is kept. Only an empty profile is safe to delete.
             plan.profiles_retained.append(
-                {"profile_id": profile_id, "remaining": remaining}
+                {
+                    "profile_id": profile_id,
+                    "remaining": remaining,
+                    "reason": "still holds listings",
+                }
             )
+        elif profile_id in target_ids:
+            plan.profiles_retained.append(
+                {
+                    "profile_id": profile_id,
+                    "remaining": remaining,
+                    "reason": "is the survivor of another saved search",
+                }
+            )
+        elif bool(getattr(by_id.get(profile_id), "is_default", False)):
+            # The app assumes exactly one default profile. Emptying the
+            # owner's default is fine; removing it is not this tool's call.
+            plan.profiles_retained.append(
+                {
+                    "profile_id": profile_id,
+                    "remaining": remaining,
+                    "reason": "is the default profile",
+                }
+            )
+        else:
+            plan.profiles_to_delete.append(profile_id)
 
     return plan
 
@@ -669,6 +799,29 @@ def _counts_report(
             {"profile_id": None, "name": None, "properties": counts.get(None, 0)}
         )
     return report
+
+
+def _pinned_among(property_ids: Sequence[int]) -> List[int]:
+    """Which of these listings are pinned by hand *now*.
+
+    Planning read `enrichment` at snapshot time; the owner can pin a listing
+    through the profile form a moment later, without moving it, and no
+    portable SQL predicate expresses that. So it is re-read inside the
+    transaction, after the moves and before anything is deleted.
+    """
+    pinned: List[int] = []
+    for chunk in _chunks(list(property_ids), UPDATE_CHUNK):
+        rows = (
+            db.session.query(Property.id, Property.enrichment)
+            .filter(Property.id.in_(chunk))
+            .all()
+        )
+        pinned.extend(
+            property_id
+            for property_id, enrichment in rows
+            if _is_manually_pinned(enrichment)
+        )
+    return sorted(pinned)
 
 
 def _verify_counts(plan: RepairPlan, orphans_before: int) -> List[str]:
@@ -747,6 +900,7 @@ def _base_report(plan: RepairPlan, mode: str) -> Dict[str, Any]:
         "profiles_retained": list(plan.profiles_retained),
         "profiles_before": _counts_report(plan, plan.counts_before, plan.profile_names),
         "profiles_after": [],
+        "left_in_place": list(plan.left_in_place),
         "unresolved_properties": plan.unresolved_properties,
         "orphan_properties": plan.orphan_properties,
         "manually_pinned_properties": plan.manually_pinned_properties,
@@ -828,13 +982,20 @@ class SearchProfileRepairService:
             db.session.flush()
 
             moved = 0
+            planned_ids: List[int] = []
             for group in plan.groups:
                 for fragment_id in group.fragment_ids:
                     ids = group.property_ids[fragment_id]
+                    planned_ids.extend(ids)
                     for chunk in _chunks(ids, UPDATE_CHUNK):
                         moved += (
                             db.session.query(Property)
                             .filter(Property.id.in_(chunk))
+                            # The plan is a snapshot. Naming the profile the row
+                            # is expected to be in means a row somebody moved in
+                            # the meantime is not dragged back -- the UPDATE
+                            # simply misses it, and the count below says so.
+                            .filter(Property.search_profile_id == fragment_id)
                             .update(
                                 {"search_profile_id": group.target_id},
                                 synchronize_session=False,
@@ -848,7 +1009,15 @@ class SearchProfileRepairService:
             if moved != plan.properties_to_move:
                 errors.append(
                     f"expected to move {plan.properties_to_move} listings, "
-                    f"moved {moved}"
+                    f"moved {moved} (a listing was reassigned after planning)"
+                )
+            # The other half of the same race: pinned in place rather than
+            # moved away, which no SQL predicate here can express portably.
+            pinned_now = _pinned_among(planned_ids)
+            if pinned_now:
+                errors.append(
+                    f"listings {pinned_now} were reassigned by hand after "
+                    f"planning; refusing to move them"
                 )
             orphans_before = plan.counts_before.get(None, 0)
             errors.extend(_verify_counts(plan, orphans_before))
@@ -981,6 +1150,13 @@ def _format_report(report: Dict[str, Any]) -> Iterable[str]:
         yield "        COMMIT did not complete cleanly - the outcome is UNKNOWN"
         yield "        this is NOT a rollback; the change may or may not be there"
         yield "        inspect the database before doing anything else"
+    if report["blocked_groups"]:
+        # "clean" means there was nothing for this tool to do, not that the
+        # database is tidy. Say so next to the status, not only further down.
+        yield (
+            f"        {len(report['blocked_groups'])} saved search(es) were "
+            f"deliberately NOT repaired - see BLOCKED below"
+        )
     yield ""
     observation = report.get("post_commit_observation")
     if observation:
@@ -1050,6 +1226,12 @@ def _format_report(report: Dict[str, Any]) -> Iterable[str]:
             f"listings you reassigned by hand: "
             f"{report['manually_pinned_properties']} (left exactly where they "
             f"are, and their profile is kept)"
+        )
+    for entry in report["left_in_place"]:
+        yield (
+            f"left alone: {entry['listings']} listing(s) of "
+            f"{entry['saved_search']!r} in #{entry['profile_id']} "
+            f"{entry['name']!r} - not a fold fragment, so somebody put them there"
         )
     for message in report["errors"]:
         yield f"ERROR: {message}"
