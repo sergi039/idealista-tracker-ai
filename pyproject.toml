@@ -34,4 +34,21 @@ dependencies = [
 dev = [
     "pytest>=8.4.2",
     "pytest-flask>=1.3.0",
+    # Locked (uv.lock) so `uv run ruff` means one exact version for the CI
+    # lint job, tools/ci/local_ci.sh and the pre-push hook alike, instead of
+    # whatever each machine happens to have on PATH (issue #81).
+    "ruff>=0.16.2",
 ]
+
+[tool.ruff.lint]
+# Ruff's *default* rule set is not stable across releases: 0.15.x enabled 59
+# rules (the classic E4/E7/E9/F), 0.16.0 widened the default to 413, which
+# reports 1077 findings on this repository. Without an explicit selection the
+# lint gate would therefore pass or fail depending on which ruff each author
+# installed - the exact non-determinism the CI job exists to remove (#81).
+#
+# This list is the set the repository is actually clean under today. Widening
+# it is real work with semantic consequences - the 1077 findings above are
+# mostly UP* annotations plus BLE001/S110 exception handling - and belongs in
+# its own issue, not in the one that only turns the gate on.
+select = ["E4", "E7", "E9", "F"]
