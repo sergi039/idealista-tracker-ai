@@ -58,6 +58,9 @@ class Config:
     IMAP_PASSWORD = os.environ.get("IMAP_PASSWORD")  # Required when using IMAP
     # Default to a dedicated Gmail label to avoid clobbering the legacy build.
     IMAP_FOLDER = os.environ.get("IMAP_FOLDER") or "IdealistaProperties"
+    # Socket timeout for every IMAP connection (issue #15): a hung socket must
+    # fail that run loudly instead of stalling all future ingestions.
+    IMAP_TIMEOUT_SECONDS = float(os.environ.get("IMAP_TIMEOUT_SECONDS") or "30")
     IMAP_SEARCH_QUERY = os.environ.get("IMAP_SEARCH_QUERY") or "ALL"
     MAX_EMAILS_PER_RUN = int(os.environ.get("MAX_EMAILS_PER_RUN") or "200")
 

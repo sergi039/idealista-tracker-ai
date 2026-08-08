@@ -22,6 +22,7 @@ class IMAPService:
         self.host = Config.IMAP_HOST
         self.port = Config.IMAP_PORT
         self.ssl = Config.IMAP_SSL
+        self.timeout = Config.IMAP_TIMEOUT_SECONDS
         self.user = Config.IMAP_USER
         self.password = Config.IMAP_PASSWORD
         self.folder = Config.IMAP_FOLDER
@@ -129,7 +130,9 @@ class IMAPService:
                 logger.error("IMAP credentials not configured")
                 return False
 
-            with IMAPClient(self.host, port=self.port, ssl=self.ssl) as client:
+            with IMAPClient(
+                self.host, port=self.port, ssl=self.ssl, timeout=self.timeout
+            ) as client:
                 client.login(self.user, self.password)
                 logger.info(f"IMAP authentication successful for {self.user}")
                 return True
@@ -202,7 +205,9 @@ class IMAPService:
         max_results = max_results or self.max_emails
 
         try:
-            with IMAPClient(self.host, port=self.port, ssl=self.ssl) as client:
+            with IMAPClient(
+                self.host, port=self.port, ssl=self.ssl, timeout=self.timeout
+            ) as client:
                 client.login(self.user, self.password)
                 logger.info(f"Connected to IMAP server as {self.user}")
 
