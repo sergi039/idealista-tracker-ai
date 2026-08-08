@@ -52,45 +52,23 @@ if [ -z "$(echo "$pushed_shas" | tr -d '[:space:]')" ]; then
     exit 0
 fi
 
-run_gate_on_commit() {
-    local sha="$1"
-    local tmp_worktree
-    tmp_worktree="$(mktemp -d "${TMPDIR:-/tmp}/local-ci-gate.XXXXXX")" || {
-        echo "pre-push: could not create a temp dir for a clean snapshot of $sha"
-        return 1
-    }
-    # mktemp already created the directory; `git worktree add` requires the
-    # target to not exist (or be empty), so hand it a path inside instead.
-    local wt="${tmp_worktree}/wt"
-
-    cleanup() {
-        cd "$repo_root" 2>/dev/null || true
-        git worktree remove --force "$wt" >/dev/null 2>&1
-        rm -rf "$tmp_worktree"
-    }
-    trap cleanup EXIT INT TERM
-
-    if ! git worktree add --detach --quiet "$wt" "$sha" >/dev/null 2>&1; then
-        echo "pre-push: could not create a clean worktree for commit $sha"
-        trap - EXIT INT TERM
-        cleanup
-        return 1
-    fi
-
-    ( cd "$wt" && "${wt}/tools/ci/local_ci.sh" )
-    local rc=$?
-
-    trap - EXIT INT TERM
-    cleanup
-    return "$rc"
-}
+# The snapshot mechanics live in tools/ci/run_gate_on_sha.sh, shared with
+# merge_bot (issue #83). Resolve it relative to this hook file, not the
+# repository being pushed: the hook may gate a repository (or a test's toy
+# repository) whose commit predates the runner.
+hook_dir="$(cd "$(dirname "$0")" && pwd)"
+runner="${hook_dir}/../tools/ci/run_gate_on_sha.sh"
+if [ ! -x "$runner" ]; then
+    echo "pre-push: ${runner} is missing or not executable - cannot validate the push"
+    exit 1
+fi
 
 overall_rc=0
 
 for sha in $pushed_shas; do
     echo
     echo "pre-push: validating pushed commit $sha in a clean snapshot ..."
-    run_gate_on_commit "$sha" || overall_rc=1
+    "$runner" "$sha" || overall_rc=1
 done
 
 if [ "$overall_rc" -ne 0 ]; then

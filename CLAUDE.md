@@ -41,8 +41,9 @@ once per clone:
 tools/ci/install_hooks.sh    # git config core.hooksPath .githooks
 ```
 
-Bypass a single push with `SKIP_LOCAL_CI=1 git push`. `.github/workflows/
-ci.yml` itself is unchanged and stays the merge gate for autopilot.
+Bypass a single push with `SKIP_LOCAL_CI=1 git push`. The same snapshot
+runner (`tools/ci/run_gate_on_sha.sh`) is also autopilot's merge gate
+(issue #83) — GitHub check statuses are not consulted for merges.
 
 **Working UI is `/lands`** (owner decision, 2026-08-07): the lands view —
 cards/list with Land Type, Sea View and to-beach filters — is what the app
@@ -129,9 +130,10 @@ and TODO.md; respect it if you ever run both side by side.
   not a stand-in for CI.
 - A local PostToolUse hook auto-runs `ruff check --fix` and `ruff format`
   on edited Python files — do not fight it.
-- `tools/autopilot/` runs the loop unattended: issue → PR → CI →
-  independent review → squash-merge, with a LaunchAgent that redeploys
-  main and rolls back on a red `/api/healthz`. A PR merges only on green
-  CI *and* a reviewer PASS; `UNAVAILABLE` is not a pass. One agent per
-  issue — see tools/autopilot/README.md before pointing a second one at
-  an issue that already has a branch.
+- `tools/autopilot/` runs the loop unattended: issue → PR → local CI
+  gate → independent review → squash-merge, with a LaunchAgent that
+  redeploys main and rolls back on a red `/api/healthz`. A PR merges only
+  on a green local gate (`tools/ci/run_gate_on_sha.sh` on the PR head,
+  issue #83) *and* a reviewer PASS; `UNAVAILABLE` is not a pass. One
+  agent per issue — see tools/autopilot/README.md before pointing a
+  second one at an issue that already has a branch.

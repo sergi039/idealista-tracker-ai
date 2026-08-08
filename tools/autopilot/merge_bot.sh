@@ -1,5 +1,8 @@
 #!/bin/bash
-# Merge open PRs that pass both gates: green CI and an independent reviewer.
+# Merge open PRs that pass both gates: a green local gate and an independent
+# reviewer. The local gate is the same snapshot runner a pre-push uses
+# (tools/ci/run_gate_on_sha.sh) - GitHub check statuses are no longer
+# consulted (issue #83, owner decision: CI runs locally, not on Actions).
 #
 # The owner authorised unattended squash-merges for this repository only, and
 # only behind those two gates. Everything else here exists to make that safe:
@@ -8,7 +11,7 @@
 #     head SHA, and a new push invalidates it
 #   - `rx` reserves a bounded number of review attempts per diff, so verdicts
 #     are cached in a journal rather than re-requested on every tick
-#   - UNAVAILABLE is not a pass. Neither is a pending check.
+#   - UNAVAILABLE is not a pass. Neither is a failed or unrunnable local gate.
 #
 # Usage:
 #   merge_bot.sh              # review and merge what qualifies
@@ -25,9 +28,10 @@ LOG_FILE="${AUTOPILOT_MERGE_LOG:-${REPO_DIR}/data/autopilot-merge.log}"
 # One line per reviewed head SHA. Keyed by SHA so a re-push gets a fresh review
 # and a re-run does not burn another rx attempt on an unchanged diff.
 JOURNAL="${AUTOPILOT_REVIEW_JOURNAL:-${REPO_DIR}/data/autopilot-reviews.tsv}"
-# CI is not a required status check on this repository, so the bot enforces its
-# own list. A check that is absent, skipped or neutral is not a pass.
-REQUIRED_CHECKS="${AUTOPILOT_REQUIRED_CHECKS:-pytest no-source-bundles}"
+# The snapshot gate shared with .githooks/pre-push. It checks the head out
+# into a throwaway worktree and lets the snapshot's own tools/ci/local_ci.sh
+# judge it; the runner itself is taken from this checkout's current version.
+GATE_RUNNER="${AUTOPILOT_GATE_RUNNER:-${REPO_DIR}/tools/ci/run_gate_on_sha.sh}"
 
 DRY_RUN=0
 ONLY_PR=""
@@ -73,46 +77,66 @@ record_verdict() {
     printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$(date '+%Y-%m-%dT%H:%M:%S')" "$3" >>"$JOURNAL"
 }
 
-# --- gate 1: CI ------------------------------------------------------------
-ci_is_green() {
-    local pr="$1" checks bad pending
-    # `gh pr checks` exits non-zero both for a failure and while checks are
-    # still running, so read the states rather than the exit code.
-    checks="$(gh pr checks "$pr" --repo "$REPO_SLUG" --json name,state 2>/dev/null || true)"
+# --- gate 0: the head is current and complete ------------------------------
+# Fetches the PR head into refs/autopilot/pr-<n> and proves (a) it is still
+# the commit GitHub would merge, (b) it already contains the current base, so
+# base..head IS the merge result. The later gates reuse the fetched ref.
+head_is_current() {
+    local pr="$1" head_sha="$2" base_sha="$3" ref fetched_sha
+    ref="refs/autopilot/pr-${pr}"
 
-    if [ -z "$checks" ] || [ "$(printf '%s' "$checks" | jq 'length')" = "0" ]; then
-        # CI is not a required status check on this repo, so "no checks" means
-        # nothing verified this diff - which is not the same as green.
-        log "  PR #${pr}: no checks reported - not merging an unverified diff"
+    if ! git fetch --quiet --force "https://github.com/${REPO_SLUG}.git" \
+        "pull/${pr}/head:${ref}" 2>>"$LOG_FILE"; then
+        log "  PR #${pr}: could not fetch head - skipping"
         return 1
     fi
 
-    pending="$(printf '%s' "$checks" \
-        | jq -r '[.[] | select(.state | IN("PENDING","QUEUED","IN_PROGRESS","EXPECTED"))] | length')"
-    if [ "$pending" != "0" ]; then
-        log "  PR #${pr}: ${pending} check(s) still running"
+    # The fetch happens after the listing, so it can pick up a different commit
+    # than the one the merge will pin with --match-head-commit. A force-push to
+    # B and back to A would otherwise get A validated on B's runs. Gate only
+    # the commit that is actually going to be merged.
+    fetched_sha="$(git rev-parse "$ref" 2>/dev/null || true)"
+    if [ "$fetched_sha" != "$head_sha" ]; then
+        log "  PR #${pr}: head moved during fetch (${head_sha:0:7} -> ${fetched_sha:0:7}) - skipping"
         return 1
     fi
 
-    bad="$(printf '%s' "$checks" \
-        | jq -r '[.[] | select(.state | IN("SUCCESS","SKIPPED","NEUTRAL") | not) | .name] | join(", ")')"
-    if [ -n "$bad" ]; then
-        log "  PR #${pr}: CI red (${bad})"
+    # The validated diff has to BE the merge result, not just the branch's own
+    # changes. `base..head` on a branch that is behind hides semantic merge
+    # conflicts: main tightens a helper, the branch adds a caller written
+    # against the old helper, each side checks out clean, and the merge
+    # silently combines them into something nobody looked at. Requiring the
+    # branch to already contain the current base makes base..head exactly the
+    # code that will land - the same rule as GitHub's "require branches to be
+    # up to date before merging". It also guarantees the head carries
+    # tools/ci/local_ci.sh, which entered main before this gate did.
+    if ! git merge-base --is-ancestor "$base_sha" "$ref" 2>/dev/null; then
+        log "  PR #${pr}: behind ${BASE_BRANCH} (${base_sha:0:7}) - rebase it; a diff that"
+        log "            is not the merge result cannot be validated as one"
         return 1
     fi
+    return 0
+}
 
-    # SKIPPED and NEUTRAL are tolerated *alongside* real results, never instead
-    # of them: a run where every check skipped verifies exactly as much as a run
-    # with no checks at all, and must not read as green.
-    for required in $REQUIRED_CHECKS; do
-        local state
-        state="$(printf '%s' "$checks" \
-            | jq -r --arg n "$required" '[.[] | select(.name == $n) | .state] | first // "MISSING"')"
-        if [ "$state" != "SUCCESS" ]; then
-            log "  PR #${pr}: required check '${required}' is ${state}, not SUCCESS"
-            return 1
-        fi
-    done
+# --- gate 1: local CI ------------------------------------------------------
+# The exact gate a pre-push runs, on the same runner: the head is checked out
+# into a throwaway worktree and the snapshot's own tools/ci/local_ci.sh
+# decides. Replaces the GitHub Actions status check (issue #83). An unrunnable
+# gate is a refusal, never a pass.
+local_ci_is_green() {
+    local pr="$1" head_sha="$2" rc
+    if [ ! -x "$GATE_RUNNER" ]; then
+        log "  PR #${pr}: gate runner ${GATE_RUNNER} is missing - not merging an unverified diff"
+        return 1
+    fi
+    log "  PR #${pr}: running the local gate on ${head_sha:0:7}"
+    "$GATE_RUNNER" "$head_sha" >>"$LOG_FILE" 2>&1
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        log "  PR #${pr}: local gate FAILED (rc=${rc}) - see the log above, not merging"
+        return 1
+    fi
+    log "  PR #${pr}: local gate green"
     return 0
 }
 
@@ -136,8 +160,8 @@ post_blocker_comment() {
 
     gh pr comment "$pr" --repo "$REPO_SLUG" --body "## Automated review: BLOCKER
 
-\`tools/autopilot/merge_bot.sh\` took this PR through both gates — CI green,
-branch up to date — and stopped at the independent review. Not merged.
+\`tools/autopilot/merge_bot.sh\` took this PR through both gates — local gate
+green, branch up to date — and stopped at the independent review. Not merged.
 
 \`\`\`
 ${verdict}
@@ -152,6 +176,7 @@ commit is never covered by this one." >>"$LOG_FILE" 2>&1 \
 # --- gate 2: independent review -------------------------------------------
 review_is_pass() {
     local pr="$1" head_sha="$2" base_sha="$3" cached rc ref key
+    # shellcheck disable=SC2034  # base_sha is read via the verdict key below
 
     key="$(verdict_key "$base_sha" "$head_sha")"
     cached="$(journal_verdict "$key")"
@@ -164,39 +189,9 @@ review_is_pass() {
             return 1 ;;
     esac
 
+    # gate 0 already fetched this ref, proved it matches head_sha and that it
+    # contains the current base - reuse it for the review range.
     ref="refs/autopilot/pr-${pr}"
-    if ! git fetch --quiet --force "https://github.com/${REPO_SLUG}.git" \
-        "pull/${pr}/head:${ref}" 2>>"$LOG_FILE"; then
-        log "  PR #${pr}: could not fetch head - skipping"
-        return 1
-    fi
-
-    # The fetch happens after the listing, so it can pick up a different commit
-    # than the one the merge will pin with --match-head-commit. A force-push to
-    # B and back to A would otherwise get A merged on B's PASS. Review only the
-    # commit that is actually going to be merged.
-    local fetched_sha
-    fetched_sha="$(git rev-parse "$ref" 2>/dev/null || true)"
-    if [ "$fetched_sha" != "$head_sha" ]; then
-        log "  PR #${pr}: head moved during fetch (${head_sha:0:7} -> ${fetched_sha:0:7}) - skipping"
-        return 1
-    fi
-
-    # The reviewed diff has to BE the merge result, not just the branch's own
-    # changes. `base..head` on a branch that is behind hides semantic merge
-    # conflicts: main tightens a helper, the branch adds a caller written
-    # against the old helper, each side reviews clean, and the merge silently
-    # combines them into something nobody looked at.
-    #
-    # Requiring the branch to already contain the current base makes
-    # base..head exactly the code that will land. This is the same rule as
-    # GitHub's "require branches to be up to date before merging" - enforced
-    # here because the repository does not have it switched on.
-    if ! git merge-base --is-ancestor "$base_sha" "$ref" 2>/dev/null; then
-        log "  PR #${pr}: behind ${BASE_BRANCH} (${base_sha:0:7}) - rebase it; a diff that"
-        log "            is not the merge result cannot be reviewed as one"
-        return 1
-    fi
 
     log "  PR #${pr}: requesting independent review of ${base_sha:0:7}..${head_sha:0:7}"
     set +e
@@ -313,7 +308,8 @@ printf '%s' "$pr_query" | jq -c '.[]' | while read -r pr_json; do
         continue
     fi
 
-    ci_is_green "$number" || continue
+    head_is_current "$number" "$head_sha" "$BASE_SHA" || continue
+    local_ci_is_green "$number" "$head_sha" || continue
     review_is_pass "$number" "$head_sha" "$BASE_SHA" || continue
 
     if [ "$DRY_RUN" = "1" ]; then

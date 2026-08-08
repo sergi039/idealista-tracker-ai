@@ -9,12 +9,28 @@ with a known exit code, then desynchronize the working tree from the
 commit and assert the verdict follows the commit.
 """
 
+import os
 import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HOOK = REPO_ROOT / ".githooks" / "pre-push"
+RUNNER = REPO_ROOT / "tools" / "ci" / "run_gate_on_sha.sh"
 ZERO_SHA = "0" * 40
+
+
+def _clean_env(**overrides):
+    """Environment without inherited GIT_* variables.
+
+    This suite itself runs inside the snapshot gate (local_ci.sh under a
+    pre-push), where git exports GIT_DIR pointing at the outer repository.
+    Every subprocess the tests spawn must not inherit that, or toy-repo git
+    calls land in the wrong repo. Tests inject dirty GIT_* back deliberately
+    via overrides when the point is to prove the runner strips them.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(overrides)
+    return env
 
 
 def _git(repo, *args):
@@ -23,6 +39,7 @@ def _git(repo, *args):
         check=True,
         capture_output=True,
         text=True,
+        env=_clean_env(),
     )
 
 
@@ -36,7 +53,7 @@ def _write_gate(repo, exit_code):
 
 def _make_repo(tmp_path, committed_gate_exit):
     repo = tmp_path / "toy"
-    repo.mkdir()
+    repo.mkdir(parents=True)
     _git(repo, "init", "-q")
     _git(repo, "config", "user.email", "hook-test@example.invalid")
     _git(repo, "config", "user.name", "hook test")
@@ -57,6 +74,7 @@ def _run_hook(repo, stdin_line=None):
         capture_output=True,
         text=True,
         timeout=120,
+        env=_clean_env(),
     )
 
 
@@ -83,6 +101,56 @@ def test_branch_deletion_push_skips_gate(tmp_path):
     line = f"refs/heads/gone {ZERO_SHA} refs/heads/gone {ZERO_SHA}\n"
     res = _run_hook(repo, stdin_line=line)
     assert res.returncode == 0, res.stdout + res.stderr
+
+
+def test_runner_verdict_follows_the_committed_gate(tmp_path):
+    """merge_bot calls the runner directly: red commit fails, green passes."""
+    red = _make_repo(tmp_path / "red", committed_gate_exit=1)
+    sha = _git(red, "rev-parse", "HEAD").stdout.strip()
+    res = subprocess.run(
+        ["bash", str(RUNNER), sha],
+        cwd=red,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=_clean_env(),
+    )
+    assert res.returncode != 0, res.stdout + res.stderr
+
+    green = _make_repo(tmp_path / "green", committed_gate_exit=0)
+    sha = _git(green, "rev-parse", "HEAD").stdout.strip()
+    res = subprocess.run(
+        ["bash", str(RUNNER), sha],
+        cwd=green,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=_clean_env(),
+    )
+    assert res.returncode == 0, res.stdout + res.stderr
+
+
+def test_runner_strips_inherited_git_env(tmp_path):
+    """git exports GIT_DIR to hooks; inherited into the snapshot it would point
+    every git call at the OUTER repository. A green toy commit must stay green
+    even when the environment says the repo is somewhere else entirely."""
+    repo = _make_repo(tmp_path / "toy-envtest", committed_gate_exit=0)
+    sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    # what a real hook invocation carries - injected deliberately
+    env = _clean_env(GIT_DIR=str(REPO_ROOT / ".git"))
+    res = subprocess.run(
+        ["bash", str(RUNNER), sha],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert res.returncode == 0, (
+        "runner must judge the toy repo, not the GIT_DIR one:\n"
+        + res.stdout
+        + res.stderr
+    )
 
 
 def test_skip_local_ci_env_bypasses(tmp_path, monkeypatch):

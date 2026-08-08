@@ -3,7 +3,7 @@
 Unattended issue → PR → merge → deploy for this repository.
 
 ```
-open issue ──▶ run_issue.sh ──▶ PR ──▶ CI (GitHub Actions)
+open issue ──▶ run_issue.sh ──▶ PR ──▶ local CI gate (run_gate_on_sha.sh)
                                         │
                                         ▼
                                  independent review (rx / gpt-5.6-sol)
@@ -15,14 +15,16 @@ open issue ──▶ run_issue.sh ──▶ PR ──▶ CI (GitHub Actions)
                                   unhealthy? ──▶ rollback
 ```
 
-Nothing here bypasses a gate. A PR merges only with **green CI and a PASS from
-an independent reviewer**; a deploy survives only if `/api/healthz` answers
-`"ok":true` afterwards.
+Nothing here bypasses a gate. A PR merges only with **a green local gate and a
+PASS from an independent reviewer**; a deploy survives only if `/api/healthz`
+answers `"ok":true` afterwards.
 
-What counts as green is spelled out rather than inferred: every check in
-`AUTOPILOT_REQUIRED_CHECKS` (default `pytest no-source-bundles`) must report
-`SUCCESS`. A run where the required checks are absent, skipped or neutral
-verifies exactly as much as a run with no CI at all, and is refused.
+What counts as green (issue #83, owner decision — CI runs locally, not on
+GitHub Actions): the PR head must already contain the current base, and
+`tools/ci/run_gate_on_sha.sh` — the same snapshot runner the pre-push hook
+uses — must exit 0 on that head: ruff check, ruff format, no-source-bundles,
+full pytest, all inside a throwaway worktree of exactly that commit. A gate
+that cannot run refuses the merge; it never reads as green.
 
 ## Scripts
 
