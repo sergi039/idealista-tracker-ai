@@ -10,9 +10,9 @@ ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from app import create_app, db
-from models import Land
-from services.anthropic_service import get_anthropic_service
+from app import create_app, db  # noqa: E402
+from models import Land  # noqa: E402
+from services.anthropic_service import get_anthropic_service  # noqa: E402
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:

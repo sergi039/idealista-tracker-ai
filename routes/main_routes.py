@@ -454,7 +454,7 @@ def lands():
             query = query.filter(Land.environment["sea_view"].as_boolean().is_(True))
 
         if favorites_filter:
-            query = query.filter(Land.is_favorite == True)
+            query = query.filter(Land.is_favorite)
 
         if hide_removed_filter:
             query = query.filter(
@@ -2573,7 +2573,7 @@ def export_csv():
             query = query.filter(Land.environment["sea_view"].as_boolean().is_(True))
 
         if favorites_filter:
-            query = query.filter(Land.is_favorite == True)
+            query = query.filter(Land.is_favorite)
 
         # Apply sorting with same logic as main lands route
         if sort_by == "investment_metrics":

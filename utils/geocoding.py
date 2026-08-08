@@ -68,7 +68,7 @@ class GeocodingService:
                 )
                 return self._fallback_geocoding(address)
 
-        except Exception as e:
+        except Exception:
             logger.error("Geocoding error for '%s'", address, exc_info=True)
             return self._fallback_geocoding(address)
 
@@ -106,7 +106,7 @@ class GeocodingService:
             logger.warning(f"Fallback geocoding also failed for '{address}'")
             return None
 
-        except Exception as e:
+        except Exception:
             logger.error("Fallback geocoding error for '%s'", address, exc_info=True)
             return None
 
@@ -138,7 +138,7 @@ class GeocodingService:
 
             return self._fallback_reverse_geocoding(lat, lng)
 
-        except Exception as e:
+        except Exception:
             logger.error("Reverse geocoding error for %s,%s", lat, lng, exc_info=True)
             return None
 
@@ -168,7 +168,7 @@ class GeocodingService:
 
             return None
 
-        except Exception as e:
+        except Exception:
             logger.error(
                 "Fallback reverse geocoding error for %s,%s", lat, lng, exc_info=True
             )

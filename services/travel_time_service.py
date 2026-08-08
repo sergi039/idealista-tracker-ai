@@ -215,7 +215,7 @@ class TravelTimeService:
 
             return True
 
-        except Exception as e:
+        except Exception:
             logger.error(
                 "Failed to calculate travel times for land %s", land_id, exc_info=True
             )
@@ -369,7 +369,7 @@ class TravelTimeService:
             )
             return None
 
-        except Exception as e:
+        except Exception:
             logger.error("Google Maps API error", exc_info=True)
             return None
 
@@ -475,7 +475,7 @@ class TravelTimeService:
 
             return {"time": travel_time, "distance": round(actual_distance)}
 
-        except Exception as e:
+        except Exception:
             logger.error("Fallback travel time calculation failed", exc_info=True)
             return None
 
@@ -549,7 +549,7 @@ class TravelTimeService:
 
             return None
 
-        except Exception as e:
+        except Exception:
             logger.error("Error finding nearest beach", exc_info=True)
             return None
 
@@ -586,7 +586,7 @@ class TravelTimeService:
 
             return None
 
-        except Exception as e:
+        except Exception:
             logger.error("Error finding nearest facility", exc_info=True)
             return None
 
