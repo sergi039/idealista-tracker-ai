@@ -2,8 +2,11 @@
 Tests for market analysis service functionality (2025 updates).
 """
 
-import pytest
+from datetime import datetime, timedelta
 from decimal import Decimal
+
+import pytest
+
 from app import create_app, db
 from models import Land
 from services.market_analysis_service import MarketAnalysisService
@@ -233,6 +236,45 @@ class TestMarketAnalysisService:
             assert "construction_value_estimation" in result
             assert "market_price_dynamics" in result
             assert "rental_market_analysis" in result
+
+    def test_declining_market_preserves_negative_growth_rate(
+        self, app, market_service, test_land
+    ):
+        """A falling market must not be reported as positive growth."""
+        with app.app_context():
+            now = datetime.now()
+            db.session.add_all(
+                [
+                    Land(
+                        source_email_id="market_test_older_comparable",
+                        title="Older comparable land",
+                        municipality="Madrid",
+                        land_type="developed",
+                        price=Decimal("100000.00"),
+                        area=Decimal("1000.00"),
+                        created_at=now - timedelta(days=181),
+                    ),
+                    Land(
+                        source_email_id="market_test_recent_comparable",
+                        title="Recent comparable land",
+                        municipality="Madrid",
+                        land_type="developed",
+                        price=Decimal("80000.00"),
+                        area=Decimal("1000.00"),
+                        created_at=now - timedelta(days=30),
+                    ),
+                ]
+            )
+            db.session.commit()
+
+            land = db.session.get(Land, test_land)
+            result = market_service.analyze_market_trends(land)
+
+            assert result["price_trend"] == "DECLINING"
+            assert result["annual_growth_rate"] == pytest.approx(-20.0)
+            assert result["future_outlook"] == (
+                "Expected 20.0% annual decline based on current market conditions"
+            )
 
     def test_noi_calculation(self, app, market_service, test_land):
         """Test Net Operating Income calculation"""

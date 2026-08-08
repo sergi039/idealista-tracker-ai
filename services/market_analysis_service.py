@@ -379,7 +379,7 @@ class MarketAnalysisService:
                 "quality_evaluation": quality_eval,
             }
 
-        except Exception as e:
+        except Exception:
             logger.error("Error calculating construction value", exc_info=True)
             return {}
 
@@ -494,12 +494,19 @@ class MarketAnalysisService:
                     "Local infrastructure improvements",
                 ]
 
+            if growth_rate > 0:
+                outlook_direction = "growth"
+            elif growth_rate < 0:
+                outlook_direction = "decline"
+            else:
+                outlook_direction = "change"
+
             return {
                 "price_trend": trend,
-                "annual_growth_rate": abs(growth_rate) if growth_rate else 3.5,
+                "annual_growth_rate": growth_rate,
                 "trend_period": "2024-2025",
                 "trend_analysis": trend_analysis,
-                "future_outlook": f"Expected {abs(growth_rate):.1f}% annual growth based on current market conditions",
+                "future_outlook": f"Expected {abs(growth_rate):.1f}% annual {outlook_direction} based on current market conditions",
                 "market_factors": market_factors,
                 "avg_price_per_m2": round(avg_price),
                 "min_price_per_m2": round(min_price),
@@ -507,7 +514,7 @@ class MarketAnalysisService:
                 "sample_size": len(price_per_m2_data),
             }
 
-        except Exception as e:
+        except Exception:
             logger.error("Error analyzing market trends", exc_info=True)
             return self._get_default_market_trends()
 
@@ -657,7 +664,7 @@ class MarketAnalysisService:
                 },
             }
 
-        except Exception as e:
+        except Exception:
             logger.error("Error calculating rental analysis", exc_info=True)
             return {
                 "error": "Unable to calculate rental analysis",
