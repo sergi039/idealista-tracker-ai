@@ -173,8 +173,28 @@ class ResolvedProfileSelection:
         return self.filter_ids == () and not self.include_unassigned
 
     @property
-    def spans_several_profiles(self) -> bool:
-        return self.single_id is None and not self.matches_nothing
+    def withholds_profile_travel(self) -> bool:
+        """The view covers more than one profile, so profile-specific travel
+        data is withheld and the page owes the reader an explanation.
+
+        Deliberately derived from the selection alone. An earlier version let
+        the templates gate the explanation on "there is at least one active
+        profile" as well, which held right up until *every* profile was
+        inactive: a bookmark naming several of them then hid the travel data
+        and the reason for it at the same time. Selecting inactive profiles
+        by id is supported on purpose, so the explanation has to follow.
+        """
+        if self.single_id is not None:
+            # Exactly one profile: its travel data is shown, nothing withheld.
+            return False
+        if self.matches_nothing:
+            # Nothing on screen to explain.
+            return False
+        if self.filter_ids is None:
+            # No filter and no profile resolved -- an install with nothing to
+            # select. Advising the reader to pick one would be nonsense.
+            return False
+        return True
 
     @property
     def form_fallback_value(self) -> str:

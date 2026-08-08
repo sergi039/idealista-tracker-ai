@@ -934,6 +934,95 @@ class TestProfileSpecificTravelNeedsOneProfile:
         assert not [column for column in header if column.startswith("travel_")]
 
 
+class TestTheTravelNoticeDoesNotDependOnTheActiveList:
+    """The explanation has to appear whenever the data is withheld.
+
+    Selecting inactive profiles by id is supported on purpose, and when every
+    profile happens to be inactive the active list is empty. Gating the notice
+    on that list meant the page hid the travel data *and* the reason for it,
+    which is the failure mode this whole issue is about, one level up.
+    """
+
+    @pytest.fixture
+    def only_inactive_profiles(self, app):
+        """Two inactive profiles, one of them the default.
+
+        The default flag matters: `get_default_profile(create=True)` would
+        otherwise mint a fresh *active* profile and the active list would not
+        be empty at all.
+        """
+        with app.app_context():
+            first = SearchProfile(
+                name="Retired north",
+                is_active=False,
+                is_default=True,
+                travel_targets={"presets": {}, "custom": []},
+            )
+            second = SearchProfile(
+                name="Retired south",
+                is_active=False,
+                is_default=False,
+                travel_targets={"presets": {}, "custom": []},
+            )
+            db.session.add_all([first, second])
+            db.session.commit()
+            for index, profile in enumerate((first, second)):
+                db.session.add(
+                    Property(
+                        source_email_id=f"issue104_inactive_{index}",
+                        title=f"RetiredListing{index}UniqueTitle",
+                        search_profile_id=profile.id,
+                        listing_status="active",
+                        location_lat=38.1 + index,
+                        location_lon=-0.6 - index,
+                    )
+                )
+            db.session.commit()
+            return {"first_id": first.id, "second_id": second.id}
+
+    def test_the_active_list_really_is_empty(self, client, only_inactive_profiles):
+        """Fixture strength: if a default profile got auto-created the page
+        would have an active profile and the defect could not reproduce."""
+        body = client.get("/properties?profile_id=all").get_data(as_text=True)
+        assert "No active profiles yet." in body
+
+    def test_the_page_explains_itself(self, client, only_inactive_profiles):
+        query = (
+            f"profile_id={only_inactive_profiles['first_id']}"
+            f"&profile_id={only_inactive_profiles['second_id']}"
+        )
+        body = client.get(f"/properties?{query}").get_data(as_text=True)
+        assert "RetiredListing0UniqueTitle" in body
+        assert "RetiredListing1UniqueTitle" in body
+        assert "Recalculate travel" not in body
+        assert TRAVEL_NOTICE in body
+
+    def test_the_map_explains_itself(self, client, only_inactive_profiles):
+        query = (
+            f"profile_id={only_inactive_profiles['first_id']}"
+            f"&profile_id={only_inactive_profiles['second_id']}"
+        )
+        body = client.get(f"/map?{query}").get_data(as_text=True)
+        assert len(_marker_ids(body)) == 2
+        assert TRAVEL_NOTICE in body
+
+    def test_a_single_inactive_profile_still_shows_its_travel_data(
+        self, client, only_inactive_profiles
+    ):
+        """The counterpart: one profile is one profile, active or not."""
+        body = client.get(
+            f"/properties?profile_id={only_inactive_profiles['first_id']}"
+        ).get_data(as_text=True)
+        assert "Recalculate travel" in body
+        assert TRAVEL_NOTICE not in body
+
+    def test_an_install_with_nothing_to_select_stays_quiet(self, client, app):
+        """The guard being replaced did have a job: a page that resolved no
+        profile at all must not advise picking one."""
+        body = client.get("/properties").get_data(as_text=True)
+        assert TRAVEL_NOTICE not in body
+
+
 class TestOldLinksKeepWorking:
     def test_a_single_profile_bookmark(self, client, subscriptions):
         alpha = subscriptions["alpha_id"]
@@ -1088,8 +1177,31 @@ class TestProfileSelectionModule:
         assert resolved.filter_ids == (3,)
         assert resolved.include_unassigned is True
         assert resolved.single_id is None
-        assert resolved.spans_several_profiles is True
+        assert resolved.withholds_profile_travel is True
         assert resolved.link_values == (3, "unassigned")
+
+    @pytest.mark.parametrize(
+        "query,active,auto,expected",
+        [
+            # Several profiles, none of them active: the explanation must not
+            # depend on the active list being non-empty.
+            ("profile_id=98&profile_id=99", [], None, True),
+            ("profile_id=98&profile_id=99", [3, 5], None, True),
+            ("profile_id=all", [3, 5], None, True),
+            ("profile_id=unassigned", [], None, True),
+            # One profile, active or not: its travel data is shown.
+            ("profile_id=99", [], None, False),
+            ("profile_id=3", [3, 5], None, False),
+            ("profile_id=all", [3], None, False),
+            ("", [3, 5], 3, False),
+            # Nothing on screen, or nothing to select at all.
+            ("profile_id=0", [3, 5], None, False),
+            ("profile_id=all", [], None, False),
+            ("", [], None, False),
+        ],
+    )
+    def test_withholds_profile_travel(self, query, active, auto, expected):
+        assert _resolve(query, active, auto=auto).withholds_profile_travel is expected
 
     def test_unassigned_alone_is_not_an_empty_selection(self):
         resolved = _resolve("profile_id=unassigned", [3, 5])

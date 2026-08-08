@@ -24,7 +24,7 @@
         {# Same rule as /properties (issue #104): custom travel target ids
            belong to one profile, so the popups drop them rather than mixing
            several profiles' destinations together. #}
-        {% if profiles and profile_selection.spans_several_profiles %}
+        {% if profile_selection.withholds_profile_travel %}
             <div class="alert alert-light border py-2 px-3 small text-body-secondary" id="profile-travel-notice">
                 <i class="fas fa-circle-info me-1"></i>{{ profile_selection.travel_notice }}
             </div>
