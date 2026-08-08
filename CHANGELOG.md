@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔑 Changed: a saved search is identified by its URL, not its label (2026-08-08, #102)
+- **What**: alert emails link to the saved-search page, and that link encodes
+  the subscription's filters. `services/search_subscription_identity.py`
+  canonicalizes it and fingerprints it as `idealista:v1:<sha256>`, stored in
+  the new `search_profiles.source_search_key` (unique) with the raw link kept
+  in `source_search_url` for diagnostics. `resolve_profile()` now resolves by
+  search key first, then adopts a same-named profile that has no key yet, then
+  creates one; emails with no recognizable search URL keep the old
+  name/matcher/default path. Migration `013`.
+- **Why**: the name parsed out of the subject is a *label*. It gets folded by
+  the mail server (#101), reworded by Idealista, or renamed by the owner, and
+  each variant used to create another `SearchProfile`.
+- **Consequence to keep in mind**: `search_profiles.name` is no longer UNIQUE —
+  two subscriptions may legitimately share a label with a different `shape`, so
+  `merge_duplicate_profiles()` now refuses to merge a group holding different
+  search keys. Only labels the ingester invented (`is_auto_created`) are ever
+  rewritten. Keys are **not** backfilled: existing profiles stay NULL until the
+  next email for that subscription arrives. Identity conflicts (URL points at
+  one profile, label at another; several different search links in one email)
+  are logged and left alone, never merged automatically.
+- **CI**: the `pytest` job now runs a PostgreSQL service, because the migration
+  SQL is PostgreSQL-only and cannot be executed by SQLite —
+  `tests/test_postgres_migrations.py` applies the real files to a real server.
+  That test caught a percent-sign collision in `013` that would otherwise have
+  failed at deploy time, after the container had already been replaced.
+
 ### 🛟 Fixed: last_seen_uid no longer runs ahead of the database (2026-08-08, #24)
 - **What**: both IMAP services persisted `max(uids)` inside
   `get_idealista_emails()`, before `run_ingestion()` had written anything. A

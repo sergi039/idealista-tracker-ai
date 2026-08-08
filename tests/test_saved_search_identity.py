@@ -1,0 +1,518 @@
+"""A saved search is identified by its own search URL, not by its label.
+
+The subject line carries a *label*: the mail server folds it (#101), Idealista
+rewords it, the owner renames it. Every alert email also links to the search
+page, and that link encodes the subscription's filters, so it is the thing that
+actually distinguishes one saved search from another (#102).
+
+Verified over the last 60 emails in the mailbox: grouping by path + shape gives
+exactly two groups, each mapping to exactly one unfolded subject name.
+
+The canonical form is pinned literally in this module rather than produced by
+calling the code under test - otherwise the assertions would only prove the
+function agrees with itself.
+"""
+
+import hashlib
+import logging
+from unittest.mock import patch
+
+import pytest
+
+from app import create_app, db
+from config import Config
+from models import Property, SearchProfile
+from services.property_imap_service import PropertyIMAPService
+from services.search_profile_service import SearchProfileService
+from services.search_subscription_identity import (
+    SEARCH_KEY_PREFIX,
+    canonicalize_search_url,
+    extract_search_identity,
+    search_key_for_url,
+)
+from tests import setup_test_environment
+
+# The two real saved searches, as they appear in the mailbox.
+TERRENOS_SHAPE = "((u}ygG~adt@gqdAquaBmnZ_yvC))"
+VIVIENDAS_SHAPE = "((wc_hGxqmu@dCsdE~pAquH))"
+
+TERRENOS_FILTERS = (
+    "con-precio-hasta_150000,metros-cuadrados-mas-de_100,"
+    "metros-cuadrados-menos-de_5000,terrenos-urbanizables,publicado_ultimo-mes"
+)
+VIVIENDAS_FILTERS = (
+    "con-precio-hasta_150000,precio-desde_60000,chalets,de-dos-dormitorios,"
+    "de-tres-dormitorios,publicado_ultimo-mes"
+)
+
+TERRENOS_URL = (
+    f"https://www.idealista.com/en/areas/venta-terrenos/{TERRENOS_FILTERS}/"
+    f"?shape={TERRENOS_SHAPE}"
+)
+VIVIENDAS_URL = (
+    f"https://www.idealista.com/en/areas/venta-viviendas/{VIVIENDAS_FILTERS}/"
+    f"?shape={VIVIENDAS_SHAPE}"
+)
+
+# The same subscription as Idealista writes it in a different email: Spanish
+# UI segment, no `www`, plain http, percent-encoded shape, per-email `utm_*`
+# noise in a different order, a fragment, and no trailing slash. Every one of
+# those differences is cosmetic.
+TERRENOS_URL_VARIANT = (
+    "http://idealista.com/es/areas/venta-terrenos/"
+    f"{TERRENOS_FILTERS}"
+    "?utm_notification_id=99887766&"
+    "shape=%28%28u%7DygG%7Eadt%40gqdAquaBmnZ_yvC%29%29&"
+    "utm_source=email&utm_recipient_id=42#results"
+)
+# ... and the same link as it is actually written inside an href attribute.
+# The stored diagnostic URL is the unescaped one: `&amp;` is HTML escaping,
+# not part of the address.
+TERRENOS_URL_VARIANT_IN_HTML = TERRENOS_URL_VARIANT.replace("&", "&amp;")
+
+TERRENOS_CANONICAL = (
+    f"idealista.com/areas/venta-terrenos/{TERRENOS_FILTERS}"
+    "?shape=%28%28u%7DygG~adt%40gqdAquaBmnZ_yvC%29%29"
+)
+TERRENOS_KEY = (
+    SEARCH_KEY_PREFIX + hashlib.sha256(TERRENOS_CANONICAL.encode("utf-8")).hexdigest()
+)
+
+LISTING_URL_ONE = "https://www.idealista.com/en/inmueble/112229931/"
+LISTING_URL_TWO = "https://www.idealista.com/en/inmueble/112229932/"
+
+# One saved search, two labels. Idealista rewords a saved-search name, and a
+# folded subject (#101) truncates it; either way the label moves and the
+# subscription does not.
+SUBJECT_FULL = (
+    "New country house in your search: houses at your custom search area norte!"
+)
+SUBJECT_TRUNCATED = "New country house in your search: houses at your custom!"
+SEARCH_NAME = "houses at your custom search area norte"
+
+
+def _alert_email(subject: str, listing_url: str, search_url: str) -> bytes:
+    """A single-part HTML alert, the shape the real mailbox delivers."""
+    return (
+        "From: idealista <noresponder@idealista.com>\r\n"
+        f"Subject: {subject}\r\n"
+        "MIME-Version: 1.0\r\n"
+        'Content-Type: text/html; charset="utf-8"\r\n'
+        "\r\n"
+        "<html><body>"
+        f'<a href="{listing_url}">150,000 EUR</a>'
+        "<p>200 m2</p>"
+        f'<a href="{search_url}">See all listings</a>'
+        "</body></html>\r\n"
+    ).encode("utf-8")
+
+
+# Delivered in UID order, so the *last* alert carries the full label and the
+# cosmetically different copy of the same search URL.
+RAW_EMAILS = {
+    1: _alert_email(SUBJECT_TRUNCATED, LISTING_URL_ONE, TERRENOS_URL),
+    2: _alert_email(SUBJECT_FULL, LISTING_URL_TWO, TERRENOS_URL_VARIANT_IN_HTML),
+}
+
+
+class _FakeIMAPClient:
+    """Serves raw emails, so the test exercises the real parsing path."""
+
+    def __init__(self, host, port=None, ssl=None, timeout=None):
+        self.host = host
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def login(self, user, password):
+        return True
+
+    def select_folder(self, name, readonly=True):
+        return None
+
+    def search(self, args):
+        return sorted(RAW_EMAILS)
+
+    def fetch(self, uids, parts):
+        return {
+            uid: {b"RFC822": RAW_EMAILS[uid], b"INTERNALDATE": None} for uid in uids
+        }
+
+
+@pytest.fixture
+def app():
+    setup_test_environment()
+    app = create_app()
+    app.config["TESTING"] = True
+    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+
+    with app.app_context():
+        db.create_all()
+        yield app
+        db.drop_all()
+
+
+# --------------------------------------------------------------------------
+# Canonicalization: only provably cosmetic differences may collapse.
+# --------------------------------------------------------------------------
+
+
+def test_canonical_form_is_the_documented_string():
+    assert canonicalize_search_url(TERRENOS_URL) == TERRENOS_CANONICAL
+    assert search_key_for_url(TERRENOS_URL) == TERRENOS_KEY
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        TERRENOS_URL_VARIANT_IN_HTML,
+        TERRENOS_URL.replace("https://", "http://"),
+        TERRENOS_URL.replace("www.idealista.com", "WWW.Idealista.COM"),
+        TERRENOS_URL.replace("www.idealista.com", "idealista.com"),
+        TERRENOS_URL.replace("/en/", "/es/"),
+        TERRENOS_URL.replace(f"{TERRENOS_FILTERS}/?", f"{TERRENOS_FILTERS}?"),
+        TERRENOS_URL + "#top",
+        TERRENOS_URL + "&utm_notification_id=1&utm_recipient_id=2",
+    ],
+    ids=[
+        "everything-at-once",
+        "scheme",
+        "host-case",
+        "www",
+        "language-segment",
+        "trailing-slash",
+        "fragment",
+        "utm-params",
+    ],
+)
+def test_cosmetic_variants_share_one_key(variant):
+    assert search_key_for_url(variant) == TERRENOS_KEY
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        TERRENOS_URL.replace(TERRENOS_SHAPE, "((u}ygG~adt@gqdAquaBmnZ_yvD))"),
+        VIVIENDAS_URL,
+        # The path is opaque: its comma-separated filters are not sorted, and
+        # a reordered path is a different search until Idealista proves it is
+        # not.
+        TERRENOS_URL.replace(
+            "con-precio-hasta_150000,metros-cuadrados-mas-de_100",
+            "metros-cuadrados-mas-de_100,con-precio-hasta_150000",
+        ),
+    ],
+    ids=["different-shape", "different-search", "reordered-path"],
+)
+def test_material_differences_produce_different_keys(variant):
+    key = search_key_for_url(variant)
+
+    assert key is not None
+    assert key != TERRENOS_KEY
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "",
+        "https://www.idealista.com/en/inmueble/112229931/",
+        "https://www.idealista.com/en/venta-viviendas/alicante/",
+        "https://example.com/en/areas/venta-terrenos/x/?shape=((a))",
+        "javascript:alert(1)",
+        "mailto:noresponder@idealista.com",
+    ],
+    ids=["empty", "listing", "no-areas", "foreign-host", "javascript", "mailto"],
+)
+def test_non_search_urls_have_no_key(url):
+    assert canonicalize_search_url(url) is None
+    assert search_key_for_url(url) is None
+
+
+# --------------------------------------------------------------------------
+# Extraction from the email body.
+# --------------------------------------------------------------------------
+
+
+def test_identity_is_extracted_from_the_body_and_ignores_listing_links():
+    body = _alert_email(SUBJECT_FULL, LISTING_URL_ONE, TERRENOS_URL).decode("utf-8")
+
+    identity = extract_search_identity(body)
+
+    assert identity is not None
+    assert identity.key == TERRENOS_KEY
+    assert identity.url == TERRENOS_URL
+
+
+def test_repeated_links_to_the_same_search_are_one_identity():
+    body = (
+        f'<a href="{TERRENOS_URL}">See all listings</a>'
+        f'<a href="{TERRENOS_URL_VARIANT_IN_HTML}">Modify your search</a>'
+    )
+
+    identity = extract_search_identity(body)
+
+    assert identity is not None
+    assert identity.key == TERRENOS_KEY
+
+
+def test_two_different_searches_in_one_email_are_logged_and_refused(caplog):
+    """Never guess: picking "the first link" would bind the wrong identity."""
+    body = f'<a href="{TERRENOS_URL}">A</a><a href="{VIVIENDAS_URL}">B</a>'
+
+    with caplog.at_level(logging.WARNING):
+        identity = extract_search_identity(body)
+
+    assert identity is None
+    assert any("search links" in record.message for record in caplog.records)
+
+
+# --------------------------------------------------------------------------
+# resolve_profile: the search key outranks the label.
+# --------------------------------------------------------------------------
+
+
+def test_one_search_url_with_two_labels_resolves_to_one_profile(app):
+    with app.app_context():
+        first = SearchProfileService.resolve_profile(
+            SUBJECT_FULL, f'<a href="{TERRENOS_URL}">See all listings</a>'
+        )
+        second = SearchProfileService.resolve_profile(
+            SUBJECT_TRUNCATED,
+            f'<a href="{TERRENOS_URL_VARIANT_IN_HTML}">See all listings</a>',
+        )
+
+        assert first is not None and second is not None
+        assert first.id == second.id
+        assert first.source_search_key == TERRENOS_KEY
+        assert first.source_search_url == TERRENOS_URL_VARIANT
+        assert SearchProfile.query.count() == 1
+
+
+def test_same_label_with_a_different_shape_creates_a_second_profile(app):
+    """Two subscriptions may legitimately carry the same human label."""
+    with app.app_context():
+        other_shape = TERRENOS_URL.replace(TERRENOS_SHAPE, "((zzz))")
+
+        first = SearchProfileService.resolve_profile(
+            SUBJECT_FULL, f'<a href="{TERRENOS_URL}">x</a>'
+        )
+        second = SearchProfileService.resolve_profile(
+            SUBJECT_FULL, f'<a href="{other_shape}">x</a>'
+        )
+
+        assert first is not None and second is not None
+        assert first.id != second.id
+        assert first.name == second.name == SEARCH_NAME
+        assert {p.source_search_key for p in SearchProfile.query.all()} == {
+            TERRENOS_KEY,
+            search_key_for_url(other_shape),
+        }
+
+
+def test_an_existing_keyless_profile_is_adopted_rather_than_duplicated(app):
+    with app.app_context():
+        existing = SearchProfile(
+            name=SEARCH_NAME,
+            is_active=True,
+            is_default=False,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(existing)
+        db.session.commit()
+        existing_id = existing.id
+
+        resolved = SearchProfileService.resolve_profile(
+            SUBJECT_FULL, f'<a href="{TERRENOS_URL}">x</a>'
+        )
+
+        assert resolved is not None
+        assert resolved.id == existing_id
+        assert resolved.source_search_key == TERRENOS_KEY
+        assert SearchProfile.query.count() == 1
+
+
+def test_the_default_profile_is_never_bound_to_one_subscription(app):
+    """The catch-all must keep catching; binding it would hijack every email."""
+    with app.app_context():
+        default = SearchProfile(
+            name=SEARCH_NAME,
+            is_active=True,
+            is_default=True,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(default)
+        db.session.commit()
+
+        resolved = SearchProfileService.resolve_profile(
+            SUBJECT_FULL, f'<a href="{TERRENOS_URL}">x</a>'
+        )
+
+        assert resolved is not None
+        assert resolved.is_default is False
+        assert db.session.get(SearchProfile, default.id).source_search_key is None
+
+
+def test_an_email_without_a_search_url_keeps_the_old_resolution(app):
+    with app.app_context():
+        by_name = SearchProfileService.resolve_profile(
+            "New detached house in your search: Search Junio!",
+            "See all listings for 'Search Junio'",
+        )
+
+        assert by_name is not None
+        assert by_name.name == "Junio"
+        assert by_name.source_search_key is None
+        # That label came out of an email too, so a later email carrying the
+        # subscription's URL is allowed to correct it.
+        assert by_name.is_auto_created is True
+
+
+def test_an_unlabelled_email_with_a_url_never_lands_in_default(app):
+    with app.app_context():
+        resolved = SearchProfileService.resolve_profile(
+            "Nueva vivienda", f'<a href="{TERRENOS_URL}">x</a>'
+        )
+
+        assert resolved is not None
+        assert resolved.is_default is False
+        assert resolved.source_search_key == TERRENOS_KEY
+        assert "venta-terrenos" in resolved.name
+
+
+def test_only_an_auto_created_label_may_be_rewritten(app):
+    with app.app_context():
+        owner_named = SearchProfile(
+            name="Plots I actually want",
+            is_active=True,
+            is_default=False,
+            is_auto_created=False,
+            source_search_key=TERRENOS_KEY,
+            source_search_url=TERRENOS_URL,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(owner_named)
+        db.session.commit()
+
+        resolved = SearchProfileService.resolve_profile(
+            SUBJECT_FULL, f'<a href="{TERRENOS_URL}">x</a>'
+        )
+
+        assert resolved is not None
+        assert resolved.id == owner_named.id
+        assert resolved.name == "Plots I actually want"
+
+
+def test_an_auto_created_label_follows_the_email(app):
+    with app.app_context():
+        first = SearchProfileService.resolve_profile(
+            SUBJECT_TRUNCATED, f'<a href="{TERRENOS_URL}">x</a>'
+        )
+        assert first is not None
+        assert first.is_auto_created is True
+
+        second = SearchProfileService.resolve_profile(
+            SUBJECT_FULL, f'<a href="{TERRENOS_URL}">x</a>'
+        )
+
+        assert second is not None
+        assert second.id == first.id
+        assert second.name == SEARCH_NAME
+
+
+def test_an_identity_conflict_is_logged_and_nothing_is_merged(app, caplog):
+    """URL says profile A, label says profile B: report it, change neither."""
+    with app.app_context():
+        keyed = SearchProfile(
+            name="Terrenos norte",
+            is_active=True,
+            is_auto_created=True,
+            source_search_key=TERRENOS_KEY,
+            source_search_url=TERRENOS_URL,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        by_label = SearchProfile(
+            name=SEARCH_NAME,
+            is_active=True,
+            is_auto_created=True,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add_all([keyed, by_label])
+        db.session.commit()
+        keyed_id, label_id = keyed.id, by_label.id
+
+        with caplog.at_level(logging.WARNING):
+            resolved = SearchProfileService.resolve_profile(
+                SUBJECT_FULL, f'<a href="{TERRENOS_URL}">x</a>'
+            )
+
+        assert resolved is not None
+        assert resolved.id == keyed_id
+        assert db.session.get(SearchProfile, keyed_id).name == "Terrenos norte"
+        assert db.session.get(SearchProfile, label_id).name == SEARCH_NAME
+        assert SearchProfile.query.count() == 2
+        assert any("conflict" in record.message.lower() for record in caplog.records)
+
+
+def test_merge_refuses_profiles_that_hold_different_search_keys(app):
+    """Same label, different subscription: merging would destroy one of them."""
+    with app.app_context():
+        for key in (TERRENOS_KEY, search_key_for_url(VIVIENDAS_URL)):
+            db.session.add(
+                SearchProfile(
+                    name="Same label",
+                    is_active=True,
+                    is_auto_created=True,
+                    source_search_key=key,
+                    travel_targets={"presets": {}, "custom": []},
+                )
+            )
+        db.session.commit()
+
+        report = SearchProfileService.merge_duplicate_profiles()
+
+        assert report["merged_groups"] == 0
+        assert report["profiles_deleted"] == 0
+        assert report["conflicts"]
+        assert SearchProfile.query.count() == 2
+
+
+# --------------------------------------------------------------------------
+# The ingestion boundary: the URL has to survive the whole IMAP pipeline.
+# --------------------------------------------------------------------------
+
+
+def test_the_search_url_reaches_profile_resolution_through_ingestion(app):
+    """Two alerts, one saved search, two different labels: one profile."""
+    with app.app_context():
+        Config.AUTO_TRAVEL_ENRICHMENT = False
+        Config.AUTO_PROPERTY_SCORING = False
+        Config.AUTO_PROFILE_ASSIGNMENT = False
+
+        with patch("services.property_imap_service.IMAPClient", _FakeIMAPClient):
+            service = PropertyIMAPService()
+            service.user = "user@example.com"
+            service.password = "dummy"
+            service.host = "imap.gmail.com"
+            service.folder = "Idealista"
+            service.last_seen_uid = 0
+            service.run_ingestion(sync_type="test")
+
+        first = Property.query.filter_by(idealista_property_id=112229931).first()
+        second = Property.query.filter_by(idealista_property_id=112229932).first()
+        assert first is not None and second is not None, "both alerts should ingest"
+
+        assert first.search_profile_id == second.search_profile_id, (
+            "the same saved search under two labels must not fragment"
+        )
+
+        profile = db.session.get(SearchProfile, first.search_profile_id)
+        assert profile is not None
+        assert profile.source_search_key == TERRENOS_KEY, (
+            "the search URL never reached resolve_profile"
+        )
+        assert profile.source_search_url == TERRENOS_URL_VARIANT
+        assert profile.name == SEARCH_NAME
+        assert SearchProfile.query.count() == 1

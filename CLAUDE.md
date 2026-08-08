@@ -136,6 +136,14 @@ and TODO.md; respect it if you ever run both side by side.
 - Run `uv run pytest tests/ -q` locally and paste the real output before
   claiming done. That is a standing owner requirement in its own right,
   not a stand-in for CI.
+- **Writing a migration?** Everything in `migrations/` is PostgreSQL-only and
+  multi-statement, so SQLite cannot execute it and `db.create_all()` proves
+  nothing about it. `tests/test_postgres_migrations.py` runs the real files
+  against a real server; it skips unless `TEST_DATABASE_URL_POSTGRES` points
+  at a **throwaway** database (never `idealista-db` on 5434), and the CI
+  `pytest` job sets it plus `REQUIRE_POSTGRES_TESTS=1` so a missing server
+  fails instead of skipping. A percent sign in migration SQL must be doubled —
+  psycopg2 eats a lone one and the statement dies at deploy time.
 - A local PostToolUse hook auto-runs `ruff check --fix` and `ruff format`
   on edited Python files — do not fight it. It calls whatever `ruff` is on
   PATH, which is not necessarily the version in `uv.lock`; the CI job and

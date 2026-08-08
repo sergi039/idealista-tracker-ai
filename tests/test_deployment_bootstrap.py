@@ -1,6 +1,5 @@
-import subprocess
+import re
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
@@ -87,6 +86,76 @@ def _add_operator_drift(engine):
         connection.execute(text("CREATE TABLE operator_audit (id INTEGER)"))
 
 
+# Everything `db.metadata` gained after migration 012, as (index, columns).
+# The frozen fingerprint in migrations/runner.py describes the *pre-ledger*
+# schema, so once a migration adds a column, create_all() no longer produces
+# that schema and a test that wants it has to say so explicitly.
+_POST_BASELINE_SCHEMA = {
+    "search_profiles": (
+        "ux_search_profiles_source_search_key",
+        ("source_search_key", "source_search_url", "is_auto_created"),
+    ),
+}
+
+
+def _create_historical_schema(engine):
+    """Build the schema as it stood at migration 012.
+
+    The runner's fingerprint check is deliberately strict, so this must be the
+    real historical shape - anything left over from a later migration is drift
+    and would (correctly) make the runner refuse to baseline.
+    """
+    db.metadata.create_all(engine)
+    with engine.begin() as connection:
+        for table, (index, columns) in _POST_BASELINE_SCHEMA.items():
+            connection.execute(text(f"DROP INDEX IF EXISTS {index}"))
+            for column in columns:
+                connection.execute(
+                    text(f"ALTER TABLE {table} DROP COLUMN {column}")  # noqa: S608
+                )
+
+
+def _baseline_migrations_dir(tmp_path: Path) -> Path:
+    """A copy of the repository's migrations, truncated to the baseline set.
+
+    The repository's migration SQL is PostgreSQL-only (and multi-statement,
+    which pysqlite refuses outright), so these SQLite tests can only ever
+    cover migrations that are *never executed* - the 000-012 baseline, which
+    is recorded as metadata. Migration SQL after 012 is exercised for real
+    against PostgreSQL in tests/test_postgres_migrations.py.
+    """
+    from migrations.runner import BASELINE_IDENTIFIERS, MIGRATIONS_DIR
+
+    directory = tmp_path / "baseline-migrations"
+    directory.mkdir()
+    for identifier in BASELINE_IDENTIFIERS:
+        name = f"{identifier}.sql"
+        shutil.copy(MIGRATIONS_DIR / name, directory / name)
+    return directory
+
+
+def test_the_baseline_set_is_every_migration_the_sqlite_tests_can_cover():
+    """Pins why the tests below use a truncated migrations directory.
+
+    If a later migration is added to the baseline identifiers (it must not be
+    - the set is frozen history), or the copy helper silently misses a file,
+    these tests would quietly stop covering what they claim to.
+    """
+    from migrations.runner import (
+        BASELINE_IDENTIFIERS,
+        MIGRATIONS_DIR,
+        discover_migrations,
+    )
+
+    all_migrations = discover_migrations(MIGRATIONS_DIR)
+    baselined = [m for m in all_migrations if m.identifier in BASELINE_IDENTIFIERS]
+
+    assert [m.identifier for m in baselined] == list(BASELINE_IDENTIFIERS)
+    assert [m.identifier for m in all_migrations[: len(BASELINE_IDENTIFIERS)]] == list(
+        BASELINE_IDENTIFIERS
+    ), "the baseline must stay a prefix of migration history"
+
+
 def test_migration_runner_applies_each_file_once_and_reports_current(tmp_path):
     from migrations.runner import get_schema_status, run_migrations
 
@@ -145,17 +214,18 @@ def test_migration_runner_fails_on_changed_applied_migration(tmp_path):
         run_migrations(engine, migrations_dir=tmp_path)
 
 
-def test_populated_historical_schema_is_baselined_without_replay(tmp_path, monkeypatch):
+def test_populated_historical_schema_is_baselined_without_replay(tmp_path):
     from migrations.runner import (
         BASELINE_IDENTIFIERS,
         discover_migrations,
         run_migrations,
     )
 
+    migrations_dir = _baseline_migrations_dir(tmp_path)
     database_path = tmp_path / "historical.db"
     database_url = f"sqlite:///{database_path}"
     engine = create_engine(database_url)
-    db.metadata.create_all(engine)
+    _create_historical_schema(engine)
 
     with engine.begin() as connection:
         connection.execute(
@@ -202,7 +272,7 @@ def test_populated_historical_schema_is_baselined_without_replay(tmp_path, monke
 
     event.listen(engine, "before_cursor_execute", record_statement)
     try:
-        executed = run_migrations(engine)
+        executed = run_migrations(engine, migrations_dir=migrations_dir)
     finally:
         event.remove(engine, "before_cursor_execute", record_statement)
 
@@ -222,7 +292,9 @@ def test_populated_historical_schema_is_baselined_without_replay(tmp_path, monke
         )
 
     assert executed == []
-    migration_sql = {migration.sql.strip() for migration in discover_migrations()}
+    migration_sql = {
+        migration.sql.strip() for migration in discover_migrations(migrations_dir)
+    }
     assert migration_sql.isdisjoint(executed_statements)
     assert [f"{version}_{name}" for version, name in applied] == list(
         BASELINE_IDENTIFIERS
@@ -232,63 +304,24 @@ def test_populated_historical_schema_is_baselined_without_replay(tmp_path, monke
     assert "idx_lands_is_favorite" in {
         index["name"] for index in inspect(engine).get_indexes("lands")
     }
-
-    setup_test_environment()
-    monkeypatch.setenv("DATABASE_URL", database_url)
-    monkeypatch.setenv("AUTO_START_SCHEDULER", "false")
-    monkeypatch.setattr(
-        "services.scheduler_service.get_scheduler_status",
-        lambda: {"status": "running"},
-    )
-    app = create_app(testing=True)
-
-    response = app.test_client().get("/api/healthz")
-
-    assert response.status_code == 200
-    assert response.get_json()["ok"] is True
-
-    project_root = Path(__file__).parent.parent
-    entrypoint = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "from migrations.runner import main as migrate; "
-            "migrate(); import main; assert main.app",
-        ],
-        cwd=project_root,
-        env={
-            "DATABASE_URL": database_url,
-            "SECRET_KEY": "historical-entrypoint-secret",
-            "SESSION_SECRET": "historical-entrypoint-session-secret",
-            "AUTO_START_SCHEDULER": "false",
-        },
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    assert entrypoint.returncode == 0, entrypoint.stderr
     engine.dispose()
 
 
 def test_historical_baseline_runs_only_genuinely_new_migrations(tmp_path):
-    from migrations.runner import MIGRATIONS_DIR, run_migrations
+    from migrations.runner import run_migrations
 
     engine = create_engine(f"sqlite:///{tmp_path / 'future.db'}")
-    db.metadata.create_all(engine)
-    migrations_dir = tmp_path / "migrations"
-    migrations_dir.mkdir()
-    for migration_path in MIGRATIONS_DIR.glob("[0-9][0-9][0-9]_*.sql"):
-        shutil.copy(migration_path, migrations_dir / migration_path.name)
+    _create_historical_schema(engine)
+    migrations_dir = _baseline_migrations_dir(tmp_path)
     _write_migration(
         migrations_dir,
-        "013_create_future_marker.sql",
+        "999_create_future_marker.sql",
         "CREATE TABLE future_marker (id INTEGER PRIMARY KEY);",
     )
 
     executed = run_migrations(engine, migrations_dir=migrations_dir)
 
-    assert executed == ["013_create_future_marker"]
+    assert executed == ["999_create_future_marker"]
     assert inspect(engine).has_table("future_marker")
     engine.dispose()
 
@@ -297,7 +330,7 @@ def test_migration_runner_rejects_ambiguous_schema_without_partial_replay(tmp_pa
     from migrations.runner import MigrationError, run_migrations
 
     engine = create_engine(f"sqlite:///{tmp_path / 'ambiguous.db'}")
-    db.metadata.create_all(engine)
+    _create_historical_schema(engine)
     _add_operator_drift(engine)
 
     with pytest.raises(MigrationError) as exc_info:
@@ -356,7 +389,11 @@ def test_manual_baseline_records_drifted_schema_and_normal_start_is_current(
         (migration.version, migration.name, migration.checksum)
         for migration in baseline
     ]
-    assert run_migrations(engine) == []
+    # Same checksums as the repository files this directory was copied from,
+    # so the recorded baseline validates and nothing is pending.
+    assert (
+        run_migrations(engine, migrations_dir=_baseline_migrations_dir(tmp_path)) == []
+    )
     engine.dispose()
 
 
@@ -365,8 +402,10 @@ def test_manual_baseline_refuses_existing_ledger(tmp_path, monkeypatch):
 
     database_url = f"sqlite:///{tmp_path / 'existing-ledger.db'}"
     engine = create_engine(database_url)
-    db.metadata.create_all(engine)
-    assert run_migrations(engine) == []
+    _create_historical_schema(engine)
+    assert (
+        run_migrations(engine, migrations_dir=_baseline_migrations_dir(tmp_path)) == []
+    )
     monkeypatch.setenv("DATABASE_URL", database_url)
 
     with pytest.raises(MigrationError, match="schema_migrations already exists"):
@@ -413,4 +452,38 @@ def test_repository_migrations_are_uniquely_numbered():
     assert all(
         migration.path.name[0:3].isdigit() and migration.path.name[3] == "_"
         for migration in migrations
+    )
+
+
+def test_no_migration_contains_an_unescaped_percent_sign():
+    """psycopg2 eats a lone percent sign before PostgreSQL sees the statement.
+
+    The runner calls `exec_driver_sql`, which reaches psycopg2 with an empty
+    parameter mapping, so the driver runs its own interpolation pass over the
+    SQL. A migration containing `format('... %I ...')` or `LIKE 'x%'` never
+    executes: it dies with "immutabledict is not a sequence" *at deploy time*,
+    after the container has already replaced the running app. Doubling the
+    sign is the escape psycopg2 documents; this test is why nobody has to
+    rediscover that from a failed deploy (found while writing migration 013).
+    """
+    from migrations.runner import discover_migrations
+
+    lone_percent = re.compile(r"(?<!%)%(?!%)")
+    offenders = {
+        migration.identifier: sorted(
+            {
+                line_number
+                for line_number, line in enumerate(migration.sql.splitlines(), start=1)
+                if lone_percent.search(line)
+            }
+        )
+        for migration in discover_migrations(
+            Path(__file__).parent.parent / "migrations"
+        )
+        if lone_percent.search(migration.sql)
+    }
+
+    assert not offenders, (
+        "unescaped percent signs in migration SQL (double them, or use "
+        f"quote_ident/concatenation instead of format()): {offenders}"
     )

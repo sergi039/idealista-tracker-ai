@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import json
 
 from app import db
+from services.search_subscription_identity import SEARCH_KEY_LENGTH
 from sqlalchemy import CheckConstraint
 from sqlalchemy.types import JSON
 
@@ -21,13 +22,36 @@ class SearchProfile(db.Model):
         db.Index("ix_search_profiles_name", "name"),
         db.Index("ix_search_profiles_is_active", "is_active"),
         db.Index("ix_search_profiles_is_default", "is_default"),
+        db.Index(
+            "ux_search_profiles_source_search_key", "source_search_key", unique=True
+        ),
     )
 
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(120), unique=True, nullable=False)
+    # Deliberately NOT unique (migration 013 drops the constraint): two saved
+    # searches may carry the same human label with a different `shape`, and
+    # before #102 that was impossible to represent.
+    name = db.Column(db.String(120), nullable=False)
     description = db.Column(db.Text)
     is_active = db.Column(db.Boolean, default=True)
     is_default = db.Column(db.Boolean, default=False)
+
+    # Saved-search identity (#102). The key is the fingerprint of the search
+    # URL the alert email carries -- see services/search_subscription_identity
+    # -- and is what actually identifies a subscription; the name is a label.
+    # NULL until an email for this subscription arrives: nothing is
+    # backfilled, because no stored row records which search it came from.
+    source_search_key = db.Column(db.String(SEARCH_KEY_LENGTH))
+    # Diagnostics only: the last search URL seen for this profile. Never
+    # unique -- cosmetic variants of one link differ here but share the key.
+    source_search_url = db.Column(db.Text)
+    # Machine-readable "the ingester invented this label", so relabelling can
+    # never touch a profile the owner named. Existing rows stay False: the
+    # only evidence for them is a description string, which is exactly the
+    # signal #102 refuses to trust.
+    is_auto_created = db.Column(
+        db.Boolean, nullable=False, default=False, server_default=db.text("FALSE")
+    )
 
     # Email routing for ingestion: list of regex patterns (configurable).
     email_matchers = db.Column(JSON)  # [{"pattern": "...", "priority": 10}, ...]
