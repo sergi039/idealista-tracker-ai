@@ -42,8 +42,9 @@ tools/ci/install_hooks.sh    # git config core.hooksPath .githooks
 ```
 
 Bypass a single push with `SKIP_LOCAL_CI=1 git push`. The same snapshot
-runner (`tools/ci/run_gate_on_sha.sh`) is also autopilot's merge gate
-(issue #83) — GitHub check statuses are not consulted for merges.
+runner (`tools/ci/run_gate_on_sha.sh`) is autopilot's merge gate for
+**owner-authored PRs in this repository** (issue #83); forks and bot PRs
+are never run here and stay with GitHub Actions.
 
 **Working UI is `/lands`** (owner decision, 2026-08-07): the lands view —
 cards/list with Land Type, Sea View and to-beach filters — is what the app
@@ -134,6 +135,10 @@ and TODO.md; respect it if you ever run both side by side.
   gate → independent review → squash-merge, with a LaunchAgent that
   redeploys main and rolls back on a red `/api/healthz`. A PR merges only
   on a green local gate (`tools/ci/run_gate_on_sha.sh` on the PR head,
-  issue #83) *and* a reviewer PASS; `UNAVAILABLE` is not a pass. One
-  agent per issue — see tools/autopilot/README.md before pointing a
-  second one at an issue that already has a branch.
+  issue #83) *and* a reviewer PASS; `UNAVAILABLE` is not a pass. The
+  local gate runs the PR's own code on this Mac, so the bot only points
+  it at **owner-authored branches in this repository** — forks and bots
+  (Dependabot) are skipped, never executed, and left for manual review;
+  GitHub Actions stays as their sandbox. One agent per issue — see
+  tools/autopilot/README.md before pointing a second one at an issue
+  that already has a branch.

@@ -32,6 +32,8 @@ JOURNAL="${AUTOPILOT_REVIEW_JOURNAL:-${REPO_DIR}/data/autopilot-reviews.tsv}"
 # into a throwaway worktree and lets the snapshot's own tools/ci/local_ci.sh
 # judge it; the runner itself is taken from this checkout's current version.
 GATE_RUNNER="${AUTOPILOT_GATE_RUNNER:-${REPO_DIR}/tools/ci/run_gate_on_sha.sh}"
+# Decides whether a PR's code may be executed here at all (gate 0a).
+TRUST_CHECK="${AUTOPILOT_TRUST_CHECK:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/pr_is_owner_authored.sh}"
 
 DRY_RUN=0
 ONLY_PR=""
@@ -77,7 +79,33 @@ record_verdict() {
     printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$(date '+%Y-%m-%dT%H:%M:%S')" "$3" >>"$JOURNAL"
 }
 
-# --- gate 0: the head is current and complete ------------------------------
+# --- gate 0a: whose code is this? ------------------------------------------
+# The local gate runs the PR's own code on this machine, so it may only be
+# pointed at code the owner wrote. Everything else - forks, Dependabot, any
+# outside contributor on this public repository - is left for the owner to
+# handle by hand; the bot does not merge it and, crucially, never executes it.
+# See tools/autopilot/lib/pr_is_owner_authored.sh for the full reasoning.
+pr_is_owner_authored() {
+    local pr="$1" meta
+    if [ ! -x "$TRUST_CHECK" ]; then
+        log "  PR #${pr}: trust check ${TRUST_CHECK} is missing - refusing to run its code"
+        return 1
+    fi
+    meta="$(gh pr view "$pr" --repo "$REPO_SLUG" \
+        --json isCrossRepository,author,headRepositoryOwner 2>/dev/null || true)"
+    if [ -z "$meta" ]; then
+        log "  PR #${pr}: could not read authorship metadata - treating as untrusted"
+        return 1
+    fi
+    if ! printf '%s' "$meta" | "$TRUST_CHECK" 2>>"$LOG_FILE"; then
+        log "  PR #${pr}: not owner-authored in-repo work - the local gate will not run its"
+        log "            code on this machine; merge it by hand after reviewing it"
+        return 1
+    fi
+    return 0
+}
+
+# --- gate 0b: the head is current and complete -----------------------------
 # Fetches the PR head into refs/autopilot/pr-<n> and proves (a) it is still
 # the commit GitHub would merge, (b) it already contains the current base, so
 # base..head IS the merge result. The later gates reuse the fetched ref.
@@ -308,6 +336,7 @@ printf '%s' "$pr_query" | jq -c '.[]' | while read -r pr_json; do
         continue
     fi
 
+    pr_is_owner_authored "$number" || continue
     head_is_current "$number" "$head_sha" "$BASE_SHA" || continue
     local_ci_is_green "$number" "$head_sha" || continue
     review_is_pass "$number" "$head_sha" "$BASE_SHA" || continue

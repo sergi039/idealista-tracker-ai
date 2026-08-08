@@ -29,8 +29,36 @@ if [ "${SKIP_LOCAL_CI:-0}" = "1" ]; then
     exit 0
 fi
 
-repo_root="$(git rev-parse --show-toplevel)"
+repo_root="$(git rev-parse --show-toplevel)" || {
+    echo "pre-push: not inside a work tree, cannot run the local CI gate" >&2
+    exit 1
+}
 zero_sha="0000000000000000000000000000000000000000"
+
+# Drop the git environment before spawning anything (defect in the gate as
+# it shipped in PR #78).
+#
+# git runs hooks with GIT_DIR exported whenever the push originates from a
+# LINKED WORKTREE (not from the main clone) - and this repo is worked almost
+# entirely from `git worktree` checkouts. Every child we spawn - ruff, uv,
+# pytest, the gate script - inherits it, and any git command they run then
+# resolves *this* repository instead of the one they meant:
+#
+#   * `git init` in a test's throwaway repo re-initialises THIS repo, and
+#     because GIT_DIR is set with no work tree it does so as a BARE repo:
+#     `core.bare = true` lands in the shared .git/config and every worktree
+#     dies with "fatal: this operation must be run in a work tree".
+#     (extensions.worktreeConfig is on here, so the write is shared, not
+#     scoped to one worktree.)
+#   * `git ls-files` in the snapshot reads the main clone's index, so the
+#     no-source-bundles step would silently judge the wrong tree.
+#
+# Everything below therefore addresses the repo explicitly with -C, and the
+# checks run against a genuinely clean git environment. Regression coverage:
+# tests/test_local_ci_hook.py.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE \
+    GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+    GIT_NAMESPACE GIT_PREFIX GIT_QUARANTINE_PATH
 
 # git feeds "<local-ref> <local-sha> <remote-ref> <remote-sha>" lines on
 # stdin, one per ref being pushed (a single `git push` can carry several).
@@ -52,10 +80,27 @@ if [ -z "$(echo "$pushed_shas" | tr -d '[:space:]')" ]; then
     exit 0
 fi
 
-# The snapshot mechanics live in tools/ci/run_gate_on_sha.sh, shared with
-# merge_bot (issue #83). Resolve it relative to this hook file, not the
-# repository being pushed: the hook may gate a repository (or a test's toy
-# repository) whose commit predates the runner.
+# Canary for the corruption class handled above (issue #74, incident
+# 2026-08-08): no check the gate spawns may mutate this repository's shared
+# config. If it happens anyway, the epilogue after the loop restores this
+# snapshot and fails the push loudly, instead of leaving core.bare=true to
+# quietly kill every worktree of this clone.
+shared_config="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)/config"
+config_snapshot="$(mktemp "${TMPDIR:-/tmp}/local-ci-gate-config.XXXXXX")" || config_snapshot=""
+if [ -n "$config_snapshot" ] && ! cp "$shared_config" "$config_snapshot" 2>/dev/null; then
+    rm -f "$config_snapshot"
+    config_snapshot=""
+fi
+# A dead canary must not block the push (the env scrub above is the actual
+# fix), but it must not die silently either.
+if [ -z "$config_snapshot" ]; then
+    echo "pre-push: warning: could not snapshot ${shared_config}; the config-mutation canary is OFF for this run"
+fi
+
+# The snapshot mechanics live in tools/ci/run_gate_on_sha.sh so that this hook
+# and tools/autopilot/merge_bot.sh share one primitive (issue #83). Resolve it
+# relative to this hook file, not the repository being pushed: the hook may
+# gate a repository (or a test's toy repository) whose commit predates it.
 hook_dir="$(cd "$(dirname "$0")" && pwd)"
 runner="${hook_dir}/../tools/ci/run_gate_on_sha.sh"
 if [ ! -x "$runner" ]; then
@@ -70,6 +115,19 @@ for sha in $pushed_shas; do
     echo "pre-push: validating pushed commit $sha in a clean snapshot ..."
     "$runner" "$sha" || overall_rc=1
 done
+
+if [ -n "$config_snapshot" ]; then
+    if ! cmp -s "$config_snapshot" "$shared_config"; then
+        echo
+        echo "pre-push: FATAL: this gate run mutated ${shared_config}:"
+        diff "$config_snapshot" "$shared_config" | sed 's/^/    /'
+        cp "$config_snapshot" "$shared_config"
+        echo "pre-push: restored the pre-push copy. Some check is writing to the real"
+        echo "pre-push: repo config again - find and fix it before pushing (issue #74)."
+        overall_rc=1
+    fi
+    rm -f "$config_snapshot"
+fi
 
 if [ "$overall_rc" -ne 0 ]; then
     echo

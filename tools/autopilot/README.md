@@ -19,12 +19,36 @@ Nothing here bypasses a gate. A PR merges only with **a green local gate and a
 PASS from an independent reviewer**; a deploy survives only if `/api/healthz`
 answers `"ok":true` afterwards.
 
-What counts as green (issue #83, owner decision — CI runs locally, not on
-GitHub Actions): the PR head must already contain the current base, and
-`tools/ci/run_gate_on_sha.sh` — the same snapshot runner the pre-push hook
-uses — must exit 0 on that head: ruff check, ruff format, no-source-bundles,
-full pytest, all inside a throwaway worktree of exactly that commit. A gate
-that cannot run refuses the merge; it never reads as green.
+What counts as green (issue #83): the PR head must already contain the current
+base, and `tools/ci/run_gate_on_sha.sh` — the same snapshot runner the pre-push
+hook uses — must exit 0 on that head: ruff check, ruff format,
+no-source-bundles, full pytest, all inside a throwaway worktree of exactly that
+commit. A gate that cannot run refuses the merge; it never reads as green.
+
+### The bot only runs the owner's own code
+
+The local gate executes the pull request's *own* code — `local_ci.sh`,
+`conftest.py`, every test file — on this Mac, beside `.env`, the GitHub token
+and the SSH keys. This repository is public, so for anyone else's PR that is
+remote code execution, which is exactly what the first independent review of
+PR #90 returned as CRITICAL. Pinning commands would not have closed it:
+running the PR's pytest *is* running the PR's code.
+
+So `merge_bot.sh` asks whose code it is first
+(`lib/pr_is_owner_authored.sh`): the head branch must live in this repository
+(not a fork) **and** the author must be the owner login
+(`AUTOPILOT_TRUSTED_AUTHOR`, default `sergi039`). Anything else — forks,
+Dependabot, any outside contributor — is skipped: the bot neither merges nor
+executes it, and the owner handles it by hand. Unreadable metadata counts as
+untrusted.
+
+Both checks are needed. Dependabot pushes its branches *into* this repository,
+so the fork test alone would wave it through; and a fork PR can carry any head
+branch, so the author test alone would too. Regression coverage:
+`tests/test_autopilot_pr_trust.py`.
+
+`.github/workflows/ci.yml` therefore stays: GitHub Actions runs untrusted code
+in a disposable VM, which is the one thing this Mac cannot do.
 
 ## Scripts
 

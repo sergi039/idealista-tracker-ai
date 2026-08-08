@@ -7,7 +7,7 @@ from tests import setup_test_environment
 class _FakeIMAPClient:
     last_instance = None
 
-    def __init__(self, host, port=None, ssl=None):
+    def __init__(self, host, port=None, ssl=None, timeout=None):
         self.host = host
         self.port = port
         self.ssl = ssl
