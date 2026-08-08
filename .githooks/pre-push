@@ -9,11 +9,13 @@
 # disk without committing, testing the working tree would pass while the
 # pushed commit is still broken. Reviewed and hardened in PR #78.
 #
-# Strategy:
-#   - working tree clean  -> run the gate in place (fast path, no overhead)
-#   - working tree dirty  -> run the gate against a throwaway `git worktree`
-#     checked out at each distinct commit SHA actually being pushed, so the
-#     verdict reflects exactly what `git push` sends, not the dirty tree.
+# Strategy, for each distinct SHA being pushed:
+#   - clean working tree AND the SHA is the checked-out HEAD -> run the gate
+#     in place (fast path: the tree is byte-identical to what is pushed)
+#   - anything else (dirty tree, or pushing a ref other than HEAD, e.g.
+#     `git push origin feature` while another branch is checked out) -> run
+#     the gate in a throwaway `git worktree` checked out at that exact SHA,
+#     so the verdict reflects exactly what `git push` sends.
 #
 # Bypass for one push:      SKIP_LOCAL_CI=1 git push
 # Bypass for the autopilot: run_issue.sh sets AUTOPILOT_LOCAL_CI_DONE=1 after
@@ -88,17 +90,22 @@ run_gate_on_commit() {
 }
 
 overall_rc=0
+head_sha="$(git rev-parse HEAD)"
+tree_clean=0
+[ -z "$(git status --porcelain)" ] && tree_clean=1
 
-if [ -z "$(git status --porcelain)" ]; then
-    "${repo_root}/tools/ci/local_ci.sh" || overall_rc=1
-else
-    echo "pre-push: working tree has uncommitted changes - validating the pushed commit(s) in a clean snapshot instead."
-    for sha in $pushed_shas; do
+for sha in $pushed_shas; do
+    if [ "$tree_clean" -eq 1 ] && [ "$sha" = "$head_sha" ]; then
+        # The working tree IS this commit - validate in place.
+        "${repo_root}/tools/ci/local_ci.sh" || overall_rc=1
+    else
+        # The pushed SHA is not what is checked out (another branch, or a
+        # dirty tree) - validate a clean snapshot of exactly that commit.
         echo
-        echo "pre-push: checking pushed commit $sha ..."
+        echo "pre-push: validating pushed commit $sha in a clean snapshot ..."
         run_gate_on_commit "$sha" || overall_rc=1
-    done
-fi
+    fi
+done
 
 if [ "$overall_rc" -ne 0 ]; then
     echo
