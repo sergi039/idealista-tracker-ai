@@ -63,12 +63,24 @@ required_checks() {
 # GitHub refuse a behind-branch atomically. That deletion is only sound while
 # `strict` is actually on - switch it off and the guarantee vanishes with no
 # sign in the log. Verify it, and refuse to merge rather than merge blind.
+#
+# `strict` alone is not enough, and this is the subtle part. It describes the
+# rule; `enforce_admins` decides whether the rule binds the identity doing the
+# merge. The bot authenticates as the repository owner, an administrator. With
+# enforce_admins off, protection would still report strict=true while GitHub
+# waved the merge through - and `--match-head-commit` pins only the head, so a
+# base that moved from B to B2 after the review passed for B..H would take H
+# anyway. That is exactly the race the removed base recheck used to cover.
 strict_protection_is_on() {
     # Only reachable with the override set under --dry-run; a real run exits
     # before this point rather than accepting the substitute.
     [ -n "$REQUIRED_CHECKS_OVERRIDE" ] && return 0
+
     [ "$(gh api "repos/${REPO_SLUG}/branches/${BASE_BRANCH}/protection/required_status_checks" \
-        --jq '.strict' 2>/dev/null)" = "true" ]
+        --jq '.strict' 2>/dev/null)" = "true" ] || return 1
+
+    [ "$(gh api "repos/${REPO_SLUG}/branches/${BASE_BRANCH}/protection/enforce_admins" \
+        --jq '.enabled' 2>/dev/null)" = "true" ]
 }
 
 DRY_RUN=0
@@ -330,9 +342,12 @@ warn_about_unreported_checks
 # is behind; without `strict` that assumption is silently false and the bot
 # would merge a diff nobody reviewed.
 if ! strict_protection_is_on; then
-    log "FATAL: ${BASE_BRANCH} protection does not have strict (require branches up to date)."
-    log "       The bot relies on it instead of re-checking the base itself. Enable it with:"
+    log "FATAL: ${BASE_BRANCH} protection does not both require branches to be up to"
+    log "       date and apply that to administrators. The bot merges as the owner,"
+    log "       so either one missing means GitHub would accept a merge onto a base"
+    log "       that moved after the review - which is what this check replaces."
     log "       gh api -X PATCH repos/${REPO_SLUG}/branches/${BASE_BRANCH}/protection/required_status_checks -f strict=true"
+    log "       gh api -X POST repos/${REPO_SLUG}/branches/${BASE_BRANCH}/protection/enforce_admins"
     exit 1
 fi
 
