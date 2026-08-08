@@ -242,7 +242,7 @@ class _FakeIMAPClient:
 
     payloads: dict[int, bytes] = {}
 
-    def __init__(self, host, port=None, ssl=None):
+    def __init__(self, host, port=None, ssl=None, timeout=None):
         pass
 
     def __enter__(self):
