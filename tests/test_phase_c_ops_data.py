@@ -367,7 +367,15 @@ class TestConfigValidation:
 class TestHealthzEndpoint:
     """Enhanced /healthz must report dependency status."""
 
-    def test_healthz_returns_checks(self, client):
+    def test_healthz_returns_checks(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "services.health_service.get_schema_status",
+            lambda _engine, _metadata: {"status": "ok"},
+        )
+        monkeypatch.setattr(
+            "services.scheduler_service.get_scheduler_status",
+            lambda: {"status": "running"},
+        )
         resp = client.get("/api/healthz")
         assert resp.status_code == 200
         data = resp.get_json()

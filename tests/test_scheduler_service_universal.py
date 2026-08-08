@@ -213,12 +213,11 @@ class TestJobsGetAnAppContext:
     def test_init_scheduler_binds_the_app_before_jobs_can_fire(self, app, monkeypatch):
         """The binding is what makes the context available at job time."""
         import services.scheduler_service as scheduler_service
-        from config import Config
 
         monkeypatch.setattr(scheduler_service, "scheduler", None)
         monkeypatch.setattr(scheduler_service, "flask_app", None)
-        monkeypatch.setattr(Config, "AUTO_START_SCHEDULER", True, raising=False)
         app.config["TESTING"] = False
+        app.config["AUTO_START_SCHEDULER"] = True
 
         started = scheduler_service.init_scheduler(app)
         try:

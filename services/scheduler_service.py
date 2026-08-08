@@ -46,7 +46,7 @@ def init_scheduler(app):
         logger.info("Scheduler disabled in TESTING")
         return None
 
-    if not getattr(Config, "AUTO_START_SCHEDULER", False):
+    if not app.config.get("AUTO_START_SCHEDULER", False):
         logger.info("Scheduler disabled by config")
         return None
 
@@ -166,7 +166,7 @@ def init_scheduler(app):
         logger.error("Failed to initialize scheduler", exc_info=True)
         # Release lock so other instances can try
         cleanup()
-        return None
+        raise
 
 
 def run_scheduled_ingestion():

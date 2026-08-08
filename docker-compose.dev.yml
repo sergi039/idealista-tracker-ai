@@ -2,10 +2,10 @@ services:
   app:
     environment:
       - DEV_MODE=true
-      - AUTO_CREATE_DB=true
       - AUTO_START_SCHEDULER=true
     command: >
-      gunicorn --bind 0.0.0.0:5001 --workers 1 --threads 4 --reload main:app
+      sh -c "python -m migrations.runner &&
+      exec gunicorn --bind 0.0.0.0:5001 --workers 1 --threads 4 --reload main:app"
     volumes:
       - .:/app
 

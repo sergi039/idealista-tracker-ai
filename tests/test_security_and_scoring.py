@@ -227,9 +227,11 @@ class TestNoLoginGate:
         assert property_data["is_favorite"] is True
 
     def test_health_check_accessible(self, non_testing_client):
-        """The health check must stay public (used by Docker/monitoring)."""
+        """The health check stays public while honestly reporting not-ready."""
         resp = non_testing_client.get("/api/healthz")
-        assert resp.status_code == 200
+        assert resp.status_code == 503
+        assert resp.get_json()["ok"] is False
+        assert "checks" in resp.get_json()
 
 
 class TestPropertyDataReadableWithoutLogin:

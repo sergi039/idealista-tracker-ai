@@ -261,8 +261,8 @@ def test_init_rebinds_jobs_to_the_intended_app_and_database(app, monkeypatch, tm
     monkeypatch.setattr(scheduler_service.atexit, "register", lambda callback: None)
     monkeypatch.setattr(scheduler_service.fcntl, "flock", lambda *args: None)
     monkeypatch.setattr(scheduler_service.tempfile, "gettempdir", lambda: str(tmp_path))
-    monkeypatch.setattr(Config, "AUTO_START_SCHEDULER", True, raising=False)
     app.config["TESTING"] = False
+    app.config["AUTO_START_SCHEDULER"] = True
 
     observed_apps = []
 
