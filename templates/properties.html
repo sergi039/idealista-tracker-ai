@@ -112,7 +112,7 @@
             <i class="fas fa-sync-alt me-1"></i>{{ t('manual_sync') }}
         </button>
         <a class="btn btn-outline-secondary btn-sm"
-           href="{{ url_for('main.map_view', profile_id=current_filters.profile_id) if current_filters.profile_id is not none else url_for('main.map_view') }}"
+           href="{{ url_for('main.map_view', profile_id=current_filters.profile_id) }}"
            title="View properties on map">
             <i class="fas fa-map me-1"></i>Map
         </a>
@@ -145,20 +145,59 @@
     </div>
 </div>
 
+{# Travel targets are configured per profile and custom target ids belong to
+   one profile only, so a union of several would label a column with a
+   destination the row was never measured against. Say so instead of guessing
+   (issue #104). #}
+{% if profiles and profile_selection.spans_several_profiles %}
+    <div class="alert alert-light border py-2 px-3 small text-body-secondary mb-3" id="profile-travel-notice">
+        <i class="fas fa-circle-info me-1"></i>Select one profile to view or recalculate profile-specific travel data
+    </div>
+{% endif %}
+
 <div class="card shadow-sm mb-3">
     <div class="card-body">
         <form method="GET" class="row g-2 align-items-end">
             {# Scoring mode and cards/list are view state, not filters: keep them across an Apply. #}
             <input type="hidden" name="mode" value="{{ current_filters.mode or 'combined' }}">
             <input type="hidden" name="view_type" value="{{ view_type }}">
+            {# One control, same width as before (issue #104): the dropdown
+               replaces the single-select in place rather than adding a second
+               field to the bar. #}
             <div class="col-12 col-md-3">
-                <label class="form-label small mb-1">Search Profile</label>
-                <select name="profile_id" class="form-select form-select-sm">
-                    <option value="" {% if selected_profile_id is none %}selected{% endif %}>All profiles</option>
-                    {% for p in profiles %}
-                        <option value="{{ p.id }}" {% if selected_profile_id == p.id %}selected{% endif %}>{{ p.name }}</option>
-                    {% endfor %}
-                </select>
+                <label class="form-label small mb-1" for="profile-select-dropdown">Search Profile</label>
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle w-100 text-start d-flex justify-content-between align-items-center"
+                            type="button"
+                            id="profile-select-dropdown"
+                            data-bs-toggle="dropdown"
+                            data-bs-auto-close="outside"
+                            aria-expanded="false">{{ profile_selection.label }}</button>
+                    <div class="dropdown-menu p-2" id="profile-select-menu"
+                         style="min-width: 100%; max-height: 20rem; overflow-y: auto;">
+                        {# Nothing ticked means "all profiles" -- but a form with
+                           nothing ticked submits no profile_id at all, which is
+                           indistinguishable from an old bookmark. This keeps the
+                           choice explicit; ticked boxes win over it, so the
+                           dropdown still narrows with JavaScript switched off. #}
+                        <input type="hidden" name="profile_id" value="all">
+                        <button type="button" class="btn btn-link btn-sm p-0 mb-2 text-decoration-none"
+                                id="profile-select-clear">Show all profiles</button>
+                        {% for p in profiles %}
+                            <div class="form-check">
+                                <input class="form-check-input profile-select-option"
+                                       type="checkbox"
+                                       name="profile_id"
+                                       value="{{ p.id }}"
+                                       id="profile-option-{{ p.id }}"
+                                       {% if p.id in profile_selection.checked_ids %}checked{% endif %}>
+                                <label class="form-check-label small" for="profile-option-{{ p.id }}">{{ p.name }}</label>
+                            </div>
+                        {% else %}
+                            <div class="small text-body-secondary">No active profiles yet.</div>
+                        {% endfor %}
+                    </div>
+                </div>
             </div>
             <div class="col-12 col-md-3">
                 <label class="form-label small mb-1">Category</label>
@@ -664,4 +703,45 @@
     </div>
 </div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Subscription dropdown (issue #104). Progressive enhancement only: the
+    // server reads the ticked checkboxes on its own, so with JavaScript off
+    // the dropdown still filters -- it just keeps the redundant
+    // `profile_id=all` fallback in the URL and shows a stale button label.
+    (function () {
+        const toggle = document.getElementById('profile-select-dropdown');
+        const menu = document.getElementById('profile-select-menu');
+        if (!toggle || !menu) {
+            return;
+        }
+        const fallback = menu.querySelector('input[type="hidden"][name="profile_id"]');
+        const options = Array.from(menu.querySelectorAll('input.profile-select-option'));
+
+        function refresh() {
+            const checked = options.filter(option => option.checked);
+            toggle.textContent = checked.length ? checked.length + ' selected' : 'All profiles';
+            if (fallback) {
+                // A disabled input is not submitted, so the explicit "all"
+                // only travels when nothing is ticked -- which is exactly
+                // when it is needed.
+                fallback.disabled = checked.length > 0;
+            }
+        }
+
+        options.forEach(option => option.addEventListener('change', refresh));
+
+        const clear = document.getElementById('profile-select-clear');
+        if (clear) {
+            clear.addEventListener('click', function () {
+                options.forEach(option => { option.checked = false; });
+                refresh();
+            });
+        }
+
+        refresh();
+    })();
+</script>
 {% endblock %}
