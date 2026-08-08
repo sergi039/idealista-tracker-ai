@@ -14,7 +14,7 @@ four SearchProfile rows.
 """
 
 import re
-from email.header import decode_header
+from email.header import decode_header, make_header
 
 # A line break that is followed by continuation whitespace: the break goes,
 # the whitespace stays, because it is part of the value.
@@ -44,12 +44,20 @@ def decode_header_value(value) -> str:
 
     unfolded = unfold_header(value)
     try:
-        parts = []
-        for part, encoding in decode_header(unfolded):
-            if isinstance(part, bytes):
-                parts.append(part.decode(encoding or "utf-8", errors="ignore"))
-            else:
-                parts.append(part)
-        return " ".join(parts)
+        # make_header() joins the decoded chunks the way RFC 2047 requires:
+        # whitespace *between* two encoded-words is a separator that has to be
+        # dropped, while whitespace inside an unencoded run is real text. A
+        # plain " ".join() over decode_header() gets this wrong and turns
+        # "=?utf-8?Q?John?= =?latin-1?Q?Doe?= <a@b>" into "John Doe  <a@b>".
+        return str(make_header(decode_header(unfolded)))
     except Exception:
-        return unfolded
+        try:
+            parts = []
+            for part, encoding in decode_header(unfolded):
+                if isinstance(part, bytes):
+                    parts.append(part.decode(encoding or "utf-8", errors="ignore"))
+                else:
+                    parts.append(part)
+            return "".join(parts)
+        except Exception:
+            return unfolded

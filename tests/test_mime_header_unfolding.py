@@ -31,6 +31,7 @@ from models import Property, SearchProfile
 from services.imap_service import IMAPService
 from services.property_imap_service import PropertyIMAPService
 from tests import setup_test_environment
+from utils.email_headers import decode_header_value
 
 # The real subject, folded exactly the way the mail server folded it.
 FOLDED_SUBJECT = (
@@ -104,6 +105,18 @@ def test_decode_header_value_unfolds_a_folded_subject(service_cls):
 
     assert "\r" not in decoded and "\n" not in decoded
     assert decoded == UNFOLDED_SUBJECT
+
+
+def test_adjacent_encoded_words_are_joined_without_an_invented_space():
+    """RFC 2047: whitespace *between* two encoded-words is a separator.
+
+    It has to be dropped, unlike whitespace inside an unencoded run. Both IMAP
+    services now decode `From` as well, so a display name split across two
+    charsets must not gain a space it never had.
+    """
+    header = "=?utf-8?Q?John?= =?iso-8859-1?Q?Doe?= <john@example.com>"
+
+    assert decode_header_value(header) == "JohnDoe <john@example.com>"
 
 
 def test_folded_subject_does_not_fragment_the_saved_search_profile(app, monkeypatch):
