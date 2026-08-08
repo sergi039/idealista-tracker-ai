@@ -274,10 +274,27 @@ if ! git fetch --quiet origin "$BASE_BRANCH"; then
 fi
 BASE_SHA="$(git rev-parse "origin/${BASE_BRANCH}")"
 log "merge base: ${BASE_SHA:0:7}"
+warn_about_unreported_checks
 
 # Fail closed. Everything below assumes GitHub will reject a merge whose branch
 # is behind; without `strict` that assumption is silently false and the bot
 # would merge a diff nobody reviewed.
+# A required context is matched by name. Rename a job in ci.yml and the old
+# name stays required and never reports — GitHub blocks every merge on a check
+# that will be pending forever, and nothing says why. Cheap to catch here, on
+# the way past, rather than from a PR that mysteriously will not merge.
+warn_about_unreported_checks() {
+    local workflow="${REPO_DIR}/.github/workflows/ci.yml" required
+    [ -f "$workflow" ] || return 0
+    while IFS= read -r required; do
+        [ -n "$required" ] || continue
+        grep -qF "name: ${required}" "$workflow" && continue
+        log "WARNING: required check '${required}' is not a job name in ci.yml."
+        log "         If nothing else reports it, every PR will sit on a check that"
+        log "         never arrives. Fix the name in protection or in the workflow."
+    done <<<"$(required_checks)"
+}
+
 if ! strict_protection_is_on; then
     log "FATAL: ${BASE_BRANCH} protection does not have strict (require branches up to date)."
     log "       The bot relies on it instead of re-checking the base itself. Enable it with:"
