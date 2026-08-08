@@ -15,18 +15,6 @@
     </div>
 </div>
 
-{% if not is_admin %}
-<div class="alert alert-warning">
-    <div class="d-flex flex-wrap align-items-center gap-2">
-        <div class="flex-grow-1">
-            Admin authentication is required to save changes.
-        </div>
-        <a class="btn btn-outline-dark btn-sm" href="{{ url_for('main.login', next=request.path) }}">
-            <i class="fas fa-sign-in-alt me-1"></i>Log in
-        </a>
-    </div>
-</div>
-{% endif %}
 
 <div class="card shadow-sm mb-3">
     <div class="card-body">
@@ -66,10 +54,7 @@
             </div>
 
             <div class="col-12 mt-1">
-                <button class="btn btn-primary btn-sm" type="submit" {% if not is_admin %}disabled{% endif %}>Save ingestion settings</button>
-                {% if not is_admin %}
-                    <span class="text-body-secondary small ms-2">Admin authentication required to save.</span>
-                {% endif %}
+                <button class="btn btn-primary btn-sm" type="submit">Save ingestion settings</button>
             </div>
         </form>
     </div>
@@ -118,15 +103,10 @@
                 <button type="button" class="btn btn-outline-secondary btn-sm" id="add-reference-city">
                     <i class="fas fa-plus me-1"></i>Add City
                 </button>
-                <button class="btn btn-primary btn-sm" type="submit" {% if not is_admin %}disabled{% endif %}>
+                <button class="btn btn-primary btn-sm" type="submit">
                     <i class="fas fa-save me-1"></i>Save reference cities
                 </button>
             </div>
-            {% if not is_admin %}
-                <div class="col-12">
-                    <span class="text-body-secondary small">Admin authentication required to save.</span>
-                </div>
-            {% endif %}
         </form>
     </div>
 </div>
@@ -150,13 +130,9 @@
                 hx-vals='{"sync_type":"full"}'
                 hx-trigger="click"
                 hx-indicator="#ingestion-spinner"
-                hx-swap="none"
-                {% if not is_admin %}disabled{% endif %}>
+                hx-swap="none">
             <i class="fas fa-sync-alt me-1"></i>Full Sync (reprocess all emails)
         </button>
-        {% if not is_admin %}
-            <span class="text-body-secondary small ms-2">Admin authentication required.</span>
-        {% endif %}
 
         <div class="form-text mt-2">
             Full sync resets the last-seen UID to 0 and scans the entire Gmail label configured via <code>IMAP_FOLDER</code>.
@@ -237,7 +213,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
             </div>
             <div class="col-12 d-flex gap-2 align-items-center">
-                <button class="btn btn-primary btn-sm" type="submit" {% if not is_admin %}disabled{% endif %}>Save AI context</button>
+                <button class="btn btn-primary btn-sm" type="submit">Save AI context</button>
                 <details class="ms-2">
                     <summary class="small text-body-secondary">Show built-in default</summary>
                     <pre class="small mb-0 mt-2" style="white-space: pre-wrap;">{{ default_ai_market_context or '' }}</pre>
@@ -267,7 +243,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
             </div>
             <div class="col-12 d-flex gap-2 align-items-center">
-                <button class="btn btn-primary btn-sm" type="submit" {% if not is_admin %}disabled{% endif %}>Save rules</button>
+                <button class="btn btn-primary btn-sm" type="submit">Save rules</button>
                 <span class="text-body-secondary small">To reset: clear JSON and save.</span>
             </div>
         </form>

@@ -41,29 +41,26 @@ def client(app):
 
 
 @pytest.fixture
-def isolated_app():
-    """Like `app`, but points SQLALCHEMY_DATABASE_URI at a real in-memory
-    database *before* create_app()/db.init_app() bind the engine.
+def non_testing_app():
+    """App fixture with TESTING=False, i.e. the app as it actually runs.
 
-    The `app` fixture above sets `app.config['SQLALCHEMY_DATABASE_URI']`
-    *after* create_app() returns, which is too late: db.init_app() already
-    bound the engine to DATABASE_URL from the environment, which
-    tests/__init__.py points at a real file (sqlite:///test.db) shared by
-    every test module's `app` fixture across the whole suite. Late in a full
-    `pytest tests/` run, that file accumulates enough concurrently-open
-    connections from other modules' never-disposed engines that a handful of
-    admin-authenticated page renders in this file (land detail, map, CSV
-    export — heavier than the rest of the suite's API-only tests) can hit a
-    genuine 'database is locked' on this fixture's own db.drop_all().
-    Overriding DATABASE_URL before create_app() gives these tests a private,
-    uncontended in-memory database instead.
-    """
+    The admin login was removed on 2026-08-08 (owner decision: the app is a
+    single-owner tool bound to 127.0.0.1), so this fixture no longer differs
+    from `app` in access terms -- it exists to exercise the non-TESTING code
+    path, where the old auth gate used to live.
+
+    DATABASE_URL is overridden *before* create_app(), unlike the `app` fixture
+    above which sets SQLALCHEMY_DATABASE_URI after db.init_app() already bound
+    the engine to the suite-wide sqlite file. Tests here render heavy pages
+    (land detail, map, CSV export) instead of bouncing off a 401, and that
+    shared file is contended enough late in a run to fail drop_all() with
+    'database is locked'. A private in-memory DB avoids it."""
     setup_test_environment()
     orig_db_url = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = "sqlite:///:memory:"
     try:
         app = create_app()
-        app.config["TESTING"] = True
+        app.config["TESTING"] = False
         app.config["WTF_CSRF_ENABLED"] = False
         with app.app_context():
             db.create_all()
@@ -77,66 +74,8 @@ def isolated_app():
 
 
 @pytest.fixture
-def disposed_client(isolated_app):
-    return isolated_app.test_client()
-
-
-@pytest.fixture
-def isolated_test_land(isolated_app):
-    """Create a land in the isolated_app's private in-memory DB."""
-    with isolated_app.app_context():
-        land = Land(
-            source_email_id="isolated_test_1",
-            title="Isolated Test Land",
-            municipality="Valencia",
-            land_type="developed",
-            price=Decimal("150000.00"),
-            area=Decimal("1500.00"),
-        )
-        db.session.add(land)
-        db.session.commit()
-        return land.id
-
-
-@pytest.fixture
-def isolated_test_property(isolated_app):
-    """Create a property in the isolated_app's private in-memory DB."""
-    with isolated_app.app_context():
-        prop = Property(
-            source_email_id="isolated_test_prop_1",
-            title="Isolated Test Property",
-            municipality="Barcelona",
-            property_category="housing",
-            property_subtype="apartment",
-            price=Decimal("250000.00"),
-            area=Decimal("90.00"),
-        )
-        db.session.add(prop)
-        db.session.commit()
-        return prop.id
-
-
-@pytest.fixture
-def auth_disabled_app():
-    """App fixture with TESTING=False so auth checks are enforced.
-    ADMIN_API_TOKEN is NOT set so all requests are denied (fail-closed)."""
-    setup_test_environment()
-    orig_token = os.environ.pop("ADMIN_API_TOKEN", None)
-    app = create_app()
-    app.config["TESTING"] = False
-    app.config["WTF_CSRF_ENABLED"] = False
-    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
-    with app.app_context():
-        db.create_all()
-        yield app
-        db.drop_all()
-    if orig_token is not None:
-        os.environ["ADMIN_API_TOKEN"] = orig_token
-
-
-@pytest.fixture
-def auth_disabled_client(auth_disabled_app):
-    return auth_disabled_app.test_client()
+def non_testing_client(non_testing_app):
+    return non_testing_app.test_client()
 
 
 @pytest.fixture
@@ -214,9 +153,9 @@ def test_property(app):
 
 
 @pytest.fixture
-def auth_disabled_test_land(auth_disabled_app):
-    """Create a land in the auth-disabled app context."""
-    with auth_disabled_app.app_context():
+def non_testing_test_land(non_testing_app):
+    """Create a land in the non-TESTING app context."""
+    with non_testing_app.app_context():
         land = Land(
             source_email_id="auth_test_1",
             title="Auth Test Land",
@@ -231,9 +170,9 @@ def auth_disabled_test_land(auth_disabled_app):
 
 
 @pytest.fixture
-def auth_disabled_test_property(auth_disabled_app):
-    """Create a property in the auth-disabled app context."""
-    with auth_disabled_app.app_context():
+def non_testing_test_property(non_testing_app):
+    """Create a property in the non-TESTING app context."""
+    with non_testing_app.app_context():
         prop = Property(
             source_email_id="auth_prop_test_1",
             title="Auth Test Property",
@@ -249,158 +188,118 @@ def auth_disabled_test_property(auth_disabled_app):
 
 
 # ---------------------------------------------------------------------------
-# Security: unauthorized POST → 401
+# Access: no login gate (owner decision, 2026-08-08)
 # ---------------------------------------------------------------------------
-class TestUnauthorizedAccess:
-    """Admin-only endpoints must return 401 for anonymous requests."""
+class TestNoLoginGate:
+    """The admin login was removed: this is a single-owner tool published only
+    on 127.0.0.1 (see docker-compose.yml), and the owner wanted direct access.
+    These tests pin that decision so the gate does not silently come back --
+    and so anyone reintroducing it does it deliberately, not by accident.
 
-    PROTECTED_POST_ENDPOINTS = [
-        "/api/ingest/email/run",
-        "/api/lands/enrich-all",
-    ]
+    The paired risk is recorded in README: with no token gate, the JSON API is
+    reachable by anything that can talk to localhost, and api_bp is CSRF-exempt."""
 
-    def test_anonymous_post_returns_401(
-        self, auth_disabled_client, auth_disabled_test_land
-    ):
-        """All protected Land POST endpoints must reject anonymous requests."""
-        lid = auth_disabled_test_land
-        endpoints = self.PROTECTED_POST_ENDPOINTS + [
-            f"/api/land/{lid}/enrich",
-            f"/api/analyze/property/{lid}/structured",
-            f"/api/analysis/generate/{lid}/openai",
-            f"/api/enhance/description/{lid}",
-            f"/api/land/{lid}/environment",
-            f"/api/analyze/property/{lid}",
-            f"/api/land/{lid}/set-status",
-            f"/api/land/{lid}/check-status",
-        ]
-
-        for endpoint in endpoints:
-            resp = auth_disabled_client.post(endpoint)
-            assert resp.status_code == 401, (
-                f"{endpoint} returned {resp.status_code}, expected 401"
-            )
-            data = json.loads(resp.data)
-            assert data["success"] is False
-
-    def test_anonymous_property_post_returns_401(
-        self, auth_disabled_client, auth_disabled_test_property
-    ):
-        """All protected Property POST endpoints must reject anonymous requests."""
-        pid = auth_disabled_test_property
-        property_endpoints = [
-            f"/api/property/{pid}/enrich",
-            f"/api/property/{pid}/set-status",
-            f"/api/property/{pid}/analyze/structured",
-            f"/api/property/{pid}/environment",
-        ]
-
-        for endpoint in property_endpoints:
-            resp = auth_disabled_client.post(endpoint)
-            assert resp.status_code == 401, (
-                f"{endpoint} returned {resp.status_code}, expected 401"
+    def test_login_route_is_gone(self, non_testing_client):
+        """/login and /logout must not exist as routes any more."""
+        for path in ("/login", "/logout"):
+            resp = non_testing_client.get(path)
+            assert resp.status_code == 404, (
+                f"{path} returned {resp.status_code}, expected 404 (route removed)"
             )
 
-    def test_anonymous_favorite_toggle_is_allowed(
-        self, auth_disabled_client, auth_disabled_test_land, auth_disabled_test_property
+    def test_favorite_toggle_is_allowed(
+        self, non_testing_client, non_testing_test_land, non_testing_test_property
     ):
-        """Favorites are user-facing actions and should work without admin auth."""
-        lid = auth_disabled_test_land
-        pid = auth_disabled_test_property
+        """Favorites are user-facing actions and must keep working."""
+        lid = non_testing_test_land
+        pid = non_testing_test_property
 
-        land_resp = auth_disabled_client.post(f"/api/land/{lid}/favorite")
+        land_resp = non_testing_client.post(f"/api/land/{lid}/favorite")
         assert land_resp.status_code == 200
         land_data = json.loads(land_resp.data)
         assert land_data["success"] is True
         assert land_data["is_favorite"] is True
 
-        property_resp = auth_disabled_client.post(f"/api/property/{pid}/favorite")
+        property_resp = non_testing_client.post(f"/api/property/{pid}/favorite")
         assert property_resp.status_code == 200
         property_data = json.loads(property_resp.data)
         assert property_data["success"] is True
         assert property_data["is_favorite"] is True
 
-    def test_anonymous_put_returns_401(self, auth_disabled_client):
-        """PUT /api/criteria must reject anonymous requests."""
-        resp = auth_disabled_client.put(
-            "/api/criteria",
-            data=json.dumps({"criteria": {"test": 0.5}}),
-            content_type="application/json",
-        )
-        assert resp.status_code == 401
-
-    def test_health_check_accessible_without_auth(self, auth_disabled_client):
+    def test_health_check_accessible(self, non_testing_client):
         """The health check must stay public (used by Docker/monitoring)."""
-        resp = auth_disabled_client.get("/api/healthz")
+        resp = non_testing_client.get("/api/healthz")
         assert resp.status_code == 200
 
 
-class TestPropertyDataRequiresAuth:
-    """Issue #30: the entire property database must not be readable or
-    bulk-exportable without authentication. Every endpoint that returns
-    listing data must reject anonymous requests."""
+class TestPropertyDataReadableWithoutLogin:
+    """Counterpart of the removed issue-#30 gate: these endpoints used to
+    answer 401 (or redirect to /login) without a token. After the owner
+    removed the login on 2026-08-08 they must serve data directly, with no
+    redirect to a login page that no longer exists."""
 
-    PROTECTED_API_GET_ENDPOINTS = [
+    OPEN_API_GET_ENDPOINTS = [
         "/api/lands",
         "/api/stats",
     ]
 
-    def test_anonymous_get_returns_401_on_api_endpoints(self, auth_disabled_client):
-        """Anonymous GET to data-dumping JSON API endpoints must return 401."""
-        for endpoint in self.PROTECTED_API_GET_ENDPOINTS:
-            resp = auth_disabled_client.get(endpoint)
-            assert resp.status_code == 401, (
-                f"{endpoint} returned {resp.status_code}, expected 401"
+    def test_api_endpoints_serve_data(self, non_testing_client):
+        """The JSON list/stats endpoints answer without any credential."""
+        for endpoint in self.OPEN_API_GET_ENDPOINTS:
+            resp = non_testing_client.get(endpoint)
+            assert resp.status_code == 200, (
+                f"{endpoint} returned {resp.status_code}, expected 200"
             )
             data = json.loads(resp.data)
-            assert data["success"] is False
+            assert data["success"] is True
 
-    def test_anonymous_get_returns_401_on_land_scoped_endpoints(
-        self, auth_disabled_client, auth_disabled_test_land
+    def test_land_scoped_endpoints_serve_data(
+        self, non_testing_client, non_testing_test_land
     ):
-        """Anonymous GET to per-land data endpoints must return 401."""
-        lid = auth_disabled_test_land
+        """Per-land data endpoints answer without any credential."""
+        lid = non_testing_test_land
         endpoints = [
             f"/api/lands/{lid}",
             f"/api/land/{lid}/history",
             f"/api/analysis/compare/{lid}",
-            f"/api/description/variants/{lid}",
         ]
+        # /api/description/variants/<id> is left out on purpose: it builds
+        # DescriptionService and needs a configured AI key, which is unrelated
+        # to the access question under test here.
         for endpoint in endpoints:
-            resp = auth_disabled_client.get(endpoint)
-            assert resp.status_code == 401, (
-                f"{endpoint} returned {resp.status_code}, expected 401"
+            resp = non_testing_client.get(endpoint)
+            assert resp.status_code == 200, (
+                f"{endpoint} returned {resp.status_code}, expected 200"
             )
 
-    def test_anonymous_get_returns_401_on_property_scoped_endpoints(
-        self, auth_disabled_client, auth_disabled_test_property
+    def test_property_scoped_endpoints_serve_data(
+        self, non_testing_client, non_testing_test_property
     ):
-        """Anonymous GET to per-property data endpoints must return 401."""
-        pid = auth_disabled_test_property
+        """Per-property data endpoints answer without any credential."""
+        pid = non_testing_test_property
         endpoints = [
             f"/api/properties/{pid}",
             f"/api/property/{pid}/analysis/compare",
         ]
         for endpoint in endpoints:
-            resp = auth_disabled_client.get(endpoint)
-            assert resp.status_code == 401, (
-                f"{endpoint} returned {resp.status_code}, expected 401"
+            resp = non_testing_client.get(endpoint)
+            assert resp.status_code == 200, (
+                f"{endpoint} returned {resp.status_code}, expected 200"
             )
 
-    def test_anonymous_get_properties_returns_401(self, auth_disabled_client):
-        """/api/properties (the ?full=1-capable bulk dump) must require auth."""
-        resp = auth_disabled_client.get("/api/properties")
-        assert resp.status_code == 401
-        resp_full = auth_disabled_client.get("/api/properties?full=1")
-        assert resp_full.status_code == 401
+    def test_properties_bulk_dump_serves_data(self, non_testing_client):
+        """/api/properties, including the ?full=1 bulk dump, is open."""
+        resp = non_testing_client.get("/api/properties")
+        assert resp.status_code == 200
+        resp_full = non_testing_client.get("/api/properties?full=1")
+        assert resp_full.status_code == 200
 
-    def test_anonymous_page_access_redirects_to_login(
-        self, auth_disabled_client, auth_disabled_test_land, auth_disabled_test_property
+    def test_pages_render_without_login(
+        self, non_testing_client, non_testing_test_land, non_testing_test_property
     ):
-        """Anonymous requests to HTML pages rendering property data must
-        redirect to the login page rather than rendering the data."""
-        lid = auth_disabled_test_land
-        pid = auth_disabled_test_property
+        """HTML pages render the data instead of redirecting to /login."""
+        lid = non_testing_test_land
+        pid = non_testing_test_property
         pages = [
             "/properties",
             f"/properties/{pid}",
@@ -409,84 +308,19 @@ class TestPropertyDataRequiresAuth:
             f"/lands/{lid}",
         ]
         for page in pages:
-            resp = auth_disabled_client.get(page)
-            assert resp.status_code in (302, 401), (
-                f"{page} returned {resp.status_code}, expected a redirect to login"
+            resp = non_testing_client.get(page)
+            assert resp.status_code == 200, (
+                f"{page} returned {resp.status_code}, expected 200"
             )
-            if resp.status_code == 302:
-                assert "/login" in resp.headers.get("Location", ""), (
-                    f"{page} redirected to {resp.headers.get('Location')}, expected /login"
-                )
 
-    def test_anonymous_csv_export_denied(self, auth_disabled_client):
-        """The bulk CSV export endpoints must not leak data anonymously."""
+    def test_csv_export_serves_the_file(self, non_testing_client):
+        """The bulk CSV exports download directly."""
         for endpoint in ["/export.csv", "/properties/export.csv"]:
-            resp = auth_disabled_client.get(endpoint)
-            assert resp.status_code in (302, 401), (
-                f"{endpoint} returned {resp.status_code}, expected a redirect/401, "
-                "not the exported CSV"
-            )
-            assert "text/csv" not in resp.headers.get("Content-Type", "")
-
-    # Sanity checks below confirm the TESTING bypass (acting as an authenticated
-    # admin) can still reach every endpoint we just locked down. Split into
-    # several small tests (instead of one big loop) to keep each test's request
-    # count low: sqlite's in-memory test DB is prone to spurious "database is
-    # locked" errors on teardown when a single test fires many full,
-    # DB-heavy view renders back-to-back.
-    def test_authenticated_admin_can_view_property_pages(self, client, test_property):
-        pid = test_property
-        for endpoint in [
-            "/properties",
-            f"/properties/{pid}",
-            "/api/properties",
-            f"/api/properties/{pid}",
-        ]:
-            resp = client.get(endpoint)
+            resp = non_testing_client.get(endpoint)
             assert resp.status_code == 200, (
-                f"{endpoint} returned {resp.status_code}, expected 200 for an admin"
+                f"{endpoint} returned {resp.status_code}, expected 200"
             )
-
-    def test_authenticated_admin_can_view_land_pages(
-        self, disposed_client, isolated_test_land
-    ):
-        lid = isolated_test_land
-        for endpoint in ["/map", "/criteria", f"/lands/{lid}"]:
-            resp = disposed_client.get(endpoint)
-            assert resp.status_code == 200, (
-                f"{endpoint} returned {resp.status_code}, expected 200 for an admin"
-            )
-
-    def test_authenticated_admin_can_export_csv(
-        self, disposed_client, isolated_test_land, isolated_test_property
-    ):
-        for endpoint in ["/export.csv", "/properties/export.csv"]:
-            resp = disposed_client.get(endpoint)
-            assert resp.status_code == 200, (
-                f"{endpoint} returned {resp.status_code}, expected 200 for an admin"
-            )
-
-    def test_authenticated_admin_can_read_land_apis(self, client, test_land):
-        lid = test_land
-        for endpoint in ["/api/lands", f"/api/lands/{lid}", "/api/stats"]:
-            resp = client.get(endpoint)
-            assert resp.status_code == 200, (
-                f"{endpoint} returned {resp.status_code}, expected 200 for an admin"
-            )
-
-    def test_authenticated_admin_can_read_land_history_and_comparison(
-        self, client, test_land
-    ):
-        lid = test_land
-        for endpoint in [f"/api/land/{lid}/history", f"/api/analysis/compare/{lid}"]:
-            resp = client.get(endpoint)
-            assert resp.status_code == 200, (
-                f"{endpoint} returned {resp.status_code}, expected 200 for an admin"
-            )
-        # /api/description/variants/<id> is intentionally not exercised here:
-        # it needs a configured ANTHROPIC_API_KEY to build DescriptionService,
-        # unrelated to the auth gate under test. Its 401-on-anonymous behavior
-        # is covered by test_anonymous_get_returns_401_on_land_scoped_endpoints.
+            assert "text/csv" in resp.headers.get("Content-Type", "")
 
 
 # ---------------------------------------------------------------------------
@@ -508,27 +342,27 @@ class TestSourceArchiveNotServed:
         "/static/download.html",
     ]
 
-    def test_archive_route_no_longer_exists(self, auth_disabled_client, client):
+    def test_archive_route_no_longer_exists(self, non_testing_client, client):
         """The dead /api/download/project endpoint must not come back as a
-        live route, for anonymous or authenticated callers."""
-        for c in (auth_disabled_client, client):
+        live route, in either app configuration."""
+        for c in (non_testing_client, client):
             resp = c.get("/api/download/project")
             assert resp.status_code == 404, (
                 f"/api/download/project returned {resp.status_code}, expected 404 (route removed)"
             )
 
-    def test_archive_files_not_served_from_static_anonymous(self, auth_disabled_client):
+    def test_archive_files_not_served_from_static(self, non_testing_client):
         """None of the source-archive files must be reachable under /static/,
-        which Flask serves unauthenticated regardless of any route decorator."""
+        which Flask serves directly regardless of any route decorator."""
         for path in self.ARCHIVE_STATIC_PATHS:
-            resp = auth_disabled_client.get(path)
+            resp = non_testing_client.get(path)
             assert resp.status_code == 404, (
                 f"{path} returned {resp.status_code}, expected 404 (file must not exist in static/)"
             )
 
-    def test_archive_files_not_served_from_static_authenticated(self, client):
-        """Same check as an authenticated admin: the files must be gone, not
-        merely access-gated, since static/ bypasses admin_required entirely."""
+    def test_archive_files_not_served_from_static_testing_app(self, client):
+        """Same check on the TESTING app: the files must be gone from the
+        repository, not merely gated behind a route."""
         for path in self.ARCHIVE_STATIC_PATHS:
             resp = client.get(path)
             assert resp.status_code == 404, (
@@ -559,46 +393,19 @@ class TestSourceArchiveNotServed:
 # Security: /settings/properties must not expose ADMIN_API_TOKEN via a
 # JS-readable cookie (issue #20)
 # ---------------------------------------------------------------------------
-@pytest.fixture
-def token_login_app():
-    """App fixture with TESTING=False and a known ADMIN_API_TOKEN, so the
-    real POST /login -> session -> POST /settings/properties round trip can
-    be exercised without the TESTING bypass masking auth behaviour."""
-    setup_test_environment()
-    orig_token = os.environ.get("ADMIN_API_TOKEN")
-    os.environ["ADMIN_API_TOKEN"] = "unit-test-admin-token"
-    app = create_app()
-    app.config["TESTING"] = False
-    app.config["WTF_CSRF_ENABLED"] = False
-    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
-    with app.app_context():
-        db.create_all()
-        yield app
-        db.drop_all()
-    if orig_token is not None:
-        os.environ["ADMIN_API_TOKEN"] = orig_token
-    else:
-        os.environ.pop("ADMIN_API_TOKEN", None)
-
-
-@pytest.fixture
-def token_login_client(token_login_app):
-    return token_login_app.test_client()
-
-
 class TestPropertySettingsNoTokenCookie:
     """Issue #20: the "Unlock" widget on /settings/properties wrote the
     master ADMIN_API_TOKEN into a non-HttpOnly, JS-readable `admin_token`
     cookie via `document.cookie`, and nothing server-side ever read that
-    cookie back (check_admin_auth only looks at the Authorization header and
-    the Flask session) -- so the widget didn't even authenticate the user.
-    The fix removes the paste-a-token widget and points anonymous users at
-    the real POST /login flow, which establishes a proper server-side
-    session instead of a client-readable credential."""
+    cookie back -- so the widget didn't even authenticate the user.
 
-    def test_anonymous_settings_page_has_no_token_widget(self, auth_disabled_client):
+    The login itself is gone since 2026-08-08, but the widget must not come
+    back: writing a credential into a JS-readable cookie would be wrong again
+    the moment any authentication is reintroduced."""
+
+    def test_settings_page_has_no_token_widget(self, non_testing_client):
         """The dead cookie-writing widget and its JS must be gone entirely."""
-        resp = auth_disabled_client.get("/settings/properties")
+        resp = non_testing_client.get("/settings/properties")
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
 
@@ -612,51 +419,26 @@ class TestPropertySettingsNoTokenCookie:
         assert "document.cookie" not in body
         assert "admin_token=" not in body
 
-        # Anonymous users get a real path to authenticate instead.
-        assert 'href="/login' in body or "href=\"/login" in body
-
     def test_settings_page_response_sets_no_admin_token_cookie(
-        self, auth_disabled_client
+        self, non_testing_client
     ):
         """The server itself must never set an admin_token cookie either."""
-        resp = auth_disabled_client.get("/settings/properties")
+        resp = non_testing_client.get("/settings/properties")
         assert resp.status_code == 200
         set_cookie_headers = resp.headers.get_all("Set-Cookie")
         assert not any("admin_token" in h for h in set_cookie_headers)
 
-    def test_login_flow_grants_access_without_client_side_token_storage(
-        self, token_login_client
-    ):
-        """The real fix: POST /login with the correct token establishes a
-        server-side session (admin_authenticated), and the settings page
-        then renders as authenticated -- with no admin_token cookie ever
-        set or read along the way."""
-        # Anonymous: read-only, warning banner shown, no admin_token cookie.
-        anon_resp = token_login_client.get("/settings/properties")
-        assert anon_resp.status_code == 200
-        assert "Admin authentication is required" in anon_resp.get_data(as_text=True)
-        assert not any(
-            "admin_token" in h for h in anon_resp.headers.get_all("Set-Cookie")
+    def test_settings_page_saves_without_any_credential(self, non_testing_client):
+        """The settings form posts through and takes effect with no token."""
+        resp = non_testing_client.post(
+            "/settings/properties",
+            data={"action": "save_ingestion_settings", "sale_only": "on"},
+            follow_redirects=True,
         )
-
-        # Log in via the real, CSRF-protected, session-based flow.
-        login_resp = token_login_client.post(
-            "/login",
-            data={"token": "unit-test-admin-token", "next": "/settings/properties"},
-        )
-        assert login_resp.status_code == 302
-        assert "/settings/properties" in login_resp.headers.get("Location", "")
-        assert not any(
-            "admin_token" in h for h in login_resp.headers.get_all("Set-Cookie")
-        )
-
-        # Now authenticated via the session cookie set by Flask itself, not
-        # a hand-rolled JS cookie holding the master token.
-        auth_resp = token_login_client.get("/settings/properties")
-        assert auth_resp.status_code == 200
-        body = auth_resp.get_data(as_text=True)
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
         assert "Admin authentication is required" not in body
-        assert "admin_token" not in body
+        assert "Unauthorized" not in body
 
 
 # ---------------------------------------------------------------------------

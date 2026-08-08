@@ -5,6 +5,19 @@ All notable changes to the Idealista Tracker AI project will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 🔓 Removed: admin authentication (2026-08-08)
+- **Login removed**: deleted `utils/auth.py`, the `/login` and `/logout` routes,
+  `templates/login.html`, all 42 `@admin_required` decorators and every inline
+  `check_admin_auth()` gate. `ADMIN_API_TOKEN` is no longer read anywhere.
+- **Why**: single-owner local tool, published only on `127.0.0.1:5001`; the
+  owner wanted direct access rather than re-entering a token each month.
+- **Consequence to keep in mind**: nothing gates the API any more, and the JSON
+  blueprints stay CSRF-exempt — the loopback binding in `docker-compose.yml` is
+  now the only thing standing between the database (and the paid AI/enrichment
+  endpoints) and the network. Put authentication back before exposing the app.
+
 ## [2.0.0] - 2025-09-11
 
 ### 🚀 Major Features Added
