@@ -18,6 +18,7 @@ from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
 from app import db
 from services.profile_selection import (
+    MAX_SELECTED_PROFILE_IDS,
     apply_profile_filter,
     empty_profile_selection,
     parse_profile_selection,
@@ -473,6 +474,7 @@ def properties():
             pagination=pagination,
             profiles=profiles,
             profile_options=_profile_dropdown_options(profiles, profile_selection),
+            max_selected_profiles=MAX_SELECTED_PROFILE_IDS,
             selected_profile_id=selected_profile_id,
             profile_selection=profile_selection,
             travel_display_targets=travel_display_targets,
@@ -508,6 +510,7 @@ def properties():
             pagination=None,
             profiles=[],
             profile_options=[],
+            max_selected_profiles=MAX_SELECTED_PROFILE_IDS,
             selected_profile_id=None,
             profile_selection=empty_profile_selection(),
             travel_display_targets=[],

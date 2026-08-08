@@ -232,7 +232,7 @@ def subscriptions(app):
         db.session.add_all([alpha, beta, gamma, zeta])
         db.session.commit()
 
-        created = {"alpha": [], "beta": [], "gamma": [], "zeta": []}
+        created = {"alpha": [], "beta": [], "gamma": [], "zeta": [], "orphan": []}
         clock = [0]
 
         def _make(slug, profile_id, index):
@@ -265,6 +265,12 @@ def subscriptions(app):
             _make("gamma", gamma.id, index)
         for index in range(2):
             _make("zeta", zeta.id, index)
+        # Listings with no subscription at all. #110 gives ingestion two
+        # legitimate ways to persist one: an email carrying several different
+        # search links, and a recognised email whose profile lookup lost a
+        # concurrent write.
+        for index in range(2):
+            _make("orphan", None, index)
 
         db.session.commit()
 
@@ -277,6 +283,7 @@ def subscriptions(app):
             "beta_props": list(created["beta"]),
             "gamma_props": list(created["gamma"]),
             "zeta_props": list(created["zeta"]),
+            "orphan_props": list(created["orphan"]),
         }
 
 
@@ -310,14 +317,16 @@ class TestFixtureStrength:
         beta = set(subscriptions["beta_props"])
         gamma = set(subscriptions["gamma_props"])
         zeta = set(subscriptions["zeta_props"])
+        orphan = set(subscriptions["orphan_props"])
         union = alpha | beta
 
-        assert alpha and beta and gamma and zeta
+        assert alpha and beta and gamma and zeta and orphan
         assert not alpha & beta, "the two selected profiles must not share rows"
         assert union != alpha, "first-id-only would pass"
         assert union != beta, "last-id-only would pass"
         assert union != union | gamma, "every-active-profile would pass"
-        assert union != union | gamma | zeta, "no-filter-at-all would pass"
+        assert union != union | gamma | zeta | orphan, "no-filter-at-all would pass"
+        assert union != union | orphan, "including unassigned rows would pass"
         assert len(union) > PER_PAGE, "the union must not fit on a single page"
 
     def test_both_pagination_pages_hold_rows_from_both_profiles(
@@ -444,36 +453,172 @@ class TestPropertiesPageShowsTheUnion:
         assert "All profiles" not in button.group(1)
         assert "0 selected" in button.group(1)
 
-    def test_a_row_with_no_profile_at_all_is_not_reachable(self, client, app):
-        """Pinned, not endorsed: `all` means "every active profile", so a
-        listing whose `search_profile_id` is NULL -- which ingestion can
-        persist when it cannot resolve or create a profile -- is not shown.
-        Previously `all` applied no filter and these rows appeared. If the
-        owner wants them back, this test is the thing to change."""
-        with app.app_context():
-            db.session.add(
-                SearchProfile(
-                    name="Only profile",
-                    is_active=True,
-                    is_default=True,
-                    travel_targets={"presets": {}, "custom": []},
-                )
-            )
-            db.session.commit()
-            orphan = Property(
-                source_email_id="issue104_orphan",
-                title="OrphanListingUniqueTitle",
-                search_profile_id=None,
-                listing_status="active",
-            )
-            db.session.add(orphan)
-            db.session.commit()
-            orphan_id = orphan.id
 
+class TestNoSubscriptionOption:
+    """Listings with `search_profile_id IS NULL` get their own dropdown entry.
+
+    They are not a profile, so `all` does not cover them and no id reaches
+    them -- without a dedicated option they would be unreachable from every
+    view, which is not theoretical: #110 gives ingestion two legitimate ways
+    to persist one (an email carrying several different search links, and a
+    recognised email whose profile lookup lost a concurrent write).
+    """
+
+    def test_all_still_does_not_include_them(self, client, subscriptions):
         body = client.get("/properties?profile_id=all&per_page=100").get_data(
             as_text=True
         )
-        assert orphan_id not in _listing_ids_in_order(body)
+        shown = set(_listing_ids_in_order(body))
+        assert not shown & set(subscriptions["orphan_props"])
+
+    def test_the_option_shows_exactly_the_unassigned_rows(self, client, subscriptions):
+        body = client.get("/properties?profile_id=unassigned&per_page=100").get_data(
+            as_text=True
+        )
+        assert set(_listing_ids_in_order(body)) == set(subscriptions["orphan_props"])
+
+    def test_it_combines_with_a_profile(self, client, subscriptions):
+        alpha = subscriptions["alpha_id"]
+        body = client.get(
+            f"/properties?profile_id={alpha}&profile_id=unassigned&per_page=100"
+        ).get_data(as_text=True)
+        assert set(_listing_ids_in_order(body)) == set(
+            subscriptions["alpha_props"]
+        ) | set(subscriptions["orphan_props"])
+
+    def test_the_dropdown_offers_it_beside_the_profiles(self, client, subscriptions):
+        body = client.get("/properties?profile_id=all").get_data(as_text=True)
+        checkbox = re.search(
+            r'<input[^>]*name="profile_id"[^>]*value="unassigned"[^>]*>', body
+        )
+        assert checkbox, "the dropdown needs a No subscription entry"
+        assert "checked" not in checkbox.group(0), "all profiles must not tick it"
+
+    def test_the_dropdown_ticks_it_when_it_is_selected(self, client, subscriptions):
+        body = client.get("/properties?profile_id=unassigned").get_data(as_text=True)
+        checkbox = re.search(
+            r'<input[^>]*name="profile_id"[^>]*value="unassigned"[^>]*>', body
+        )
+        assert checkbox and "checked" in checkbox.group(0)
+
+    def test_the_choice_survives_every_link(self, client, subscriptions):
+        alpha = subscriptions["alpha_id"]
+        expected = [str(alpha), "unassigned"]
+        body = client.get(
+            f"/properties?profile_id={alpha}&profile_id=unassigned&view_type=list"
+        ).get_data(as_text=True)
+        hrefs = (
+            _anchor_hrefs(body, "lands-th-link")
+            + [_anchor_href(body, "Download filtered data as CSV")]
+            + [_anchor_href(body, "View properties on map")]
+            + [_anchor_href(body, 'id="mode-investment-btn"')]
+            + [_anchor_href(body, 'id="view-cards-btn"')]
+        )
+        assert len(hrefs) >= 8
+        for href in hrefs:
+            assert _query_params(href).get("profile_id") == expected, href
+
+    def test_the_map_and_the_csv_agree_with_the_page(self, client, subscriptions):
+        alpha = subscriptions["alpha_id"]
+        expected = set(subscriptions["alpha_props"]) | set(
+            subscriptions["orphan_props"]
+        )
+        query = f"profile_id={alpha}&profile_id=unassigned"
+
+        markers = _marker_ids(client.get(f"/map?{query}").get_data(as_text=True))
+        assert set(markers) == expected
+
+        csv_ids = _csv_ids_in_order(
+            client.get(f"/properties/export.csv?{query}").get_data(as_text=True)
+        )
+        assert set(csv_ids) == expected
+
+    def test_it_hides_profile_specific_travel(self, client, subscriptions):
+        """An unassigned row has no profile, so there is no profile-specific
+        travel configuration to show -- with or without a profile alongside."""
+        alpha = subscriptions["alpha_id"]
+        alone = client.get("/properties?profile_id=unassigned").get_data(as_text=True)
+        assert TRAVEL_NOTICE in alone
+        assert "Recalculate travel" not in alone
+
+        mixed = client.get(
+            f"/properties?profile_id={alpha}&profile_id=unassigned"
+        ).get_data(as_text=True)
+        assert TRAVEL_NOTICE in mixed
+        assert "AlphaOfficeTarget" not in mixed
+        assert "Recalculate travel" not in mixed
+
+    def test_the_button_counts_it_as_one_entry(self, client, subscriptions):
+        alpha = subscriptions["alpha_id"]
+        body = client.get(
+            f"/properties?profile_id={alpha}&profile_id=unassigned"
+        ).get_data(as_text=True)
+        button = re.search(
+            r'id="profile-select-dropdown"[^>]*>(.*?)</button>', body, re.S
+        )
+        assert button and "2 selected" in button.group(1)
+
+
+class TestExplicitlyEmptySelectionSurvivesApply:
+    """`?profile_id=0` is a deliberate empty selection, and pressing Apply for
+    an unrelated filter must not widen it.
+
+    Nothing is ticked in that state, so the form falls back to its hidden
+    `profile_id` -- which therefore has to carry the impossible marker rather
+    than `all`, or the page silently jumps from "nothing" to every active
+    profile.
+    """
+
+    def test_the_hidden_fallback_carries_the_impossible_marker(
+        self, client, subscriptions
+    ):
+        body = client.get("/properties?profile_id=0").get_data(as_text=True)
+        hidden = re.search(
+            r'<input[^>]*type="hidden"[^>]*name="profile_id"[^>]*>', body
+        )
+        assert hidden, "the form still needs an explicit fallback"
+        assert 'value="0"' in hidden.group(0), hidden.group(0)
+
+    def test_replaying_that_submit_keeps_the_page_empty(self, client, subscriptions):
+        """What the browser sends when the user changes another filter and
+        presses Apply without touching the dropdown."""
+        body = client.get("/properties?profile_id=0").get_data(as_text=True)
+        hidden = re.search(
+            r'<input[^>]*type="hidden"[^>]*name="profile_id"[^>]*value="([^"]*)"', body
+        )
+        assert hidden
+        resubmitted = client.get(
+            f"/properties?profile_id={hidden.group(1)}&favorites=on&per_page=100"
+        ).get_data(as_text=True)
+        assert _listing_ids_in_order(resubmitted) == []
+
+    def test_a_normal_state_still_falls_back_to_all(self, client, subscriptions):
+        for query in ("profile_id=all", f"profile_id={subscriptions['alpha_id']}", ""):
+            body = client.get(f"/properties?{query}").get_data(as_text=True)
+            hidden = re.search(
+                r'<input[^>]*type="hidden"[^>]*name="profile_id"[^>]*>', body
+            )
+            assert hidden and 'value="all"' in hidden.group(0), query
+
+
+class TestTruncationIsNotSilent:
+    """The parser caps the id list before it reaches `IN (...)`. Dropping the
+    overflow without a word would quietly narrow the page, the map, the export
+    and every link at once."""
+
+    def test_the_page_says_so_when_it_truncates(self, client, subscriptions):
+        from services.profile_selection import MAX_SELECTED_PROFILE_IDS
+
+        query = "&".join(
+            f"profile_id={n}" for n in range(1, MAX_SELECTED_PROFILE_IDS + 12)
+        )
+        body = client.get(f"/properties?{query}").get_data(as_text=True)
+        assert "profile-selection-truncated" in body
+        assert str(MAX_SELECTED_PROFILE_IDS) in body
+
+    def test_a_normal_selection_says_nothing(self, client, pair):
+        body = client.get(f"/properties?{pair['query']}").get_data(as_text=True)
+        assert "profile-selection-truncated" not in body
 
 
 class TestFilterBarKeepsOneControl:
@@ -908,13 +1053,62 @@ class TestProfileSelectionModule:
         assert selection.state is ProfileSelectionState.SELECTED
         assert selection.ids == ()
 
-    def test_the_id_list_is_capped(self):
+    def test_the_id_list_is_capped_and_says_so(self):
         from services.profile_selection import MAX_SELECTED_PROFILE_IDS
 
         query = "&".join(
             f"profile_id={n}" for n in range(1, MAX_SELECTED_PROFILE_IDS + 25)
         )
-        assert len(self._parse(query).ids) == MAX_SELECTED_PROFILE_IDS
+        selection = self._parse(query)
+        assert len(selection.ids) == MAX_SELECTED_PROFILE_IDS
+        assert selection.truncated is True
+        assert self._parse("profile_id=6&profile_id=8").truncated is False
+
+    def test_the_unassigned_token_is_its_own_choice(self):
+        selection = self._parse("profile_id=unassigned")
+        assert selection.state is ProfileSelectionState.SELECTED
+        assert selection.ids == ()
+        assert selection.include_unassigned is True
+
+    def test_unassigned_combines_with_ids_and_beats_the_all_token(self):
+        selection = self._parse("profile_id=all&profile_id=6&profile_id=UNASSIGNED")
+        assert selection.state is ProfileSelectionState.SELECTED
+        assert selection.ids == (6,)
+        assert selection.include_unassigned is True
+
+    def test_all_never_implies_unassigned(self):
+        selection = self._parse("profile_id=all")
+        assert selection.include_unassigned is False
+        assert _resolve("profile_id=all", [3, 5]).include_unassigned is False
+
+    def test_resolve_keeps_unassigned_out_of_single_profile_context(self):
+        """One profile plus the unassigned rows is still not one profile, so
+        profile-specific travel has to stay hidden."""
+        resolved = _resolve("profile_id=3&profile_id=unassigned", [3, 5])
+        assert resolved.filter_ids == (3,)
+        assert resolved.include_unassigned is True
+        assert resolved.single_id is None
+        assert resolved.spans_several_profiles is True
+        assert resolved.link_values == (3, "unassigned")
+
+    def test_unassigned_alone_is_not_an_empty_selection(self):
+        resolved = _resolve("profile_id=unassigned", [3, 5])
+        assert resolved.matches_nothing is False
+        assert resolved.form_fallback_value == "all"
+
+    @pytest.mark.parametrize(
+        "query,expected",
+        [
+            ("profile_id=all", "all"),
+            ("profile_id=3", "all"),
+            ("", "all"),
+            # Nothing ticked here means "the empty selection you asked for",
+            # not "everything".
+            ("profile_id=0", "0"),
+        ],
+    )
+    def test_form_fallback_value(self, query, expected):
+        assert _resolve(query, [3, 5], auto=3).form_fallback_value == expected
 
     def test_resolve_all_uses_active_profiles_only(self):
         resolved = _resolve("profile_id=all", [3, 5])
@@ -950,6 +1144,8 @@ class TestProfileSelectionModule:
             ("profile_id=99", [3, 5], None),
             ("", [3, 5], 5),
             ("profile_id=0", [3, 5], None),
+            ("profile_id=unassigned", [3, 5], None),
+            ("profile_id=3&profile_id=unassigned", [3, 5], None),
         ],
     )
     def test_link_values_round_trip_back_to_the_same_state(self, query, active, auto):
@@ -964,6 +1160,7 @@ class TestProfileSelectionModule:
         )
         assert reresolved.filter_ids == resolved.filter_ids
         assert reresolved.link_values == resolved.link_values
+        assert reresolved.include_unassigned == resolved.include_unassigned
 
     @pytest.mark.parametrize(
         "query,active,auto,expected",

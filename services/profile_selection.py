@@ -19,7 +19,14 @@ three answers it can encode are modelled here explicitly:
 
 ``selected(ids)``
     One or more explicit ids: ``profile_id=6&profile_id=8``. Ids reach
-    inactive profiles too -- that is the only way to see one.
+    inactive profiles too -- that is the only way to see one. The same state
+    carries ``profile_id=unassigned``, which selects listings with no
+    ``search_profile_id`` at all; it sits *beside* the profiles rather than
+    among them, and ``all`` never implies it. Ingestion can legitimately
+    persist such a listing (issue #110: an email carrying several different
+    search links, or a recognised email whose profile lookup lost a
+    concurrent write), and without its own option it would be reachable from
+    nowhere -- unlike an inactive profile, it has no id to name.
 
 Two decisions worth knowing before changing anything here:
 
@@ -52,6 +59,11 @@ from typing import Any, Iterable, Optional, Sequence, Tuple, Union
 # means the same thing and is what a bare `profile_id=` submits.
 PROFILE_ALL_SENTINEL = "all"
 
+# Accepted in `profile_id` to mean "listings with no subscription at all"
+# (`search_profile_id IS NULL`). Not a profile, and deliberately not part of
+# `all` -- it is a peer of the profile list, not a member of it.
+PROFILE_UNASSIGNED_SENTINEL = "unassigned"
+
 QUERY_PARAM = "profile_id"
 
 # `SearchProfile.id` is a 32-bit `db.Integer`. Anything outside the range can
@@ -72,8 +84,11 @@ IMPOSSIBLE_PROFILE_ID = "0"
 # the one outcome the module promises never to produce for a numeric input.
 _NUMERIC_TOKEN = re.compile(r"[+-]?\d+")
 
-# Ids past this many are dropped. Nothing legitimate selects more profiles
-# than exist, and the parsed list goes straight into a SQL `IN (...)`.
+# Ids past this many are dropped, because the parsed list goes straight into
+# a SQL `IN (...)` and a hand-written URL is not obliged to be reasonable.
+# Dropping them is never silent: `ProfileSelection.truncated` travels to the
+# page, which says so. The owner has nine profiles, so the form cannot reach
+# this.
 MAX_SELECTED_PROFILE_IDS = 50
 
 # Shown wherever a multi-profile view has to withhold profile-specific travel
@@ -95,6 +110,13 @@ class ProfileSelection:
 
     state: ProfileSelectionState
     ids: Tuple[int, ...] = ()
+
+    #: `profile_id=unassigned` was asked for -- listings with no profile.
+    include_unassigned: bool = False
+
+    #: More ids arrived than `MAX_SELECTED_PROFILE_IDS`; the overflow was
+    #: dropped and the page has to say so.
+    truncated: bool = False
 
     @property
     def is_auto(self) -> bool:
@@ -134,9 +156,39 @@ class ResolvedProfileSelection:
     #: a destination the row was never measured against.
     single_id: Optional[int]
 
+    #: Widen the filter with `search_profile_id IS NULL`, and tick the
+    #: "No subscription" box.
+    include_unassigned: bool = False
+
+    #: The id list overflowed `MAX_SELECTED_PROFILE_IDS`.
+    truncated: bool = False
+
+    @property
+    def matches_nothing(self) -> bool:
+        """An explicit selection that cannot return a row.
+
+        Distinct from "no filter" (`filter_ids is None`) and from the
+        unassigned choice, which selects real rows without naming a profile.
+        """
+        return self.filter_ids == () and not self.include_unassigned
+
     @property
     def spans_several_profiles(self) -> bool:
-        return self.single_id is None and self.filter_ids != ()
+        return self.single_id is None and not self.matches_nothing
+
+    @property
+    def form_fallback_value(self) -> str:
+        """Value for the form's hidden `profile_id`, used when nothing is ticked.
+
+        Normally the `all` sentinel. On an explicitly empty selection it has
+        to be the impossible marker instead: no box is ticked there either, so
+        an `all` fallback would turn "show nothing" into "show every active
+        profile" the moment the user changed an unrelated filter and pressed
+        Apply.
+        """
+        if self.matches_nothing:
+            return IMPOSSIBLE_PROFILE_ID
+        return PROFILE_ALL_SENTINEL
 
     @property
     def travel_notice(self) -> str:
@@ -150,11 +202,12 @@ class ResolvedProfileSelection:
         impossible ids ticks nothing but shows nothing either, and labelling
         that "All profiles" would describe the opposite of what is on screen.
         """
+        ticked = len(self.checked_ids) + (1 if self.include_unassigned else 0)
         if self.state is ProfileSelectionState.SELECTED:
-            return f"{len(self.checked_ids)} selected"
-        if not self.checked_ids:
+            return f"{ticked} selected"
+        if not ticked:
             return "All profiles"
-        return f"{len(self.checked_ids)} selected"
+        return f"{ticked} selected"
 
 
 def _dedupe(values: Iterable[int]) -> Tuple[int, ...]:
@@ -196,12 +249,16 @@ def parse_profile_selection(args: Any) -> ProfileSelection:
 
     saw_all = False
     saw_number = False
+    saw_unassigned = False
     ids: list[int] = []
 
     for raw in raw_values:
         token = str(raw if raw is not None else "").strip()
         if token == "" or token.lower() == PROFILE_ALL_SENTINEL:
             saw_all = True
+            continue
+        if token.lower() == PROFILE_UNASSIGNED_SENTINEL:
+            saw_unassigned = True
             continue
         if not _NUMERIC_TOKEN.fullmatch(token):
             # Unparseable text behaves like the old `type=int` coercion:
@@ -217,11 +274,15 @@ def parse_profile_selection(args: Any) -> ProfileSelection:
         if MIN_PROFILE_ID <= number <= MAX_PROFILE_ID:
             ids.append(number)
 
-    if saw_number:
+    if saw_number or saw_unassigned:
         # Ticked boxes beat the form's `all` fallback; see the module
         # docstring for why the fallback is posted at all.
+        unique = _dedupe(ids)
         return ProfileSelection(
-            ProfileSelectionState.SELECTED, _dedupe(ids)[:MAX_SELECTED_PROFILE_IDS]
+            ProfileSelectionState.SELECTED,
+            unique[:MAX_SELECTED_PROFILE_IDS],
+            include_unassigned=saw_unassigned,
+            truncated=len(unique) > MAX_SELECTED_PROFILE_IDS,
         )
     if saw_all:
         return ProfileSelection(ProfileSelectionState.ALL)
@@ -253,7 +314,9 @@ def resolve_profile_selection(
         filter_ids = selection.ids
         link_values = tuple(selection.ids)
         checked = selection.ids
-        if not selection.ids:
+        if selection.include_unassigned:
+            link_values = link_values + (PROFILE_UNASSIGNED_SENTINEL,)
+        elif not selection.ids:
             # A selection that named only impossible ids: keep it explicit so
             # the links do not slide back to `auto` on the next click.
             link_values = (IMPOSSIBLE_PROFILE_ID,)
@@ -266,8 +329,14 @@ def resolve_profile_selection(
         link_values = (int(auto_profile_id),)
         checked = (int(auto_profile_id),)
 
+    # One profile plus the unassigned rows is still not a single-profile view,
+    # so the profile-specific travel UI stays hidden there too.
     single_id = (
-        filter_ids[0] if filter_ids is not None and len(filter_ids) == 1 else None
+        filter_ids[0]
+        if filter_ids is not None
+        and len(filter_ids) == 1
+        and not selection.include_unassigned
+        else None
     )
 
     return ResolvedProfileSelection(
@@ -276,6 +345,8 @@ def resolve_profile_selection(
         link_values=link_values,
         checked_ids=checked,
         single_id=single_id,
+        include_unassigned=selection.include_unassigned,
+        truncated=selection.truncated,
     )
 
 
@@ -295,8 +366,24 @@ def apply_profile_filter(query, column, resolved: ResolvedProfileSelection):
     Kept next to the state model so `/properties`, `/properties/export.csv`
     and `/map` cannot drift into three slightly different filters.
     """
-    if resolved.filter_ids is None:
+    from sqlalchemy import or_
+
+    if resolved.filter_ids is None and not resolved.include_unassigned:
         return query
-    if len(resolved.filter_ids) == 1:
-        return query.filter(column == resolved.filter_ids[0])
-    return query.filter(column.in_(resolved.filter_ids))
+
+    clauses = []
+    ids = resolved.filter_ids or ()
+    if len(ids) == 1:
+        clauses.append(column == ids[0])
+    elif ids:
+        clauses.append(column.in_(ids))
+    if resolved.include_unassigned:
+        clauses.append(column.is_(None))
+
+    if not clauses:
+        # An explicit selection that named nothing reachable. `in_(())` is the
+        # always-false expression that says so, rather than no filter at all.
+        return query.filter(column.in_(()))
+    if len(clauses) == 1:
+        return query.filter(clauses[0])
+    return query.filter(or_(*clauses))

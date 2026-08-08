@@ -175,12 +175,15 @@
                             aria-expanded="false">{{ profile_selection.label }}</button>
                     <div class="dropdown-menu p-2" id="profile-select-menu"
                          style="min-width: 100%; max-height: 20rem; overflow-y: auto;">
-                        {# Nothing ticked means "all profiles" -- but a form with
-                           nothing ticked submits no profile_id at all, which is
-                           indistinguishable from an old bookmark. This keeps the
-                           choice explicit; ticked boxes win over it, so the
-                           dropdown still narrows with JavaScript switched off. #}
-                        <input type="hidden" name="profile_id" value="all">
+                        {# Nothing ticked usually means "all profiles" -- but a
+                           form with nothing ticked submits no profile_id at all,
+                           which is indistinguishable from an old bookmark. This
+                           keeps the choice explicit; ticked boxes win over it, so
+                           the dropdown still narrows with JavaScript switched off.
+                           On an explicitly empty selection the value is the
+                           impossible marker instead, or pressing Apply for some
+                           other filter would widen the page to every profile. #}
+                        <input type="hidden" name="profile_id" value="{{ profile_selection.form_fallback_value }}">
                         <button type="button" class="btn btn-link btn-sm p-0 mb-2 text-decoration-none"
                                 id="profile-select-clear">Show all profiles</button>
                         {# `profile_options` is the active profiles plus anything
@@ -203,8 +206,32 @@
                         {% else %}
                             <div class="small text-body-secondary">No active profiles yet.</div>
                         {% endfor %}
+                        {# A peer of the profile list, not a member of it: these
+                           listings have no subscription, so "All profiles" does
+                           not cover them and no id reaches them. Ingestion can
+                           legitimately produce them (issue #110), and this is
+                           their only way onto the page. #}
+                        <hr class="my-2">
+                        <div class="form-check">
+                            <input class="form-check-input profile-select-option"
+                                   type="checkbox"
+                                   name="profile_id"
+                                   value="unassigned"
+                                   id="profile-option-unassigned"
+                                   {% if profile_selection.include_unassigned %}checked{% endif %}>
+                            <label class="form-check-label small" for="profile-option-unassigned">
+                                No subscription
+                                <span class="text-body-secondary">&mdash; listings not tied to a search</span>
+                            </label>
+                        </div>
                     </div>
                 </div>
+                {% if profile_selection.truncated %}
+                    <div class="form-text text-warning-emphasis" id="profile-selection-truncated">
+                        Only the first {{ max_selected_profiles }} subscriptions of that
+                        selection are being shown.
+                    </div>
+                {% endif %}
             </div>
             <div class="col-12 col-md-3">
                 <label class="form-label small mb-1">Category</label>
@@ -731,10 +758,14 @@
             const checked = options.filter(option => option.checked);
             toggle.textContent = checked.length ? checked.length + ' selected' : 'All profiles';
             if (fallback) {
-                // A disabled input is not submitted, so the explicit "all"
-                // only travels when nothing is ticked -- which is exactly
-                // when it is needed.
+                // A disabled input is not submitted, so the fallback only
+                // travels when nothing is ticked -- which is exactly when it
+                // is needed.
                 fallback.disabled = checked.length > 0;
+                // The server may have rendered the impossible marker here for
+                // an explicitly empty selection. Once the user is working the
+                // dropdown, an empty tick list means "all".
+                fallback.value = 'all';
             }
         }
 
