@@ -679,6 +679,7 @@ class TestOpenRedirectGuard:
             "//evil.example/phish",
             "/\\evil.example/phish",
             "javascript:alert(1)",
+            "//[",  # malformed: urlparse() raises ValueError("Invalid IPv6 URL")
         ],
     )
     def test_login_post_rejects_external_next(self, token_login_client, malicious_next):
@@ -717,6 +718,24 @@ class TestOpenRedirectGuard:
         location = resp.headers.get("Location", "")
         assert "evil.example" not in location
         assert location == "/lands"
+
+    def test_login_get_already_authenticated_rejects_malformed_next(
+        self, token_login_client
+    ):
+        """QA regression: `next=//[` must fail closed to `/lands`, not 500.
+
+        `urlparse("//[")` raises `ValueError: Invalid IPv6 URL`; the guard
+        must catch that and fall back rather than letting it bubble up as a
+        server error for already-authenticated users clicking a crafted link.
+        """
+        login_resp = token_login_client.post(
+            "/login", data={"token": "unit-test-admin-token"}
+        )
+        assert login_resp.status_code == 302
+
+        resp = token_login_client.get("/login?next=%2F%2F%5B")
+        assert resp.status_code == 302
+        assert resp.headers.get("Location") == "/lands"
 
     def _make_property(self, token_login_app, source_email_id):
         with token_login_app.app_context():
