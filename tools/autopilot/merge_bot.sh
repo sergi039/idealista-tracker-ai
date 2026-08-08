@@ -25,6 +25,9 @@ LOG_FILE="${AUTOPILOT_MERGE_LOG:-${REPO_DIR}/data/autopilot-merge.log}"
 # One line per reviewed head SHA. Keyed by SHA so a re-push gets a fresh review
 # and a re-run does not burn another rx attempt on an unchanged diff.
 JOURNAL="${AUTOPILOT_REVIEW_JOURNAL:-${REPO_DIR}/data/autopilot-reviews.tsv}"
+# CI is not a required status check on this repository, so the bot enforces its
+# own list. A check that is absent, skipped or neutral is not a pass.
+REQUIRED_CHECKS="${AUTOPILOT_REQUIRED_CHECKS:-pytest no-source-bundles}"
 
 DRY_RUN=0
 ONLY_PR=""
@@ -46,24 +49,24 @@ touch "$JOURNAL"
 cd "$REPO_DIR" || { echo "repo not found: $REPO_DIR" >&2; exit 1; }
 
 # --- single instance -------------------------------------------------------
-if mkdir "$LOCK_DIR" 2>/dev/null; then
-    echo $$ >"${LOCK_DIR}/pid"
-    trap 'rm -rf "$LOCK_DIR"' EXIT
-else
-    holder="$(cat "${LOCK_DIR}/pid" 2>/dev/null || true)"
-    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-        rm -rf "$LOCK_DIR"
-        mkdir "$LOCK_DIR" && echo $$ >"${LOCK_DIR}/pid"
-        trap 'rm -rf "$LOCK_DIR"' EXIT
-    else
-        log "another merge_bot run is in progress, skipping"
-        exit 0
-    fi
+# shellcheck source=lib/lock.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/lock.sh"
+if ! autopilot_acquire_lock "$LOCK_DIR"; then
+    log "another merge_bot run is in progress, skipping"
+    exit 0
 fi
 
+# A verdict covers one diff, and a diff is (base, head) — not head alone. When
+# main moves from B1 to B2 the merged result is different code even though the
+# PR head never changed, so the key has to include the base or a stale PASS
+# gets applied to a diff nobody reviewed.
+verdict_key() {
+    printf '%s..%s' "$1" "$2"
+}
+
 journal_verdict() {
-    # Last recorded verdict for a head SHA, empty when never reviewed.
-    awk -F'\t' -v sha="$1" '$1 == sha { v = $2 } END { print v }' "$JOURNAL"
+    # Last recorded verdict for this exact base..head pair, empty if unreviewed.
+    awk -F'\t' -v key="$1" '$1 == key { v = $2 } END { print v }' "$JOURNAL"
 }
 
 record_verdict() {
@@ -97,20 +100,34 @@ ci_is_green() {
         log "  PR #${pr}: CI red (${bad})"
         return 1
     fi
+
+    # SKIPPED and NEUTRAL are tolerated *alongside* real results, never instead
+    # of them: a run where every check skipped verifies exactly as much as a run
+    # with no checks at all, and must not read as green.
+    for required in $REQUIRED_CHECKS; do
+        local state
+        state="$(printf '%s' "$checks" \
+            | jq -r --arg n "$required" '[.[] | select(.name == $n) | .state] | first // "MISSING"')"
+        if [ "$state" != "SUCCESS" ]; then
+            log "  PR #${pr}: required check '${required}' is ${state}, not SUCCESS"
+            return 1
+        fi
+    done
     return 0
 }
 
 # --- gate 2: independent review -------------------------------------------
 review_is_pass() {
-    local pr="$1" head_sha="$2" cached rc ref
+    local pr="$1" head_sha="$2" base_sha="$3" cached rc ref key
 
-    cached="$(journal_verdict "$head_sha")"
+    key="$(verdict_key "$base_sha" "$head_sha")"
+    cached="$(journal_verdict "$key")"
     case "$cached" in
         PASS)
-            log "  PR #${pr}: cached PASS for ${head_sha:0:7}"
+            log "  PR #${pr}: cached PASS for ${base_sha:0:7}..${head_sha:0:7}"
             return 0 ;;
         BLOCKER)
-            log "  PR #${pr}: cached BLOCKER for ${head_sha:0:7} - needs a human or a new push"
+            log "  PR #${pr}: cached BLOCKER for ${base_sha:0:7}..${head_sha:0:7} - needs a human or a new push"
             return 1 ;;
     esac
 
@@ -121,9 +138,9 @@ review_is_pass() {
         return 1
     fi
 
-    log "  PR #${pr}: requesting independent review of ${head_sha:0:7}"
+    log "  PR #${pr}: requesting independent review of ${base_sha:0:7}..${head_sha:0:7}"
     set +e
-    rx --range "origin/${BASE_BRANCH}..${ref}" \
+    rx --range "${base_sha}..${ref}" \
         "Review this pull request for merge into ${BASE_BRANCH} of a self-hosted Flask
 app that ingests real estate listings. Judge correctness, security, error
 handling and whether the tests actually prove the claimed behaviour rather than
@@ -137,10 +154,10 @@ queries)." >>"$LOG_FILE" 2>&1
 
     case "$rc" in
         0) log "  PR #${pr}: review PASS"
-           record_verdict "$head_sha" PASS "pr-${pr}"
+           record_verdict "$key" PASS "pr-${pr}"
            return 0 ;;
         4) log "  PR #${pr}: review BLOCKER - left open"
-           record_verdict "$head_sha" BLOCKER "pr-${pr}"
+           record_verdict "$key" BLOCKER "pr-${pr}"
            return 1 ;;
         *) log "  PR #${pr}: review UNAVAILABLE (rc=${rc}) - not a pass, retrying next tick"
            return 1 ;;
@@ -148,7 +165,15 @@ queries)." >>"$LOG_FILE" 2>&1
 }
 
 # --- main ------------------------------------------------------------------
-git fetch --quiet origin "$BASE_BRANCH" || log "WARNING: git fetch failed; review base may be stale"
+# A failed fetch means the local base ref is stale. Continuing would review
+# against yesterday's main and then merge into today's — exactly the diff
+# nobody looked at. Stop instead; the next tick retries.
+if ! git fetch --quiet origin "$BASE_BRANCH"; then
+    log "git fetch failed - cannot establish the merge base, aborting this pass"
+    exit 1
+fi
+BASE_SHA="$(git rev-parse "origin/${BASE_BRANCH}")"
+log "merge base: ${BASE_SHA:0:7}"
 
 if [ -n "$ONLY_PR" ]; then
     pr_query="$(gh pr view "$ONLY_PR" --repo "$REPO_SLUG" \
@@ -180,10 +205,24 @@ printf '%s' "$pr_query" | jq -c '.[]' | while read -r pr_json; do
     fi
 
     ci_is_green "$number" || continue
-    review_is_pass "$number" "$head_sha" || continue
+    review_is_pass "$number" "$head_sha" "$BASE_SHA" || continue
 
     if [ "$DRY_RUN" = "1" ]; then
         log "  WOULD MERGE #${number} (dry run)"
+        continue
+    fi
+
+    # A review takes minutes. If main moved while it ran, the reviewed diff is
+    # not the diff GitHub would merge — `--match-head-commit` guards the head
+    # but nothing guards the base. Re-check and defer; the next tick reviews
+    # against the new base and the verdict key makes that a fresh review.
+    base_now="$(git ls-remote origin "refs/heads/${BASE_BRANCH}" 2>/dev/null | cut -f1)"
+    if [ -z "$base_now" ]; then
+        log "  cannot confirm ${BASE_BRANCH} head - deferring merge of #${number}"
+        continue
+    fi
+    if [ "$base_now" != "$BASE_SHA" ]; then
+        log "  ${BASE_BRANCH} moved ${BASE_SHA:0:7} -> ${base_now:0:7} during review - deferring #${number}"
         continue
     fi
 

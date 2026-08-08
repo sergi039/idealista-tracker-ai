@@ -34,6 +34,9 @@ PRIORITY_LABELS="${AUTOPILOT_LABELS:-high,medium,low}"
 MAX_ISSUES=1
 MERGE_ONLY=0
 DRY_RUN=0
+# Non-zero when any stage failed. The pass still runs to the end - one bad
+# issue should not stop the merge phase - but the exit code has to say so.
+exit_status=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -53,19 +56,11 @@ mkdir -p "$(dirname "$LOG_FILE")"
 # --- single instance -------------------------------------------------------
 # An agent run takes minutes to an hour. Overlapping passes would point two
 # agents at the same issue, which is how PRs #57 and #58 happened.
-if mkdir "$LOCK_DIR" 2>/dev/null; then
-    echo $$ >"${LOCK_DIR}/pid"
-    trap 'rm -rf "$LOCK_DIR"' EXIT
-else
-    holder="$(cat "${LOCK_DIR}/pid" 2>/dev/null || true)"
-    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-        rm -rf "$LOCK_DIR"
-        mkdir "$LOCK_DIR" && echo $$ >"${LOCK_DIR}/pid"
-        trap 'rm -rf "$LOCK_DIR"' EXIT
-    else
-        log "another autopilot pass is running (pid ${holder:-?}), skipping"
-        exit 0
-    fi
+# shellcheck source=lib/lock.sh
+source "${HERE}/lib/lock.sh"
+if ! autopilot_acquire_lock "$LOCK_DIR"; then
+    log "another autopilot pass is running, skipping"
+    exit 0
 fi
 
 cd "$REPO_DIR" || { echo "repo not found: $REPO_DIR" >&2; exit 1; }
@@ -102,7 +97,12 @@ if [ "$MERGE_ONLY" = "0" ]; then
             log "WOULD START #${issue} (dry run)"
         else
             log "--- starting #${issue} ---"
-            "${HERE}/run_issue.sh" "$issue" || log "#${issue}: run_issue.sh exited non-zero"
+            if ! "${HERE}/run_issue.sh" "$issue"; then
+                # A red suite is a normal outcome for one issue and must not
+                # abort the pass, but it is still a failure of this pass.
+                log "#${issue}: run_issue.sh exited non-zero"
+                exit_status=1
+            fi
         fi
         started=$((started + 1))
     done
@@ -110,10 +110,20 @@ if [ "$MERGE_ONLY" = "0" ]; then
 fi
 
 # --- merges ----------------------------------------------------------------
-if [ "$DRY_RUN" = "1" ]; then
-    "${HERE}/merge_bot.sh" --dry-run || log "merge_bot.sh exited non-zero"
-else
-    "${HERE}/merge_bot.sh" || log "merge_bot.sh exited non-zero"
+merge_args=()
+[ "$DRY_RUN" = "1" ] && merge_args+=(--dry-run)
+
+if ! "${HERE}/merge_bot.sh" "${merge_args[@]+"${merge_args[@]}"}"; then
+    # Distinct from "nothing qualified to merge", which exits 0. This is an
+    # auth failure, a bad base, or a crash - swallowing it would make a broken
+    # pass look like a quiet one.
+    log "merge_bot.sh FAILED"
+    exit_status=1
 fi
 
-log "=== autopilot pass end ==="
+if [ "$exit_status" = "0" ]; then
+    log "=== autopilot pass end ==="
+else
+    log "=== autopilot pass end WITH FAILURES ==="
+fi
+exit "$exit_status"

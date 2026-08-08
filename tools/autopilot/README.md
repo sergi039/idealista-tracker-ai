@@ -19,6 +19,11 @@ Nothing here bypasses a gate. A PR merges only with **green CI and a PASS from
 an independent reviewer**; a deploy survives only if `/api/healthz` answers
 `"ok":true` afterwards.
 
+What counts as green is spelled out rather than inferred: every check in
+`AUTOPILOT_REQUIRED_CHECKS` (default `pytest no-source-bundles`) must report
+`SUCCESS`. A run where the required checks are absent, skipped or neutral
+verifies exactly as much as a run with no CI at all, and is refused.
+
 ## Scripts
 
 | Script | Does | Does not |
@@ -80,8 +85,30 @@ in the log even when the page loads — that combination is precisely what
 
 **UNAVAILABLE is not PASS.** A reviewer that cannot run leaves the PR open.
 
+**A verdict covers a diff, not a branch.** The journal key is `base..head`, so
+a PASS stops applying the moment main moves — and the merge step re-checks the
+base one last time, because a review takes minutes and `--match-head-commit`
+only guards the head.
+
+## The lock
+
+`lib/lock.sh` uses real `flock(2)` (through `python3`, since macOS has no
+`flock(1)`). The kernel releases it when the process dies, so there is no PID
+bookkeeping and nothing to reclaim after a killed build.
+
+The obvious `mkdir` + stale-PID substitute was tried first and is genuinely
+racy: `lib/lock_race_test.sh` reproduces two simultaneous winners against it.
+That test runs in CI via `tests/test_autopilot_lock.py`.
+
+```bash
+bash tools/autopilot/lib/lock_race_test.sh
+```
+
+Note that children inherit the lock along with fd 9 — fine for these scripts,
+whose subprocesses all exit before the script does, but worth knowing before
+adding a background job to one of them.
+
 ## Requirements
 
-`gh` (authenticated), `jq`, `docker`, `uv`, `claude`, `rx`, and GNU `timeout`
-(`brew install coreutils`). macOS has no `flock(1)`; the scripts use atomic
-`mkdir` locks with stale-PID reclamation instead.
+`gh` (authenticated), `jq`, `docker`, `uv`, `claude`, `rx`, `python3`, and GNU
+`timeout` (`brew install coreutils`).

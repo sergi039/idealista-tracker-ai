@@ -41,32 +41,10 @@ die() {
 mkdir -p "$(dirname "$LOG_FILE")"
 
 # --- single instance -------------------------------------------------------
-# A build takes minutes; the timer fires more often than that. macOS has no
-# flock(1), so use mkdir - atomic on every filesystem worth deploying from.
-acquire_lock() {
-    if mkdir "$LOCK_DIR" 2>/dev/null; then
-        echo $$ >"${LOCK_DIR}/pid"
-        trap 'rm -rf "$LOCK_DIR"' EXIT
-        return 0
-    fi
-
-    # A machine that slept or a killed build leaves the directory behind. Only
-    # reclaim it when the recorded process is genuinely gone.
-    local holder
-    holder="$(cat "${LOCK_DIR}/pid" 2>/dev/null || true)"
-    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-        log "reclaiming stale lock from dead pid ${holder}"
-        rm -rf "$LOCK_DIR"
-        if mkdir "$LOCK_DIR" 2>/dev/null; then
-            echo $$ >"${LOCK_DIR}/pid"
-            trap 'rm -rf "$LOCK_DIR"' EXIT
-            return 0
-        fi
-    fi
-    return 1
-}
-
-if ! acquire_lock; then
+# A build takes minutes; the timer fires more often than that.
+# shellcheck source=lib/lock.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/lock.sh"
+if ! autopilot_acquire_lock "$LOCK_DIR"; then
     echo "$(date '+%Y-%m-%d %H:%M:%S')  another deploy is in progress, skipping" >>"$LOG_FILE"
     exit 0
 fi
@@ -113,19 +91,41 @@ fi
 rollback() {
     local reason="$1"
     log "ROLLBACK (${reason}): returning to ${local_sha:0:7}"
-    git reset --hard "$local_sha" >/dev/null 2>&1 || log "  git reset failed"
-    if [ "$have_rollback_image" = "1" ]; then
-        docker tag "$ROLLBACK_TAG" "$IMAGE"
-        docker compose -f "$COMPOSE_FILE" up -d --no-build >>"$LOG_FILE" 2>&1 \
-            || log "  rollback 'compose up' failed - MANUAL ATTENTION NEEDED"
+
+    # Every step here runs on the failure path, where `set -e` aborting
+    # mid-rollback would leave the app down with no further attempt. Each
+    # command is therefore guarded and reported rather than allowed to exit.
+    git reset --hard "$local_sha" >/dev/null 2>&1 \
+        || log "  git reset failed - the tree may not match the image"
+
+    local restored=0
+    if [ "$have_rollback_image" = "1" ] && docker image inspect "$ROLLBACK_TAG" >/dev/null 2>&1; then
+        if docker tag "$ROLLBACK_TAG" "$IMAGE" 2>>"$LOG_FILE"; then
+            if docker compose -f "$COMPOSE_FILE" up -d --no-build >>"$LOG_FILE" 2>&1; then
+                restored=1
+            else
+                log "  rollback 'compose up' from the saved image failed"
+            fi
+        else
+            log "  could not retag ${ROLLBACK_TAG} - saved image is unusable"
+        fi
     else
-        docker compose -f "$COMPOSE_FILE" up -d --build >>"$LOG_FILE" 2>&1 \
-            || log "  rollback rebuild failed - MANUAL ATTENTION NEEDED"
+        log "  no saved image available for rollback"
     fi
+
+    # Rebuilding from the restored source is slower and can itself fail, but it
+    # is the only remaining way back up. Try it whenever the image path did not
+    # already restore service.
+    if [ "$restored" = "0" ]; then
+        log "  falling back to a rebuild from ${local_sha:0:7}"
+        docker compose -f "$COMPOSE_FILE" up -d --build >>"$LOG_FILE" 2>&1 \
+            || log "  rollback rebuild failed"
+    fi
+
     if check_health; then
         log "rollback healthy - previous version is serving again"
     else
-        log "ROLLBACK IS ALSO UNHEALTHY - MANUAL ATTENTION NEEDED"
+        log "ROLLBACK IS ALSO UNHEALTHY - THE APP IS DOWN, MANUAL ATTENTION NEEDED"
     fi
 }
 
