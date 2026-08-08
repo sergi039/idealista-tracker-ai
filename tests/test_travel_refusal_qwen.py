@@ -20,16 +20,38 @@ CONTRACT (what the code SHOULD do):
   store status="not_found".
 - Partial failures (Places down, Distance Matrix up) must be surfaced honestly.
 
-Measured, not asserted: against 69566e1 (the commit before the fix) 10 of these
-14 tests fail; against the merged fix all 14 pass. The 4 that pass on both are
+Measured, not asserted: against 69566e1 (the commit before the fix) 11 of these
+16 tests fail; against the merged fix all 16 pass. The 5 that pass on both are
 the controls that a heavy-handed fix would have broken.
 
-Operator edits to the generated module, all mechanical:
+Operator edits, disclosed so the model's contribution stays legible:
+
+Mechanical corrections to what was generated
   - `source_email_id` added to the fixture (NOT NULL in this schema).
-  - `_targets()` helper: the generated assertions walked `travel.items()`, but
+  - `_targets()`: the generated assertions walked `travel.items()`, but
     per-target outcomes live under `travel["targets"]`. At the wrong level four
     loops asserted nothing at all and two more failed on both trees.
-No assertion, expectation or scenario was changed.
+  - The service was built with only a Places key, so it never reached Distance
+    Matrix and every run silently took the straight-line estimate branch. Both
+    keys are passed now, except where a missing key is the subject.
+  - `_distance_matrix_ok_response` carried a duration but no distance, which
+    the service cannot use - the "healthy" reply produced status="estimated".
+
+From the review of this suite (three findings, all fair)
+  - `assert_every_target_reports_a_refusal` replaces walks shaped
+    `if travel: ... if "status" in val: assert ...`, which an empty
+    `{"targets": {}}` satisfied without comparing anything.
+  - The happy path accepted `{"school": {}}`; it now requires a travel time.
+  - `TestZeroResultsIsAnAnswer`: the "nothing nearby" control used
+    `status="OK"`, but Google sends ZERO_RESULTS. A fix that read every non-OK
+    status as an outage would have passed the suite as generated.
+
+Operator-authored, because the model lacked the config shape
+  - `TestPlacesRefusedWhileDistanceMatrixAnswers`: the real mixed case. Its own
+    reasoning trace flagged that presets alone cannot express it.
+
+No scenario the model asked for was removed, and no expectation was weakened
+to fit the implementation.
 """
 
 from unittest.mock import MagicMock, patch
@@ -82,6 +104,29 @@ def _targets(travel):
     return travel.get("targets") or {}
 
 
+def assert_every_target_reports_a_refusal(travel, context):
+    """Assert positively: at least one target, and none of them "not_found".
+
+    Operator addition. The generated assertions were shaped as
+    `if travel: for ... : if "status" in val: assert ...`, which an empty
+    `{"targets": {}}` satisfies without comparing anything - the suite would
+    pass while proving nothing was recorded at all.
+    """
+    targets = _targets(travel)
+    assert targets, (
+        f"{context}: nothing was persisted, so the refusal was not recorded "
+        f"anywhere a reader could find it. travel={travel!r}"
+    )
+    for key, val in targets.items():
+        assert isinstance(val, dict) and "status" in val, (
+            f"{context}: target '{key}' has no status at all: {val!r}"
+        )
+        assert val["status"] != "not_found", (
+            f"{context}: target '{key}' says 'not_found', which is what a real "
+            f"answer with nothing nearby says. A refusal must be distinguishable."
+        )
+
+
 def _make_response(status_code=200, json_data=None):
     """Build a fake requests.Response-like object."""
     resp = MagicMock()
@@ -106,7 +151,13 @@ def _places_over_limit_response():
 
 
 def _distance_matrix_ok_response():
-    """A healthy Distance Matrix response."""
+    """A healthy Distance Matrix response.
+
+    Operator correction: as generated the element carried a duration but no
+    distance, which the service cannot use - it fell back to a straight-line
+    estimate and recorded status="estimated". The happy-path test then passed
+    while never exercising the happy path. A real reply carries both.
+    """
     return _make_response(
         200,
         {
@@ -114,7 +165,11 @@ def _distance_matrix_ok_response():
             "rows": [
                 {
                     "elements": [
-                        {"status": "OK", "duration": {"value": 600, "text": "10 mins"}}
+                        {
+                            "status": "OK",
+                            "distance": {"value": 4200, "text": "4.2 km"},
+                            "duration": {"value": 600, "text": "10 mins"},
+                        }
                     ]
                 }
             ],
@@ -156,7 +211,9 @@ def _patch_service_deps(mock_request, mock_cache, mock_preset_defs, mock_travel_
     """Apply the standard set of patches and return the service instance."""
     from services.property_travel_service import PropertyTravelService
 
-    svc = PropertyTravelService(google_places_key="FAKE_KEY_FOR_TESTING")
+    svc = PropertyTravelService(
+        google_maps_key="FAKE_MAPS_KEY", google_places_key="FAKE_KEY_FOR_TESTING"
+    )
 
     # Stub location_service so no geocoding happens
     svc.location_service = MagicMock()
@@ -201,7 +258,9 @@ class TestAllPlacesRefused:
 
         from services.property_travel_service import PropertyTravelService
 
-        svc = PropertyTravelService(google_places_key="FAKE_KEY")
+        svc = PropertyTravelService(
+            google_maps_key="FAKE_MAPS_KEY", google_places_key="FAKE_KEY"
+        )
         svc.location_service = MagicMock()
         svc.location_service.ensure_coordinates.return_value = True
 
@@ -238,7 +297,9 @@ class TestAllPlacesRefused:
 
         from services.property_travel_service import PropertyTravelService
 
-        svc = PropertyTravelService(google_places_key="FAKE_KEY")
+        svc = PropertyTravelService(
+            google_maps_key="FAKE_MAPS_KEY", google_places_key="FAKE_KEY"
+        )
         svc.location_service = MagicMock()
         svc.location_service.ensure_coordinates.return_value = True
 
@@ -248,17 +309,10 @@ class TestAllPlacesRefused:
         db.session.refresh(prop)
         travel = prop.travel
 
-        # If travel was written at all, the status must NOT be "not_found"
-        # because the API never actually searched — it refused.
-        if travel and isinstance(travel, dict):
-            for key, val in _targets(travel).items():
-                if isinstance(val, dict) and "status" in val:
-                    assert val["status"] != "not_found", (
-                        f"Travel target '{key}' has status='not_found' but the "
-                        f"API returned REQUEST_DENIED. These must be distinguishable. "
-                        f"Expected an error status like 'error', 'api_error', or "
-                        f"'request_denied'."
-                    )
+        # The status must NOT be "not_found": the API never searched, it refused.
+        assert_every_target_reports_a_refusal(
+            travel, "every Places call REQUEST_DENIED"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +358,9 @@ class TestPartialFailure:
 
         from services.property_travel_service import PropertyTravelService
 
-        svc = PropertyTravelService(google_places_key="FAKE_KEY")
+        svc = PropertyTravelService(
+            google_maps_key="FAKE_MAPS_KEY", google_places_key="FAKE_KEY"
+        )
         svc.location_service = MagicMock()
         svc.location_service.ensure_coordinates.return_value = True
 
@@ -349,21 +405,18 @@ class TestPartialFailure:
 
         from services.property_travel_service import PropertyTravelService
 
-        svc = PropertyTravelService(google_places_key="FAKE_KEY")
+        svc = PropertyTravelService(
+            google_maps_key="FAKE_MAPS_KEY", google_places_key="FAKE_KEY"
+        )
         svc.location_service = MagicMock()
         svc.location_service.ensure_coordinates.return_value = True
 
         svc.calculate_for_property(prop, commit=True)
         db.session.refresh(prop)
 
-        travel = prop.travel
-        if travel and isinstance(travel, dict):
-            for key, val in _targets(travel).items():
-                if isinstance(val, dict) and "status" in val:
-                    assert val["status"] != "not_found", (
-                        f"Target '{key}' shows 'not_found' but Places was "
-                        f"REQUEST_DENIED. Must use a distinct error status."
-                    )
+        assert_every_target_reports_a_refusal(
+            prop.travel, "Places REQUEST_DENIED while Distance Matrix answers"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +456,9 @@ class TestGenuineNothingNearby:
 
         from services.property_travel_service import PropertyTravelService
 
-        svc = PropertyTravelService(google_places_key="FAKE_KEY")
+        svc = PropertyTravelService(
+            google_maps_key="FAKE_MAPS_KEY", google_places_key="FAKE_KEY"
+        )
         svc.location_service = MagicMock()
         svc.location_service.ensure_coordinates.return_value = True
 
@@ -440,7 +495,9 @@ class TestGenuineNothingNearby:
 
         from services.property_travel_service import PropertyTravelService
 
-        svc = PropertyTravelService(google_places_key="FAKE_KEY")
+        svc = PropertyTravelService(
+            google_maps_key="FAKE_MAPS_KEY", google_places_key="FAKE_KEY"
+        )
         svc.location_service = MagicMock()
         svc.location_service.ensure_coordinates.return_value = True
 
@@ -500,7 +557,9 @@ class TestHTTPLevelFailure:
 
         from services.property_travel_service import PropertyTravelService
 
-        svc = PropertyTravelService(google_places_key="FAKE_KEY")
+        svc = PropertyTravelService(
+            google_maps_key="FAKE_MAPS_KEY", google_places_key="FAKE_KEY"
+        )
         svc.location_service = MagicMock()
         svc.location_service.ensure_coordinates.return_value = True
 
@@ -534,21 +593,16 @@ class TestHTTPLevelFailure:
 
         from services.property_travel_service import PropertyTravelService
 
-        svc = PropertyTravelService(google_places_key="FAKE_KEY")
+        svc = PropertyTravelService(
+            google_maps_key="FAKE_MAPS_KEY", google_places_key="FAKE_KEY"
+        )
         svc.location_service = MagicMock()
         svc.location_service.ensure_coordinates.return_value = True
 
         svc.calculate_for_property(prop, commit=True)
         db.session.refresh(prop)
 
-        travel = prop.travel
-        if travel and isinstance(travel, dict):
-            for key, val in _targets(travel).items():
-                if isinstance(val, dict) and "status" in val:
-                    assert val["status"] != "not_found", (
-                        f"Target '{key}' has status='not_found' but the HTTP "
-                        f"request returned 500. Must use an error status."
-                    )
+        assert_every_target_reports_a_refusal(prop.travel, "Places returned HTTP 500")
 
     @patch(
         "services.property_travel_service.SearchProfileService.get_travel_targets_config"
@@ -577,7 +631,9 @@ class TestHTTPLevelFailure:
 
         from services.property_travel_service import PropertyTravelService
 
-        svc = PropertyTravelService(google_places_key="FAKE_KEY")
+        svc = PropertyTravelService(
+            google_maps_key="FAKE_MAPS_KEY", google_places_key="FAKE_KEY"
+        )
         svc.location_service = MagicMock()
         svc.location_service.ensure_coordinates.return_value = True
 
@@ -625,7 +681,9 @@ class TestOverQueryLimit:
 
         from services.property_travel_service import PropertyTravelService
 
-        svc = PropertyTravelService(google_places_key="FAKE_KEY")
+        svc = PropertyTravelService(
+            google_maps_key="FAKE_MAPS_KEY", google_places_key="FAKE_KEY"
+        )
         svc.location_service = MagicMock()
         svc.location_service.ensure_coordinates.return_value = True
 
@@ -659,21 +717,18 @@ class TestOverQueryLimit:
 
         from services.property_travel_service import PropertyTravelService
 
-        svc = PropertyTravelService(google_places_key="FAKE_KEY")
+        svc = PropertyTravelService(
+            google_maps_key="FAKE_MAPS_KEY", google_places_key="FAKE_KEY"
+        )
         svc.location_service = MagicMock()
         svc.location_service.ensure_coordinates.return_value = True
 
         svc.calculate_for_property(prop, commit=True)
         db.session.refresh(prop)
 
-        travel = prop.travel
-        if travel and isinstance(travel, dict):
-            for key, val in _targets(travel).items():
-                if isinstance(val, dict) and "status" in val:
-                    assert val["status"] != "not_found", (
-                        f"Target '{key}' has status='not_found' but the API "
-                        f"returned OVER_QUERY_LIMIT. Must use an error status."
-                    )
+        assert_every_target_reports_a_refusal(
+            prop.travel, "Places returned OVER_QUERY_LIMIT"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -775,7 +830,9 @@ class TestFullSuccessPath:
 
         from services.property_travel_service import PropertyTravelService
 
-        svc = PropertyTravelService(google_places_key="FAKE_KEY")
+        svc = PropertyTravelService(
+            google_maps_key="FAKE_MAPS_KEY", google_places_key="FAKE_KEY"
+        )
         svc.location_service = MagicMock()
         svc.location_service.ensure_coordinates.return_value = True
 
@@ -823,7 +880,9 @@ class TestFullSuccessPath:
 
         from services.property_travel_service import PropertyTravelService
 
-        svc = PropertyTravelService(google_places_key="FAKE_KEY")
+        svc = PropertyTravelService(
+            google_maps_key="FAKE_MAPS_KEY", google_places_key="FAKE_KEY"
+        )
         svc.location_service = MagicMock()
         svc.location_service.ensure_coordinates.return_value = True
 
@@ -833,11 +892,156 @@ class TestFullSuccessPath:
         travel = prop.travel
         assert travel is not None, "Travel JSON must be written on success."
 
-        # The travel data should contain the school preset with place info
-        if isinstance(travel, dict):
-            school_data = _targets(travel).get("school")
-            assert school_data is not None, "Expected 'school' key in travel JSON."
-            # Should have place info, not an error status
-            assert school_data.get("status") != "not_found", (
-                "Happy path should not produce 'not_found' status."
-            )
+        # Operator strengthening: as generated, this accepted `{"school": {}}` -
+        # a happy path that persisted nothing at all would have passed. The
+        # point of the run is the travel time, so assert the travel time.
+        school_data = _targets(travel).get("school")
+        assert school_data, f"expected a 'school' target with data, got {travel!r}"
+        assert school_data.get("status") not in {"not_found", "unavailable"}, (
+            f"the happy path must not record a failure state: {school_data!r}"
+        )
+        assert school_data.get("duration_min") is not None, (
+            f"a resolved target without a duration is an empty result wearing a "
+            f"success label: {school_data!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Operator addition, from the review of this suite: ZERO_RESULTS.
+#
+# The generated control used status="OK" with an empty results list, but that
+# is not what Google sends when a search finds nothing - it sends
+# ZERO_RESULTS. A fix that treated every non-OK status as a refusal would
+# reclassify "no school within range" as an outage, and the suite as written
+# would not have noticed. This is the control the control was missing.
+# ---------------------------------------------------------------------------
+
+
+def _places_zero_results_response():
+    """What Google actually returns for a search that found nothing."""
+    return _make_response(200, {"status": "ZERO_RESULTS", "results": []})
+
+
+class TestZeroResultsIsAnAnswer:
+    @patch(
+        "services.property_travel_service.SearchProfileService.get_travel_targets_config"
+    )
+    @patch(
+        "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
+    )
+    @patch("services.property_travel_service.get_cached_enrichment_data")
+    @patch("services.property_travel_service.request_with_retries")
+    def test_zero_results_is_success_and_not_a_refusal(
+        self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
+    ):
+        """ASSERT: ZERO_RESULTS is an answer - success, and "not_found", not an error."""
+        mock_cache.return_value = None
+        mock_preset_defs.return_value = FAKE_PRESET_DEFS
+        mock_travel_config.return_value = FAKE_TRAVEL_CONFIG
+        mock_request.return_value = _places_zero_results_response()
+
+        from services.property_travel_service import PropertyTravelService
+
+        svc = PropertyTravelService(
+            google_maps_key="FAKE_MAPS_KEY", google_places_key="FAKE_KEY"
+        )
+        svc.location_service = MagicMock()
+        svc.location_service.ensure_coordinates.return_value = True
+
+        result = svc.calculate_for_property(prop, commit=True)
+        db.session.refresh(prop)
+
+        assert result is True, (
+            "ZERO_RESULTS means Google searched and found nothing. That is a "
+            "successful run over empty ground, not a failure."
+        )
+        school = _targets(prop.travel).get("school")
+        assert school, f"expected a 'school' target, got {prop.travel!r}"
+        assert school.get("status") == "not_found", (
+            f"ZERO_RESULTS must record the genuine 'nothing nearby' state, not an "
+            f"API error: {school!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Operator addition: the genuinely mixed case.
+#
+# The model asked for "Places refused while Distance Matrix answers" and wrote
+# it with presets only - but a preset target needs Places to find a place, so a
+# refusal there leaves nothing to route to and Distance Matrix is never called.
+# Its own reasoning trace flagged this and guessed at a custom-target config it
+# had not been shown. A custom target carries its own coordinates, so it routes
+# without Places, and both APIs are exercised in one run: exactly the shape of
+# the 2026-08-08 outage, where the Places key was stale and the Maps key was not.
+# ---------------------------------------------------------------------------
+
+MIXED_TRAVEL_CONFIG = {
+    "presets": {"school": {"enabled": True, "mode": "driving"}},
+    "custom": [{"name": "Office", "lat": 51.52, "lon": -0.14, "mode": "driving"}],
+}
+
+
+class TestPlacesRefusedWhileDistanceMatrixAnswers:
+    @patch(
+        "services.property_travel_service.SearchProfileService.get_travel_targets_config"
+    )
+    @patch(
+        "services.property_travel_service.SearchProfileService.get_travel_preset_defs"
+    )
+    @patch("services.property_travel_service.get_cached_enrichment_data")
+    @patch("services.property_travel_service.request_with_retries")
+    def test_one_refusal_and_one_answer_are_both_visible(
+        self, mock_request, mock_cache, mock_preset_defs, mock_travel_config, app, prop
+    ):
+        """ASSERT: a partial outage is neither reported as total success nor as total failure."""
+        mock_cache.return_value = None
+        mock_preset_defs.return_value = FAKE_PRESET_DEFS
+        mock_travel_config.return_value = MIXED_TRAVEL_CONFIG
+
+        def side_effect(_fn, url, **_kwargs):
+            if "place/nearbysearch" in url:
+                return _places_denied_response()
+            if "distancematrix" in url:
+                return _distance_matrix_ok_response()
+            return _make_response(404, {})
+
+        mock_request.side_effect = side_effect
+
+        from services.property_travel_service import PropertyTravelService
+
+        svc = PropertyTravelService(
+            google_maps_key="FAKE_MAPS_KEY", google_places_key="FAKE_KEY"
+        )
+        svc.location_service = MagicMock()
+        svc.location_service.ensure_coordinates.return_value = True
+
+        result = svc.calculate_for_property(prop, commit=True)
+        db.session.refresh(prop)
+
+        called = [c.args[1] for c in mock_request.call_args_list]
+        assert any("place/nearbysearch" in u for u in called), (
+            "the premise of this test is that Places was called and refused"
+        )
+        assert any("distancematrix" in u for u in called), (
+            f"Distance Matrix was never called, so nothing here proves it stayed "
+            f"healthy while Places did not. URLs: {called}"
+        )
+
+        targets = _targets(prop.travel)
+        school = targets.get("school")
+        custom = next(
+            (v for k, v in targets.items() if str(k).startswith("custom:")), None
+        )
+
+        assert school and school.get("status") != "not_found", (
+            f"the Places refusal must not read as 'nothing nearby': {school!r}"
+        )
+        assert custom and custom.get("duration_min") is not None, (
+            f"the target that did not need Places must still have its travel "
+            f"time - a partial outage must not discard the half that worked: "
+            f"{custom!r}"
+        )
+        assert result is True, (
+            "one target resolved, so the run is degraded rather than failed; "
+            "returning False here would tell the caller to discard a good result"
+        )
