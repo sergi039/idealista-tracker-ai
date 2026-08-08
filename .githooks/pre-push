@@ -9,13 +9,14 @@
 # disk without committing, testing the working tree would pass while the
 # pushed commit is still broken. Reviewed and hardened in PR #78.
 #
-# Strategy, for each distinct SHA being pushed:
-#   - clean working tree AND the SHA is the checked-out HEAD -> run the gate
-#     in place (fast path: the tree is byte-identical to what is pushed)
-#   - anything else (dirty tree, or pushing a ref other than HEAD, e.g.
-#     `git push origin feature` while another branch is checked out) -> run
-#     the gate in a throwaway `git worktree` checked out at that exact SHA,
-#     so the verdict reflects exactly what `git push` sends.
+# Strategy: every distinct SHA being pushed is validated in a throwaway
+# `git worktree` checked out at exactly that commit. Deliberately no fast
+# path against the working tree: a tree that "looks clean" to git status
+# can still differ from the committed blob (excluded/ignored files that
+# ruff and pytest would see), so the only tree whose verdict provably
+# matches what `git push` sends is a fresh checkout of the pushed SHA.
+# Costs a few extra seconds (uv reuses its global cache for the snapshot's
+# .venv); the SKIP_LOCAL_CI bypass exists for the impatient case.
 #
 # Bypass for one push:      SKIP_LOCAL_CI=1 git push
 # Bypass for the autopilot: run_issue.sh sets AUTOPILOT_LOCAL_CI_DONE=1 after
@@ -90,21 +91,11 @@ run_gate_on_commit() {
 }
 
 overall_rc=0
-head_sha="$(git rev-parse HEAD)"
-tree_clean=0
-[ -z "$(git status --porcelain)" ] && tree_clean=1
 
 for sha in $pushed_shas; do
-    if [ "$tree_clean" -eq 1 ] && [ "$sha" = "$head_sha" ]; then
-        # The working tree IS this commit - validate in place.
-        "${repo_root}/tools/ci/local_ci.sh" || overall_rc=1
-    else
-        # The pushed SHA is not what is checked out (another branch, or a
-        # dirty tree) - validate a clean snapshot of exactly that commit.
-        echo
-        echo "pre-push: validating pushed commit $sha in a clean snapshot ..."
-        run_gate_on_commit "$sha" || overall_rc=1
-    fi
+    echo
+    echo "pre-push: validating pushed commit $sha in a clean snapshot ..."
+    run_gate_on_commit "$sha" || overall_rc=1
 done
 
 if [ "$overall_rc" -ne 0 ]; then
