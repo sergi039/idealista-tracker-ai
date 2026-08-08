@@ -117,6 +117,24 @@ record_deployed() {
     return 0
 }
 
+# Removing the marker is the fallback whenever the truth cannot be recorded,
+# so its own failure cannot be ignored: an unwritable directory fails the write
+# *and* the delete, leaving the previous commit's marker in place while a
+# different one serves. The next tick still redeploys (marker != HEAD), so the
+# app is never stale - but it will redeploy on every tick until someone fixes
+# the permissions, and that deserves to be shouted rather than hidden.
+clear_marker() {
+    local reason="$1"
+    if rm -f "$DEPLOYED_MARKER" 2>/dev/null && [ ! -e "$DEPLOYED_MARKER" ]; then
+        log "  cleared the deployment marker (${reason})"
+        return 0
+    fi
+    log "  ALERT: could not clear the deployment marker (${reason})."
+    log "  ${DEPLOYED_MARKER} still names an older commit; expect a redeploy every"
+    log "  tick until the file is writable again."
+    return 1
+}
+
 rollback() {
     local reason="$1"
     log "ROLLBACK (${reason}): returning to ${local_sha:0:7}"
@@ -153,7 +171,7 @@ rollback() {
 
     if ! check_health; then
         log "ROLLBACK IS ALSO UNHEALTHY - THE APP IS DOWN, MANUAL ATTENTION NEEDED"
-        rm -f "$DEPLOYED_MARKER" 2>/dev/null || true
+        clear_marker "the rollback itself is unhealthy"
         return
     fi
     log "rollback healthy - previous version is serving again"
@@ -168,16 +186,12 @@ rollback() {
     # No marker is the honest answer: one wasted rebuild beats a permanently
     # wrong belief about what is running.
     if [ "$restored" = "1" ]; then
-        log "  restored from the saved image, whose commit is unknown - clearing"
-        log "  the marker so the next tick redeploys and re-establishes it"
-        rm -f "$DEPLOYED_MARKER" 2>/dev/null || true
+        clear_marker "restored from the saved image, whose commit is unknown"
         return
     fi
 
     if ! record_deployed "$local_sha"; then
-        log "  could not update the deployment marker - removing it so the next"
-        log "  tick redeploys rather than trusting a stale value"
-        rm -f "$DEPLOYED_MARKER" 2>/dev/null || true
+        clear_marker "the rollback rebuilt ${local_sha:0:7} but the marker could not be written"
     fi
 }
 
@@ -222,12 +236,11 @@ deployed_sha="$(git rev-parse HEAD)"
 if record_deployed "$deployed_sha"; then
     log "DEPLOYED ${deployed_sha:0:7} successfully"
 else
-    # The deploy worked; only the bookkeeping failed. Say so, and leave no
-    # marker rather than a wrong one - the next tick will redeploy the same
-    # commit, which is wasteful but never wrong.
-    rm -f "$DEPLOYED_MARKER" 2>/dev/null || true
-    log "DEPLOYED ${deployed_sha:0:7} successfully, but the marker could not be"
-    log "written - the next tick will redeploy this same commit"
+    # The deploy worked; only the bookkeeping failed. Leave no marker rather
+    # than a wrong one - the next tick then redeploys this same commit, which
+    # is wasteful but never wrong.
+    log "DEPLOYED ${deployed_sha:0:7} successfully, but the marker could not be written"
+    clear_marker "the deploy succeeded but its marker could not be written"
 fi
 
 # Scheduler state is worth a line in the log: a 'not_initialized' scheduler is
