@@ -51,9 +51,19 @@ That test runs in CI via `tests/test_autopilot_lock.py`.
 bash tools/autopilot/lib/lock_race_test.sh
 ```
 
-Note that children inherit the lock along with fd 9 — fine for these scripts,
-whose subprocesses all exit before the script does, but worth knowing before
-adding a background job to one of them.
+Children inherit the lock along with fd 9, and that has a consequence worth
+stating plainly: **killing the script does not release the lock**. The kernel
+drops it when the *last* descriptor closes, so an orphaned `rx` or `codex exec`
+keeps the lock held long after its parent is gone, and the next tick reports
+"another run is in progress" with no such run in `ps`.
+
+Observed in practice on 2026-08-08, when another session killed a bot run to
+unblock a merge and had to hunt the orphans separately. To release a stuck lock,
+kill the whole family:
+
+```bash
+pkill -f merge_bot; pkill -f reviewer_coordinator; pkill -f "codex exec"
+```
 
 ## Requirements
 
