@@ -19,16 +19,12 @@
 <div class="alert alert-warning">
     <div class="d-flex flex-wrap align-items-center gap-2">
         <div class="flex-grow-1">
-            Admin authentication is required to save changes. Configure <code>ADMIN_API_TOKEN</code>.
+            Admin authentication is required to save changes.
         </div>
-        <div class="input-group input-group-sm" style="max-width: 420px;">
-            <span class="input-group-text">Admin token</span>
-            <input type="password" class="form-control" id="admin-token-input" placeholder="Paste ADMIN_API_TOKEN">
-            <button type="button" class="btn btn-outline-dark" id="admin-token-save">Unlock</button>
-            <button type="button" class="btn btn-outline-secondary" id="admin-token-clear" title="Clear token">Clear</button>
-        </div>
+        <a class="btn btn-outline-dark btn-sm" href="{{ url_for('main.login', next=request.path) }}">
+            <i class="fas fa-sign-in-alt me-1"></i>Log in
+        </a>
     </div>
-    <div class="form-text mt-2">Token is stored in a browser cookie for this host only.</div>
 </div>
 {% endif %}
 
@@ -170,34 +166,6 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const tokenInput = document.getElementById('admin-token-input');
-    const saveToken = document.getElementById('admin-token-save');
-    const clearToken = document.getElementById('admin-token-clear');
-
-    const setCookie = (value, maxAgeSeconds) => {
-        let cookie = `admin_token=${encodeURIComponent(value || '')}; Path=/; SameSite=Lax`;
-        if (maxAgeSeconds !== undefined) {
-            cookie += `; Max-Age=${maxAgeSeconds}`;
-        }
-        document.cookie = cookie;
-    };
-
-    if (saveToken && tokenInput) {
-        saveToken.addEventListener('click', () => {
-            const token = (tokenInput.value || '').trim();
-            if (!token) return;
-            setCookie(token, 60 * 60 * 24 * 7);
-            window.location.reload();
-        });
-    }
-
-    if (clearToken) {
-        clearToken.addEventListener('click', () => {
-            setCookie('', 0);
-            window.location.reload();
-        });
-    }
-
     const refForm = document.getElementById('reference-cities-form');
     const rows = document.getElementById('reference-cities-rows');
     const addBtn = document.getElementById('add-reference-city');
