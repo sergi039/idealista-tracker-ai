@@ -36,6 +36,21 @@ def test_extract_price_handles_dot_separators_for_price_reduction_emails():
 
 
 @pytest.mark.parametrize(
+    "price_text, expected",
+    [
+        ("59000 €", 59000.0),
+        ("1.234,56 €", 1234.56),
+        ("1,234.56 €", 1234.56),
+    ],
+)
+def test_extract_price_handles_plain_and_decimal_prices(price_text, expected):
+    """Regression for GH #65: the legacy parser must consume the whole
+    anchored price instead of returning a trailing digit-group fragment."""
+    parser = EmailParser()
+    assert parser._extract_price(price_text) == expected
+
+
+@pytest.mark.parametrize(
     "area_text, expected",
     [
         ("1.373 m²", 1373.0),  # Spanish thousands grouping (dot)
