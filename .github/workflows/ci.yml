@@ -28,3 +28,21 @@ jobs:
 
       - name: Run test suite
         run: uv run pytest tests/ -v
+
+  bundles:
+    name: no-source-bundles
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Reject committed archives and source dumps
+        run: |
+          hits=$(git ls-files -- '*.zip' '*.tar.gz' '*.tgz' '*all_code.txt')
+          if [ -n "$hits" ]; then
+            echo "::error::Source bundles must never be committed (issue #29):"
+            echo "$hits"
+            exit 1
+          fi
+          echo "OK: no source bundles tracked"
