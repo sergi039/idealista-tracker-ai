@@ -90,7 +90,15 @@ def test_land(app):
 
 @pytest.fixture
 def scoring_criteria(app):
-    """Create test scoring criteria"""
+    """Create test scoring criteria.
+
+    Every name here is a real criterion, i.e. a key of
+    Config.DEFAULT_SCORING_WEIGHTS, and the weights sum to 1.0 so that
+    load_custom_weights' MCDM normalization is an identity. `location_quality`
+    used to be `neighborhood`, which is a land data field with a scorer but has
+    never been a weighted criterion: load_custom_weights now drops rows whose
+    name is not a criterion (#47), so it no longer counted toward the total.
+    """
     with app.app_context():
         criteria = [
             ScoringCriteria(
@@ -101,7 +109,7 @@ def scoring_criteria(app):
             ),
             ScoringCriteria(criteria_name="transport", weight=Decimal("0.20")),
             ScoringCriteria(criteria_name="environment", weight=Decimal("0.15")),
-            ScoringCriteria(criteria_name="neighborhood", weight=Decimal("0.15")),
+            ScoringCriteria(criteria_name="location_quality", weight=Decimal("0.15")),
             ScoringCriteria(criteria_name="services_quality", weight=Decimal("0.10")),
             ScoringCriteria(criteria_name="legal_status", weight=Decimal("0.05")),
         ]
