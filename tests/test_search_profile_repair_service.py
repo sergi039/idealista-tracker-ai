@@ -642,6 +642,52 @@ def test_an_unrecognisable_listing_blocks_a_promotion(app):
         assert [g["name"] for g in report["blocked_groups"]] == [full]
 
 
+def test_a_pinned_listing_keeps_its_saved_search_in_the_projection(app):
+    """Moving a fragment's listings out does not empty it if some are pinned.
+
+    Profile 2 is a fold fragment of both saved searches. The first group
+    takes its movable listings, but a hand-pinned one stays -- so the profile
+    still holds that search. Dropping the name from the projection makes the
+    second group see a clean profile, rename it, and leave the pinned listing
+    sitting under somebody else's saved search.
+    """
+    first = "aaa bbb"
+    second = "aaa ccc"
+
+    with app.app_context():
+        db.session.add_all(
+            [
+                SearchProfile(id=1, name=first, is_active=True),
+                SearchProfile(id=2, name="aaa", is_active=True),
+            ]
+        )
+        _add_listings(1, _plain(first), 1, "home")
+        _add_listings(2, _folded_at(first, "aaa"), 2, "movable")
+        _add_listings(2, _folded_at(second, "aaa"), 3, "second")
+        db.session.add(
+            Property(
+                source_email_id="imap_pinned",
+                email_subject=_folded_at(first, "aaa"),
+                search_profile_id=2,
+                enrichment={"profile_assignment": {"manual_override": True}},
+                title="pinned by hand",
+            )
+        )
+        db.session.commit()
+
+        report = SearchProfileRepairService.apply()
+
+        assert db.session.get(SearchProfile, 2).name == "aaa", (
+            "a profile still holding a pinned listing of another saved search "
+            "must not be renamed after this one"
+        )
+        pinned = Property.query.filter_by(source_email_id="imap_pinned").first()
+        assert pinned.search_profile_id == 2
+        assert _count(1) == 3, "only the movable listings moved"
+        assert _count(2) == 4, "the pinned one plus the second saved search"
+        assert [g["name"] for g in report["blocked_groups"]] == [second]
+
+
 def test_a_deliberate_profile_keeps_its_listings_when_a_real_fragment_is_merged(app):
     """A fold fragment is repaired; the geo-placed profile beside it is not."""
     full = "alpha beta gamma"
@@ -1040,6 +1086,54 @@ def test_a_listing_moved_away_after_planning_is_not_dragged_back(
 
         db.session.expire_all()
         assert db.session.get(Property, victim_id).search_profile_id == 6
+        assert _count(TARGET_ID) == FRAGMENTS[TARGET_ID][2], "nothing was committed"
+
+
+def test_a_profile_renamed_after_planning_aborts_the_repair(fragmented, monkeypatch):
+    """The plan decided what to merge from the names it read.
+
+    Counts and pins are already re-checked before anything is applied; the
+    name was not, so a profile renamed in between sailed through and the
+    listings landed in a profile that is no longer the one the plan chose.
+    """
+    with fragmented.app_context():
+
+        def rename_the_survivor():
+            db.session.get(SearchProfile, TARGET_ID).name = "renamed by someone else"
+
+        _plan_then(monkeypatch, rename_the_survivor)
+
+        report = SearchProfileRepairService.apply()
+
+        assert report["status"] == "mismatch"
+        assert any("renamed after planning" in m for m in report["errors"])
+
+        db.session.expire_all()
+        assert _count(TARGET_ID) == FRAGMENTS[TARGET_ID][2], "nothing was committed"
+        for fragment_id in FRAGMENT_IDS:
+            assert db.session.get(SearchProfile, fragment_id) is not None
+
+
+def test_a_fragment_made_default_after_planning_aborts_the_repair(
+    fragmented, monkeypatch
+):
+    """A profile that became the default must not be deleted as an empty one."""
+    with fragmented.app_context():
+
+        def promote_to_default():
+            db.session.get(SearchProfile, 9).is_default = True
+
+        _plan_then(monkeypatch, promote_to_default)
+
+        report = SearchProfileRepairService.apply()
+
+        assert report["status"] == "mismatch"
+        assert any("default" in m for m in report["errors"])
+
+        db.session.expire_all()
+        assert db.session.get(SearchProfile, 9) is not None, (
+            "the new default profile must not be deleted"
+        )
         assert _count(TARGET_ID) == FRAGMENTS[TARGET_ID][2], "nothing was committed"
 
 

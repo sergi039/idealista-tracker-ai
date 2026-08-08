@@ -115,6 +115,13 @@ What the code guarantees on its own, with another writer running
   ``INSERT`` into ``properties`` referencing it needs a ``FOR KEY SHARE``
   lock on that same row, so a concurrent ingestion waits for this
   transaction and then fails its foreign key rather than slipping in.
+- **The plan is re-checked against the database before any of it is applied.**
+  Every profile it touches is re-read -- by column, so a stale object from
+  planning cannot answer -- and its name and default flag compared with what
+  the plan decided from. Each reassignment names the profile the row is
+  expected to be in, and every planned row's pinned state is read again after
+  the moves. A profile renamed, a profile made default, a listing moved or
+  pinned in between: each aborts before COMMIT.
 - **The counts in the report were verified**, twice, inside the transaction.
 - **The exit code does not overstate what is known** (table below).
 
@@ -328,6 +335,7 @@ class RepairPlan:
     profiles_to_delete: List[int] = field(default_factory=list)
     profiles_retained: List[Dict[str, int]] = field(default_factory=list)
     profile_names: Dict[int, str] = field(default_factory=dict)
+    profile_defaults: Dict[int, bool] = field(default_factory=dict)
     left_in_place: List[Dict[str, Any]] = field(default_factory=list)
     unresolved_properties: int = 0
     orphan_properties: int = 0
@@ -482,6 +490,11 @@ class _Planner:
         self.replayed: Dict[tuple, set] = {}
         self.unresolved_by_profile: Dict[int, int] = {}
         self.left_in_place: Dict[tuple, Dict[str, Any]] = {}
+        # {(profile id, canonical name): listings the profile will still hold
+        # once the plan runs}. Pinned rows never leave, so a fragment can give
+        # up its movable listings and still hold that saved search -- which is
+        # what decides whether the name may drop out of the projection.
+        self.remaining: Dict[tuple, int] = {}
 
     def add_unresolved(self, profile_id: int) -> None:
         """A listing in this profile whose saved-search name cannot be read."""
@@ -506,6 +519,8 @@ class _Planner:
         self.replayed.setdefault((profile_id, canonical), set()).add(
             _canonical_profile_name(replayed) if replayed else None
         )
+        key = (profile_id, canonical)
+        self.remaining[key] = self.remaining.get(key, 0) + 1
         if pinned:
             # Owner's choice. It still counts towards what the profile holds --
             # so it can stop a rename and keep the profile from being deleted --
@@ -688,10 +703,20 @@ class _Planner:
         if rename_to:
             self.effective_names[target.id] = rename_to
         for fragment_id in fragment_ids:
-            # Every listing of this name leaves the fragment...
-            self.projected_names.get(fragment_id, set()).discard(canonical)
-        # ...and arrives at the target, which from here on counts as holding
-        # this saved search even if it held none of it a moment ago.
+            leaving = len(property_ids[fragment_id])
+            key = (fragment_id, canonical)
+            self.remaining[key] = self.remaining.get(key, 0) - leaving
+            # The name drops out of the projection only when nothing of this
+            # saved search is left. Pinned listings do not move, so a fragment
+            # that had one still holds the search afterwards -- and renaming it
+            # after some *other* search would strand that listing under a name
+            # that is not its own.
+            if self.remaining[key] <= 0:
+                self.projected_names.get(fragment_id, set()).discard(canonical)
+            # ...while the target gains them, and from here on counts as
+            # holding this saved search even if it held none a moment ago.
+            target_key = (target.id, canonical)
+            self.remaining[target_key] = self.remaining.get(target_key, 0) + leaving
         self.projected_names.setdefault(target.id, set()).add(canonical)
 
         group = GroupPlan(
@@ -722,6 +747,9 @@ def build_plan() -> RepairPlan:
     plan = RepairPlan()
     profiles = SearchProfile.query.order_by(SearchProfile.id.asc()).all()
     plan.profile_names = {profile.id: profile.name for profile in profiles}
+    plan.profile_defaults = {
+        profile.id: bool(profile.is_default) for profile in profiles
+    }
     plan.counts_before = _profile_property_counts()
 
     # Everything is keyed by *canonical* name. "ALPHA" and "Alpha" are one
@@ -835,6 +863,52 @@ def _counts_report(
             {"profile_id": None, "name": None, "properties": counts.get(None, 0)}
         )
     return report
+
+
+def _verify_profile_metadata(plan: RepairPlan) -> List[str]:
+    """Re-read the profiles the plan touches and compare them with the snapshot.
+
+    Counts and pins were already re-checked before anything is applied, so the
+    contract "verify the snapshot before acting on it" is settled; name and
+    `is_default` had simply fallen out of it. They decide what gets renamed and
+    what may be deleted, so a profile renamed or made default in between would
+    otherwise sail through every other check.
+
+    Reads columns rather than entities on purpose: an ORM `get()` can hand back
+    the instance loaded during planning, which is exactly the stale answer this
+    is trying to catch.
+    """
+    involved = sorted(
+        {group.target_id for group in plan.groups}
+        | {fid for group in plan.groups for fid in group.fragment_ids}
+        | set(plan.profiles_to_delete)
+    )
+    problems: List[str] = []
+    for chunk in _chunks(involved, UPDATE_CHUNK):
+        rows = (
+            db.session.query(
+                SearchProfile.id, SearchProfile.name, SearchProfile.is_default
+            )
+            .filter(SearchProfile.id.in_(chunk))
+            .all()
+        )
+        found = {profile_id for profile_id, _, _ in rows}
+        for profile_id, name, is_default in rows:
+            planned_name = plan.profile_names.get(profile_id)
+            if name != planned_name:
+                problems.append(
+                    f"profile {profile_id} was renamed after planning: the plan "
+                    f"read {planned_name!r}, the database now says {name!r}"
+                )
+            if bool(is_default) != plan.profile_defaults.get(profile_id, False):
+                problems.append(
+                    f"profile {profile_id} changed its default flag after "
+                    f"planning (now is_default={bool(is_default)})"
+                )
+        for profile_id in chunk:
+            if profile_id not in found:
+                problems.append(f"profile {profile_id} disappeared after planning")
+    return problems
 
 
 def _pinned_among(property_ids: Sequence[int]) -> List[int]:
@@ -1004,9 +1078,18 @@ class SearchProfileRepairService:
             return report
 
         try:
+            # Nothing has been written yet, so this compares the plan against
+            # the database as it stands. Expiring first means the checks below
+            # -- and the objects mutated after them -- come from the database
+            # rather than from whatever planning happened to load.
+            db.session.expire_all()
+            errors.extend(_verify_profile_metadata(plan))
+            if errors:
+                return abort(errors)
+
             for group in plan.groups:
                 target = db.session.get(SearchProfile, group.target_id)
-                if target is None:  # pragma: no cover - planned one query ago
+                if target is None:  # pragma: no cover - checked one query ago
                     errors.append(f"target profile {group.target_id} disappeared")
                     continue
                 for name, value in group.updates.items():
