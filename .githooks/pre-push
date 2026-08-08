@@ -1,0 +1,28 @@
+#!/bin/bash
+# Pre-push gate: runs tools/ci/local_ci.sh before letting a push reach GitHub
+# (issue #74). Enabled per-clone via tools/ci/install_hooks.sh.
+#
+# Bypass for one push:      SKIP_LOCAL_CI=1 git push
+# Bypass for the autopilot: run_issue.sh sets AUTOPILOT_LOCAL_CI_DONE=1 after
+#   it already ran the full suite itself, so the hook does not run it twice.
+
+if [ "${SKIP_LOCAL_CI:-0}" = "1" ]; then
+    echo "pre-push: SKIP_LOCAL_CI=1 set, skipping local CI gate"
+    exit 0
+fi
+
+if [ "${AUTOPILOT_LOCAL_CI_DONE:-0}" = "1" ]; then
+    echo "pre-push: autopilot already ran the full suite this run, skipping local CI gate"
+    exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+
+if ! "${repo_root}/tools/ci/local_ci.sh"; then
+    echo
+    echo "pre-push: local CI gate failed - push aborted."
+    echo "Fix the failures above, or bypass once with: SKIP_LOCAL_CI=1 git push"
+    exit 1
+fi
+
+exit 0
