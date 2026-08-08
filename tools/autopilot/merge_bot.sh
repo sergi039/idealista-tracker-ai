@@ -38,13 +38,26 @@ JOURNAL="${AUTOPILOT_REVIEW_JOURNAL:-${REPO_DIR}/data/autopilot-reviews.tsv}"
 # Overridable for a dry run against a repository whose protection is not set up.
 REQUIRED_CHECKS_OVERRIDE="${AUTOPILOT_REQUIRED_CHECKS:-}"
 
+# One newline-separated name per line: a check may legitimately be called
+# "Unit tests / pytest", and word-splitting would turn that into four names
+# that match nothing, quietly blocking every PR.
 required_checks() {
     if [ -n "$REQUIRED_CHECKS_OVERRIDE" ]; then
-        printf '%s' "$REQUIRED_CHECKS_OVERRIDE"
+        printf '%s\n' $REQUIRED_CHECKS_OVERRIDE
         return 0
     fi
     gh api "repos/${REPO_SLUG}/branches/${BASE_BRANCH}/protection/required_status_checks" \
-        --jq '.contexts | join(" ")' 2>/dev/null || true
+        --jq '.contexts[]' 2>/dev/null || true
+}
+
+# The bot no longer re-checks the base before merging, because `strict` makes
+# GitHub refuse a behind-branch atomically. That deletion is only sound while
+# `strict` is actually on - switch it off and the guarantee vanishes with no
+# sign in the log. Verify it, and refuse to merge rather than merge blind.
+strict_protection_is_on() {
+    [ -n "$REQUIRED_CHECKS_OVERRIDE" ] && return 0
+    [ "$(gh api "repos/${REPO_SLUG}/branches/${BASE_BRANCH}/protection/required_status_checks" \
+        --jq '.strict' 2>/dev/null)" = "true" ]
 }
 
 DRY_RUN=0
@@ -122,16 +135,17 @@ ci_is_green() {
     # SKIPPED and NEUTRAL are tolerated *alongside* real results, never instead
     # of them: a run where every check skipped verifies exactly as much as a run
     # with no checks at all, and must not read as green.
-    for required in $(required_checks); do
-        local state
+    local required state missing=0
+    while IFS= read -r required; do
+        [ -n "$required" ] || continue
         state="$(printf '%s' "$checks" \
             | jq -r --arg n "$required" '[.[] | select(.name == $n) | .state] | first // "MISSING"')"
         if [ "$state" != "SUCCESS" ]; then
             log "  PR #${pr}: required check '${required}' is ${state}, not SUCCESS"
-            return 1
+            missing=1
         fi
-    done
-    return 0
+    done <<<"$(required_checks)"
+    [ "$missing" = "0" ]
 }
 
 # A BLOCKER that only reaches data/autopilot-merge.log is a verdict nobody
@@ -260,6 +274,16 @@ if ! git fetch --quiet origin "$BASE_BRANCH"; then
 fi
 BASE_SHA="$(git rev-parse "origin/${BASE_BRANCH}")"
 log "merge base: ${BASE_SHA:0:7}"
+
+# Fail closed. Everything below assumes GitHub will reject a merge whose branch
+# is behind; without `strict` that assumption is silently false and the bot
+# would merge a diff nobody reviewed.
+if ! strict_protection_is_on; then
+    log "FATAL: ${BASE_BRANCH} protection does not have strict (require branches up to date)."
+    log "       The bot relies on it instead of re-checking the base itself. Enable it with:"
+    log "       gh api -X PATCH repos/${REPO_SLUG}/branches/${BASE_BRANCH}/protection/required_status_checks -f strict=true"
+    exit 1
+fi
 
 if [ -n "$ONLY_PR" ]; then
     pr_query="$(gh pr view "$ONLY_PR" --repo "$REPO_SLUG" \
