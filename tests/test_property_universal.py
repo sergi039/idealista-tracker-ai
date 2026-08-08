@@ -13,6 +13,7 @@ from services.search_profile_service import SearchProfileService
 from tests import setup_test_environment
 from utils.cache import cache
 from utils.idealista_extractors import (
+    extract_area_m2,
     extract_listing_title,
     extract_municipality_from_title,
     extract_price,
@@ -110,6 +111,34 @@ def test_extract_price_handles_thousands_grouped_and_plain_listing_emails(
     """
     assert extract_price(html) == expected
     assert extract_price(price_text) == expected
+
+
+@pytest.mark.parametrize(
+    "area_text, expected",
+    [
+        ("1.373 m²", 1373.0),  # Spanish thousands grouping (dot)
+        ("25.000 m²", 25000.0),  # Spanish thousands grouping, round number
+        ("1373 m²", 1373.0),  # plain digits, no separator
+        ("1,373 m²", 1373.0),  # English thousands grouping (comma)
+    ],
+)
+def test_extract_area_m2_handles_spanish_format_and_unseparated_areas(
+    area_text, expected
+):
+    """Regression for GH #22: extract_area_m2() had the same unanchored-regex
+    defect as extract_price() (#21) -- the comma-pattern matched the "373"
+    tail of "1.373 m²" before the dot-pattern was tried, returning 373.0
+    instead of 1373.0, and "25.000 m²" returned 0.0 outright. Mirrors a plain
+    listing alert email where the area appears alongside the price."""
+    html = f"""
+    <html><body>
+      <a href="https://www.idealista.com/en/inmueble/223/">Plot in calle Foo, Bar</a>
+      <div>59.000 €</div>
+      <div>{area_text}</div>
+    </body></html>
+    """
+    assert extract_area_m2(html) == expected
+    assert extract_area_m2(area_text) == expected
 
 
 @pytest.mark.parametrize(

@@ -37,13 +37,24 @@ _PRICE_CHANGE_PATTERNS = [
     rf"\bde\s+{_PRICE_NUMBER}\s*€\s+a\s+{_PRICE_NUMBER}\s*€",
 ]
 
-# Area patterns (m² / m2; no minimum threshold)
+# Area patterns (m² / m2; no minimum size threshold -- this extractor covers
+# every property type, from small apartments to large plots).
+#
+# Reuses the same anchored, dual-grammar grouped-number regex as prices
+# (_PRICE_NUMBER above) because the underlying defect is identical (GH #22,
+# same root cause as #21 for extract_price()): an unanchored
+# `\d{1,3}(?:[.,]\d{3})*` pattern can match a trailing digit-group fragment of
+# a longer number, e.g. matching "373" out of "1.373 m²" instead of the whole
+# "1.373". Anchoring makes that fragment match structurally impossible.
+_AREA_NUMBER = _PRICE_NUMBER
 _AREA_PATTERNS = [
-    r"(\d{1,3}(?:,\d{3})*)\s*m[²2]",
-    r"(\d{1,3}(?:\.\d{3})*)\s*m[²2]",
-    r"(\d+)\s*m[²2]",
-    r"Superficie:?\s*(\d+(?:,\d+)?)\s*m[²2]",
+    rf"Superficie:?\s*{_AREA_NUMBER}\s*m[²2]",
+    rf"{_AREA_NUMBER}\s*m[²2]",
 ]
+
+# A parsed area of 0 (or negative) is never a real size -- reject it rather
+# than returning a bogus sub-1m² value from a mis-scan.
+_AREA_SANITY_FLOOR = 0.0
 
 _ANCHOR_RE = re.compile(
     r'<a\b[^>]*href=["\'](?P<href>[^"\']+)["\'][^>]*>(?P<text>.*?)</a>',
@@ -240,18 +251,26 @@ def extract_price_change(text: str) -> Tuple[Optional[float], Optional[float]]:
 def extract_area_m2(text: str) -> Optional[float]:
     if not text:
         return None
-    text = _strip_html(text)
+    plain = _strip_html(text)
+
+    # Collect every match from every pattern (instead of first-pattern-wins)
+    # and prefer the longest leftmost match: a longer match at the same
+    # position captures the whole number rather than a trailing fragment of
+    # it, and the leftmost position mirrors how the value appeared in the
+    # original one-search-per-pattern code for ordinary single-area text.
+    candidates: list[tuple[int, int, float]] = []
     for pattern in _AREA_PATTERNS:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if not match:
-            continue
-        area_str = match.group(1)
-        area_str = area_str.replace(",", "").replace(".", "")
-        try:
-            return float(area_str)
-        except ValueError:
-            continue
-    return None
+        for m in re.finditer(pattern, plain, re.IGNORECASE):
+            parsed = _parse_number_groups(m.groups())
+            if parsed is None or parsed <= _AREA_SANITY_FLOOR:
+                continue
+            candidates.append((m.start(), -(m.end() - m.start()), parsed))
+
+    if not candidates:
+        return None
+
+    candidates.sort()
+    return candidates[0][2]
 
 
 def _strip_html(value: str) -> str:
