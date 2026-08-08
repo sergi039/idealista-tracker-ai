@@ -90,7 +90,18 @@ and TODO.md; respect it if you ever run both side by side.
   https://github.com/sergi039/idealista-tracker-ai/issues. An AgentsRoom
   board card, when used, is only a launch wrapper titled `#NN: …`.
 - Branch from `main` (agent branches use `claude/**` or `codex/**`
-  prefixes), merge back via PR. There is no CI yet (issue #31): run
-  `pytest tests/ -v` locally before claiming done and paste real output.
+  prefixes), merge back via PR. `main` is protected — no force-push, no
+  deletion, changes only through a PR, admins included — so a direct
+  push is rejected.
+- CI exists (`.github/workflows/ci.yml`; issue #31 closed 2026-08-07):
+  it runs on every PR and on push to `main`, with actions pinned by SHA.
+  Two jobs — `pytest` does `uv sync --frozen` + `uv run pytest tests/ -v`
+  on Python 3.11; `no-source-bundles` fails when an archive or source
+  dump is tracked (issue #29). Neither is a *required* status check yet,
+  so a red run does not block a merge by itself — read the run before
+  merging.
+- Run `uv run pytest tests/ -q` locally and paste the real output before
+  claiming done. That is a standing owner requirement in its own right,
+  not a stand-in for CI.
 - A local PostToolUse hook auto-runs `ruff check --fix` and `ruff format`
   on edited Python files — do not fight it.
