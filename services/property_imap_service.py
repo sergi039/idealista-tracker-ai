@@ -180,6 +180,61 @@ class PropertyIMAPService:
                     text_parts.append(payload.decode("utf-8", errors="ignore"))
         return "\n".join(text_parts)
 
+    @classmethod
+    def _is_listing_url(cls, url: Optional[str]) -> bool:
+        """True only for a URL that identifies exactly one Idealista listing.
+
+        A row created from anything else carries `idealista_property_id=None`,
+        so it can never be deduped by id, and exact-URL matching is defeated by
+        the per-email UTM parameters. Recommendation/digest/promo emails linking
+        to the homepage or to a search page therefore inserted a fresh junk row
+        on every full sync (issue #25). The legacy pipeline rejects those URLs
+        (services/imap_service.py); this is the same gate, expressed as
+        "the URL must yield a property id".
+        """
+        if not url:
+            return False
+        if "utm_link=logo" in url.lower():
+            return False
+        return cls._PROPERTY_ID_RE.search(url) is not None
+
+    @staticmethod
+    def _find_properties(
+        idealista_id: Optional[int],
+        url: Optional[str],
+        profile_id: Optional[int],
+        profile_agnostic_fallback: bool,
+    ) -> List[Property]:
+        """Look up the rows an incoming email refers to.
+
+        The profile-scoped query stays the primary one, so a listing that
+        legitimately belongs to two saved searches keeps one row per profile.
+        But `SearchProfileService.resolve_profile()` auto-creates profiles from
+        whatever saved-search name it can read out of the email, and price-change
+        and "no longer listed" templates do not carry that name the way a listing
+        email does. When the profile differs from the one the row was stored
+        under, the scoped query misses and the update used to no-op silently.
+        For those two email kinds we therefore fall back to a lookup by
+        `idealista_property_id` alone, which is globally unique per listing
+        (issue #25).
+        """
+        matches: List[Property] = []
+        if idealista_id:
+            matches = Property.query.filter_by(
+                idealista_property_id=idealista_id, search_profile_id=profile_id
+            ).all()
+            if not matches and profile_agnostic_fallback:
+                matches = Property.query.filter_by(
+                    idealista_property_id=idealista_id
+                ).all()
+        if not matches and url:
+            matches = Property.query.filter_by(
+                url=url, search_profile_id=profile_id
+            ).all()
+            if not matches and profile_agnostic_fallback:
+                matches = Property.query.filter_by(url=url).all()
+        return matches
+
     @staticmethod
     def _infer_deal_type(subject: str, body: str, url: Optional[str]) -> str:
         text = f"{subject}\n{body}\n{url or ''}"
@@ -346,6 +401,16 @@ class PropertyIMAPService:
 
                         url = extract_url(body) or extract_url(subject)
                         if not url:
+                            continue
+                        if not self._is_listing_url(url):
+                            # Nothing downstream can dedupe such a row, so this
+                            # is a deliberate skip, not a parser gap: the UID is
+                            # resolved and the email never comes back.
+                            logger.info(
+                                "Skipping UID %s: %r is not a single-listing URL",
+                                uid,
+                                url[:120],
+                            )
                             continue
 
                         deal_type = self._infer_deal_type(subject, body, url)
@@ -535,16 +600,23 @@ class PropertyIMAPService:
                         idealista_id = email_data.get(
                             "idealista_property_id"
                         ) or extract_idealista_property_id(url)
-                        matches: List[Property] = []
-                        if idealista_id:
-                            matches = Property.query.filter_by(
-                                idealista_property_id=idealista_id,
-                                search_profile_id=profile_id,
-                            ).all()
-                        if not matches and url:
-                            matches = Property.query.filter_by(
-                                url=url, search_profile_id=profile_id
-                            ).all()
+                        # A delisting is a fact about the listing, not about the
+                        # saved search it arrived through: match across profiles
+                        # rather than let a mismatched profile leave a removed
+                        # property sitting there as "active" (issue #25).
+                        matches: List[Property] = self._find_properties(
+                            idealista_id,
+                            url,
+                            profile_id,
+                            profile_agnostic_fallback=True,
+                        )
+                        if not matches:
+                            logger.info(
+                                "No property matched a 'no longer listed' email "
+                                "(idealista_property_id=%s, url=%s)",
+                                idealista_id,
+                                url,
+                            )
 
                         updated = 0
                         for prop in matches:
@@ -568,16 +640,20 @@ class PropertyIMAPService:
                         "idealista_property_id"
                     ) or extract_idealista_property_id(url)
 
-                    existing: List[Property] = []
-                    if idealista_id:
-                        existing = Property.query.filter_by(
-                            idealista_property_id=idealista_id,
-                            search_profile_id=profile_id,
-                        ).all()
-                    if not existing and url:
-                        existing = Property.query.filter_by(
-                            url=url, search_profile_id=profile_id
-                        ).all()
+                    is_price_change = (
+                        email_data.get("type") or ""
+                    ).strip().lower() == "price_change"
+
+                    # Only price-change emails look across profiles: a plain
+                    # listing email for a second saved search is supposed to get
+                    # its own row (see test_property_profile_dedup.py), and the
+                    # two cases are indistinguishable at this point.
+                    existing: List[Property] = self._find_properties(
+                        idealista_id,
+                        url,
+                        profile_id,
+                        profile_agnostic_fallback=is_price_change,
+                    )
 
                     raw_price = email_data.get("price")
                     new_price = None
@@ -666,6 +742,32 @@ class PropertyIMAPService:
                     if existing:
                         continue
 
+                    if is_price_change:
+                        # Price-change alerts are not listing-specific: their
+                        # body describes the change, not the property. Creating a
+                        # row from one produces a thin duplicate of a listing we
+                        # already track under another profile, and cross-ingests
+                        # listings from unrelated saved searches. The legacy
+                        # pipeline refuses this for the same reason
+                        # (services/imap_service.py) - issue #25.
+                        logger.info(
+                            "Skipping price-change email for an untracked listing "
+                            "(idealista_property_id=%s, url=%s)",
+                            idealista_id,
+                            url,
+                        )
+                        continue
+
+                    if not idealista_id:
+                        # No dedup key: such a row is re-inserted on every full
+                        # sync because the URL carries per-email UTM parameters.
+                        logger.info(
+                            "Skipping email %s: no Idealista listing id in %s",
+                            email_data.get("source_email_id"),
+                            url,
+                        )
+                        continue
+
                     email_date = self._parse_email_received_at(
                         email_data.get("email_received_at")
                     )
@@ -688,24 +790,6 @@ class PropertyIMAPService:
                     prop.description = email_data.get("description")
                     prop.attributes = email_data.get("attributes")
                     prop.email_date = email_date
-
-                    # If the first email we ingest is a price change, keep a baseline.
-                    if email_data.get("type") == "price_change":
-                        hint = email_data.get("previous_price_hint")
-                        if hint is not None and prop.price is not None:
-                            try:
-                                hint_f = float(hint)
-                                new_f = float(prop.price)
-                                prop.previous_price = hint_f
-                                prop.price_change_amount = new_f - hint_f
-                                prop.price_change_percentage = (
-                                    (prop.price_change_amount / hint_f) * 100
-                                    if hint_f > 0
-                                    else None
-                                )
-                                prop.price_changed_date = datetime.now(timezone.utc)
-                            except Exception:
-                                pass
 
                     db.session.add(prop)
                     db.session.commit()
