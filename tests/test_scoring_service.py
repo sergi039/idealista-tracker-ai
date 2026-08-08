@@ -337,7 +337,7 @@ class TestScoringService:
     def test_update_weights_with_existing_criteria(
         self, app, scoring_service, scoring_criteria
     ):
-        """Test updating existing criteria weights"""
+        """A legacy shared update writes both profiles used by scoring."""
         with app.app_context():
             new_weights = {
                 "infrastructure_basic": 0.30  # Update existing
@@ -347,11 +347,11 @@ class TestScoringService:
 
             assert result is True
 
-            # Verify existing criteria was updated
-            criteria = ScoringCriteria.query.filter_by(
-                criteria_name="infrastructure_basic"
-            ).first()
-            assert criteria.weight == Decimal("0.30")
+            for profile in ("investment", "lifestyle"):
+                criteria = ScoringCriteria.query.filter_by(
+                    criteria_name="infrastructure_basic", profile=profile
+                ).first()
+                assert criteria.weight == Decimal("0.30")
 
     def test_get_current_weights(self, app, scoring_service, scoring_criteria):
         """Test getting current weights"""

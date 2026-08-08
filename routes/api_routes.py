@@ -1357,10 +1357,9 @@ def update_criteria():
 
         weights = data["criteria"]
 
-        # Validate names and weights. Unknown names are rejected before any
-        # write: update_weights() stores them under profile='combined', the
-        # same namespace the investment/lifestyle mix lives in, so a name that
-        # is not a criterion silently repoints the combined score (#48).
+        # Validate names and weights at the JSON boundary too. The service
+        # repeats the name check before routing this shared update to both real
+        # scoring profiles; mix names remain reserved for their form endpoint.
         from services.scoring_service import known_criteria_names
 
         valid_criteria = known_criteria_names()

@@ -4,7 +4,7 @@
 row in the legacy namespace (`profile='combined' OR profile IS NULL`). That
 namespace holds two unrelated kinds of row and has no discriminator column:
 
-1. genuine legacy criterion weights, and
+1. genuine legacy criterion weights written by the pre-#27 implementation, and
 2. the `investment`/`lifestyle` pair written by
    `POST /criteria/update_combined_mix` - the ratio between the two profile
    scores, owned by `_load_combined_mix()`, not a criterion.
