@@ -122,7 +122,9 @@ def test_extract_price_handles_thousands_grouped_and_plain_listing_emails(
         ("1,373 m²", 1373.0),  # English thousands grouping (comma)
     ],
 )
-def test_extract_area_m2_handles_spanish_format_and_unseparated_areas(area_text, expected):
+def test_extract_area_m2_handles_spanish_format_and_unseparated_areas(
+    area_text, expected
+):
     """Regression for GH #22: extract_area_m2() had the same unanchored-regex
     defect as extract_price() (#21) -- the comma-pattern matched the "373"
     tail of "1.373 m²" before the dot-pattern was tried, returning 373.0

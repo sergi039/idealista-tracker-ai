@@ -19,7 +19,9 @@ _NUMBER_COMMA_GROUP = r"(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?![\
 _GROUPED_NUMBER = rf"(?:{_NUMBER_DOT_GROUP}|{_NUMBER_COMMA_GROUP})"
 
 
-def _parse_grouped_number(int_part: Optional[str], dec_part: Optional[str]) -> Optional[float]:
+def _parse_grouped_number(
+    int_part: Optional[str], dec_part: Optional[str]
+) -> Optional[float]:
     """Combine a group-separated integer part with an optional 1-2 digit
     decimal part into a float."""
     if int_part is None:
