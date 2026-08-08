@@ -550,12 +550,13 @@ class EnrichmentService:
                 nearby_places, failure = self._search_nearby_places(
                     lat, lon, place_types
                 )
-                if failure is not None and not nearby_places:
-                    # No answer for this amenity: leave its keys untouched
-                    # rather than recording "not available".
+                if failure is not None:
                     first_failure = first_failure or failure
                     failed_amenities.append(amenity)
-                    continue
+                    if not nearby_places:
+                        # No answer for this amenity: leave its keys untouched
+                        # rather than recording "not available".
+                        continue
 
                 if amenity in [
                     "supermarket",
@@ -605,10 +606,11 @@ class EnrichmentService:
                         places_for_transport, wide_failure = self._search_nearby_places(
                             lat, lon, place_types, radius=100000
                         )
-                        if wide_failure is not None and not places_for_transport:
+                        if wide_failure is not None:
                             first_failure = first_failure or wide_failure
                             failed_amenities.append(amenity)
-                            continue
+                            if not places_for_transport:
+                                continue
 
                     if places_for_transport:
                         transport[f"{amenity}_available"] = True
