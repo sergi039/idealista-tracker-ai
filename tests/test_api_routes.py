@@ -95,8 +95,16 @@ def test_criteria(app):
 class TestAPIHealthCheck:
     """Test API health check endpoint"""
 
-    def test_health_check(self, client):
+    def test_health_check(self, client, monkeypatch):
         """Test health check endpoint"""
+        monkeypatch.setattr(
+            "services.health_service.get_schema_status",
+            lambda _engine, _metadata: {"status": "ok"},
+        )
+        monkeypatch.setattr(
+            "services.scheduler_service.get_scheduler_status",
+            lambda: {"status": "running"},
+        )
         response = client.get("/api/healthz")
 
         assert response.status_code == 200

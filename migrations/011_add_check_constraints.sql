@@ -7,6 +7,12 @@
 -- ============================================================
 
 DO $$ BEGIN
+    ALTER TABLE lands ADD CONSTRAINT ck_lands_land_type_enum
+        CHECK (land_type IS NULL OR land_type IN ('developed', 'buildable'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
     ALTER TABLE lands ADD CONSTRAINT ck_lands_price_non_negative
         CHECK (price IS NULL OR price >= 0);
 EXCEPTION WHEN duplicate_object THEN NULL;

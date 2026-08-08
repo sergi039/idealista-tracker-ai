@@ -13,13 +13,12 @@ services:
       - .env
     environment:
       - DATABASE_URL=postgresql://${DB_USER:-idealista}:${DB_PASSWORD}@db:5432/${DB_NAME:-idealista_universal}
+      - AUTO_START_SCHEDULER=${AUTO_START_SCHEDULER:-true}
       # AI runs on the owner's subscriptions via the host bridge, never on API keys.
       - AI_BRIDGE_URL=${AI_BRIDGE_URL:-http://host.docker.internal:5061}
     extra_hosts:
       # Linux hosts need this mapping; Docker Desktop provides it natively.
       - "host.docker.internal:host-gateway"
-    command: >
-      gunicorn --bind 0.0.0.0:5001 --workers 1 --threads 4 main:app
     volumes:
       # Persist last seen UID
       - ./data:/app/data

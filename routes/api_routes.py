@@ -39,31 +39,15 @@ def get_job_status(job_id: str):
 
 @api_bp.route("/healthz")
 def health_check():
-    """Health check with dependency status.
+    """Return 200 only when the database schema and scheduler are ready."""
+    from services.health_service import collect_health_checks
 
-    Returns 200 when the app is running; individual dependency statuses
-    are reported in the JSON body so orchestration/monitoring can react.
-    """
-    checks = {}
-
-    # Database connectivity
-    try:
-        db.session.execute(db.text("SELECT 1"))
-        checks["database"] = "ok"
-    except Exception as exc:
-        logger.warning("Healthz: DB ping failed: %s", exc)
-        checks["database"] = "unavailable"
-
-    # Scheduler status
-    try:
-        from services.scheduler_service import get_scheduler_status
-
-        sched = get_scheduler_status()
-        checks["scheduler"] = sched.get("status", "unknown")
-    except Exception:
-        checks["scheduler"] = "unknown"
-
-    all_ok = checks.get("database") == "ok"
+    checks = collect_health_checks(db)
+    all_ok = checks == {
+        "database": "ok",
+        "schema": "ok",
+        "scheduler": "running",
+    }
     status_code = 200 if all_ok else 503
     return jsonify({"ok": all_ok, "checks": checks}), status_code
 
