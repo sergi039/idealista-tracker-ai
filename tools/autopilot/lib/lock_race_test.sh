@@ -12,7 +12,13 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB="${AUTOPILOT_LOCK_LIB:-${HERE}/lock.sh}"
-LOCK="${TMPDIR:-/tmp}/autopilot-lock-race-test.lock"
+# $$ in every scratch path, the lock included: two runs of this test on one
+# machine (two worktrees, two agents running pytest) must not share a lock
+# file. With a shared path, one instance's per-round `rm -f` unlinks the inode
+# the other instance's workers hold, and each instance's winner blocks the
+# other's contenders - rounds report 0 or 2 winners with the lock itself
+# working correctly. CI never sees this; a laptop running parallel agents does.
+LOCK="${TMPDIR:-/tmp}/autopilot-lock-race-test.$$.lock"
 RESULTS="${TMPDIR:-/tmp}/autopilot-lock-race-results.$$"
 WORKER="${TMPDIR:-/tmp}/autopilot-lock-race-worker.$$.sh"
 
