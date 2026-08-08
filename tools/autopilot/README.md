@@ -15,118 +15,27 @@ open issue ──▶ run_issue.sh ──▶ PR ──▶ CI (GitHub Actions)
                                   unhealthy? ──▶ rollback
 ```
 
-Nothing here bypasses a gate. A PR merges only with **green CI and a PASS from
-an independent reviewer**; a deploy survives only if `/api/healthz` answers
-`"ok":true` afterwards.
+Branch protection on `main` requires the status checks named in the protection
+itself and refuses any branch behind `main` — GitHub enforces both atomically at
+merge time. The bot does not re-implement them. It adds the gate GitHub has no
+concept of: **an independent reviewer must return PASS**.
 
-What counts as green is spelled out rather than inferred: every check in
-`AUTOPILOT_REQUIRED_CHECKS` (default `pytest no-source-bundles`) must report
-`SUCCESS`. A run where the required checks are absent, skipped or neutral
-verifies exactly as much as a run with no CI at all, and is refused.
+| Enforced by | What |
+|---|---|
+| GitHub branch protection | required checks green, branch up to date, PR required, no force-push |
+| `merge_bot.sh` | independent review, verdict bound to the exact diff, BLOCKER posted on the PR |
 
-## Scripts
-
-| Script | Does | Does not |
-|---|---|---|
-| `run_issue.sh <n>` | worktree, agent, full suite, push, open PR | merge anything |
-| `merge_bot.sh` | check CI, request review, squash-merge | write code |
-| `deploy_watcher.sh` | pull main, rebuild, health-check, roll back | merge anything |
-| `autopilot.sh` | one issue pass, then a merge pass | deploy |
-
-Every script takes a lock, so a slow run never overlaps the next tick.
-
-## Running it
-
-```bash
-tools/autopilot/autopilot.sh --dry-run      # decide and report, change nothing
-tools/autopilot/autopilot.sh                # one issue, then a merge pass
-tools/autopilot/autopilot.sh --issues 3     # three issues this pass
-tools/autopilot/merge_bot.sh --pr 57        # one specific PR
-tools/autopilot/run_issue.sh 24             # one specific issue
-```
-
-Logs live in `data/autopilot*.log`. Review verdicts are journalled in
-`data/autopilot-reviews.tsv`, keyed by `base..head` — a re-push or a moved base
-gets a fresh review, a re-run does not burn another reviewer attempt on an
-unchanged diff.
-
-`data/.deployed_sha` records the commit that is actually serving. The watcher
-compares it against `HEAD`, not just local git against remote git: a `git pull`
-run by hand leaves the checkout current while the container still runs the old
-build, and comparing only the two git refs reports "nothing to deploy" for a
-stale app. The marker is written after the health check passes, so it never
-names a build that failed.
-
-After a rollback the marker is written only when the rollback rebuilt from
-source — that path knows which commit is running. A rollback restored from the
-saved image does not: with no prior marker, that image can predate the checkout
-entirely, and claiming otherwise would make every later tick skip a redeploy
-the app actually needs. The marker is removed instead. One wasted rebuild beats
-a permanently wrong belief about what is running.
-
-## Scheduled deploys
-
-```bash
-cp tools/autopilot/com.idealista.deploy-watcher.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.idealista.deploy-watcher.plist
-```
-
-Polls every 5 minutes. GitHub Actions cannot reach this Mac — there is no
-self-hosted runner — so deployment is pull-based by necessity, not preference.
-
-To stop it:
-
-```bash
-launchctl unload ~/Library/LaunchAgents/com.idealista.deploy-watcher.plist
-```
-
-## Why it is shaped like this
-
-**One agent per issue.** PRs #57 and #58 both fixed issue #17, in different
-files, because two agents were pointed at the same issue. `run_issue.sh` refuses
-an issue that already has a branch or an open PR, and `autopilot.sh` filters
-claimed issues before spending an agent's hour.
-
-**A reviewer, not just tests.** The pre-existing suite mocked the IMAP services
-wholesale, so the `db.session` call that actually crashed never ran under test —
-issue #14 passed CI for six months while ingestion was dead. Green tests prove
-less than they look like they prove; the reviewer is asked specifically whether
-the tests mock past the failure.
-
-**Health-gated deploys.** `/api/healthz` reports the database and the scheduler
-separately. A deploy that leaves the scheduler `not_initialized` gets a warning
-in the log even when the page loads — that combination is precisely what
-"working app, no new data" looked like.
+**A verdict covers a diff, not a branch.** The journal key is `base..head`, so a
+PASS stops applying the moment either end moves, and `--match-head-commit`
+guarantees the merged commit is the reviewed one.
 
 **UNAVAILABLE is not PASS.** A reviewer that cannot run leaves the PR open.
 
-**A verdict covers a diff, not a branch.** The journal key is `base..head`, so
-a PASS stops applying the moment main moves — and the merge step re-checks the
-base one last time, because a review takes minutes and `--match-head-commit`
-only guards the head.
-
-**The branch must be up to date.** A PR that is behind main is refused before
-review, not merged and hoped for. `base..head` on a stale branch shows what the
-branch changes, which is not what will land: main tightens a helper, the branch
-adds a caller written against the old one, both sides review clean, and the
-merge combines them into something nobody saw. Requiring the branch to contain
-the current base makes the reviewed diff and the merged code the same thing.
-
-### Known residual risk: the base can move during the merge itself
-
-GitHub has no "merge only if the base is still X". Between the last base check
-and the `gh pr merge` call — a second or two — main can advance, and the squash
-lands on a base nobody reviewed. This cannot be closed from a script.
-
-The bot does two things about it rather than one: it re-checks the base as late
-as possible, and after every merge it reads the first parent of the squash
-commit and compares it to the reviewed base. A mismatch is logged as `ALERT`
-with the commit to inspect. Silent is not the same as safe.
-
-The actual fix is a repository setting the owner has to make — branch
-protection → **"Require branches to be up to date before merging"**. With it,
-GitHub itself refuses the merge when the base has moved. Worth turning on
-before letting this run unattended over a busy main.
+**The bot still checks CI and up-to-dateness before reviewing** — not as a gate,
+but to avoid spending a minutes-long review on a PR that protection will refuse,
+and to keep the reviewer looking at the diff that will actually land. The list
+of required checks is read from branch protection, so there is no second copy to
+drift.
 
 ## The lock
 
@@ -142,9 +51,19 @@ That test runs in CI via `tests/test_autopilot_lock.py`.
 bash tools/autopilot/lib/lock_race_test.sh
 ```
 
-Note that children inherit the lock along with fd 9 — fine for these scripts,
-whose subprocesses all exit before the script does, but worth knowing before
-adding a background job to one of them.
+Children inherit the lock along with fd 9, and that has a consequence worth
+stating plainly: **killing the script does not release the lock**. The kernel
+drops it when the *last* descriptor closes, so an orphaned `rx` or `codex exec`
+keeps the lock held long after its parent is gone, and the next tick reports
+"another run is in progress" with no such run in `ps`.
+
+Observed in practice on 2026-08-08, when another session killed a bot run to
+unblock a merge and had to hunt the orphans separately. To release a stuck lock,
+kill the whole family:
+
+```bash
+pkill -f merge_bot; pkill -f reviewer_coordinator; pkill -f "codex exec"
+```
 
 ## Requirements
 
