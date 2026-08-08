@@ -642,7 +642,12 @@ class ScoringService:
     def update_weights(
         self, new_weights: Dict[str, float], profile: str = "combined"
     ) -> bool:
-        """Update scoring weights for a specific profile and rescore all lands"""
+        """Update scoring weights for one or both profiles and rescore all lands.
+
+        ``combined`` is the legacy shared-criteria API, not a profile used by
+        the scoring calculation. Route those writes to both profiles so the
+        persisted rows become the weights that ``calculate_score`` reads.
+        """
         try:
             from models import ScoringCriteria, Land
             from app import db
@@ -652,29 +657,33 @@ class ScoringService:
                 logger.error(f"Invalid profile: {profile}")
                 return False
 
-            # Validate criterion names. This is the shared primitive behind both
-            # write endpoints, so it does not trust its callers: an unknown name
-            # written at profile='combined' lands in the same namespace as the
-            # investment/lifestyle mix rows and silently changes scoring (#48).
+            # Validate criterion names before expanding a shared write to both
+            # profiles. The service does not trust its endpoint callers, and mix
+            # names must remain reserved for _load_combined_mix() (#48).
             unknown_criteria = sorted(set(new_weights) - known_criteria_names())
             if unknown_criteria:
                 logger.error(f"Unknown scoring criteria: {unknown_criteria}")
                 return False
 
-            # Update or create criteria records for this profile
-            for criteria_name, weight in new_weights.items():
-                criterion = ScoringCriteria.query.filter_by(
-                    criteria_name=criteria_name, profile=profile
-                ).first()
+            target_profiles = (
+                ("investment", "lifestyle") if profile == "combined" else (profile,)
+            )
 
-                if criterion:
-                    criterion.weight = weight
-                else:
-                    criterion = ScoringCriteria()
-                    criterion.criteria_name = criteria_name
-                    criterion.profile = profile
-                    criterion.weight = weight
-                    db.session.add(criterion)
+            # Update or create criteria records in the profiles scoring reads.
+            for target_profile in target_profiles:
+                for criteria_name, weight in new_weights.items():
+                    criterion = ScoringCriteria.query.filter_by(
+                        criteria_name=criteria_name, profile=target_profile
+                    ).first()
+
+                    if criterion:
+                        criterion.weight = weight
+                    else:
+                        criterion = ScoringCriteria()
+                        criterion.criteria_name = criteria_name
+                        criterion.profile = target_profile
+                        criterion.weight = weight
+                        db.session.add(criterion)
 
             db.session.commit()
 
@@ -831,7 +840,7 @@ class ScoringService:
             return {}
 
     def _load_profile_weights(self, profile: str) -> Dict[str, float]:
-        """Load weights for a specific profile from database, fallback to Config"""
+        """Load profile weights from DB, legacy shared rows, or Config."""
         try:
             from models import ScoringCriteria
             from config import Config
@@ -841,10 +850,29 @@ class ScoringService:
                 active=True, profile=profile
             ).all()
 
+            source = f"{profile} profile"
+            if not criteria:
+                # Before #27, the legacy writers stored criterion rows in the
+                # non-scoring ``combined`` namespace. Keep those existing
+                # installations effective until a real profile is written.
+                criteria = (
+                    ScoringCriteria.query.filter_by(active=True)
+                    .filter(
+                        (ScoringCriteria.profile == "combined")
+                        | ScoringCriteria.profile.is_(None),
+                        ScoringCriteria.criteria_name.in_(known_criteria_names()),
+                    )
+                    .all()
+                )
+                source = "legacy shared"
+
             if criteria:
-                db_weights = {}
-                for criterion in criteria:
-                    db_weights[criterion.criteria_name] = float(criterion.weight)
+                valid_criteria = known_criteria_names()
+                db_weights = {
+                    criterion.criteria_name: float(criterion.weight)
+                    for criterion in criteria
+                    if criterion.criteria_name in valid_criteria
+                }
 
                 # Normalize DB weights (MCDM requirement)
                 total_weight = sum(db_weights.values())
@@ -853,7 +881,7 @@ class ScoringService:
                         k: v / total_weight for k, v in db_weights.items()
                     }
                     logger.info(
-                        f"Loaded {profile} profile weights from DB: {normalized_weights}"
+                        f"Loaded {source} weights from DB for {profile}: {normalized_weights}"
                     )
                     return normalized_weights
 

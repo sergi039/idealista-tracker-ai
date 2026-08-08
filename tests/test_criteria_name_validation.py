@@ -1,10 +1,10 @@
 """Regression tests for #48: criterion names are validated on the way in.
 
 `PUT /api/criteria` and `POST /criteria/update` used to validate weight
-*values* and nothing else. Both write through `ScoringService.update_weights()`,
-whose `profile` argument defaults to `'combined'` - the same namespace, and the
-same two names, that `_load_combined_mix()` reads the investment/lifestyle ratio
-from. So a request of
+*values* and nothing else. Both write through `ScoringService.update_weights()`.
+Before #27 remapped its logical `combined` target to the real scoring profiles,
+that default selected the same namespace and the same two names that
+`_load_combined_mix()` reads for the investment/lifestyle ratio. So a request of
 
     PUT /api/criteria {"criteria": {"investment": 0.9, "lifestyle": 0.1}}
 
@@ -80,6 +80,15 @@ def combined_rows(app):
         }
 
 
+def profile_rows(app, profile):
+    """Every criterion row in one real scoring profile."""
+    with app.app_context():
+        return {
+            row.criteria_name: float(row.weight)
+            for row in ScoringCriteria.query.filter_by(profile=profile).all()
+        }
+
+
 def load_mix(app):
     with app.app_context():
         return ScoringService()._load_combined_mix()
@@ -139,7 +148,9 @@ class TestApiRejectsUnknownCriteria:
 
         assert resp.status_code == 200
         assert json.loads(resp.data)["success"] is True
-        assert combined_rows(app) == {KNOWN_CRITERION: pytest.approx(0.3)}
+        for profile in ("investment", "lifestyle"):
+            assert profile_rows(app, profile) == {KNOWN_CRITERION: pytest.approx(0.3)}
+        assert combined_rows(app) == {}
 
     def test_put_cannot_repoint_the_combined_mix(self, app, client):
         """The damage this issue is actually about.
@@ -184,7 +195,9 @@ class TestFormRouteRejectsUnknownCriteria:
 
         assert resp.status_code == 302
         assert [c for c, _ in flashes(client)] == ["success"]
-        assert combined_rows(app) == {KNOWN_CRITERION: pytest.approx(0.3)}
+        for profile in ("investment", "lifestyle"):
+            assert profile_rows(app, profile) == {KNOWN_CRITERION: pytest.approx(0.3)}
+        assert combined_rows(app) == {}
 
     def test_form_cannot_repoint_the_combined_mix(self, app, client):
         set_combined_mix(client, 0.4, 0.6)
@@ -264,11 +277,17 @@ class TestUpdateWeightsRejectsUnknownCriteria:
             for profile in ("combined", "investment", "lifestyle"):
                 assert service.update_weights({KNOWN_CRITERION: 0.3}, profile=profile)
 
-                row = ScoringCriteria.query.filter_by(
-                    criteria_name=KNOWN_CRITERION, profile=profile
-                ).first()
-                assert row is not None
-                assert float(row.weight) == pytest.approx(0.3)
+                target_profiles = (
+                    ("investment", "lifestyle") if profile == "combined" else (profile,)
+                )
+                for target_profile in target_profiles:
+                    row = ScoringCriteria.query.filter_by(
+                        criteria_name=KNOWN_CRITERION, profile=target_profile
+                    ).first()
+                    assert row is not None
+                    assert float(row.weight) == pytest.approx(0.3)
+
+            assert ScoringCriteria.query.filter_by(profile="combined").count() == 0
 
     def test_every_default_criterion_is_accepted(self, app):
         """The known set is exactly Config.DEFAULT_SCORING_WEIGHTS, not a copy."""
@@ -277,8 +296,11 @@ class TestUpdateWeightsRejectsUnknownCriteria:
 
             assert service.update_weights(dict(Config.DEFAULT_SCORING_WEIGHTS))
 
-            written = {
-                row.criteria_name
-                for row in ScoringCriteria.query.filter_by(profile="combined").all()
-            }
-            assert written == set(Config.DEFAULT_SCORING_WEIGHTS)
+            for profile in ("investment", "lifestyle"):
+                written = {
+                    row.criteria_name
+                    for row in ScoringCriteria.query.filter_by(profile=profile).all()
+                }
+                assert written == set(Config.DEFAULT_SCORING_WEIGHTS)
+
+            assert ScoringCriteria.query.filter_by(profile="combined").count() == 0
