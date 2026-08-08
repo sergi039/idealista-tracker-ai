@@ -65,7 +65,9 @@ fi
 
 cd "$REPO_DIR" || { echo "repo not found: $REPO_DIR" >&2; exit 1; }
 
-log "=== autopilot pass start${DRY_RUN:+ (dry run)} ==="
+dry_run_note=""
+[ "$DRY_RUN" = "1" ] && dry_run_note=" (dry run)"
+log "=== autopilot pass start${dry_run_note} ==="
 
 # --- issues ----------------------------------------------------------------
 if [ "$MERGE_ONLY" = "0" ]; then

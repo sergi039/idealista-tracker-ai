@@ -46,8 +46,23 @@ tools/autopilot/run_issue.sh 24             # one specific issue
 ```
 
 Logs live in `data/autopilot*.log`. Review verdicts are journalled in
-`data/autopilot-reviews.tsv`, keyed by head SHA — a re-push gets a fresh review,
-a re-run does not burn another reviewer attempt on an unchanged diff.
+`data/autopilot-reviews.tsv`, keyed by `base..head` — a re-push or a moved base
+gets a fresh review, a re-run does not burn another reviewer attempt on an
+unchanged diff.
+
+`data/.deployed_sha` records the commit that is actually serving. The watcher
+compares it against `HEAD`, not just local git against remote git: a `git pull`
+run by hand leaves the checkout current while the container still runs the old
+build, and comparing only the two git refs reports "nothing to deploy" for a
+stale app. The marker is written after the health check passes, so it never
+names a build that failed.
+
+After a rollback the marker is written only when the rollback rebuilt from
+source — that path knows which commit is running. A rollback restored from the
+saved image does not: with no prior marker, that image can predate the checkout
+entirely, and claiming otherwise would make every later tick skip a redeploy
+the app actually needs. The marker is removed instead. One wasted rebuild beats
+a permanently wrong belief about what is running.
 
 ## Scheduled deploys
 
