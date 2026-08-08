@@ -1489,6 +1489,10 @@ def manual_property_enrichment(property_id: int):
     try:
         from models import Property
         from services.property_enrichment_service import PropertyEnrichmentService
+        from services.property_travel_service import (
+            TRAVEL_STATE_UNAVAILABLE,
+            travel_api_state,
+        )
 
         prop = db.get_or_404(Property, property_id)
 
@@ -1513,6 +1517,16 @@ def manual_property_enrichment(property_id: int):
                 return {
                     "success": True,
                     "message": "Property enriched successfully with Google API data",
+                }
+
+            # A refused API is not a bad address: say which one it was (#98).
+            if travel_api_state(prop_local) == TRAVEL_STATE_UNAVAILABLE:
+                return {
+                    "success": False,
+                    "error": (
+                        "Google refused every travel request; no data was stored. "
+                        "Check the API keys, billing and enabled APIs, then retry."
+                    ),
                 }
 
             return {

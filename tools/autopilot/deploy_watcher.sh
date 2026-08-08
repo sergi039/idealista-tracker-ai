@@ -56,6 +56,18 @@ if ! autopilot_acquire_lock "$LOCK_DIR"; then
 fi
 cd "$REPO_DIR" || die "repo not found: $REPO_DIR"
 
+# --- the tools have to be the right ones, not merely present ---------------
+# launchd resolves the first match on PATH, and this Mac carries a Homebrew
+# git 2.13 from 2017 in /usr/local/bin. It predates extensions.worktreeConfig,
+# so once a worktree set that flag it refused the repository outright - every
+# tick died on the first git call, into launchd's stderr file that nobody
+# reads, while the log below stayed silent and main quietly drifted ahead of
+# what was serving. Prove both tools work here rather than discovering it
+# halfway through a build.
+command -v docker >/dev/null 2>&1 || die "docker not on PATH (${PATH})"
+git rev-parse --git-dir >/dev/null 2>&1 \
+    || die "$(command -v git) ($(git --version 2>&1 | head -1)) cannot read ${REPO_DIR} - PATH is ${PATH}"
+
 # --- is there anything to deploy? ------------------------------------------
 current_branch="$(git rev-parse --abbrev-ref HEAD)"
 if [ "$current_branch" != "$BRANCH" ]; then
@@ -163,10 +175,14 @@ rollback() {
     # Rebuilding from the restored source is slower and can itself fail, but it
     # is the only remaining way back up. Try it whenever the image path did not
     # already restore service.
+    local rebuilt=0
     if [ "$restored" = "0" ]; then
         log "  falling back to a rebuild from ${local_sha:0:7}"
-        docker compose -f "$COMPOSE_FILE" up -d --build >>"$LOG_FILE" 2>&1 \
-            || log "  rollback rebuild failed"
+        if docker compose -f "$COMPOSE_FILE" up -d --build >>"$LOG_FILE" 2>&1; then
+            rebuilt=1
+        else
+            log "  rollback rebuild failed"
+        fi
     fi
 
     if ! check_health; then
@@ -187,6 +203,17 @@ rollback() {
     # wrong belief about what is running.
     if [ "$restored" = "1" ]; then
         clear_marker "restored from the saved image, whose commit is unknown"
+        return
+    fi
+
+    # A rebuild that failed leaves the previous container running, and a
+    # container that was never stopped answers healthz perfectly well - so
+    # "healthy" here does not mean local_sha is serving. Recording it anyway
+    # is how the marker came to claim e926de6 while the container still ran
+    # the build before it, and the watcher then skipped every later tick
+    # because marker == HEAD. Observed on 2026-08-08.
+    if [ "$rebuilt" = "0" ]; then
+        clear_marker "the rollback rebuild failed; the running build is unknown"
         return
     fi
 
