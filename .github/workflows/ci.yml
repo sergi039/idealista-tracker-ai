@@ -29,6 +29,41 @@ jobs:
       - name: Run test suite
         run: uv run pytest tests/ -v
 
+  lint:
+    # Lint gate that does not depend on anyone's local setup (issue #81).
+    # Until now the only thing enforcing ruff was a PostToolUse hook in an
+    # untracked .claude/settings.json on one Mac: it misses every author
+    # that does not edit through that tool (codex/* branches, the GitHub web
+    # editor, a fresh clone) and the pre-push hook is opt-in per clone.
+    #
+    # Same commands as tools/ci/local_ci.sh steps 1-2, run through the same
+    # uv + Python 3.11 setup as the pytest job, so `uv run ruff ...` locally
+    # reproduces a red run exactly - including the ruff version, which comes
+    # from uv.lock rather than from PATH.
+    name: ruff
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv + Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      # Reported even when the step above failed, so one run shows every
+      # problem instead of one class per push (same rationale as local_ci.sh).
+      - name: ruff format --check
+        if: ${{ !cancelled() }}
+        run: uv run ruff format --check .
+
   bundles:
     name: no-source-bundles
     runs-on: ubuntu-latest
