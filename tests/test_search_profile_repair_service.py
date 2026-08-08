@@ -145,6 +145,18 @@ def _count(profile_id):
     return Property.query.filter_by(search_profile_id=profile_id).count()
 
 
+def _add_listings(profile_id, subject, count, tag):
+    for index in range(count):
+        db.session.add(
+            Property(
+                source_email_id=f"imap_{tag}_{index}",
+                email_subject=subject,
+                search_profile_id=profile_id,
+                title=f"{tag} {index}",
+            )
+        )
+
+
 def test_name_is_recomputed_from_the_stored_folded_subject(fragmented):
     """No heuristics: every fragment's own subject already holds the full name."""
     with fragmented.app_context():
@@ -372,3 +384,109 @@ def test_properties_without_a_recoverable_name_are_reported_not_touched(app):
         )
         assert _count(TARGET_ID) == TOTAL_LISTINGS
         assert Property.query.filter(Property.search_profile_id.is_(None)).count() == 0
+
+
+def test_a_profile_holding_two_recoverable_names_is_never_promoted(app):
+    """One profile, two saved searches inside it, no profile carrying either.
+
+    Both groups would independently pick the same profile as their promotion
+    target -- nothing reserves it -- so the last one to run renames it and the
+    other group's listings silently keep pointing at a profile named after
+    someone else's saved search. A profile is only promotable when everything
+    it holds resolves to the one name.
+    """
+    with app.app_context():
+        db.session.add(
+            SearchProfile(id=5, name="Mixed bag", is_active=True, is_default=False)
+        )
+        _add_listings(5, "New home in your search: Alpha!", 3, "alpha")
+        _add_listings(5, "New home in your search: Beta!", 5, "beta")
+        db.session.commit()
+
+        report = SearchProfileRepairService.apply()
+
+        profile = db.session.get(SearchProfile, 5)
+        assert profile is not None
+        assert profile.name == "Mixed bag", (
+            "a profile holding two saved searches must not be renamed after one"
+        )
+        assert _count(5) == 8
+        assert _profile_ids() == [5]
+        assert report["properties_moved"] == 0
+        assert report["profiles_deleted"] == []
+        assert sorted(g["name"] for g in report["blocked_groups"]) == ["Alpha", "Beta"]
+
+
+def test_a_pure_profile_is_still_promoted_next_to_a_mixed_one(app):
+    """Blocking the ambiguous group must not block the unambiguous one."""
+    with app.app_context():
+        db.session.add_all(
+            [
+                SearchProfile(id=5, name="pure alpha", is_active=True),
+                SearchProfile(id=6, name="Mixed bag", is_active=True),
+            ]
+        )
+        _add_listings(5, "New home in your search: Alpha!", 3, "alpha_pure")
+        _add_listings(6, "New home in your search: Alpha!", 2, "alpha_mixed")
+        _add_listings(6, "New home in your search: Beta!", 4, "beta")
+        db.session.commit()
+
+        report = SearchProfileRepairService.apply()
+
+        assert db.session.get(SearchProfile, 5).name == "Alpha"
+        assert _count(5) == 5, "both runs of Alpha listings land on the promoted row"
+        assert db.session.get(SearchProfile, 6).name == "Mixed bag"
+        assert _count(6) == 4
+        assert [g["name"] for g in report["blocked_groups"]] == ["Beta"]
+        assert report["profiles_deleted"] == [], "profile 6 still holds Beta listings"
+
+
+def _flaky_counts(monkeypatch):
+    """Make the *post-commit* count query fail; the planning one still works."""
+    from services import search_profile_repair_service as module
+
+    real = module._profile_property_counts
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] > 1:  # the first call builds the plan, before the commit
+            raise RuntimeError("server closed the connection unexpectedly")
+        return real()
+
+    monkeypatch.setattr(module, "_profile_property_counts", flaky)
+
+
+def test_a_failure_after_the_commit_reports_committed_not_rolled_back(
+    fragmented, monkeypatch
+):
+    """A non-zero exit must never imply "rolled back" once the commit landed.
+
+    The destructive half is committed by then and only the after-report is
+    missing. Reporting that as a plain failure would send the owner looking
+    for a rollback that never happened.
+    """
+    _flaky_counts(monkeypatch)
+
+    with fragmented.app_context():
+        report = SearchProfileRepairService.apply()
+
+        assert report["status"] == "applied_report_unavailable"
+        assert report["errors"]
+        assert report["properties_moved"] == TOTAL_LISTINGS - FRAGMENTS[8][2]
+
+        # The repair really did commit; the report is what failed.
+        assert _count(TARGET_ID) == TOTAL_LISTINGS
+        for fragment_id in FRAGMENT_IDS:
+            assert db.session.get(SearchProfile, fragment_id) is None
+
+
+def test_cli_exit_code_separates_a_rollback_from_a_committed_repair(
+    fragmented, monkeypatch
+):
+    _flaky_counts(monkeypatch)
+
+    with fragmented.app_context():
+        # 1 is reserved for "nothing was committed"; this is not that.
+        assert run_repair_cli(["--apply"]) == 2
+        assert _count(TARGET_ID) == TOTAL_LISTINGS

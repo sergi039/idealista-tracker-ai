@@ -184,11 +184,27 @@ docker compose run --rm app python -m services.search_profile_repair_service --a
 docker compose up -d app
 ```
 
-Exit code is 0 for both valid states — work outstanding, and already
-repaired, so a second `--apply` is a clean no-op — and 1 when a count does not
-add up, in which case the transaction was rolled back and the database is
-untouched. On a non-zero exit, do not rerun blindly: read the `ERROR:` lines,
-confirm ingestion is really stopped, and re-run the dry run first.
+The exit code says exactly what happened to the database:
+
+| code | status | what it means |
+|------|--------|---------------|
+| 0 | `clean` / `pending` / `applied` | nothing needed doing, or the repair committed and verified. A second `--apply` is a clean no-op. |
+| 1 | `mismatch` | **nothing was committed.** A count disagreed, the transaction rolled back, the database is untouched. |
+| 2 | `applied_report_unavailable` | **the repair was committed** and only the after-report could not be read back. |
+
+On **1**, do not rerun blindly: read the `ERROR:` lines, confirm ingestion is
+really stopped, and re-run the dry run first. On **2** the destructive part is
+already durable — inspect the database (the verification query below) before
+doing anything else; re-running is safe only once you have confirmed the state,
+since the repair is idempotent.
+
+A saved search reported as `BLOCKED:` was **not** repaired and nothing about it
+was touched: its listings live in a profile that also holds a different saved
+search, so renaming that profile would mislabel the others. This does not
+change the exit code. It means something other than the fold put those rows
+together — `ProfileAssignmentService` reassigns by location, and profiles can
+be edited by hand — and untangling it is an owner decision. Once the profile
+holds only one saved search, a later run repairs it normally.
 
 Verify afterwards:
 

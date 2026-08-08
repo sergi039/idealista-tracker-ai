@@ -38,9 +38,25 @@ Apply::
 
     docker compose run --rm app python -m services.search_profile_repair_service --apply
 
-Exit code is 0 for both valid states -- "pending, work outstanding" and
-"already repaired" -- and 1 when a count does not add up, in which case
-nothing was committed.
+Exit codes say exactly what happened to the database:
+
+===  =============================  ======================================
+  0  clean / pending / applied      either nothing needed doing, or the
+                                    repair committed and verified
+  1  mismatch                       **nothing was committed**; the database
+                                    is untouched
+  2  applied_report_unavailable     **the repair was committed** and only
+                                    the after-report could not be built;
+                                    inspect the database before re-running
+===  =============================  ======================================
+
+A saved search whose listings sit in a profile that also holds *another*
+saved search is reported as BLOCKED and left completely alone -- renaming
+such a profile would mislabel the other listings. That does not change the
+exit code; read the report. Repairing whatever put those rows together
+(ProfileAssignmentService reassigns by location, and profiles can be edited
+by hand) is a separate decision for the owner. Once the ambiguity is gone a
+later run picks the group up normally.
 """
 
 from __future__ import annotations
@@ -89,8 +105,17 @@ MERGEABLE_JSON_FIELDS = (
 # well under every backend's limit regardless of how large a group gets.
 UPDATE_CHUNK = 500
 
-# Statuses the operator should not be paged about.
-OK_STATUSES = ("clean", "pending", "applied")
+# Exit code per status. 1 is reserved for "nothing was committed, the database
+# is untouched" -- a rollback is the one thing the operator must be able to
+# read straight off the exit code. A repair that committed and then failed to
+# report gets its own code, because it is the opposite situation.
+EXIT_CODES = {
+    "clean": 0,
+    "pending": 0,
+    "applied": 0,
+    "mismatch": 1,
+    "applied_report_unavailable": 2,
+}
 
 
 def _remaining_property_count(profile_id: Optional[int]) -> int:
@@ -157,6 +182,7 @@ class GroupPlan:
 @dataclass
 class RepairPlan:
     groups: List[GroupPlan] = field(default_factory=list)
+    blocked_groups: List[Dict[str, Any]] = field(default_factory=list)
     counts_before: Dict[Optional[int], int] = field(default_factory=dict)
     expected_after: Dict[int, int] = field(default_factory=dict)
     profiles_to_delete: List[int] = field(default_factory=list)
@@ -281,6 +307,12 @@ def build_plan() -> RepairPlan:
 
     # {recomputed name: {current profile id: [property ids]}}
     grouped: Dict[str, Dict[int, List[int]]] = {}
+    # {profile id: every recomputed name found inside it}. A profile holding
+    # more than one is not a fold fragment -- something else put those rows
+    # together (ProfileAssignmentService reassigns by location, and profiles
+    # can be edited by hand) -- and renaming it after one of those names would
+    # mislabel the others.
+    names_by_profile: Dict[int, set] = {}
     rows = (
         db.session.query(
             Property.id, Property.search_profile_id, Property.email_subject
@@ -300,6 +332,7 @@ def build_plan() -> RepairPlan:
             plan.orphan_properties += 1
             continue
         grouped.setdefault(name, {}).setdefault(profile_id, []).append(property_id)
+        names_by_profile.setdefault(profile_id, set()).add(name)
 
     moved_out: Dict[int, int] = {}
     moved_in: Dict[int, int] = {}
@@ -314,8 +347,35 @@ def build_plan() -> RepairPlan:
             # settings survive; the ordering is the one merge_duplicate_
             # profiles() already uses. A rename cannot collide here, because
             # _find_profile_by_name() just proved no profile holds the name.
-            candidates = [by_id[pid] for pid in property_ids if pid in by_id]
+            #
+            # Only a profile whose *entire* resolvable content is this one name
+            # may be promoted. That is also what keeps two groups from claiming
+            # the same profile: if everything in it resolves to N, no other
+            # group has it among its candidates, so no reservation bookkeeping
+            # is needed and no group can rename it out from under another.
+            candidates = [
+                by_id[pid]
+                for pid in property_ids
+                if pid in by_id and names_by_profile.get(pid) == {name}
+            ]
             if not candidates:
+                plan.blocked_groups.append(
+                    {
+                        "name": name,
+                        "candidate_ids": sorted(property_ids),
+                        "other_names": sorted(
+                            other
+                            for pid in property_ids
+                            for other in names_by_profile.get(pid, set())
+                            if other != name
+                        ),
+                        "reason": (
+                            "no profile carries this name, and every profile "
+                            "holding its listings also holds another saved "
+                            "search; renaming one would mislabel the rest"
+                        ),
+                    }
+                )
                 continue
             target = sorted(
                 candidates,
@@ -411,6 +471,7 @@ def _base_report(plan: RepairPlan, mode: str) -> Dict[str, Any]:
             }
             for group in plan.groups
         ],
+        "blocked_groups": list(plan.blocked_groups),
         "properties_to_move": plan.properties_to_move,
         "properties_moved": 0,
         "profiles_to_delete": list(plan.profiles_to_delete),
@@ -455,6 +516,11 @@ class SearchProfileRepairService:
         Run with ingestion stopped: `properties.search_profile_id` is
         ``ON DELETE SET NULL``, so a listing inserted into a fragment while
         this runs would be orphaned rather than rejected.
+
+        The returned `status` states what happened to the database, and only
+        `"mismatch"` means nothing was committed. `"applied"` and
+        `"applied_report_unavailable"` both mean the repair is durable; the
+        second one only says the after-report could not be read back.
         """
         plan = build_plan()
         report = _base_report(plan, mode="apply")
@@ -556,18 +622,31 @@ class SearchProfileRepairService:
             report["errors"] = [f"repair failed: {exc}"]
             return report
 
-        report["status"] = "applied"
+        # Past this point the destructive half is durable. Nothing below may
+        # turn into a "nothing was committed" verdict: reading the database
+        # back for the after-report can still fail, and the operator has to be
+        # told which of the two happened.
         report["properties_moved"] = moved
         report["profiles_deleted"] = deleted
-        names = {profile.id: profile.name for profile in SearchProfile.query.all()}
-        report["profiles_after"] = _counts_report(
-            plan, _profile_property_counts(), names
-        )
         logger.info(
             "Profile repair applied: %s listings moved, profiles deleted: %s",
             moved,
             deleted,
         )
+        try:
+            names = {profile.id: profile.name for profile in SearchProfile.query.all()}
+            report["profiles_after"] = _counts_report(
+                plan, _profile_property_counts(), names
+            )
+        except Exception as exc:
+            logger.exception("Profile repair committed, but the report failed")
+            report["status"] = "applied_report_unavailable"
+            report["errors"] = [
+                f"the repair was COMMITTED; building the after-report failed: {exc}"
+            ]
+            return report
+
+        report["status"] = "applied"
         return report
 
 
@@ -583,6 +662,11 @@ def _count_label(entry: Dict[str, Any]) -> str:
 def _format_report(report: Dict[str, Any]) -> Iterable[str]:
     yield f"mode:   {report['mode']}"
     yield f"status: {report['status']}"
+    if report["status"] == "mismatch":
+        yield "        nothing was committed; the database is untouched"
+    elif report["status"] == "applied_report_unavailable":
+        yield "        the repair WAS COMMITTED; only the after-report failed"
+        yield "        do not re-run blindly - inspect the database first"
     yield ""
     for group in report["groups"]:
         yield f"saved search: {group['name']!r}"
@@ -599,6 +683,12 @@ def _format_report(report: Dict[str, Any]) -> Iterable[str]:
                 f"  NOT copied: {entry['field']} from profile "
                 f"#{entry['profile_id']} (survivor already has one)"
             )
+        yield ""
+    for blocked in report["blocked_groups"]:
+        yield f"BLOCKED: saved search {blocked['name']!r} was not repaired"
+        yield f"  {blocked['reason']}"
+        yield f"  profiles holding its listings: {blocked['candidate_ids']}"
+        yield f"  other saved searches in them: {blocked['other_names']}"
         yield ""
     if report["profiles_before"]:
         yield "listings per profile before:"
@@ -662,7 +752,9 @@ def run_repair_cli(argv: Optional[Sequence[str]] = None) -> int:
     else:
         for line in _format_report(report):
             print(line)
-    return 0 if report["status"] in OK_STATUSES else 1
+    # An unknown status is treated as a rollback only if the code says so;
+    # default to 1 so a status added later cannot silently pass as success.
+    return EXIT_CODES.get(report["status"], 1)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
