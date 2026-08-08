@@ -35,15 +35,24 @@ JOURNAL="${AUTOPILOT_REVIEW_JOURNAL:-${REPO_DIR}/data/autopilot-reviews.tsv}"
 # rather than keeping a copy here means the two can never drift: add a check to
 # protection and the bot honours it on the next tick, with no edit.
 #
-# Overridable for a dry run against a repository whose protection is not set up.
+# Overridable for a dry run against a repository whose protection is not set
+# up. Refused outside --dry-run, below: the override also stands in for the
+# `strict` verification, so honouring it during a real merge would let one
+# environment variable disable the only guarantee that the reviewed diff is
+# the diff that lands.
 REQUIRED_CHECKS_OVERRIDE="${AUTOPILOT_REQUIRED_CHECKS:-}"
 
-# One newline-separated name per line: a check may legitimately be called
+# One name per line, split on newlines only. A check may legitimately be called
 # "Unit tests / pytest", and word-splitting would turn that into four names
-# that match nothing, quietly blocking every PR.
+# that match nothing, quietly blocking every PR - which is exactly what the
+# unquoted expansion here used to do.
 required_checks() {
     if [ -n "$REQUIRED_CHECKS_OVERRIDE" ]; then
-        printf '%s\n' $REQUIRED_CHECKS_OVERRIDE
+        # `|| [ -n "$name" ]` keeps a last line that has no trailing newline,
+        # which is the normal shape of AUTOPILOT_REQUIRED_CHECKS=pytest.
+        printf '%s' "$REQUIRED_CHECKS_OVERRIDE" | while IFS= read -r name || [ -n "$name" ]; do
+            [ -n "$name" ] && printf '%s\n' "$name"
+        done
         return 0
     fi
     gh api "repos/${REPO_SLUG}/branches/${BASE_BRANCH}/protection/required_status_checks" \
@@ -55,6 +64,8 @@ required_checks() {
 # `strict` is actually on - switch it off and the guarantee vanishes with no
 # sign in the log. Verify it, and refuse to merge rather than merge blind.
 strict_protection_is_on() {
+    # Only reachable with the override set under --dry-run; a real run exits
+    # before this point rather than accepting the substitute.
     [ -n "$REQUIRED_CHECKS_OVERRIDE" ] && return 0
     [ "$(gh api "repos/${REPO_SLUG}/branches/${BASE_BRANCH}/protection/required_status_checks" \
         --jq '.strict' 2>/dev/null)" = "true" ]
@@ -70,6 +81,19 @@ while [ $# -gt 0 ]; do
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
+
+# The override answers both "what must be green" and "is strict protection on",
+# so a real run that honoured it would merge without ever checking that the
+# base has not moved since the review - the one thing `strict` guarantees. One
+# environment variable must not be able to switch that off. Fail closed and say
+# why, rather than merging under a weaker rule than the log implies.
+if [ -n "$REQUIRED_CHECKS_OVERRIDE" ] && [ "$DRY_RUN" = "0" ]; then
+    echo "AUTOPILOT_REQUIRED_CHECKS is a --dry-run affordance: it stands in for" >&2
+    echo "branch protection, including the 'strict' verification that keeps the" >&2
+    echo "reviewed diff and the merged diff identical. Refusing to merge with it" >&2
+    echo "set. Re-run with --dry-run, or unset it and let protection answer." >&2
+    exit 2
+fi
 
 log() {
     printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG_FILE"
@@ -269,6 +293,27 @@ parameterised queries)." >>"$LOG_FILE" 2>&1
     esac
 }
 
+# A required context is matched by name. Rename a job in ci.yml and the old
+# name stays required and never reports - GitHub blocks every merge on a check
+# that will be pending forever, and nothing says why. Cheap to catch here, on
+# the way past, rather than from a PR that mysteriously will not merge.
+#
+# Defined up here with the other helpers, not below its call site: bash resolves
+# a function only once its definition has been executed, so the version that sat
+# after `main` never ran at all - the call printed "command not found" into the
+# log and the warning this exists to give was never given.
+warn_about_unreported_checks() {
+    local workflow="${REPO_DIR}/.github/workflows/ci.yml" required
+    [ -f "$workflow" ] || return 0
+    while IFS= read -r required; do
+        [ -n "$required" ] || continue
+        grep -qF "name: ${required}" "$workflow" && continue
+        log "WARNING: required check '${required}' is not a job name in ci.yml."
+        log "         If nothing else reports it, every PR will sit on a check that"
+        log "         never arrives. Fix the name in protection or in the workflow."
+    done <<<"$(required_checks)"
+}
+
 # --- main ------------------------------------------------------------------
 # A failed fetch means the local base ref is stale. Continuing would review
 # against yesterday's main and then merge into today's — exactly the diff
@@ -284,22 +329,6 @@ warn_about_unreported_checks
 # Fail closed. Everything below assumes GitHub will reject a merge whose branch
 # is behind; without `strict` that assumption is silently false and the bot
 # would merge a diff nobody reviewed.
-# A required context is matched by name. Rename a job in ci.yml and the old
-# name stays required and never reports — GitHub blocks every merge on a check
-# that will be pending forever, and nothing says why. Cheap to catch here, on
-# the way past, rather than from a PR that mysteriously will not merge.
-warn_about_unreported_checks() {
-    local workflow="${REPO_DIR}/.github/workflows/ci.yml" required
-    [ -f "$workflow" ] || return 0
-    while IFS= read -r required; do
-        [ -n "$required" ] || continue
-        grep -qF "name: ${required}" "$workflow" && continue
-        log "WARNING: required check '${required}' is not a job name in ci.yml."
-        log "         If nothing else reports it, every PR will sit on a check that"
-        log "         never arrives. Fix the name in protection or in the workflow."
-    done <<<"$(required_checks)"
-}
-
 if ! strict_protection_is_on; then
     log "FATAL: ${BASE_BRANCH} protection does not have strict (require branches up to date)."
     log "       The bot relies on it instead of re-checking the base itself. Enable it with:"
