@@ -44,9 +44,13 @@
 
     <key>EnvironmentVariables</key>
     <dict>
-        <!-- launchd hands the job a minimal PATH; docker and git are not on it. -->
+        <!-- launchd hands the job a minimal PATH; docker and git are not on it.
+             Homebrew comes before /usr/local/bin on purpose: this Mac still has
+             a 2017 git 2.13 symlinked there, which cannot read a repository
+             using extensions.worktreeConfig. Docker lives only in
+             /usr/local/bin, so that entry has to stay - just not first. -->
         <key>PATH</key>
-        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
 </dict>
 </plist>
