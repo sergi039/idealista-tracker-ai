@@ -156,23 +156,25 @@ ingestion — and never guesses from name similarity.
 
 ### What counts as a fold fragment
 
-Only a fold fragment is ever emptied or renamed. For a saved search N, profile
-P qualifies when **all three** hold:
+Only a fold fragment is ever emptied or renamed, and a profile qualifies by
+**replaying the bug** rather than by resembling its victims. For a saved search
+N, profile P qualifies when:
 
-1. P's name is not N;
-2. every listing of N inside P still carries a **folded** `email_subject`;
-3. P's name is the start of N, **at a word boundary**.
+1. P's name is not N; **and**
+2. running the pre-#101 extractor over every listing of N inside P — the same
+   extraction, on the stored subject, *without* unfolding, so it truncates at
+   the CR exactly as it used to — returns precisely the name P carries, for all
+   of them.
 
-The prefix test on its own would be a guess. Together with the folded subject
-it checks exactly the damage folding does — the fold cut the tail off the name,
-so the fragment's name must be the head of the real one and the fold must still
-be there to prove it. Two profiles holding one saved search prove nothing by
-themselves: `ProfileAssignmentService` files listings by location, so "Coast"
-and "City" legitimately split one subscription between them, and neither passes
-clause 3.
+That is cause and effect: P's name was produced by this bug, on these rows.
+Weaker signals are not enough. Two profiles holding one saved search prove
+nothing — `ProfileAssignmentService` files listings by location, so "Coast" and
+"City" legitimately split one subscription. A line break in the subject proves
+nothing either: it can sit past the end of the name, where it truncated nothing.
 
-On the live database the separation is exact — the three fragments have 100% of
-their listings folded, the correctly named profile has 0%.
+There is deliberately no extra "name must be a word-boundary prefix" rule: it
+approximated the replay and, kept alongside it, would only reject genuine
+fragments whose fold landed on punctuation.
 
 **One consequence, and it is the right one:** since #101 stores subjects
 unfolded, this repair can only ever act on rows written **before** that fix.

@@ -23,22 +23,31 @@ collapse two real subscriptions into one.
 What counts as a fold fragment
 ------------------------------
 
-Only a *fold fragment* is ever emptied or renamed, and a profile has to show
-the mechanism to qualify. For a saved search N, profile P is a fold fragment
-of N when all three hold:
+Only a *fold fragment* is ever emptied or renamed, and a profile qualifies by
+**replaying the bug**, not by resembling its victims. For a saved search N,
+profile P is a fold fragment of N when:
 
-1. P's name is not N;
-2. every listing of N inside P still carries a **folded** ``email_subject``;
-3. P's name is the start of N, **at a word boundary**.
+1. P's name is not N; and
+2. running the **pre-#101 extractor** over every listing of N inside P -- the
+   same `extract_search_name()`, on the stored subject, *without* unfolding,
+   so its ``[^\\r\\n]`` classes truncate at the CR exactly as they used to --
+   returns precisely the name P carries, for all of them.
 
-The prefix test alone would be a guess -- it was rejected as one at the
-outset. Together with the folded subject it stops being a guess and becomes a
-check of exactly the damage folding does: the fold cut the tail off the name,
-so the fragment's name must be the head of the real one, and the fold must
-still be there to prove it. Two profiles holding one saved search prove
-nothing by themselves: `ProfileAssignmentService` files listings by location,
-so "Coast" and "City" legitimately split one subscription, and neither passes
-clause 3.
+That is cause and effect: this profile's name was produced by this bug, on
+these rows. Weaker signals were tried and are not enough. Two profiles
+holding one saved search prove nothing -- `ProfileAssignmentService` files
+listings by location, so "Coast" and "City" legitimately split one
+subscription. A line break in the subject proves nothing either: it can sit
+past the end of the name (``"...: Alpha Beta Gamma!\\r\\n extra"``), where it
+truncated nothing at all.
+
+There is deliberately no additional "the name must be a word-boundary prefix"
+clause. It was an approximation of the replay, and as a second belt it only
+subtracts: a fold landing on punctuation
+(``"...: Homes in Ciudad Quesada,\\r\\n Alicante!"``) yields a name the
+cleaner strips back to "Homes in Ciudad Quesada", which is *not* a
+word-boundary prefix of "Homes in Ciudad Quesada, Alicante" -- yet the replay
+proves it is a genuine fragment.
 
 One consequence, and it is the right one: since #101 stores subjects
 unfolded, **this repair can only ever act on rows written before that fix**.
@@ -242,15 +251,18 @@ def _profile_property_counts() -> Dict[Optional[int], int]:
     return {profile_id: int(total) for profile_id, total in rows}
 
 
-def _is_folded_subject(subject: Any) -> bool:
-    """True when the stored subject still carries the fold that broke the name.
+def _pre_fix_profile_name(subject: Any) -> Optional[str]:
+    """The name the *pre-#101* extractor would have produced from this subject.
 
-    A folded subject *is* the mechanism: the old extractor stopped at the CR,
-    so the name it produced was the start of the real one. That makes it hard
-    evidence rather than a guess -- and, since #101 stores subjects unfolded,
-    it also means this repair only ever acts on rows written before the fix.
+    Before #101 the subject was never unfolded, so it reached
+    `extract_search_name()` with the fold intact and every pattern's
+    ``[^\\r\\n]`` class truncated the name at the CR. Running the same
+    extractor on the stored subject *without* unfolding therefore replays the
+    bug exactly. Comparing the result with a profile's name answers the only
+    question that matters -- was this profile's name produced by this bug, on
+    these very rows -- instead of inferring it from the shape of the name.
     """
-    return isinstance(subject, str) and ("\r" in subject or "\n" in subject)
+    return extract_search_name(str(subject or ""), "")
 
 
 def _is_manually_pinned(enrichment: Any) -> bool:
@@ -463,12 +475,19 @@ class _Planner:
         self.claimed_by: Dict[int, str] = {}
         self.moved_out: Dict[int, int] = {}
         self.moved_in: Dict[int, int] = {}
-        # {(profile id, canonical name): listings} and how many of them still
-        # carry a folded subject. Both count pinned rows: the question they
-        # answer is what broke this profile's *name*, not what may move.
-        self.totals: Dict[tuple, int] = {}
-        self.folded: Dict[tuple, int] = {}
+        # {(profile id, canonical name): every name the pre-#101 extractor
+        # would have produced from those listings}. Pinned rows are counted
+        # too: the question is what broke this profile's *name*, not what may
+        # move. {profile id: listings whose name cannot be recomputed at all}.
+        self.replayed: Dict[tuple, set] = {}
+        self.unresolved_by_profile: Dict[int, int] = {}
         self.left_in_place: Dict[tuple, Dict[str, Any]] = {}
+
+    def add_unresolved(self, profile_id: int) -> None:
+        """A listing in this profile whose saved-search name cannot be read."""
+        self.unresolved_by_profile[profile_id] = (
+            self.unresolved_by_profile.get(profile_id, 0) + 1
+        )
 
     def add_listing(
         self,
@@ -477,15 +496,16 @@ class _Planner:
         name: str,
         canonical: str,
         pinned: bool,
-        folded: bool,
+        replayed: Optional[str],
     ) -> None:
         self.projected_names.setdefault(profile_id, set()).add(canonical)
         counts = self.spellings.setdefault(canonical, {})
         counts[name] = counts.get(name, 0) + 1
-        key = (profile_id, canonical)
-        self.totals[key] = self.totals.get(key, 0) + 1
-        if folded:
-            self.folded[key] = self.folded.get(key, 0) + 1
+        # Canonical, so the comparison against a profile's name matches the
+        # equality ingestion itself uses.
+        self.replayed.setdefault((profile_id, canonical), set()).add(
+            _canonical_profile_name(replayed) if replayed else None
+        )
         if pinned:
             # Owner's choice. It still counts towards what the profile holds --
             # so it can stop a rename and keep the profile from being deleted --
@@ -501,18 +521,23 @@ class _Planner:
 
         Two profiles holding one saved search prove nothing on their own --
         `ProfileAssignmentService` files listings by location, so "Coast" and
-        "City" can legitimately split one subscription between them. A fold
-        fragment has to show the mechanism that broke it:
+        "City" can legitimately split one subscription between them. Nor does
+        a line break somewhere in the subject: it can sit past the end of the
+        name, where it truncated nothing.
 
-        1. its name is not the recomputed name;
-        2. every listing of that search inside it still carries a folded
-           subject -- the fold is what truncated the name in the first place;
-        3. its name is the start of the recomputed name, at a word boundary --
-           because a fold cuts the tail off, nothing else.
+        So the bug is replayed instead of characterised. Every listing of this
+        search inside the profile is run through the pre-#101 extractor, and
+        the profile qualifies only when all of them come back with exactly the
+        name it carries. That is cause and effect -- this profile's name was
+        produced by this bug on these rows -- rather than a family resemblance.
 
-        A prefix test alone would be a guess, which is why it was rejected at
-        the outset. Together with the folded subject it stops being one: it
-        checks precisely the damage folding does. "Coast" fails every clause.
+        Deliberately *not* also requiring the name to be a word-boundary
+        prefix. It was an approximation of this check, and as a second belt it
+        only subtracts: a fold landing on punctuation ("Homes in Ciudad
+        Quesada,\\r\\n Alicante!") leaves a name the cleaner strips back to
+        "Homes in Ciudad Quesada", which is not a prefix of "Homes in Ciudad
+        Quesada, Alicante" at a word boundary -- yet the replay proves it is a
+        real fragment.
         """
         current = self.effective_names.get(profile_id)
         if not current:
@@ -520,11 +545,8 @@ class _Planner:
         current_canonical = _canonical_profile_name(current)
         if not current_canonical or current_canonical == canonical:
             return False
-        if not canonical.startswith(current_canonical + " "):
-            return False
-        key = (profile_id, canonical)
-        total = self.totals.get(key, 0)
-        return total > 0 and self.folded.get(key, 0) == total
+        replayed = self.replayed.get((profile_id, canonical))
+        return bool(replayed) and replayed == {current_canonical}
 
     def run(self) -> None:
         # The spelling most of a group's listings use, ties alphabetical.
@@ -592,27 +614,38 @@ class _Planner:
                     canonical,
                     property_ids,
                     "no profile carries this name, and none of the profiles "
-                    "holding its listings is a fold fragment of it -- none has "
-                    "a name that is the start of it, at a word boundary, with "
-                    "folded subjects to show the fold did the cutting. These "
-                    "look like deliberate placements, not damage",
+                    "holding its listings is a fold fragment of it -- replaying "
+                    "the pre-#101 extractor over their subjects does not produce "
+                    "the name any of them carries, so this bug did not name "
+                    "them. These look like deliberate placements, not damage",
                 )
             # Promote the fragment with the most listings rather than create a
             # profile, so its settings survive; the ordering is the one
-            # merge_duplicate_profiles() already uses. Only a profile whose
-            # *entire* content resolves to this one name may be promoted.
+            # merge_duplicate_profiles() already uses.
+            #
+            # A rename must prove the profile will hold *nothing but* this
+            # saved search: every row it keeps resolves to this name
+            # (projected_names) and none of its rows is unreadable
+            # (unresolved_by_profile). Together those say its total row count
+            # equals its count for this name -- listings whose name cannot be
+            # recomputed never enter the projection, so without the second
+            # clause a fragment carrying one looked pure and got renamed while
+            # still holding somebody else's row.
             candidates = [
                 self.by_id[pid]
                 for pid in fragments_here
-                if pid in self.by_id and self.projected_names.get(pid) == {canonical}
+                if pid in self.by_id
+                and self.projected_names.get(pid) == {canonical}
+                and not self.unresolved_by_profile.get(pid)
             ]
             if not candidates:
                 return self._block(
                     canonical,
                     property_ids,
-                    "no profile carries this name, and every profile holding "
-                    "its listings also holds another saved search; renaming "
-                    "one would mislabel the rest",
+                    "no profile carries this name, and every fold fragment of "
+                    "it would still hold something else afterwards -- another "
+                    "saved search, or a listing whose name cannot be read. "
+                    "Renaming one would mislabel what stays behind",
                 )
             target = sorted(
                 candidates,
@@ -712,6 +745,8 @@ def build_plan() -> RepairPlan:
         name = SearchProfileRepairService.recompute_profile_name(subject)
         if not name:
             plan.unresolved_properties += 1
+            if profile_id is not None:
+                planner.add_unresolved(profile_id)
             continue
         if profile_id is None:
             # Already orphaned (an earlier DELETE, or a manual edit). Reported,
@@ -722,6 +757,7 @@ def build_plan() -> RepairPlan:
         canonical = _canonical_profile_name(name)
         if not canonical:  # pragma: no cover - extract_search_name cleans first
             plan.unresolved_properties += 1
+            planner.add_unresolved(profile_id)
             continue
         planner.add_listing(
             property_id,
@@ -729,7 +765,7 @@ def build_plan() -> RepairPlan:
             name,
             canonical,
             _is_manually_pinned(enrichment),
-            _is_folded_subject(subject),
+            _pre_fix_profile_name(subject),
         )
 
     planner.run()

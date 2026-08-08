@@ -145,17 +145,25 @@ def _count(profile_id):
     return Property.query.filter_by(search_profile_id=profile_id).count()
 
 
-def _folded(name):
-    """A subject that unfolds to `name`, stored folded as pre-#101 rows were.
+def _folded_at(name, truncated_to):
+    """A subject for `name` whose fold cuts the name down to `truncated_to`.
 
-    A folded subject is the mechanism that truncated a profile's name, so it
-    is also the evidence that a truncated-looking name really is one. Rows
-    written after #101 are stored unfolded and can never be that evidence --
-    which is why this repair, by construction, only repairs pre-#101 data.
+    The fold is the mechanism: the pre-#101 extractor stopped at the CR, so
+    replaying it on this subject yields exactly `truncated_to` -- the name the
+    fragment profile ended up carrying. Rows written after #101 are stored
+    unfolded and can never be that evidence, which is why this repair only
+    ever acts on pre-fix data.
     """
-    head, _, tail = name.rpartition(" ")
+    assert name.startswith(truncated_to + " "), "the fold must land inside the name"
+    tail = name[len(truncated_to) :].lstrip()
+    return f"New home in your search: {truncated_to}\r\n {tail}!"
+
+
+def _folded(name):
+    """A subject folded before the last word of `name`."""
+    head, _, _tail = name.rpartition(" ")
     assert head, "a one-word name cannot fold mid-name"
-    return f"New home in your search: {head}\r\n {tail}!"
+    return _folded_at(name, head)
 
 
 def _plain(name):
@@ -463,11 +471,11 @@ def test_planning_reruns_until_no_further_group_can_be_repaired(app):
                 SearchProfile(id=3, name=second, is_active=True),
             ]
         )
-        _add_listings(1, _folded(first), 2, "a1")
-        _add_listings(1, _folded(second), 3, "b1")
-        _add_listings(2, _folded(first), 4, "a2")
-        _add_listings(2, _folded(second), 1, "b2")
-        _add_listings(3, _folded(second), 2, "b3")
+        _add_listings(1, _folded_at(first, "alpha"), 2, "a1")
+        _add_listings(1, _folded_at(second, "alpha"), 3, "b1")
+        _add_listings(2, _folded_at(first, "alpha beta"), 4, "a2")
+        _add_listings(2, _folded_at(second, "alpha beta"), 1, "b2")
+        _add_listings(3, _plain(second), 2, "b3")
         db.session.commit()
 
         report = SearchProfileRepairService.apply()
@@ -536,6 +544,102 @@ def test_a_geo_split_of_one_subscription_across_two_profiles_survives(app):
         assert report["properties_moved"] == 0
         assert report["profiles_deleted"] == []
         assert [g["name"] for g in report["blocked_groups"]] == ["Homes in Alicante"]
+
+
+def test_a_line_break_outside_the_name_is_not_evidence_of_a_fold(app):
+    """The break has to be what truncated the name, not merely present.
+
+    Here it lands after the whole name, so the pre-#101 extractor would have
+    returned the name in full and no profile was ever damaged. Treating any
+    line break as evidence hands a rename and a deletion to profiles that the
+    bug never touched.
+    """
+    full = "Alpha Beta Gamma"
+    subject = f"New home in your search: {full}!\r\n extra"
+
+    with app.app_context():
+        db.session.add_all(
+            [
+                SearchProfile(id=1, name="Alpha Beta", is_active=True),
+                SearchProfile(id=2, name="Alpha", is_active=True),
+            ]
+        )
+        _add_listings(1, subject, 3, "one")
+        _add_listings(2, subject, 2, "two")
+        db.session.commit()
+
+        report = SearchProfileRepairService.apply()
+
+        assert db.session.get(SearchProfile, 1).name == "Alpha Beta"
+        assert db.session.get(SearchProfile, 2).name == "Alpha"
+        assert _count(1) == 3
+        assert _count(2) == 2
+        assert report["properties_moved"] == 0
+        assert report["profiles_deleted"] == []
+        assert [g["name"] for g in report["blocked_groups"]] == [full]
+
+
+def test_a_fold_landing_on_punctuation_is_still_recognised(app):
+    """Replaying the bug beats reasoning about the shape of the name.
+
+    "Homes in Ciudad Quesada, Alicante" folded after the comma leaves
+    "Homes in Ciudad Quesada" once trailing punctuation is cleaned -- which is
+    *not* a word-boundary prefix of the full name, because the next character
+    is a comma. It is a real fragment all the same, which is why the prefix
+    test was dropped rather than kept as a second belt.
+    """
+    full = "Homes in Ciudad Quesada, Alicante"
+    folded = "New home in your search: Homes in Ciudad Quesada,\r\n Alicante!"
+
+    with app.app_context():
+        db.session.add_all(
+            [
+                SearchProfile(id=1, name=full, is_active=True),
+                SearchProfile(id=2, name="Homes in Ciudad Quesada", is_active=True),
+            ]
+        )
+        _add_listings(1, _plain(full), 1, "home")
+        _add_listings(2, folded, 3, "frag")
+        db.session.commit()
+
+        SearchProfileRepairService.apply()
+
+        assert _count(1) == 4
+        assert db.session.get(SearchProfile, 2) is None
+        _assert_every_listing_matches_its_profile_name()
+
+
+def test_an_unrecognisable_listing_blocks_a_promotion(app):
+    """A rename must prove the profile holds nothing but that saved search.
+
+    Listings whose name cannot be recomputed never enter the projection, so a
+    fragment carrying one looked pure and got renamed -- leaving a profile
+    named after a saved search while holding somebody else's row.
+    """
+    full = "alpha beta gamma"
+
+    with app.app_context():
+        db.session.add(SearchProfile(id=1, name="alpha beta", is_active=True))
+        _add_listings(1, _folded_at(full, "alpha beta"), 4, "frag")
+        db.session.add(
+            Property(
+                source_email_id="imap_junk",
+                email_subject="Idealista newsletter",
+                search_profile_id=1,
+                title="not a saved-search alert",
+            )
+        )
+        db.session.commit()
+
+        report = SearchProfileRepairService.apply()
+
+        assert db.session.get(SearchProfile, 1).name == "alpha beta", (
+            "a profile still holding an unrecognisable listing must not be renamed"
+        )
+        assert _count(1) == 5
+        assert report["properties_moved"] == 0
+        assert report["profiles_deleted"] == []
+        assert [g["name"] for g in report["blocked_groups"]] == [full]
 
 
 def test_a_deliberate_profile_keeps_its_listings_when_a_real_fragment_is_merged(app):
@@ -717,10 +821,10 @@ def test_a_profile_that_gains_a_saved_search_while_planning_is_blocked(app):
                 SearchProfile(id=4, name="alpha", is_active=True),
             ]
         )
-        _add_listings(1, _folded(long_name), 3, "z1")
-        _add_listings(2, _folded(long_name), 2, "z2")
-        _add_listings(4, _folded(short), 2, "a4")
-        _add_listings(4, _folded(middle), 1, "b4")
+        _add_listings(1, _folded_at(long_name, short), 3, "z1")
+        _add_listings(2, _folded_at(long_name, middle), 2, "z2")
+        _add_listings(4, _folded_at(short, "alpha"), 2, "a4")
+        _add_listings(4, _folded_at(middle, "alpha"), 1, "b4")
         db.session.commit()
 
         report = SearchProfileRepairService.apply()
@@ -848,8 +952,8 @@ def test_canonically_equal_names_are_one_group_and_keep_one_setting(app):
                 ),
             ]
         )
-        _add_listings(2, _folded("ALPHA BETA GAMMA"), 2, "upper")
-        _add_listings(3, _folded("Alpha Beta Gamma"), 3, "lower")
+        _add_listings(2, _folded_at("ALPHA BETA GAMMA", "ALPHA BETA"), 2, "upper")
+        _add_listings(3, _folded_at("Alpha Beta Gamma", "Alpha"), 3, "lower")
         db.session.commit()
 
         report = SearchProfileRepairService.apply()
