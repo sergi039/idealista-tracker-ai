@@ -3,53 +3,15 @@ import logging
 import unicodedata
 from typing import Dict, Optional
 
+from utils.idealista_extractors import _PRICE_NUMBER, _parse_number_groups
+
 logger = logging.getLogger(__name__)
 
-# Two mutually exclusive number "grammars", anchored with a lookbehind/
-# lookahead so a match can never start or end in the middle of a longer
-# digit/separator run. Root cause of GH issue #22 (identical to #21's price
-# defect): unanchored `\d{1,3}(?:[.,]\d{3})*` patterns matched the trailing
-# digit-group fragment of a longer number, e.g. "373" out of "1.373 m²"
-# instead of the whole "1.373". In the first grammar '.' groups thousands and
-# ',' introduces a 1-2 digit decimal (e.g. "1.373,5"); in the second the
-# roles are swapped (e.g. "1,373.5"). Shared by both price and area parsing
-# since the grouped-number grammar is identical for both.
-_NUMBER_DOT_GROUP = r"(?<![\d.,])(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2}))?(?![\d.,])"
-_NUMBER_COMMA_GROUP = r"(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?![\d.,])"
-_GROUPED_NUMBER = rf"(?:{_NUMBER_DOT_GROUP}|{_NUMBER_COMMA_GROUP})"
-
-
-def _parse_grouped_number(
-    int_part: Optional[str], dec_part: Optional[str]
-) -> Optional[float]:
-    """Combine a group-separated integer part with an optional 1-2 digit
-    decimal part into a float."""
-    if int_part is None:
-        return None
-    digits = re.sub(r"[.,]", "", int_part)
-    if not digits:
-        return None
-    try:
-        value = float(digits)
-    except ValueError:
-        return None
-    if dec_part:
-        try:
-            value += int(dec_part) / (10 ** len(dec_part))
-        except ValueError:
-            return None
-    return value
-
-
-def _parse_grouped_number_groups(groups) -> Optional[float]:
-    """Parse a (dot_int, dot_dec, comma_int, comma_dec) 4-tuple captured by
-    _GROUPED_NUMBER: exactly one grammar's (int, dec) pair is populated."""
-    dot_int, dot_dec, comma_int, comma_dec = groups
-    if dot_int is not None:
-        return _parse_grouped_number(dot_int, dot_dec)
-    if comma_int is not None:
-        return _parse_grouped_number(comma_int, comma_dec)
-    return None
+# The grouped-number grammar (dot-grouped vs comma-grouped thousand
+# separators, anchored so a match can never start/end mid-digit-run) and its
+# int+decimal combiner live in idealista_extractors.py as the single source
+# of truth (GH #54, follow-up to #21/#22 which each had to fix this grammar
+# in both files). Do not redefine the grammar locally here -- import it.
 
 
 class EmailParser:
@@ -63,8 +25,8 @@ class EmailParser:
                 r"Precio:?\s*(\d{1,3}(?:\.\d{3})*)\s*€",  # Spanish with label
             ],
             "area": [
-                rf"Superficie:?\s*{_GROUPED_NUMBER}\s*m[²2]",  # Spanish with label
-                rf"{_GROUPED_NUMBER}\s*m[²2]",  # Anchored grouped number (any format)
+                rf"Superficie:?\s*{_PRICE_NUMBER}\s*m[²2]",  # Spanish with label
+                rf"{_PRICE_NUMBER}\s*m[²2]",  # Anchored grouped number (any format)
             ],
             "url": [
                 r"https?://www\.idealista\.com/[^\s]+",
@@ -136,7 +98,7 @@ class EmailParser:
                 # Set default land type if not detected
                 if not extracted_data["land_type"]:
                     extracted_data["land_type"] = "buildable"  # Default to buildable
-                    logger.info(f"No land type detected, defaulting to 'buildable'")
+                    logger.info("No land type detected, defaulting to 'buildable'")
 
                 logger.info(
                     f"Successfully parsed email: {extracted_data['title'][:50] if extracted_data['title'] else 'No title'}..."
@@ -144,11 +106,11 @@ class EmailParser:
                 return extracted_data
             else:
                 logger.warning(
-                    f"Skipping email - missing essential data (URL, title, or price)"
+                    "Skipping email - missing essential data (URL, title, or price)"
                 )
                 return None
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to parse email", exc_info=True)
             return None
 
@@ -298,7 +260,7 @@ class EmailParser:
         candidates = []
         for pattern in self.patterns["area"]:
             for match in re.finditer(pattern, text, re.IGNORECASE):
-                area = _parse_grouped_number_groups(match.groups())
+                area = _parse_number_groups(match.groups())
                 if area is None:
                     continue
                 # Sanity floor: land listings are at least 100 m² (this
@@ -709,6 +671,6 @@ class EmailParser:
 
             return {"url": url, "type": "removed"}
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to parse 'no longer listed' email", exc_info=True)
             return None
