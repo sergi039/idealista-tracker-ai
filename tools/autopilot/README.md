@@ -90,6 +90,13 @@ a PASS stops applying the moment main moves — and the merge step re-checks the
 base one last time, because a review takes minutes and `--match-head-commit`
 only guards the head.
 
+**The branch must be up to date.** A PR that is behind main is refused before
+review, not merged and hoped for. `base..head` on a stale branch shows what the
+branch changes, which is not what will land: main tightens a helper, the branch
+adds a caller written against the old one, both sides review clean, and the
+merge combines them into something nobody saw. Requiring the branch to contain
+the current base makes the reviewed diff and the merged code the same thing.
+
 ### Known residual risk: the base can move during the merge itself
 
 GitHub has no "merge only if the base is still X". Between the last base check

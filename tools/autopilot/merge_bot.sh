@@ -149,6 +149,22 @@ review_is_pass() {
         return 1
     fi
 
+    # The reviewed diff has to BE the merge result, not just the branch's own
+    # changes. `base..head` on a branch that is behind hides semantic merge
+    # conflicts: main tightens a helper, the branch adds a caller written
+    # against the old helper, each side reviews clean, and the merge silently
+    # combines them into something nobody looked at.
+    #
+    # Requiring the branch to already contain the current base makes
+    # base..head exactly the code that will land. This is the same rule as
+    # GitHub's "require branches to be up to date before merging" - enforced
+    # here because the repository does not have it switched on.
+    if ! git merge-base --is-ancestor "$base_sha" "$ref" 2>/dev/null; then
+        log "  PR #${pr}: behind ${BASE_BRANCH} (${base_sha:0:7}) - rebase it; a diff that"
+        log "            is not the merge result cannot be reviewed as one"
+        return 1
+    fi
+
     log "  PR #${pr}: requesting independent review of ${base_sha:0:7}..${head_sha:0:7}"
     set +e
     rx --range "${base_sha}..${ref}" \
