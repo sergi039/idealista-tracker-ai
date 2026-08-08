@@ -437,6 +437,49 @@ class TestScoringService:
             assert "infrastructure_basic" in breakdown
             assert "legal_status" in breakdown
 
+    def test_update_weights_persists_rescored_environment(
+        self, app, scoring_service, test_land
+    ):
+        """A rescore must replace the persisted JSON breakdown (#26)."""
+        with app.app_context():
+            land = db.session.get(Land, test_land)
+            land.environment = {
+                **land.environment,
+                "scoring": {
+                    "profiles": {"lifestyle": {"weights_used": {"environment": 0.22}}},
+                    "combined_score": -1,
+                },
+                "score_breakdown": {"environment": -1},
+            }
+            db.session.commit()
+            db.session.expire_all()
+
+            baseline = db.session.get(Land, test_land)
+            baseline_weights = baseline.environment["scoring"]["profiles"]["lifestyle"][
+                "weights_used"
+            ]
+
+            assert scoring_service.update_weights(
+                {"environment": 0.1, "legal_status": 0.9},
+                profile="lifestyle",
+            )
+
+            db.session.expire_all()
+            rescored = db.session.get(Land, test_land)
+            persisted_scoring = rescored.environment["scoring"]
+            persisted_weights = persisted_scoring["profiles"]["lifestyle"][
+                "weights_used"
+            ]
+
+            assert persisted_weights == pytest.approx(
+                {"environment": 0.1, "legal_status": 0.9}
+            )
+            assert persisted_weights != baseline_weights
+            assert persisted_scoring["combined_score"] == pytest.approx(
+                float(rescored.score_total)
+            )
+            assert rescored.environment["sea_view"] is True
+
 
 class TestConfigWeightsNotMutated:
     """Regression tests for #44.
