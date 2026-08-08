@@ -8,7 +8,11 @@ logger = logging.getLogger(__name__)
 
 class ScoringService:
     def __init__(self):
-        self.weights = Config.DEFAULT_SCORING_WEIGHTS
+        # Copy, never bind: load_custom_weights() and update_weights() both
+        # update self.weights in place, and Config.DEFAULT_SCORING_WEIGHTS is a
+        # class attribute shared by the whole process. A shallow dict() is
+        # enough - the mapping is flat str -> float (config.py).
+        self.weights = dict(Config.DEFAULT_SCORING_WEIGHTS)
         self.load_custom_weights()
 
     def load_custom_weights(self):
