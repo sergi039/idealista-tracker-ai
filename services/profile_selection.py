@@ -43,6 +43,7 @@ this module by the integrator once issue #102 has landed.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Iterable, Optional, Sequence, Tuple, Union
@@ -64,6 +65,20 @@ MAX_PROFILE_ID = 2**31 - 1
 # the empty result stays put instead of sliding back to `auto` on the next
 # click. `0` is below MIN_PROFILE_ID, so it re-parses to the same state.
 IMPOSSIBLE_PROFILE_ID = "0"
+
+# A token that looks like an integer *is* an id claim even when Python
+# refuses to convert it: `int()` raises on decimal strings past its 4300-digit
+# limit, and treating that as unparseable text would fall back to `auto` --
+# the one outcome the module promises never to produce for a numeric input.
+_NUMERIC_TOKEN = re.compile(r"[+-]?\d+")
+
+# Ids past this many are dropped. Nothing legitimate selects more profiles
+# than exist, and the parsed list goes straight into a SQL `IN (...)`.
+MAX_SELECTED_PROFILE_IDS = 50
+
+# Shown wherever a multi-profile view has to withhold profile-specific travel
+# data. Lives here so the two templates and the tests cannot drift apart.
+TRAVEL_NOTICE = "Select one profile to view or recalculate profile-specific travel data"
 
 LinkValue = Union[int, str]
 
@@ -120,16 +135,23 @@ class ResolvedProfileSelection:
     single_id: Optional[int]
 
     @property
-    def is_all(self) -> bool:
-        return self.state is ProfileSelectionState.ALL
-
-    @property
     def spans_several_profiles(self) -> bool:
         return self.single_id is None and self.filter_ids != ()
 
     @property
+    def travel_notice(self) -> str:
+        return TRAVEL_NOTICE
+
+    @property
     def label(self) -> str:
-        """Text on the dropdown toggle: `All profiles` or `N selected`."""
+        """Text on the dropdown toggle: `All profiles` or `N selected`.
+
+        Keyed off the state, not off the tick count: a selection of only
+        impossible ids ticks nothing but shows nothing either, and labelling
+        that "All profiles" would describe the opposite of what is on screen.
+        """
+        if self.state is ProfileSelectionState.SELECTED:
+            return f"{len(self.checked_ids)} selected"
         if not self.checked_ids:
             return "All profiles"
         return f"{len(self.checked_ids)} selected"
@@ -181,20 +203,26 @@ def parse_profile_selection(args: Any) -> ProfileSelection:
         if token == "" or token.lower() == PROFILE_ALL_SENTINEL:
             saw_all = True
             continue
-        try:
-            number = int(token)
-        except (TypeError, ValueError):
+        if not _NUMERIC_TOKEN.fullmatch(token):
             # Unparseable text behaves like the old `type=int` coercion:
             # ignored, so `?profile_id=abc` keeps falling back to auto.
             continue
         saw_number = True
+        try:
+            number = int(token)
+        except ValueError:
+            # Numeric but longer than `int()` will convert: an id claim that
+            # cannot possibly match, handled like `0` rather than like text.
+            continue
         if MIN_PROFILE_ID <= number <= MAX_PROFILE_ID:
             ids.append(number)
 
     if saw_number:
         # Ticked boxes beat the form's `all` fallback; see the module
         # docstring for why the fallback is posted at all.
-        return ProfileSelection(ProfileSelectionState.SELECTED, _dedupe(ids))
+        return ProfileSelection(
+            ProfileSelectionState.SELECTED, _dedupe(ids)[:MAX_SELECTED_PROFILE_IDS]
+        )
     if saw_all:
         return ProfileSelection(ProfileSelectionState.ALL)
     return ProfileSelection(ProfileSelectionState.AUTO)

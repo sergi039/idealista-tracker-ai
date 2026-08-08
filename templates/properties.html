@@ -151,7 +151,7 @@
    (issue #104). #}
 {% if profiles and profile_selection.spans_several_profiles %}
     <div class="alert alert-light border py-2 px-3 small text-body-secondary mb-3" id="profile-travel-notice">
-        <i class="fas fa-circle-info me-1"></i>Select one profile to view or recalculate profile-specific travel data
+        <i class="fas fa-circle-info me-1"></i>{{ profile_selection.travel_notice }}
     </div>
 {% endif %}
 
@@ -183,15 +183,22 @@
                         <input type="hidden" name="profile_id" value="all">
                         <button type="button" class="btn btn-link btn-sm p-0 mb-2 text-decoration-none"
                                 id="profile-select-clear">Show all profiles</button>
-                        {% for p in profiles %}
+                        {# `profile_options` is the active profiles plus anything
+                           currently selected that is not among them (an inactive
+                           profile reached by id, say). A selected id with no
+                           checkbox would read as "nothing ticked" to the script
+                           below and get dropped on the next Apply. #}
+                        {% for option in profile_options %}
                             <div class="form-check">
                                 <input class="form-check-input profile-select-option"
                                        type="checkbox"
                                        name="profile_id"
-                                       value="{{ p.id }}"
-                                       id="profile-option-{{ p.id }}"
-                                       {% if p.id in profile_selection.checked_ids %}checked{% endif %}>
-                                <label class="form-check-label small" for="profile-option-{{ p.id }}">{{ p.name }}</label>
+                                       value="{{ option.id }}"
+                                       id="profile-option-{{ option.id }}"
+                                       {% if option.id in profile_selection.checked_ids %}checked{% endif %}>
+                                <label class="form-check-label small" for="profile-option-{{ option.id }}">
+                                    {{ option.name }}{% if not option.is_active %} <span class="badge bg-light text-body-secondary border">inactive</span>{% endif %}
+                                </label>
                             </div>
                         {% else %}
                             <div class="small text-body-secondary">No active profiles yet.</div>
@@ -741,7 +748,11 @@
             });
         }
 
-        refresh();
+        // Deliberately no refresh() on load: the server already rendered the
+        // label and the fallback, and it knows things the DOM does not (a
+        // selected id with no checkbox, an explicit selection that matched
+        // nothing). Recomputing here would overwrite a correct state with a
+        // guess.
     })();
 </script>
 {% endblock %}

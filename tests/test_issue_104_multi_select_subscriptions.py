@@ -48,13 +48,12 @@ from werkzeug.datastructures import MultiDict
 from app import create_app, db
 from models import Property, SearchProfile
 from services.profile_selection import (
+    TRAVEL_NOTICE,
     ProfileSelectionState,
     parse_profile_selection,
     resolve_profile_selection,
 )
 from tests import setup_test_environment
-
-TRAVEL_NOTICE = "Select one profile to view or recalculate profile-specific travel data"
 
 # `/properties` clamps per_page to a minimum of 10, so the union has to be
 # larger than that for pagination to split at all.
@@ -418,6 +417,64 @@ class TestPropertiesPageShowsTheUnion:
         body = client.get(f"/properties?profile_id={unknown}").get_data(as_text=True)
         assert _listing_ids_in_order(body) == []
 
+    @pytest.mark.parametrize("raw", ["0", "-1", "99999999999999999999"])
+    def test_an_impossible_id_renders_an_empty_page(self, client, subscriptions, raw):
+        """This is the only route that reaches the empty-`IN ()` branch of
+        `apply_profile_filter`; the parser unit tests stop short of the
+        database."""
+        resp = client.get(f"/properties?profile_id={raw}")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert _listing_ids_in_order(body) == []
+        # And the emptiness is sticky -- a sort link must not slide the page
+        # back to the auto-selected profile.
+        for href in _anchor_hrefs(body, "lands-th-link") or [
+            _anchor_href(body, 'id="mode-combined-btn"')
+        ]:
+            assert _query_params(href).get("profile_id") == ["0"]
+
+    def test_the_button_does_not_claim_all_profiles_on_an_empty_page(
+        self, client, subscriptions
+    ):
+        body = client.get("/properties?profile_id=0").get_data(as_text=True)
+        button = re.search(
+            r'id="profile-select-dropdown"[^>]*>(.*?)</button>', body, re.S
+        )
+        assert button
+        assert "All profiles" not in button.group(1)
+        assert "0 selected" in button.group(1)
+
+    def test_a_row_with_no_profile_at_all_is_not_reachable(self, client, app):
+        """Pinned, not endorsed: `all` means "every active profile", so a
+        listing whose `search_profile_id` is NULL -- which ingestion can
+        persist when it cannot resolve or create a profile -- is not shown.
+        Previously `all` applied no filter and these rows appeared. If the
+        owner wants them back, this test is the thing to change."""
+        with app.app_context():
+            db.session.add(
+                SearchProfile(
+                    name="Only profile",
+                    is_active=True,
+                    is_default=True,
+                    travel_targets={"presets": {}, "custom": []},
+                )
+            )
+            db.session.commit()
+            orphan = Property(
+                source_email_id="issue104_orphan",
+                title="OrphanListingUniqueTitle",
+                search_profile_id=None,
+                listing_status="active",
+            )
+            db.session.add(orphan)
+            db.session.commit()
+            orphan_id = orphan.id
+
+        body = client.get("/properties?profile_id=all&per_page=100").get_data(
+            as_text=True
+        )
+        assert orphan_id not in _listing_ids_in_order(body)
+
 
 class TestFilterBarKeepsOneControl:
     def test_the_profile_control_is_a_single_dropdown(self, client, subscriptions):
@@ -426,13 +483,12 @@ class TestFilterBarKeepsOneControl:
         assert '<select name="profile_id"' not in body
 
     def test_the_dropdown_lists_active_profiles_only(self, client, subscriptions):
+        """With nothing selected outside the active set, the only profile
+        checkboxes on the page are the active profiles."""
         body = client.get("/properties?profile_id=all").get_data(as_text=True)
-        menu = re.search(
-            r'id="profile-select-menu".*?</div>\s*</div>', body, re.S
-        ) or re.search(r'id="profile-select-menu".*', body, re.S)
-        assert menu, "the dropdown needs a stable menu container"
+        assert body.count('id="profile-select-menu"') == 1
         checkbox_values = re.findall(
-            r'<input[^>]*name="profile_id"[^>]*value="(\d+)"', menu.group(0)
+            r'<input[^>]*name="profile_id"[^>]*value="(\d+)"', body
         )
         assert sorted(int(v) for v in checkbox_values) == sorted(
             [
@@ -468,6 +524,42 @@ class TestFilterBarKeepsOneControl:
         )
         assert button
         assert "2 selected" in button.group(1)
+
+    def test_a_selected_inactive_profile_still_gets_a_checkbox(
+        self, client, subscriptions
+    ):
+        """Otherwise the page's own script -- which recomputes the state from
+        the checkboxes -- reads the selection as "nothing ticked", and the
+        next Apply silently widens the view to every active profile."""
+        zeta = subscriptions["zeta_id"]
+        body = client.get(f"/properties?profile_id={zeta}").get_data(as_text=True)
+        checkbox = re.search(
+            rf'<input[^>]*name="profile_id"[^>]*value="{zeta}"[^>]*>', body
+        )
+        assert checkbox, "the selected inactive profile has no checkbox to untick"
+        assert "checked" in checkbox.group(0)
+        assert "inactive" in body
+
+    def test_an_unrenderable_selection_is_not_lost_on_the_next_submit(
+        self, client, subscriptions
+    ):
+        """Replay what the browser posts when the user presses Apply without
+        touching the dropdown: every ticked box, plus the form's explicit
+        `all` fallback. The inactive profile has to survive it."""
+        zeta = subscriptions["zeta_id"]
+        body = client.get(f"/properties?profile_id={zeta}").get_data(as_text=True)
+        ticked = re.findall(
+            r'<input[^>]*name="profile_id"[^>]*value="(\d+)"[^>]*checked', body
+        )
+        assert ticked == [str(zeta)]
+        resubmitted = client.get(
+            "/properties?profile_id=all"
+            + "".join(f"&profile_id={value}" for value in ticked)
+            + "&per_page=100"
+        ).get_data(as_text=True)
+        assert set(_listing_ids_in_order(resubmitted)) == set(
+            subscriptions["zeta_props"]
+        )
 
     def test_checkboxes_reflect_the_current_selection(
         self, client, subscriptions, pair
@@ -632,7 +724,7 @@ class TestTheUnionIsStableAcrossTransitions:
         back_href = _anchor_href(map_body, 'id="map-list-view-link"')
         assert _query_params(back_href).get("profile_id") == pair["ids"]
         back_body = client.get(html.unescape(back_href)).get_data(as_text=True)
-        assert set(_listing_ids_in_order(back_body)) <= pair["union"]
+        assert set(_listing_ids_in_order(back_body)) == pair["union"]
         assert (
             _query_params(_anchor_href(back_body, "View properties on map")).get(
                 "profile_id"
@@ -675,7 +767,22 @@ class TestProfileSpecificTravelNeedsOneProfile:
         assert "BetaOfficeTarget" not in multi
         assert TRAVEL_NOTICE in multi
 
-    def test_the_csv_drops_the_profile_travel_columns_for_a_union(self, client, pair):
+    def test_the_csv_drops_the_profile_travel_columns_for_a_union(
+        self, client, subscriptions, pair
+    ):
+        """Paired with the single-profile case below on purpose: a negative
+        assertion alone also passes against an export that never emits travel
+        columns at all."""
+        alpha = subscriptions["alpha_id"]
+        single = client.get(f"/properties/export.csv?profile_id={alpha}")
+        assert single.status_code == 200
+        single_header = next(
+            csv_module.reader(io.StringIO(single.get_data(as_text=True)))
+        )
+        assert [c for c in single_header if c.startswith("travel_")], (
+            "the single-profile export must carry the profile's travel columns"
+        )
+
         resp = client.get(f"/properties/export.csv?{pair['query']}")
         assert resp.status_code == 200
         header = next(csv_module.reader(io.StringIO(resp.get_data(as_text=True))))
@@ -694,7 +801,11 @@ class TestOldLinksKeepWorking:
         body = client.get("/properties?profile_id=all&per_page=100").get_data(
             as_text=True
         )
-        assert set(_listing_ids_in_order(body)) >= set(subscriptions["alpha_props"])
+        assert set(_listing_ids_in_order(body)) == (
+            set(subscriptions["alpha_props"])
+            | set(subscriptions["beta_props"])
+            | set(subscriptions["gamma_props"])
+        )
 
     def test_an_empty_profile_id_still_means_all(self, client, subscriptions):
         body = client.get("/properties?profile_id=&per_page=100").get_data(as_text=True)
@@ -789,6 +900,22 @@ class TestProfileSelectionModule:
         assert selection.state is ProfileSelectionState.SELECTED
         assert selection.ids == ()
 
+    def test_a_number_too_long_for_int_is_still_a_number(self):
+        """Python's `int()` refuses decimal strings past 4300 digits. Letting
+        that raise into the unparseable-text branch would fall back to auto --
+        the one thing a numeric input must never do."""
+        selection = self._parse("profile_id=" + "9" * 5000)
+        assert selection.state is ProfileSelectionState.SELECTED
+        assert selection.ids == ()
+
+    def test_the_id_list_is_capped(self):
+        from services.profile_selection import MAX_SELECTED_PROFILE_IDS
+
+        query = "&".join(
+            f"profile_id={n}" for n in range(1, MAX_SELECTED_PROFILE_IDS + 25)
+        )
+        assert len(self._parse(query).ids) == MAX_SELECTED_PROFILE_IDS
+
     def test_resolve_all_uses_active_profiles_only(self):
         resolved = _resolve("profile_id=all", [3, 5])
         assert resolved.filter_ids == (3, 5)
@@ -846,6 +973,9 @@ class TestProfileSelectionModule:
             ("profile_id=3&profile_id=5", [3, 5], None, "2 selected"),
             ("", [3, 5], 5, "1 selected"),
             ("", [], None, "All profiles"),
+            # An explicit selection that matched nothing shows an empty page,
+            # so the toggle must not read "All profiles".
+            ("profile_id=0", [3, 5], None, "0 selected"),
         ],
     )
     def test_button_label(self, query, active, auto, expected):

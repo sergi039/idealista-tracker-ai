@@ -131,6 +131,46 @@ def _map_auto_profile_id(default_profile, profiles):
     return None
 
 
+def _profile_dropdown_options(profiles, resolved):
+    """Rows for the subscription dropdown: active profiles, plus whatever is
+    selected but not among them.
+
+    The dropdown offers active profiles, but a selection can legitimately name
+    one that is not there -- an inactive profile reached by id, or an id that
+    no longer exists. Leaving those out is not merely cosmetic: the page's own
+    script recomputes the state from the checkboxes, so a selection with no
+    checkbox reads as "nothing ticked", and the next Apply would silently
+    widen the view to every active profile.
+    """
+    options = [
+        {"id": profile.id, "name": profile.name, "is_active": True}
+        for profile in profiles
+    ]
+
+    missing = [
+        profile_id
+        for profile_id in resolved.checked_ids
+        if profile_id not in {profile.id for profile in profiles}
+    ]
+    if not missing:
+        return options
+
+    # One query, not one per id: `missing` is bounded by the parser's id cap.
+    named = {
+        profile.id: profile.name
+        for profile in SearchProfile.query.filter(SearchProfile.id.in_(missing)).all()
+    }
+    for profile_id in missing:
+        options.append(
+            {
+                "id": profile_id,
+                "name": named.get(profile_id) or f"Unknown profile #{profile_id}",
+                "is_active": False,
+            }
+        )
+    return options
+
+
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance between two points, in kilometers."""
     r = 6371.0
@@ -432,6 +472,7 @@ def properties():
             properties=pagination.items,
             pagination=pagination,
             profiles=profiles,
+            profile_options=_profile_dropdown_options(profiles, profile_selection),
             selected_profile_id=selected_profile_id,
             profile_selection=profile_selection,
             travel_display_targets=travel_display_targets,
@@ -466,6 +507,7 @@ def properties():
             properties=[],
             pagination=None,
             profiles=[],
+            profile_options=[],
             selected_profile_id=None,
             profile_selection=empty_profile_selection(),
             travel_display_targets=[],
