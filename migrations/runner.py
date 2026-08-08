@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import logging
 import os
@@ -308,7 +309,11 @@ def _baseline_historical_schema(
         raise MigrationError(
             "Database has application tables but no schema_migrations ledger and "
             "does not match the historical baseline fingerprint; refusing to "
-            "guess or replay migrations. " + "; ".join(errors)
+            "guess or replay migrations. "
+            + "; ".join(errors)
+            + ". After verifying the schema, follow the 'Manual verified baseline "
+            "for drifted databases' section in MIGRATION_RUNBOOK.md and run "
+            "exactly: python -m migrations.runner --baseline-existing --yes"
         )
 
     baseline = _baseline_migrations(migrations)
@@ -334,6 +339,58 @@ def _baseline_historical_schema(
         migration.version: (migration.name, migration.checksum)
         for migration in baseline
     }
+
+
+def baseline_existing_schema(
+    engine: Engine,
+    *,
+    confirmed: bool = False,
+    migrations_dir: Path = MIGRATIONS_DIR,
+) -> list[Migration]:
+    """Record the frozen baseline after an operator verifies an existing schema."""
+    if not confirmed:
+        raise MigrationError(
+            "Manual baseline requires the explicit --yes flag after operator "
+            "schema verification"
+        )
+
+    migrations = discover_migrations(migrations_dir)
+    baseline = _baseline_migrations(migrations)
+
+    with engine.begin() as connection:
+        if connection.dialect.name == "postgresql":
+            connection.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_id)"),
+                {"lock_id": MIGRATION_LOCK_ID},
+            )
+
+        inspector = inspect(connection)
+        if inspector.has_table(MIGRATION_TABLE):
+            raise MigrationError(
+                "Manual baseline refused: schema_migrations already exists"
+            )
+
+        existing_tables = set(inspector.get_table_names())
+        application_tables = existing_tables & set(HISTORICAL_SCHEMA_FINGERPRINT)
+        if not application_tables:
+            raise MigrationError(
+                "Manual baseline refused: database has no application tables"
+            )
+
+        _ledger_table.create(connection, checkfirst=False)
+        connection.execute(
+            _ledger_table.insert(),
+            [
+                {
+                    "version": migration.version,
+                    "name": migration.name,
+                    "checksum": migration.checksum,
+                }
+                for migration in baseline
+            ],
+        )
+
+    return baseline
 
 
 def run_migrations(engine: Engine, migrations_dir: Path = MIGRATIONS_DIR) -> list[str]:
@@ -406,16 +463,51 @@ def get_schema_status(
     return {"status": "ok"}
 
 
-def main() -> None:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Apply migrations or explicitly baseline a verified schema."
+    )
+    parser.add_argument(
+        "--baseline-existing",
+        action="store_true",
+        help="record the verified existing schema as migrations 000-012",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="confirm that the existing schema was verified by an operator",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv)
+    if args.baseline_existing and not args.yes:
+        raise MigrationError(
+            "Manual baseline requires the explicit --yes flag after operator "
+            "schema verification"
+        )
+    if args.yes and not args.baseline_existing:
+        raise MigrationError("--yes is only valid together with --baseline-existing")
+
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
         raise MigrationError("DATABASE_URL must be set before running migrations")
 
     engine = create_engine(database_url, pool_pre_ping=True)
     try:
-        applied = run_migrations(engine)
+        if args.baseline_existing:
+            baseline = baseline_existing_schema(engine, confirmed=True)
+        else:
+            applied = run_migrations(engine)
     finally:
         engine.dispose()
+
+    if args.baseline_existing:
+        print("Recorded manual baseline entries:")
+        for migration in baseline:
+            print(migration.version, migration.name, migration.checksum)
+        return
 
     if applied:
         logger.info("Applied %d migration(s): %s", len(applied), ", ".join(applied))

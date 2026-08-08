@@ -61,27 +61,69 @@ curl -s http://localhost:5001/api/healthz | python3 -m json.tool
 
 ## Step 4: Database Migration
 
-Universal uses the same DB tables as Legacy (lands, scoring_criteria, etc.) plus new tables (properties, search_profiles, property_ai_analysis_variants, app_settings).
+Do not run `db.create_all()` or individual migration files in production. The
+container runs `python -m migrations.runner` before gunicorn and stops before
+starting the application if migration validation fails.
+
+### Normal automatic path
+
+- A new empty database receives every numbered migration in order. Each
+  applied version, name, and file checksum is stored in `schema_migrations`.
+- A database with a ledger validates every recorded name and checksum, applies
+  only pending migrations, and otherwise starts normally.
+- Any unknown, renamed, or changed recorded migration is a hard error. Fix the
+  migration history; do not edit ledger rows to bypass it.
+
+### Automatic baseline for an exact historical database
+
+A pre-ledger database with application tables is compared with the frozen
+historical fingerprint. If its tables, columns, `id` primary keys, and ID types
+match exactly, the runner automatically records migrations 000–012 as a
+metadata-only baseline. It does not execute those migration files or rewrite
+application data. Migrations after 012 remain pending and run normally.
+
+If the fingerprint differs, automatic startup fails closed and leaves the
+database without a ledger. This strict check must not be weakened to accept
+drift automatically.
+
+### Manual verified baseline for drifted databases
+
+Use this escape hatch only when an operator has established that a no-ledger
+database already represents the application schema through migration 012 and
+the reported drift is intentional, such as an extra ad-hoc table or column.
+Before continuing:
+
+1. Take and verify a restorable database backup.
+2. Review the runner's complete fingerprint mismatch and inspect a schema-only
+   dump (`pg_dump --schema-only`).
+3. Compare the application tables, columns, primary keys, constraints, and
+   indexes with `models.py` and migrations 000–012. Confirm that no schema or
+   data operation from those migrations still needs to run.
+4. Record why every difference is safe. This command marks all migrations
+   000–012 as applied, so it must not be used to conceal missing migration work.
+
+After that verification, run the explicit one-off command:
 
 ```bash
-# 4a. New tables are auto-created by AUTO_CREATE_DB=true (dev) or need manual migration in prod
-
-# 4b. Create new tables (db.create_all won't add CHECK constraints to existing tables)
-docker exec idealista-app python -c "
-from app import create_app, db
-app = create_app()
-with app.app_context():
-    db.create_all()
-    print('Tables created/verified')
-"
-
-# 4c. Apply CHECK constraints to existing tables (idempotent)
-docker exec idealista-db psql -U idealista -d idealista -f /app/migrations/011_add_check_constraints.sql
-
-# 4d. Verify new tables exist
-docker exec idealista-db psql -U idealista -d idealista -c "\dt"
-# Should show: properties, search_profiles, property_ai_analysis_variants, app_settings, market_settings
+docker compose run --rm app python -m migrations.runner --baseline-existing --yes
 ```
+
+The exact runner command is
+`python -m migrations.runner --baseline-existing --yes`. It creates only the
+`schema_migrations` ledger and records the version, name, and actual SHA-256
+checksum of each tracked migration from 000 through 012. It prints every row it
+records, executes no migration SQL, and exits. It refuses to run without
+`--yes`, when a ledger already exists, or when no recognized application table
+exists. There is deliberately no environment-variable switch for this mode.
+
+Review the printed ledger entries, then start the normal stack again:
+
+```bash
+docker compose up -d
+```
+
+The ordinary runner now validates the recorded baseline, applies any migration
+after 012, and starts gunicorn only if the database is current.
 
 ## Step 5: Port Mapping Update
 

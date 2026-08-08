@@ -81,6 +81,12 @@ def _write_migration(directory: Path, filename: str, sql: str) -> None:
     (directory / filename).write_text(sql, encoding="utf-8")
 
 
+def _add_operator_drift(engine):
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE lands ADD COLUMN operator_note TEXT"))
+        connection.execute(text("CREATE TABLE operator_audit (id INTEGER)"))
+
+
 def test_migration_runner_applies_each_file_once_and_reports_current(tmp_path):
     from migrations.runner import get_schema_status, run_migrations
 
@@ -292,15 +298,107 @@ def test_migration_runner_rejects_ambiguous_schema_without_partial_replay(tmp_pa
 
     engine = create_engine(f"sqlite:///{tmp_path / 'ambiguous.db'}")
     db.metadata.create_all(engine)
-    with engine.begin() as connection:
-        connection.execute(text("CREATE TABLE unexpected_table (id INTEGER)"))
+    _add_operator_drift(engine)
 
-    with pytest.raises(MigrationError, match="unexpected tables: unexpected_table"):
+    with pytest.raises(MigrationError) as exc_info:
         run_migrations(engine)
 
+    error = str(exc_info.value)
+    assert "unexpected tables: operator_audit" in error
+    assert "lands unexpected columns: operator_note" in error
+    assert "python -m migrations.runner --baseline-existing --yes" in error
+    assert "Manual verified baseline for drifted databases" in error
     inspector = inspect(engine)
-    assert inspector.has_table("unexpected_table")
+    assert inspector.has_table("operator_audit")
     assert not inspector.has_table("schema_migrations")
+    engine.dispose()
+
+
+def test_manual_baseline_records_drifted_schema_and_normal_start_is_current(
+    tmp_path, monkeypatch, capsys
+):
+    from migrations.runner import (
+        BASELINE_IDENTIFIERS,
+        discover_migrations,
+        main as migration_main,
+        run_migrations,
+    )
+
+    database_url = f"sqlite:///{tmp_path / 'manual-baseline.db'}"
+    engine = create_engine(database_url)
+    db.metadata.create_all(engine)
+    _add_operator_drift(engine)
+
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    migration_main(["--baseline-existing", "--yes"])
+
+    baseline = [
+        migration
+        for migration in discover_migrations()
+        if migration.identifier in BASELINE_IDENTIFIERS
+    ]
+    output_lines = capsys.readouterr().out.strip().splitlines()
+    assert output_lines == [
+        "Recorded manual baseline entries:",
+        *[
+            f"{migration.version} {migration.name} {migration.checksum}"
+            for migration in baseline
+        ],
+    ]
+
+    with engine.connect() as connection:
+        ledger = connection.execute(
+            text(
+                "SELECT version, name, checksum FROM schema_migrations ORDER BY version"
+            )
+        ).all()
+    assert ledger == [
+        (migration.version, migration.name, migration.checksum)
+        for migration in baseline
+    ]
+    assert run_migrations(engine) == []
+    engine.dispose()
+
+
+def test_manual_baseline_refuses_existing_ledger(tmp_path, monkeypatch):
+    from migrations.runner import MigrationError, main as migration_main, run_migrations
+
+    database_url = f"sqlite:///{tmp_path / 'existing-ledger.db'}"
+    engine = create_engine(database_url)
+    db.metadata.create_all(engine)
+    assert run_migrations(engine) == []
+    monkeypatch.setenv("DATABASE_URL", database_url)
+
+    with pytest.raises(MigrationError, match="schema_migrations already exists"):
+        migration_main(["--baseline-existing", "--yes"])
+
+    engine.dispose()
+
+
+def test_manual_baseline_refuses_empty_database(tmp_path, monkeypatch):
+    from migrations.runner import MigrationError, main as migration_main
+
+    database_url = f"sqlite:///{tmp_path / 'empty.db'}"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+
+    with pytest.raises(MigrationError, match="no application tables"):
+        migration_main(["--baseline-existing", "--yes"])
+
+
+def test_manual_baseline_requires_yes(tmp_path, monkeypatch):
+    from migrations.runner import MigrationError, main as migration_main
+
+    database_url = f"sqlite:///{tmp_path / 'confirmation.db'}"
+    engine = create_engine(database_url)
+    db.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE operator_audit (id INTEGER)"))
+    monkeypatch.setenv("DATABASE_URL", database_url)
+
+    with pytest.raises(MigrationError, match="requires the explicit --yes flag"):
+        migration_main(["--baseline-existing"])
+
+    assert not inspect(engine).has_table("schema_migrations")
     engine.dispose()
 
 
