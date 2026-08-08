@@ -176,6 +176,27 @@ ignored files), so an uncommitted "fix" can't hide a broken commit.
 Bypass a single push with `SKIP_LOCAL_CI=1 git push` if you need to push
 work-in-progress.
 
+### Lint
+
+`ruff` is a locked dev dependency, so always invoke it as `uv run ruff` —
+that is the version CI uses (`uv.lock`), not whatever your PATH points at.
+Both commands run in the `ruff` job of `.github/workflows/ci.yml`, so the
+gate applies to every author, not only to those who installed the local
+hooks (issue #81):
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
+uv run ruff check --fix . && uv run ruff format .   # to fix
+```
+
+Rule selection lives in `pyproject.toml` under `[tool.ruff.lint]` and is
+deliberately explicit: ruff's default rule set changes between releases
+(59 rules in 0.15.x, 413 in 0.16.0), so relying on the default would make
+the gate's verdict depend on which ruff you happen to have installed.
+Expanding the selection is welcome — as its own PR, with the resulting
+findings actually fixed.
+
 ## 🐛 Bug Reports
 
 When reporting bugs, please include:

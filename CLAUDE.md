@@ -42,7 +42,14 @@ tools/ci/install_hooks.sh    # git config core.hooksPath .githooks
 ```
 
 Bypass a single push with `SKIP_LOCAL_CI=1 git push`. `.github/workflows/
-ci.yml` itself is unchanged and stays the merge gate for autopilot.
+ci.yml` stays the merge gate for autopilot; since issue #81 it runs the same
+ruff commands, so the two really are in sync.
+
+Ruff itself is a locked dev dependency (`uv.lock`), so `uv run ruff` is one
+pinned version for CI, the hook and you. Rule selection is explicit in
+`pyproject.toml` (`[tool.ruff.lint] select`) because ruff's *default* set is
+not stable across releases — do not delete it expecting the default to be
+equivalent.
 
 **Working UI is `/lands`** (owner decision, 2026-08-07): the lands view —
 cards/list with Land Type, Sea View and to-beach filters — is what the app
@@ -119,16 +126,21 @@ and TODO.md; respect it if you ever run both side by side.
   push is rejected.
 - CI exists (`.github/workflows/ci.yml`; issue #31 closed 2026-08-07):
   it runs on every PR and on push to `main`, with actions pinned by SHA.
-  Two jobs — `pytest` does `uv sync --frozen` + `uv run pytest tests/ -v`
-  on Python 3.11; `no-source-bundles` fails when an archive or source
-  dump is tracked (issue #29). Neither is a *required* status check yet,
-  so a red run does not block a merge by itself — read the run before
-  merging.
+  Three jobs — `pytest` does `uv sync --frozen` + `uv run pytest tests/ -v`
+  on Python 3.11; `no-source-bundles` fails when an archive or source dump
+  is tracked (issue #29); `ruff` runs `ruff check .` and `ruff format
+  --check .` on the same uv setup (issue #81). `pytest` and
+  `no-source-bundles` are *required* status checks on `main` (strict: the
+  branch must be up to date); `ruff` is not required unless the owner adds
+  the context to branch protection, so read the run before merging.
 - Run `uv run pytest tests/ -q` locally and paste the real output before
   claiming done. That is a standing owner requirement in its own right,
   not a stand-in for CI.
 - A local PostToolUse hook auto-runs `ruff check --fix` and `ruff format`
-  on edited Python files — do not fight it.
+  on edited Python files — do not fight it. It calls whatever `ruff` is on
+  PATH, which is not necessarily the version in `uv.lock`; the CI job and
+  the pre-push gate use the locked one, so `uv run ruff` is the verdict
+  that counts.
 - `tools/autopilot/` runs the loop unattended: issue → PR → CI →
   independent review → squash-merge, with a LaunchAgent that redeploys
   main and rolls back on a red `/api/healthz`. A PR merges only on green
