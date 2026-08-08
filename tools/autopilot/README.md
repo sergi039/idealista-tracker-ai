@@ -139,12 +139,35 @@ keeps the lock held long after its parent is gone, and the next tick reports
 "another run is in progress" with no such run in `ps`.
 
 Observed in practice on 2026-08-08, when another session killed a bot run to
-unblock a merge and had to hunt the orphans separately. To release a stuck lock,
-kill the whole family:
+unblock a merge and had to hunt the orphans separately.
+
+Ask the lock file who is holding it, rather than pattern-matching command lines.
+`pkill -f "codex exec"` is the wrong instrument on a machine that runs more than
+one project: it would reach into an unrelated repository's review and kill it
+mid-write. `lsof` names the actual holders and nothing else.
 
 ```bash
-pkill -f merge_bot; pkill -f reviewer_coordinator; pkill -f "codex exec"
+lsof -t /tmp/idealista-autopilot-merge.lock.d
 ```
+
+(The `.d` suffix is a leftover from the `mkdir` design; the path is a plain
+file that `flock(2)` is taken on, not a directory.)
+
+Inspect them before signalling — confirm they are this bot's family — then end
+them, escalating only if they ignore the first request:
+
+```bash
+lsof -t /tmp/idealista-autopilot-merge.lock.d | xargs -r ps -o pid,ppid,command -p
+```
+
+```bash
+lsof -t /tmp/idealista-autopilot-merge.lock.d | xargs -r kill
+```
+
+The deploy watcher's lock is `/tmp/idealista-autopilot-deploy.lock.d`; the
+same three commands apply. The lock is released when the last of those
+descriptors closes, so re-run `lsof` afterwards to confirm nothing is left
+holding it.
 
 ## Requirements
 
