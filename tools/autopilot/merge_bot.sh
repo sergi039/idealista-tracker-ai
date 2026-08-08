@@ -164,6 +164,42 @@ queries)." >>"$LOG_FILE" 2>&1
     esac
 }
 
+# --- after the fact --------------------------------------------------------
+# GitHub offers no "merge only if the base is still X". `--match-head-commit`
+# pins the head; the base can still advance between the last check and the
+# merge, and the squash then lands on a base nobody reviewed. The window is
+# a second or two and cannot be closed from a script - the real fix is branch
+# protection's "require branches to be up to date before merging", which is the
+# owner's setting to make.
+#
+# What a script *can* do is refuse to pretend it did not happen: the first
+# parent of a squash commit is the base it landed on, so compare it and say so.
+verify_merged_onto_reviewed_base() {
+    local pr="$1" reviewed_base="$2" merge_sha actual_base
+
+    merge_sha="$(gh pr view "$pr" --repo "$REPO_SLUG" \
+        --json mergeCommit --jq '.mergeCommit.oid // empty' 2>/dev/null || true)"
+    if [ -z "$merge_sha" ]; then
+        log "  WARNING: #${pr} merged but the merge commit could not be read - base unverified"
+        return 0
+    fi
+
+    actual_base="$(gh api "repos/${REPO_SLUG}/commits/${merge_sha}" \
+        --jq '.parents[0].sha // empty' 2>/dev/null || true)"
+    if [ -z "$actual_base" ]; then
+        log "  WARNING: #${pr} merged but its base could not be read - unverified"
+        return 0
+    fi
+
+    if [ "$actual_base" != "$reviewed_base" ]; then
+        log "  ALERT: #${pr} was reviewed against ${reviewed_base:0:7} but landed on ${actual_base:0:7}."
+        log "         ${BASE_BRANCH} moved during the merge; the merged result differs from"
+        log "         the reviewed diff. Inspect ${merge_sha:0:7} by hand."
+        return 1
+    fi
+    return 0
+}
+
 # --- main ------------------------------------------------------------------
 # A failed fetch means the local base ref is stale. Continuing would review
 # against yesterday's main and then merge into today's — exactly the diff
@@ -229,6 +265,7 @@ printf '%s' "$pr_query" | jq -c '.[]' | while read -r pr_json; do
     if gh pr merge "$number" --repo "$REPO_SLUG" --squash --delete-branch \
         --match-head-commit "$head_sha" >>"$LOG_FILE" 2>&1; then
         log "  MERGED #${number}"
+        verify_merged_onto_reviewed_base "$number" "$BASE_SHA"
     else
         # --match-head-commit fails the merge if someone pushed after the
         # review; that is the desired outcome, not an error to work around.

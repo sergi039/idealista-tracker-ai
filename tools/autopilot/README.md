@@ -90,6 +90,22 @@ a PASS stops applying the moment main moves — and the merge step re-checks the
 base one last time, because a review takes minutes and `--match-head-commit`
 only guards the head.
 
+### Known residual risk: the base can move during the merge itself
+
+GitHub has no "merge only if the base is still X". Between the last base check
+and the `gh pr merge` call — a second or two — main can advance, and the squash
+lands on a base nobody reviewed. This cannot be closed from a script.
+
+The bot does two things about it rather than one: it re-checks the base as late
+as possible, and after every merge it reads the first parent of the squash
+commit and compares it to the reviewed base. A mismatch is logged as `ALERT`
+with the commit to inspect. Silent is not the same as safe.
+
+The actual fix is a repository setting the owner has to make — branch
+protection → **"Require branches to be up to date before merging"**. With it,
+GitHub itself refuses the merge when the base has moved. Worth turning on
+before letting this run unattended over a busy main.
+
 ## The lock
 
 `lib/lock.sh` uses real `flock(2)` (through `python3`, since macOS has no
