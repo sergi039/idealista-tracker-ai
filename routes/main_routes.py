@@ -14,6 +14,7 @@ from flask import (
     session,
 )
 from sqlalchemy import or_, case, func
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
 from app import db
@@ -2277,27 +2278,31 @@ def update_criteria_profile(profile):
 @admin_required
 def update_combined_mix():
     """Update the Investment vs Lifestyle balance for combined scoring"""
+    from decimal import Decimal as D
+
+    from models import ScoringCriteria
+    from services.scoring_service import ScoringService
+
+    # Parse form data
     try:
-        # Parse form data
         investment_weight = float(request.form.get("investment_weight", 0.32))
         lifestyle_weight = float(request.form.get("lifestyle_weight", 0.68))
+    except (TypeError, ValueError):
+        flash("Combined mix weights must be numbers.", "error")
+        return redirect(url_for("main.criteria"))
 
-        # Validate weights sum to 1.0
-        total_weight = investment_weight + lifestyle_weight
-        if abs(total_weight - 1.0) > 0.01:
-            flash(
-                f"Combined mix weights must sum to 1.0, got {total_weight:.3f}", "error"
-            )
-            return redirect(url_for("main.criteria"))
+    # Validate weights sum to 1.0
+    total_weight = investment_weight + lifestyle_weight
+    if abs(total_weight - 1.0) > 0.01:
+        flash(f"Combined mix weights must sum to 1.0, got {total_weight:.3f}", "error")
+        return redirect(url_for("main.criteria"))
 
-        logger.info(
-            f"Updating combined mix: Investment={investment_weight:.3f}, Lifestyle={lifestyle_weight:.3f}"
-        )
+    logger.info(
+        f"Updating combined mix: Investment={investment_weight:.3f}, Lifestyle={lifestyle_weight:.3f}"
+    )
 
+    try:
         # Persist combined mix to database
-        from models import ScoringCriteria
-        from decimal import Decimal as D
-
         for key, val in [
             ("investment", investment_weight),
             ("lifestyle", lifestyle_weight),
@@ -2320,10 +2325,6 @@ def update_combined_mix():
         db.session.commit()
 
         # Rescore all lands with new mix in batches
-        from models import Land
-        from services.scoring_service import ScoringService
-        from app import db
-
         scoring_service = ScoringService()
         batch_size = 100
         offset = 0
@@ -2341,17 +2342,21 @@ def update_combined_mix():
             total_rescored += len(lands)
             offset += batch_size
 
-        flash(
-            f"Combined mix updated to {investment_weight * 100:.0f}% Investment + {lifestyle_weight * 100:.0f}% Lifestyle. {total_rescored} properties rescored!",
-            "success",
-        )
-
-    except Exception as e:
+    except SQLAlchemyError:
+        # Only database failures are expected here: calculate_score() swallows
+        # its own errors. Anything else is a bug and must surface as a 500
+        # instead of a flash message that hides it.
+        db.session.rollback()
         logger.error("Failed to update combined mix", exc_info=True)
         flash(
             "An error occurred while updating combined mix. Check server logs.", "error"
         )
+        return redirect(url_for("main.criteria"))
 
+    flash(
+        f"Combined mix updated to {investment_weight * 100:.0f}% Investment + {lifestyle_weight * 100:.0f}% Lifestyle. {total_rescored} properties rescored!",
+        "success",
+    )
     return redirect(url_for("main.criteria"))
 
 
