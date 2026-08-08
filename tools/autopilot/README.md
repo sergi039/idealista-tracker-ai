@@ -15,14 +15,15 @@ open issue ──▶ run_issue.sh ──▶ PR ──▶ CI (GitHub Actions)
                                   unhealthy? ──▶ rollback
 ```
 
-Nothing here bypasses a gate. A PR merges only with **green CI and a PASS from
-an independent reviewer**; a deploy survives only if `/api/healthz` answers
-`"ok":true` afterwards.
+Branch protection on `main` requires the status checks named in the protection
+itself and refuses any branch behind `main` — GitHub enforces both atomically at
+merge time. The bot does not re-implement them. It adds the gate GitHub has no
+concept of: **an independent reviewer must return PASS**.
 
-What counts as green is spelled out rather than inferred: every check in
-`AUTOPILOT_REQUIRED_CHECKS` (default `pytest no-source-bundles`) must report
-`SUCCESS`. A run where the required checks are absent, skipped or neutral
-verifies exactly as much as a run with no CI at all, and is refused.
+| Enforced by | What |
+|---|---|
+| GitHub branch protection | required checks green, branch up to date, PR required, no force-push |
+| `merge_bot.sh` | independent review, verdict bound to the exact diff, BLOCKER posted on the PR |
 
 ## Scripts
 
@@ -105,35 +106,17 @@ separately. A deploy that leaves the scheduler `not_initialized` gets a warning
 in the log even when the page loads — that combination is precisely what
 "working app, no new data" looked like.
 
+**A verdict covers a diff, not a branch.** The journal key is `base..head`, so a
+PASS stops applying the moment either end moves, and `--match-head-commit`
+guarantees the merged commit is the reviewed one.
+
 **UNAVAILABLE is not PASS.** A reviewer that cannot run leaves the PR open.
 
-**A verdict covers a diff, not a branch.** The journal key is `base..head`, so
-a PASS stops applying the moment main moves — and the merge step re-checks the
-base one last time, because a review takes minutes and `--match-head-commit`
-only guards the head.
-
-**The branch must be up to date.** A PR that is behind main is refused before
-review, not merged and hoped for. `base..head` on a stale branch shows what the
-branch changes, which is not what will land: main tightens a helper, the branch
-adds a caller written against the old one, both sides review clean, and the
-merge combines them into something nobody saw. Requiring the branch to contain
-the current base makes the reviewed diff and the merged code the same thing.
-
-### Known residual risk: the base can move during the merge itself
-
-GitHub has no "merge only if the base is still X". Between the last base check
-and the `gh pr merge` call — a second or two — main can advance, and the squash
-lands on a base nobody reviewed. This cannot be closed from a script.
-
-The bot does two things about it rather than one: it re-checks the base as late
-as possible, and after every merge it reads the first parent of the squash
-commit and compares it to the reviewed base. A mismatch is logged as `ALERT`
-with the commit to inspect. Silent is not the same as safe.
-
-The actual fix is a repository setting the owner has to make — branch
-protection → **"Require branches to be up to date before merging"**. With it,
-GitHub itself refuses the merge when the base has moved. Worth turning on
-before letting this run unattended over a busy main.
+**The bot still checks CI and up-to-dateness before reviewing** — not as a gate,
+but to avoid spending a minutes-long review on a PR that protection will refuse,
+and to keep the reviewer looking at the diff that will actually land. The list
+of required checks is read from branch protection, so there is no second copy to
+drift.
 
 ## The lock
 
