@@ -15,6 +15,7 @@ from services.settings_service import SettingsService
 from services.search_profile_service import SearchProfileService
 from services.property_classification_service import PropertyClassificationService
 from utils.email_parser import EmailParser
+from utils.uid_cursor import UidBatchCursor, read_uid_file, write_uid_file
 from utils.idealista_extractors import (
     extract_area_m2,
     extract_idealista_property_id,
@@ -48,6 +49,9 @@ class PropertyIMAPService:
         self.max_emails = Config.MAX_EMAILS_PER_RUN
         self.email_parser = EmailParser()
         self.last_seen_uid = self._get_last_seen_uid()
+        # Set by get_idealista_emails(); run_ingestion() advances it per email
+        # only after that email's DB work is committed (issue #24).
+        self._uid_cursor: Optional[UidBatchCursor] = None
 
     @staticmethod
     def _gmail_label_query(label: Optional[str]) -> Optional[str]:
@@ -80,33 +84,55 @@ class PropertyIMAPService:
             logger.warning("Failed to parse email date: %s", e)
             return None
 
+    @staticmethod
+    def _uid_file_path() -> str:
+        return (
+            getattr(Config, "LAST_SEEN_UID_PROPERTIES_PATH", None)
+            or Config.LAST_SEEN_UID_PATH
+        )
+
     def _get_last_seen_uid(self) -> int:
-        try:
-            uid_file = (
-                getattr(Config, "LAST_SEEN_UID_PROPERTIES_PATH", None)
-                or Config.LAST_SEEN_UID_PATH
-            )
-            legacy_uid_file = os.path.join(Config.BASE_DIR, ".last_seen_uid_properties")
+        """Read the persisted cursor. Missing file means 0; a corrupt one raises.
 
-            for path in (uid_file, legacy_uid_file):
-                if os.path.exists(path):
-                    with open(path, "r") as f:
-                        return int(f.read().strip() or "0")
-            return 0
-        except Exception:
-            return 0
+        Returning 0 on any error (the old behaviour) turned a corrupt cursor
+        into a silent full-mailbox reprocess — issue #24.
+        """
+        uid_file = self._uid_file_path()
+        legacy_uid_file = os.path.join(Config.BASE_DIR, ".last_seen_uid_properties")
 
-    def _save_last_seen_uid(self, uid: int) -> None:
+        for path in (uid_file, legacy_uid_file):
+            uid = read_uid_file(path)
+            if uid is None:
+                continue
+            return uid
+        return 0
+
+    def _save_last_seen_uid(self, uid: int) -> bool:
+        """Persist the cursor atomically. Returns False when the write failed.
+
+        A failed write is safe: the cursor stays behind and the emails are
+        re-fetched next run, where re-ingestion dedupes them.
+        """
         try:
-            uid_file = (
-                getattr(Config, "LAST_SEEN_UID_PROPERTIES_PATH", None)
-                or Config.LAST_SEEN_UID_PATH
-            )
-            os.makedirs(os.path.dirname(uid_file), exist_ok=True)
-            with open(uid_file, "w") as f:
-                f.write(str(uid))
+            write_uid_file(self._uid_file_path(), uid)
+            return True
         except Exception as e:
             logger.error("Failed to save last UID: %s", e)
+            return False
+
+    def _advance_uid_cursor(self, email_data: Dict[str, Any]) -> None:
+        """Mark one email's UID as done and persist the resulting watermark.
+
+        Called only once the email's DB work has been committed (or the email
+        needed no write at all), so the persisted cursor can never step over an
+        email whose rows never landed.
+        """
+        cursor = self._uid_cursor
+        if cursor is None:
+            return
+        if cursor.resolve(email_data.get("uid")) and cursor.watermark > 0:
+            if self._save_last_seen_uid(cursor.watermark):
+                self.last_seen_uid = cursor.watermark
 
     def _decode_header_value(self, value: str) -> str:
         try:
@@ -204,6 +230,7 @@ class PropertyIMAPService:
             return []
 
         email_data: List[Dict[str, Any]] = []
+        self._uid_cursor = None
         limit = max_results or self.max_emails
         excluded_categories = self._excluded_categories()
         sale_only = SettingsService.get_sale_only()
@@ -265,9 +292,24 @@ class PropertyIMAPService:
                     return []
 
                 fetch_data = client.fetch(uids, ["RFC822", "INTERNALDATE"])
+                cursor = UidBatchCursor(uids, start=self.last_seen_uid)
+                self._uid_cursor = cursor
+
                 for uid in uids:
+                    fetched = fetch_data.get(uid) or {}
+                    raw_email = fetched.get(b"RFC822")
+                    if raw_email is None:
+                        # Fetch-level gap, not a parsing decision: leave the UID
+                        # unresolved so the next run fetches it again instead of
+                        # the cursor stepping over it.
+                        logger.error("IMAP fetch returned no body for UID %s", uid)
+                        continue
+
+                    # Emails we hand back still need DB work, so they stay
+                    # unresolved until run_ingestion() commits them. Everything
+                    # else (filtered out, or unparseable) is done right here.
+                    emitted = False
                     try:
-                        raw_email = fetch_data[uid][b"RFC822"]
                         msg = message_from_bytes(raw_email)
 
                         html_parts = self._extract_html_parts(msg)
@@ -280,7 +322,7 @@ class PropertyIMAPService:
                         if any(s in subject_low for s in skip_subjects):
                             continue
 
-                        internal_date = fetch_data[uid][b"INTERNALDATE"]
+                        internal_date = fetched.get(b"INTERNALDATE")
                         email_source_id = f"imap_{uid}"
                         email_sender = msg.get("From")
 
@@ -327,9 +369,11 @@ class PropertyIMAPService:
                         profile = SearchProfileService.resolve_profile(subject, body)
 
                         if is_no_longer:
+                            emitted = True
                             email_data.append(
                                 {
                                     "type": "no_longer_listed",
+                                    "uid": uid,
                                     "source_email_id": email_source_id,
                                     "email_received_at": internal_date,
                                     "url": url,
@@ -399,11 +443,13 @@ class PropertyIMAPService:
                         else:
                             area_type = "unknown"
 
+                        emitted = True
                         email_data.append(
                             {
                                 "type": "price_change"
                                 if is_price_change
                                 else "listing",
+                                "uid": uid,
                                 "source_email_id": email_source_id,
                                 "email_received_at": internal_date,
                                 "email_subject": subject,
@@ -426,11 +472,9 @@ class PropertyIMAPService:
                         )
                     except Exception as e:
                         logger.error("Failed to process UID %s: %s", uid, e)
-                        continue
-
-                if uids:
-                    self.last_seen_uid = max(uids)
-                    self._save_last_seen_uid(self.last_seen_uid)
+                    finally:
+                        if not emitted:
+                            self._advance_uid_cursor({"uid": uid})
         except Exception as e:
             logger.error("Failed to fetch via IMAP: %s", e)
 
@@ -451,10 +495,12 @@ class PropertyIMAPService:
         excluded_categories = self._excluded_categories()
 
         try:
+            self._uid_cursor = None
             emails = self.get_idealista_emails()
             sync_history.total_emails_found = len(emails)
 
             for email_data in emails:
+                email_failed = False
                 try:
                     profile_id = email_data.get("search_profile_id")
                     deal_type = (email_data.get("deal_type") or "sale").strip().lower()
@@ -681,6 +727,7 @@ class PropertyIMAPService:
                             )
                             db.session.rollback()
                 except Exception as e:
+                    email_failed = True
                     logger.error(
                         "Failed to process email %s: %s",
                         email_data.get("source_email_id"),
@@ -688,6 +735,18 @@ class PropertyIMAPService:
                     )
                     db.session.rollback()
                     continue
+                finally:
+                    # The cursor may only pass an email whose DB work landed;
+                    # a failed one holds it back so the next run re-fetches the
+                    # unprocessed tail (issue #24).
+                    if email_failed:
+                        logger.error(
+                            "Holding last_seen_uid at %s: email %s was not persisted",
+                            self.last_seen_uid,
+                            email_data.get("source_email_id"),
+                        )
+                    else:
+                        self._advance_uid_cursor(email_data)
 
             sync_history.new_properties_added = processed_count
             sync_history.price_updated_count = price_updated_count

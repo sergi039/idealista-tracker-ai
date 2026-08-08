@@ -7,6 +7,7 @@ from imapclient import IMAPClient
 from email import message_from_bytes
 from email.header import decode_header
 from utils.email_parser import EmailParser
+from utils.uid_cursor import UidBatchCursor, read_uid_file, write_uid_file
 from models import Land, LandHistory, SyncHistory
 from app import db
 from config import Config
@@ -28,6 +29,9 @@ class IMAPService:
         self.max_emails = Config.MAX_EMAILS_PER_RUN
         self.email_parser = EmailParser()
         self.last_seen_uid = self._get_last_seen_uid()
+        # Set by get_idealista_emails(); run_ingestion() advances it per email
+        # only after that email's DB work is committed (issue #24).
+        self._uid_cursor: Optional[UidBatchCursor] = None
 
     @staticmethod
     def _gmail_label_query(label: Optional[str]) -> Optional[str]:
@@ -73,36 +77,50 @@ class IMAPService:
             return None
 
     def _get_last_seen_uid(self) -> int:
-        """Get the last processed UID from database to avoid reprocessing"""
-        try:
-            uid_file = Config.LAST_SEEN_UID_PATH
-            legacy_uid_file = os.path.join(Config.BASE_DIR, ".last_seen_uid")
+        """Read the persisted cursor. Missing file means 0; a corrupt one raises.
 
-            for path in (uid_file, legacy_uid_file):
-                if os.path.exists(path):
-                    with open(path, "r") as f:
-                        uid = int(f.read().strip() or "0")
-                    # Migrate legacy UID file into data dir for persistence
-                    if (
-                        path == legacy_uid_file
-                        and uid > 0
-                        and uid_file != legacy_uid_file
-                    ):
-                        self._save_last_seen_uid(uid)
-                    return uid
-            return 0
-        except Exception:
-            return 0
+        Returning 0 on any error (the old behaviour) turned a corrupt cursor
+        into a silent full-mailbox reprocess — issue #24.
+        """
+        uid_file = Config.LAST_SEEN_UID_PATH
+        legacy_uid_file = os.path.join(Config.BASE_DIR, ".last_seen_uid")
 
-    def _save_last_seen_uid(self, uid: int):
-        """Save the last processed UID"""
+        for path in (uid_file, legacy_uid_file):
+            uid = read_uid_file(path)
+            if uid is None:
+                continue
+            # Migrate legacy UID file into data dir for persistence
+            if path == legacy_uid_file and uid > 0 and uid_file != legacy_uid_file:
+                self._save_last_seen_uid(uid)
+            return uid
+        return 0
+
+    def _save_last_seen_uid(self, uid: int) -> bool:
+        """Persist the cursor atomically. Returns False when the write failed.
+
+        A failed write is safe: the cursor stays behind and the emails are
+        re-fetched next run, where re-ingestion dedupes them.
+        """
         try:
-            uid_file = Config.LAST_SEEN_UID_PATH
-            os.makedirs(os.path.dirname(uid_file), exist_ok=True)
-            with open(uid_file, "w") as f:
-                f.write(str(uid))
+            write_uid_file(Config.LAST_SEEN_UID_PATH, uid)
+            return True
         except Exception:
             logger.error("Failed to save last UID", exc_info=True)
+            return False
+
+    def _advance_uid_cursor(self, email_data: Dict) -> None:
+        """Mark one email's UID as done and persist the resulting watermark.
+
+        Called only once the email's DB work has been committed (or the email
+        needed no write at all), so the persisted cursor can never step over an
+        email whose rows never landed.
+        """
+        cursor = self._uid_cursor
+        if cursor is None:
+            return
+        if cursor.resolve(email_data.get("uid")) and cursor.watermark > 0:
+            if self._save_last_seen_uid(cursor.watermark):
+                self.last_seen_uid = cursor.watermark
 
     def authenticate(self) -> bool:
         """Test IMAP connection and authentication"""
@@ -180,6 +198,7 @@ class IMAPService:
             logger.error("IMAP credentials not configured")
             return []
         email_data = []
+        self._uid_cursor = None
         max_results = max_results or self.max_emails
 
         try:
@@ -244,9 +263,24 @@ class IMAPService:
                 logger.info(f"Processing {len(uids)} emails...")
                 fetch_data = client.fetch(uids, ["RFC822", "INTERNALDATE"])
 
+                cursor = UidBatchCursor(uids, start=self.last_seen_uid)
+                self._uid_cursor = cursor
+
                 for uid in uids:
+                    fetched = fetch_data.get(uid) or {}
+                    raw_email = fetched.get(b"RFC822")
+                    if raw_email is None:
+                        # Fetch-level gap, not a parsing decision: leave the UID
+                        # unresolved so the next run fetches it again instead of
+                        # the cursor stepping over it.
+                        logger.error("IMAP fetch returned no body for UID %s", uid)
+                        continue
+
+                    # Emails we hand back still need DB work, so they stay
+                    # unresolved until run_ingestion() commits them. Everything
+                    # else (filtered out, or unparseable) is done right here.
+                    emitted = False
                     try:
-                        raw_email = fetch_data[uid][b"RFC822"]
                         msg = message_from_bytes(raw_email)
 
                         html_parts = self._extract_html_parts(msg)
@@ -324,12 +358,14 @@ class IMAPService:
                                 property_id = self.extract_idealista_property_id(
                                     no_longer_data.get("url")
                                 )
+                                emitted = True
                                 email_data.append(
                                     {
+                                        "uid": uid,
                                         "source_email_id": f"imap_{uid}",
-                                        "email_received_at": fetch_data[uid][
+                                        "email_received_at": fetched.get(
                                             b"INTERNALDATE"
-                                        ],
+                                        ),
                                         "type": "no_longer_listed",
                                         "url": no_longer_data["url"],
                                         "idealista_property_id": property_id,
@@ -396,15 +432,15 @@ class IMAPService:
                             parsed["idealista_property_id"] = (
                                 self.extract_idealista_property_id(parsed.get("url"))
                             )
+                            parsed["uid"] = uid
                             parsed["source_email_id"] = f"imap_{uid}"
-                            parsed["email_received_at"] = fetch_data[uid][
-                                b"INTERNALDATE"
-                            ]
+                            parsed["email_received_at"] = fetched.get(b"INTERNALDATE")
                             parsed["type"] = (
                                 "price_change" if is_price_change else "listing"
                             )
                             parsed["email_subject"] = subject
                             parsed["email_sender"] = email_sender
+                            emitted = True
                             email_data.append(parsed)
                             logger.info(f"Successfully parsed email UID {uid}")
                         else:
@@ -413,13 +449,9 @@ class IMAPService:
                             )
                     except Exception:
                         logger.error("Failed to process UID %s", uid, exc_info=True)
-                        continue
-
-                # Persist last seen
-                if uids:
-                    self.last_seen_uid = max(uids)
-                    self._save_last_seen_uid(self.last_seen_uid)
-                    logger.info(f"Saved last seen UID: {self.last_seen_uid}")
+                    finally:
+                        if not emitted:
+                            self._advance_uid_cursor({"uid": uid})
 
                 logger.info(
                     f"Successfully processed {len(email_data)} Idealista emails"
@@ -445,6 +477,7 @@ class IMAPService:
             logger.info(f"Starting IMAP ingestion process ({sync_type})")
 
             # Fetch and parse emails
+            self._uid_cursor = None
             emails = self.get_idealista_emails()
             sync_history.total_emails_found = len(emails)
 
@@ -468,6 +501,7 @@ class IMAPService:
             processed_email_ids = set()  # Track processed emails in this run
 
             for email_data in emails:
+                email_failed = False
                 try:
                     email_id = email_data["source_email_id"]
 
@@ -751,6 +785,7 @@ class IMAPService:
                     logger.info(f"Processed new land: {land.title}")
 
                 except Exception:
+                    email_failed = True
                     logger.error(
                         "Failed to process email %s",
                         email_data.get("source_email_id"),
@@ -758,6 +793,18 @@ class IMAPService:
                     )
                     db.session.rollback()
                     continue
+                finally:
+                    # The cursor may only pass an email whose DB work landed;
+                    # a failed one holds it back so the next run re-fetches the
+                    # unprocessed tail (issue #24).
+                    if email_failed:
+                        logger.error(
+                            "Holding last_seen_uid at %s: email %s was not persisted",
+                            self.last_seen_uid,
+                            email_data.get("source_email_id"),
+                        )
+                    else:
+                        self._advance_uid_cursor(email_data)
 
             # Update sync history
             sync_history.new_properties_added = processed_count
@@ -793,15 +840,7 @@ class IMAPService:
         """Run a full synchronization - reset last seen UID and process all emails"""
         logger.info("Starting full email synchronization")
 
-        # Temporarily reset last seen UID for full sync
+        # Reset the cursor for this run; run_ingestion() re-persists it per email
+        # as their rows are committed.
         self.last_seen_uid = 0
-
-        try:
-            # Run ingestion with full sync type
-            result = self.run_ingestion(sync_type="full")
-            return result
-
-        finally:
-            # Restore original UID only if full sync failed
-            # If successful, the new UID will be saved automatically
-            pass
+        return self.run_ingestion(sync_type="full")
