@@ -132,13 +132,15 @@ def create_app(testing: bool = False):
                 "AUTO_START_SCHEDULER", "true" if dev_mode else "false"
             ).lower()
             == "true",
-            # Issue #16: the session cookie carries `admin_authenticated` and
-            # was never marked Secure/SameSite, so it rode along on any
-            # plain-HTTP request and was sent cross-site under browsers'
-            # Lax-by-default heuristics alone. SameSite=Lax blocks it being
-            # attached to cross-site POSTs (the CSRF vector); Secure is
-            # skipped only under DEV_MODE, where the app is served over
-            # plain HTTP with no TLS-terminating proxy in front of it.
+            # Issue #16: the Flask session cookie (used for the Flask-WTF
+            # CSRF token, flash messages and language preference -- the
+            # admin login itself was removed in #62) was never marked
+            # Secure/SameSite, so it rode along on any plain-HTTP request
+            # and was sent cross-site under browsers' Lax-by-default
+            # heuristics alone. SameSite=Lax blocks it being attached to
+            # cross-site POSTs; Secure is skipped only under DEV_MODE,
+            # where the app is served over plain HTTP with no
+            # TLS-terminating proxy in front of it.
             "SESSION_COOKIE_SAMESITE": "Lax",
             "SESSION_COOKIE_SECURE": not dev_mode,
         }

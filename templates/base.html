@@ -15,46 +15,6 @@
     <meta name="csrf-token" content="{{ csrf_token() }}">
 
     <script>
-        // Issue #16: the JSON API blueprints (/api/*) are exempt from
-        // Flask-WTF's automatic CSRF check so that token-authenticated
-        // clients keep working, but session-authenticated (cookie-backed)
-        // POST/PUT/PATCH/DELETE calls now require a valid X-CSRFToken
-        // header server-side (see admin_required in utils/auth.py).
-        // Attach it here, once, for every same-origin state-changing
-        // fetch() call instead of hand-editing each call site -- new fetch
-        // calls added later get the header automatically too.
-        (function () {
-            const originalFetch = window.fetch;
-            const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-
-            window.fetch = function (input, init) {
-                const method = (
-                    (init && init.method) ||
-                    (input && input.method) ||
-                    'GET'
-                ).toUpperCase();
-
-                if (UNSAFE_METHODS.has(method)) {
-                    const url = typeof input === 'string' ? input : (input && input.url) || '';
-                    const isSameOrigin = url.startsWith('/') || url.startsWith(window.location.origin);
-                    if (isSameOrigin) {
-                        const meta = document.querySelector('meta[name="csrf-token"]');
-                        if (meta) {
-                            const headers = new Headers((init && init.headers) || (typeof input !== 'string' && input && input.headers) || {});
-                            if (!headers.has('X-CSRFToken')) {
-                                headers.set('X-CSRFToken', meta.getAttribute('content'));
-                            }
-                            init = Object.assign({}, init, { headers });
-                        }
-                    }
-                }
-
-                return originalFetch.call(this, input, init);
-            };
-        })();
-    </script>
-
-    <script>
         // Apply theme early to avoid flash of incorrect theme
         (function () {
             try {

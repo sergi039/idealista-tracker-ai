@@ -11,7 +11,6 @@ Ported from Legacy to Universal.  Covers:
 """
 
 import os
-import re
 import pytest
 import json
 from decimal import Decimal
@@ -508,9 +507,12 @@ class TestOpenRedirectGuard:
 # Security: session cookie must be Secure/SameSite (issue #16)
 # ---------------------------------------------------------------------------
 class TestSessionCookieFlags:
-    """Issue #16: SESSION_COOKIE_SECURE/SAMESITE were never set anywhere, so
-    the 30-day admin session cookie relied solely on browsers'
-    Lax-by-default heuristics and would be sent over plain HTTP."""
+    """Issue #16: SESSION_COOKIE_SECURE/SAMESITE were never set anywhere.
+    The admin login is gone (#62), but the Flask session cookie is still
+    used -- to store the Flask-WTF CSRF token, flash messages and the
+    language preference -- so it still needs Secure/SameSite instead of
+    relying solely on browsers' Lax-by-default heuristics and riding along
+    over plain HTTP."""
 
     def test_session_cookie_secure_and_samesite_outside_dev_mode(self):
         setup_test_environment()
@@ -537,109 +539,6 @@ class TestSessionCookieFlags:
             os.environ.pop("DEV_MODE", None)
             os.environ.pop("AUTO_CREATE_DB", None)
             os.environ.pop("AUTO_START_SCHEDULER", None)
-
-
-# ---------------------------------------------------------------------------
-# Security: session-authenticated JSON API must enforce CSRF (issue #16)
-# ---------------------------------------------------------------------------
-class TestSessionAuthenticatedApiCsrf:
-    """Issue #16: `api_bp` is blanket-exempted from Flask-WTF's automatic
-    CSRF check so that Bearer/API-Key token clients (which have no session
-    and therefore no CSRF token) keep working. That exemption used to cover
-    session-cookie-authenticated requests too -- exactly the case CSRF
-    protection exists for, since a browser attaches the admin's session
-    cookie automatically to a cross-site POST. `admin_required` now
-    requires a valid X-CSRFToken whenever the request was authenticated via
-    the session cookie rather than a Bearer/API-Key token."""
-
-    def _make_land(self, app, source_email_id):
-        with app.app_context():
-            land = Land(
-                source_email_id=source_email_id,
-                title="CSRF Test Land",
-                municipality="Valencia",
-                land_type="developed",
-                price=Decimal("100000.00"),
-                area=Decimal("1000.00"),
-            )
-            db.session.add(land)
-            db.session.commit()
-            return land.id
-
-    def _login(self, client):
-        resp = client.post("/login", data={"token": "unit-test-admin-token"})
-        assert resp.status_code == 302
-
-    def _csrf_token(self, client):
-        """Pull the live token out of a rendered page's <meta> tag, the same
-        way the app's own fetch() wrapper does (templates/base.html)."""
-        resp = client.get("/settings/properties")
-        assert resp.status_code == 200
-        match = re.search(
-            r'name="csrf-token" content="([^"]+)"', resp.get_data(as_text=True)
-        )
-        assert match, "csrf-token meta tag not found in rendered page"
-        return match.group(1)
-
-    def test_session_post_without_csrf_token_is_rejected(
-        self, token_login_app, token_login_client
-    ):
-        """A cross-site forgery riding the admin's session cookie has no way
-        to read the meta tag (same-origin policy), so it must be rejected
-        before the state-changing action ever runs."""
-        land_id = self._make_land(token_login_app, "csrf_test_no_token")
-        self._login(token_login_client)
-
-        resp = token_login_client.post(
-            f"/api/land/{land_id}/set-status",
-            json={"status": "removed"},
-        )
-        assert resp.status_code == 403
-        assert resp.get_json()["success"] is False
-
-        with token_login_app.app_context():
-            land = db.session.get(Land, land_id)
-            assert land.listing_status != "removed"
-
-    def test_session_post_with_valid_csrf_token_succeeds(
-        self, token_login_app, token_login_client
-    ):
-        """The app's own JS (which now attaches the header from the meta
-        tag, see templates/base.html) is unaffected by the fix."""
-        land_id = self._make_land(token_login_app, "csrf_test_valid_token")
-        self._login(token_login_client)
-        token = self._csrf_token(token_login_client)
-
-        resp = token_login_client.post(
-            f"/api/land/{land_id}/set-status",
-            json={"status": "removed"},
-            headers={"X-CSRFToken": token},
-        )
-        assert resp.status_code == 200
-        assert resp.get_json()["success"] is True
-
-        with token_login_app.app_context():
-            land = db.session.get(Land, land_id)
-            assert land.listing_status == "removed"
-
-    def test_bearer_token_post_needs_no_csrf_token(self, token_login_app):
-        """Programmatic API clients authenticate via `Authorization: Bearer`
-        and never rely on a cookie, so a cross-site page can't forge this
-        header (it doesn't know the secret token) -- no CSRF check needed."""
-        land_id = self._make_land(token_login_app, "csrf_test_bearer")
-        client = token_login_app.test_client()
-
-        resp = client.post(
-            f"/api/land/{land_id}/set-status",
-            json={"status": "removed"},
-            headers={"Authorization": "Bearer unit-test-admin-token"},
-        )
-        assert resp.status_code == 200
-        assert resp.get_json()["success"] is True
-
-        with token_login_app.app_context():
-            land = db.session.get(Land, land_id)
-            assert land.listing_status == "removed"
 
 
 # ---------------------------------------------------------------------------
