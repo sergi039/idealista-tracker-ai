@@ -9,7 +9,7 @@ Covers:
 """
 
 import pytest
-from datetime import datetime, timezone
+from datetime import timezone
 from decimal import Decimal
 from unittest.mock import patch
 

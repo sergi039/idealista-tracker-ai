@@ -3,7 +3,6 @@ Tests for market analysis service functionality (2025 updates).
 """
 
 import pytest
-from unittest.mock import Mock, patch
 from decimal import Decimal
 from app import create_app, db
 from models import Land

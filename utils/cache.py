@@ -1,7 +1,6 @@
 """Caching utilities for the application"""
 import os
 import hashlib
-import json
 from flask_caching import Cache
 from functools import wraps
 import logging
