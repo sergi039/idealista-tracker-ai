@@ -2,6 +2,7 @@ import os
 import logging
 import fcntl
 import tempfile
+from contextlib import contextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import atexit
@@ -11,11 +12,35 @@ logger = logging.getLogger(__name__)
 
 scheduler = None
 scheduler_lock_file = None
+# Flask app the jobs run against. APScheduler executes them on its own worker
+# threads, which carry no app context of their own (#14).
+flask_app = None
+
+
+@contextmanager
+def job_app_context():
+    """Push the Flask app context a scheduled job needs to touch the database.
+
+    Without it every `db.session` call raises "Working outside of application
+    context", the job body's own `except Exception` swallows it, and APScheduler
+    still reports "executed successfully" - which is how ingestion stayed dead
+    and silent from February to August 2026 (#14).
+
+    Missing app is a hard error, not a skip: a scheduler running jobs that can
+    never reach the database is worse than one that refuses to start.
+    """
+    if flask_app is None:
+        raise RuntimeError(
+            "Scheduled job started without a Flask app. init_scheduler(app) must "
+            "run before any job fires."
+        )
+    with flask_app.app_context():
+        yield
 
 
 def init_scheduler(app):
     """Initialize the background scheduler with protection against duplicate instances"""
-    global scheduler, scheduler_lock_file
+    global scheduler, scheduler_lock_file, flask_app
 
     if app.config.get("TESTING"):
         logger.info("Scheduler disabled in TESTING")
@@ -57,7 +82,8 @@ def init_scheduler(app):
     # Register cleanup IMMEDIATELY after lock acquisition so the handle is
     # always released on process exit, even if scheduler init below fails.
     def cleanup():
-        global scheduler, scheduler_lock_file
+        global scheduler, scheduler_lock_file, flask_app
+        flask_app = None
         if scheduler:
             try:
                 scheduler.shutdown()
@@ -77,6 +103,10 @@ def init_scheduler(app):
 
     try:
         scheduler = BackgroundScheduler()
+
+        # Bind before the first job can fire, so job_app_context() always has
+        # an app to push.
+        flask_app = app
 
         timezone = getattr(Config, "SCHEDULER_TIMEZONE", "Europe/Madrid")
 
@@ -140,74 +170,92 @@ def init_scheduler(app):
 
 
 def run_scheduled_ingestion():
-    """Run the scheduled ingestion job"""
-    try:
-        from config import Config
+    """Run the scheduled ingestion job.
 
-        target = getattr(Config, "INGESTION_TARGET", "properties")
+    The whole body runs inside the app context, not just the service call:
+    constructing a service and reading its result can both reach the database.
 
-        logger.info("Starting scheduled IMAP ingestion (target=%s)", target)
+    Failures are logged *and* re-raised. Swallowing them is what let #14 hide -
+    APScheduler reports "executed successfully" for a job that returns normally,
+    so a caught exception means a dead job that looks alive.
+    """
+    with job_app_context():
+        try:
+            from config import Config
 
-        if target == "lands":
-            from services.imap_service import IMAPService
+            target = getattr(Config, "INGESTION_TARGET", "properties")
 
-            service = IMAPService()
-        else:
-            from services.property_imap_service import PropertyIMAPService
+            logger.info("Starting scheduled IMAP ingestion (target=%s)", target)
 
-            service = PropertyIMAPService()
+            if target == "lands":
+                from services.imap_service import IMAPService
 
-        processed_count = service.run_ingestion()
+                service = IMAPService()
+            else:
+                from services.property_imap_service import PropertyIMAPService
 
-        logger.info(
-            "Scheduled ingestion completed. Processed %s properties", processed_count
-        )
+                service = PropertyIMAPService()
 
-    except Exception:
-        logger.error("Scheduled ingestion failed", exc_info=True)
+            processed_count = service.run_ingestion()
+
+            logger.info(
+                "Scheduled ingestion completed. Processed %s properties",
+                processed_count,
+            )
+
+        except Exception:
+            logger.error("Scheduled ingestion failed", exc_info=True)
+            raise
 
 
 def run_listing_status_check():
-    """Run the scheduled listing status check job"""
-    try:
-        from config import Config
+    """Run the scheduled listing status check job.
 
-        target = getattr(Config, "INGESTION_TARGET", "properties")
-        if target != "lands":
-            logger.info(
-                "Skipping scheduled listing status check (target=%s, email-driven)",
-                target,
-            )
-            return
+    Same contract as run_scheduled_ingestion: one context around the whole body
+    (reading the result rows is database work too), and failures propagate so
+    APScheduler cannot log a dead job as a successful one.
+    """
+    with job_app_context():
+        try:
+            from config import Config
 
-        logger.info("Starting scheduled listing status check (lands)")
-        from services.listing_status_service import ListingStatusService
-
-        service = ListingStatusService()
-
-        # Check favorites first (they get priority)
-        results = service.check_favorites_status(limit=30)
-
-        logger.info(
-            "Listing status check completed. Checked %s favorites: %s removed, %s sold",
-            results["checked"],
-            results["removed"],
-            results["sold"],
-        )
-
-        # If any listings were removed, log details
-        if results.get("details"):
-            for detail in results["details"]:
+            target = getattr(Config, "INGESTION_TARGET", "properties")
+            if target != "lands":
                 logger.info(
-                    "Status change: Land %s (%s) - %s -> %s",
-                    detail["land_id"],
-                    detail["title"],
-                    detail["old_status"],
-                    detail["new_status"],
+                    "Skipping scheduled listing status check (target=%s, email-driven)",
+                    target,
                 )
+                return
 
-    except Exception:
-        logger.error("Listing status check failed", exc_info=True)
+            logger.info("Starting scheduled listing status check (lands)")
+            from services.listing_status_service import ListingStatusService
+
+            service = ListingStatusService()
+
+            # Check favorites first (they get priority)
+            results = service.check_favorites_status(limit=30)
+
+            logger.info(
+                "Listing status check completed. Checked %s favorites: %s removed, %s sold",
+                results["checked"],
+                results["removed"],
+                results["sold"],
+            )
+
+            # If any listings were removed, log details
+            if results.get("details"):
+                for detail in results["details"]:
+                    logger.info(
+                        "Status change: Land %s (%s) - %s -> %s",
+                        detail["land_id"],
+                        detail["title"],
+                        detail["old_status"],
+                        detail["new_status"],
+                    )
+
+        except Exception:
+            logger.error("Listing status check failed", exc_info=True)
+            raise
 
 
 def get_scheduler_status():
