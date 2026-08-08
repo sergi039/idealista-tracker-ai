@@ -27,7 +27,7 @@
             <i class="fas fa-sync-alt me-1"></i>{{ t('manual_sync') }}
         </button>
         <a class="btn btn-outline-secondary btn-sm"
-           href="{{ url_for('main.map_view', profile_id=selected_profile_id) if selected_profile_id else url_for('main.map_view') }}"
+           href="{{ url_for('main.map_view', profile_id=current_filters.profile_id) if current_filters.profile_id is not none else url_for('main.map_view') }}"
            title="View properties on map">
             <i class="fas fa-map me-1"></i>Map
         </a>
@@ -66,6 +66,7 @@
             <div class="col-12 col-md-3">
                 <label class="form-label small mb-1">Search Profile</label>
                 <select name="profile_id" class="form-select form-select-sm">
+                    <option value="" {% if selected_profile_id is none %}selected{% endif %}>All profiles</option>
                     {% for p in profiles %}
                         <option value="{{ p.id }}" {% if selected_profile_id == p.id %}selected{% endif %}>{{ p.name }}</option>
                     {% endfor %}

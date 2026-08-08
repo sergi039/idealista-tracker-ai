@@ -48,50 +48,34 @@ def index():
 def properties():
     """Universal properties listing page (new model, migration-in-progress)."""
     try:
-        from services.search_profile_service import SearchProfileService
+        from services.search_profile_service import (
+            PROFILE_ALL_SENTINEL,
+            SearchProfileService,
+        )
 
         profiles = SearchProfileService.list_profiles(active_only=True)
         default_profile = SearchProfileService.get_default_profile(create=True)
 
-        requested_profile_id = request.args.get("profile_id", type=int)
-        selected_profile_id = requested_profile_id
-
-        # If the default profile has no properties (common when profiles are auto-created from email search names),
-        # auto-select the most recently active profile so the list isn't empty by default.
-        if selected_profile_id is None:
-            default_has_props = False
-            if default_profile:
-                default_has_props = (
-                    Property.query.filter(
-                        Property.search_profile_id == default_profile.id
-                    )
-                    .limit(1)
-                    .first()
-                    is not None
+        # "auto": no profile_id in the URL -- apply the same fallback as before
+        #   (preserves old bookmarked/saved links).
+        # "all": profile_id=all or profile_id= (empty) -- the user explicitly
+        #   asked to see every profile at once, so selected_profile_id stays
+        #   None and no profile filter is applied below.
+        # "specific": profile_id=<int> -- filter to exactly that profile.
+        profile_state, requested_profile_id = (
+            SearchProfileService.parse_profile_selection(request.args)
+        )
+        explicit_all_profiles = profile_state == "all"
+        if profile_state == "specific":
+            selected_profile_id = requested_profile_id
+        elif profile_state == "all":
+            selected_profile_id = None
+        else:
+            selected_profile_id = (
+                SearchProfileService.resolve_richest_active_profile_id(
+                    default_profile, profiles
                 )
-
-            if default_profile and default_has_props:
-                selected_profile_id = default_profile.id
-            else:
-                recent = (
-                    db.session.query(
-                        Property.search_profile_id,
-                        func.max(Property.created_at).label("latest"),
-                    )
-                    .join(SearchProfile, SearchProfile.id == Property.search_profile_id)
-                    .filter(SearchProfile.is_active.is_(True))
-                    .group_by(Property.search_profile_id)
-                    .order_by(func.max(Property.created_at).desc())
-                    .first()
-                )
-                if recent and recent[0] is not None:
-                    selected_profile_id = int(recent[0])
-                elif default_profile:
-                    selected_profile_id = default_profile.id
-                elif profiles:
-                    selected_profile_id = profiles[0].id
-                else:
-                    selected_profile_id = None
+            )
 
         # Filters
         category_filter = request.args.get("category", "")
@@ -297,7 +281,11 @@ def properties():
             subtypes=subtypes,
             municipalities=municipalities,
             current_filters={
-                "profile_id": selected_profile_id,
+                "profile_id": (
+                    PROFILE_ALL_SENTINEL
+                    if explicit_all_profiles
+                    else selected_profile_id
+                ),
                 "category": category_filter,
                 "subtype": subtype_filter,
                 "municipality": municipality_filter,
@@ -1703,12 +1691,19 @@ def map_view():
         profiles = SearchProfileService.list_profiles(active_only=True)
         default_profile = SearchProfileService.get_default_profile(create=True)
 
-        requested_profile_id = request.args.get("profile_id", type=int)
-        selected_profile_id = requested_profile_id
-
-        # For better UX, auto-select the profile with the most mappable properties (coords present).
-        # If none have coords yet, fall back to the most recently active profile with any properties.
-        if selected_profile_id is None:
+        # Same profile_id contract as /properties: absent -> auto-select below,
+        # "all"/"" -> show every profile's markers, "<int>" -> that profile only.
+        profile_state, requested_profile_id = (
+            SearchProfileService.parse_profile_selection(request.args)
+        )
+        if profile_state == "specific":
+            selected_profile_id = requested_profile_id
+        elif profile_state == "all":
+            selected_profile_id = None
+        else:
+            selected_profile_id = None
+            # For better UX, auto-select the profile with the most mappable properties (coords present).
+            # If none have coords yet, fall back to the most recently active profile with any properties.
             mappable = (
                 db.session.query(
                     Property.search_profile_id,
@@ -2690,18 +2685,25 @@ def export_properties_csv():
 
         from services.search_profile_service import SearchProfileService
 
-        requested_profile_id = request.args.get("profile_id", type=int)
         default_profile = SearchProfileService.get_default_profile(create=True)
         profiles = SearchProfileService.list_profiles(active_only=True)
 
-        if requested_profile_id:
+        # Same profile_id contract as /properties, and the same auto-select
+        # fallback, so an "auto" CSV export matches what that page is showing
+        # instead of landing on a possibly-empty default profile.
+        profile_state, requested_profile_id = (
+            SearchProfileService.parse_profile_selection(request.args)
+        )
+        if profile_state == "specific":
             selected_profile_id = requested_profile_id
-        elif default_profile:
-            selected_profile_id = default_profile.id
-        elif profiles:
-            selected_profile_id = profiles[0].id
-        else:
+        elif profile_state == "all":
             selected_profile_id = None
+        else:
+            selected_profile_id = (
+                SearchProfileService.resolve_richest_active_profile_id(
+                    default_profile, profiles
+                )
+            )
 
         category_filter = request.args.get("category", "")
         subtype_filter = request.args.get("subtype", "")
