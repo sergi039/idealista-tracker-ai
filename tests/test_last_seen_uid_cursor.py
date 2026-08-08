@@ -118,6 +118,22 @@ def _make_service(monkeypatch) -> PropertyIMAPService:
     return service
 
 
+def _mute_land_enrichment(monkeypatch):
+    """Stop the legacy pipeline reaching Google for every saved land.
+
+    `IMAPService.run_ingestion` enriches unconditionally - there is no config
+    flag - so without this the test spends its time in network timeouts.
+    """
+
+    class _NoopEnrichment:
+        def enrich_land(self, land_id):
+            return False
+
+    monkeypatch.setattr(
+        "services.enrichment_service.EnrichmentService", _NoopEnrichment
+    )
+
+
 def test_cursor_stops_at_the_email_whose_commit_failed(app, uid_file, monkeypatch):
     """UID 2 fails to commit for real, so the cursor may not pass UID 1."""
     Config.AUTO_TRAVEL_ENRICHMENT = False
@@ -348,7 +364,9 @@ class TestParsingFailureHoldsTheCursor:
             service.run_ingestion(sync_type="test")
 
             assert Property.query.filter_by(source_email_id="imap_1").one_or_none()
-            assert Property.query.filter_by(source_email_id="imap_2").one_or_none() is None
+            assert (
+                Property.query.filter_by(source_email_id="imap_2").one_or_none() is None
+            )
 
             # UID 2 raised, so the cursor may not pass UID 1 - not 2, and not 3.
             assert read_uid_file(str(uid_file)) == 1
@@ -381,6 +399,7 @@ class TestParsingFailureHoldsTheCursor:
         monkeypatch.setattr(
             "services.imap_service.IMAPClient", _FakeIMAPClient, raising=True
         )
+        _mute_land_enrichment(monkeypatch)
         service = IMAPService()
         service.user = "owner@example.com"
         service.password = "dummy"
@@ -428,6 +447,7 @@ class TestParsingFailureHoldsTheCursor:
         monkeypatch.setattr(
             "services.imap_service.IMAPClient", _FakeIMAPClient, raising=True
         )
+        _mute_land_enrichment(monkeypatch)
         service = IMAPService()
         service.user = "owner@example.com"
         service.password = "dummy"
