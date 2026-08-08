@@ -442,6 +442,68 @@ class TestPropertySettingsNoTokenCookie:
 
 
 # ---------------------------------------------------------------------------
+# Security: Referer-based open redirects (issue #17)
+# ---------------------------------------------------------------------------
+class TestOpenRedirectGuard:
+    """Issue #17: several POST handlers redirect back to "where you came
+    from" using the Referer header, which is fully client-controlled. A
+    cross-origin form post could set it to an attacker's origin and bounce
+    the browser there right after the action completed. The handler must
+    fall back to a safe same-site default whenever the referrer is not
+    same-origin.
+
+    The sibling guard on the login page's `next` parameter went away with the
+    login itself (2026-08-08); `safe_referrer_redirect` moved to
+    utils/redirects.py and still applies to every POST handler here."""
+
+    def _make_property(self, non_testing_app, source_email_id):
+        with non_testing_app.app_context():
+            prop = Property(
+                source_email_id=source_email_id,
+                title="Redirect Guard Property",
+                municipality="Valencia",
+                property_category="housing",
+                property_subtype="apartment",
+                price=Decimal("100000.00"),
+                area=Decimal("80.00"),
+            )
+            db.session.add(prop)
+            db.session.commit()
+            return prop.id
+
+    def test_referer_redirect_rejects_cross_origin(
+        self, non_testing_app, non_testing_client
+    ):
+        """A cross-origin Referer on a POST action must not be honored."""
+        prop_id = self._make_property(non_testing_app, "redirect_guard_cross_origin_1")
+
+        resp = non_testing_client.post(
+            f"/properties/{prop_id}/set-status",
+            data={"status": "removed"},
+            headers={"Referer": "https://evil.example/steal-session"},
+        )
+        assert resp.status_code == 302
+        location = resp.headers.get("Location", "")
+        assert "evil.example" not in location
+        assert location == f"/properties/{prop_id}"
+
+    def test_referer_redirect_honors_same_origin(
+        self, non_testing_app, non_testing_client
+    ):
+        """A genuine same-origin Referer is still honored after the fix."""
+        prop_id = self._make_property(non_testing_app, "redirect_guard_same_origin_1")
+
+        referer = f"http://localhost/properties/{prop_id}?tab=notes"
+        resp = non_testing_client.post(
+            f"/properties/{prop_id}/set-status",
+            data={"status": "removed"},
+            headers={"Referer": referer},
+        )
+        assert resp.status_code == 302
+        assert resp.headers.get("Location") == referer
+
+
+# ---------------------------------------------------------------------------
 # Security: error messages don't leak internals
 # ---------------------------------------------------------------------------
 class TestErrorSanitization:

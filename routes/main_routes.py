@@ -17,7 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
 from app import db
-
+from utils.redirects import safe_referrer_redirect
 
 logger = logging.getLogger(__name__)
 
@@ -1128,7 +1128,9 @@ def recalculate_property_travel(property_id: int):
             flash("Travel not updated (missing coordinates or targets).", "error")
 
         return redirect(
-            request.referrer or url_for("main.property_detail", property_id=property_id)
+            safe_referrer_redirect(
+                url_for("main.property_detail", property_id=property_id)
+            )
         )
     except Exception:
         logger.error(
@@ -1154,7 +1156,9 @@ def recalculate_property_score(property_id: int):
             flash("Scoring not updated.", "error")
 
         return redirect(
-            request.referrer or url_for("main.property_detail", property_id=property_id)
+            safe_referrer_redirect(
+                url_for("main.property_detail", property_id=property_id)
+            )
         )
     except Exception:
         logger.error(
@@ -1206,7 +1210,7 @@ def recalculate_profile_travel(profile_id: int):
             "success",
         )
         return redirect(
-            request.referrer or url_for("main.properties", profile_id=profile_id)
+            safe_referrer_redirect(url_for("main.properties", profile_id=profile_id))
         )
     except Exception:
         logger.error(
@@ -1259,7 +1263,7 @@ def recalculate_profile_scoring(profile_id: int):
             "success",
         )
         return redirect(
-            request.referrer or url_for("main.properties", profile_id=profile_id)
+            safe_referrer_redirect(url_for("main.properties", profile_id=profile_id))
         )
 
     except Exception:
@@ -1346,7 +1350,7 @@ def recalculate_profile_classification(profile_id: int):
         else:
             flash(f"Reclassified {updated} / {len(properties)} properties", "success")
         return redirect(
-            request.referrer or url_for("main.edit_profile", profile_id=profile_id)
+            safe_referrer_redirect(url_for("main.edit_profile", profile_id=profile_id))
         )
 
     except Exception:
@@ -1380,7 +1384,9 @@ def set_property_status_form(property_id: int):
         db.session.commit()
         flash(f"Status updated to {new_status}", "success")
         return redirect(
-            request.referrer or url_for("main.property_detail", property_id=property_id)
+            safe_referrer_redirect(
+                url_for("main.property_detail", property_id=property_id)
+            )
         )
     except Exception:
         logger.error("Failed to set property status %s", property_id, exc_info=True)
@@ -1437,8 +1443,9 @@ def set_property_classification_form(property_id: int):
             db.session.commit()
             flash("Classification updated", "success")
             return redirect(
-                request.referrer
-                or url_for("main.property_detail", property_id=property_id)
+                safe_referrer_redirect(
+                    url_for("main.property_detail", property_id=property_id)
+                )
             )
 
         if action == "auto":
@@ -1465,13 +1472,16 @@ def set_property_classification_form(property_id: int):
                     "success",
                 )
             return redirect(
-                request.referrer
-                or url_for("main.property_detail", property_id=property_id)
+                safe_referrer_redirect(
+                    url_for("main.property_detail", property_id=property_id)
+                )
             )
 
         flash("Unknown action", "error")
         return redirect(
-            request.referrer or url_for("main.property_detail", property_id=property_id)
+            safe_referrer_redirect(
+                url_for("main.property_detail", property_id=property_id)
+            )
         )
 
     except Exception:
@@ -1579,7 +1589,9 @@ def set_property_profile_form(property_id: int):
         db.session.commit()
         flash("Profile updated", "success")
         return redirect(
-            request.referrer or url_for("main.property_detail", property_id=property_id)
+            safe_referrer_redirect(
+                url_for("main.property_detail", property_id=property_id)
+            )
         )
     except Exception:
         logger.error(
