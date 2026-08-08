@@ -143,6 +143,65 @@ git worktree remove /Users/ss/IdealistaRank-properties-universal
 git branch -d feature/properties-universal
 ```
 
+## Repairing search profiles fragmented by folded subjects (#103)
+
+One-off data repair, not part of the cutover. A long `Subject` header arrives
+folded (RFC 5322 2.2.3) and the saved-search extractor used to stop at the
+line break, so a single Idealista subscription accumulated four
+`search_profiles` rows with progressively truncated names. #101 fixed the
+cause; `services/search_profile_repair_service.py` merges the rows already in
+the database. It recomputes each listing's saved-search name from its own
+stored `properties.email_subject` — same unfolding, same extractor as
+ingestion — and never guesses from name similarity.
+
+**Stop ingestion before applying.** `properties.search_profile_id` is
+`ON DELETE SET NULL`: a listing written into a fragment between the
+zero-check and the `DELETE` is not rejected, it is silently left with a NULL
+profile. The scheduler runs inside the app process, so stopping the app
+container is what stops ingestion. The repair aborts on any count mismatch
+and commits nothing, but it cannot prevent a concurrent writer — only notice
+one.
+
+```bash
+# 1. Back up first (the repair deletes profile rows).
+docker exec idealista-db pg_dump -U idealista -d idealista > ~/backups/idealista_pre_repair_$(date +%Y%m%d).sql
+
+# 2. Stop ingestion. This stops the in-process scheduler with the app.
+docker compose stop app
+
+# 3. Dry run. Writes nothing; prints the plan and the per-profile counts.
+docker compose run --rm app python -m services.search_profile_repair_service
+
+# 4. Read the report. Expect one saved search, one survivor, the fragments
+#    listed for deletion, and "listings to move" matching the fragment totals.
+#    Anything under "listings whose saved-search name could not be recomputed"
+#    stays where it is and keeps its fragment alive - that is intended.
+
+# 5. Apply.
+docker compose run --rm app python -m services.search_profile_repair_service --apply
+
+# 6. Restart the app.
+docker compose up -d app
+```
+
+Exit code is 0 for both valid states — work outstanding, and already
+repaired, so a second `--apply` is a clean no-op — and 1 when a count does not
+add up, in which case the transaction was rolled back and the database is
+untouched. On a non-zero exit, do not rerun blindly: read the `ERROR:` lines,
+confirm ingestion is really stopped, and re-run the dry run first.
+
+Verify afterwards:
+
+```bash
+docker exec idealista-db psql -U idealista -d idealista -c \
+  "select search_profile_id, count(*) from properties group by 1 order by 1;"
+# No new NULL bucket, and the fragment ids are gone.
+
+curl -s http://localhost:5001/api/healthz
+```
+
+Rollback is the backup from step 1.
+
 ## Rollback Plan
 
 If issues arise after cutover:
