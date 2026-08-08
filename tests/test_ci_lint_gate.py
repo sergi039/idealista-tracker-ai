@@ -47,20 +47,58 @@ def _ci_run_commands() -> list[str]:
     return [match.group("cmd") for match in _RUN_STEP.finditer(text)]
 
 
-def test_ci_declares_a_job_named_ruff():
-    text = CI_WORKFLOW.read_text(encoding="utf-8")
-    assert re.search(r"^[ \t]+name: ruff$", text, re.MULTILINE), (
-        "no job named 'ruff' in .github/workflows/ci.yml - that is the "
-        "status-check context branch protection is configured against"
+def _job_block(job_name: str) -> str:
+    """The YAML block of the job whose `name:` is ``job_name``.
+
+    Scanning the whole file proves only that the words appear somewhere in it —
+    move `name: ruff` and the two commands into an unrelated or disabled job and
+    a file-wide search still passes while no lint runs. Pinning the assertions
+    to one job block is what makes them mean something.
+
+    Deliberately not PyYAML: it is not a dependency of this project, and the
+    workflow's two-space job indentation is stable enough to slice on.
+    """
+    lines = CI_WORKFLOW.read_text(encoding="utf-8").splitlines()
+    starts = [
+        i for i, line in enumerate(lines) if re.fullmatch(r"  [A-Za-z0-9_-]+:", line)
+    ]
+
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else len(lines)
+        block = "\n".join(lines[start:end])
+        if re.search(rf"^    name: {re.escape(job_name)}$", block, re.MULTILINE):
+            return block
+
+    raise AssertionError(
+        f"no job named '{job_name}' in {CI_WORKFLOW}; job ids found: "
+        + ", ".join(lines[i].strip().rstrip(":") for i in starts)
     )
 
 
+def test_ci_declares_a_job_named_ruff():
+    # Raises with the list of job ids if the name is gone; that name is the
+    # status-check context branch protection is configured against.
+    assert _job_block("ruff")
+
+
 def test_ci_runs_both_ruff_commands():
-    commands = _ci_run_commands()
+    """Both commands must live inside the ruff job, as steps that actually run."""
+    block = _job_block("ruff")
+
+    commands = [match.group("cmd") for match in _RUN_STEP.finditer(block)]
     missing = [cmd for cmd in RUFF_COMMANDS if cmd not in commands]
     assert not missing, (
-        f"CI no longer runs {missing}; lint would be enforced only by the "
-        f"local hooks again. Workflow commands found: {commands}"
+        f"the ruff job no longer runs {missing}; lint would be enforced only by "
+        f"the local hooks again. Commands inside the job: {commands}"
+    )
+
+    # A step carrying `if: false` never executes; the command would still be
+    # present in the text.
+    assert not re.search(
+        r"^\s*if:\s*(false|\$\{\{\s*false\s*\}\})\s*$", block, re.MULTILINE
+    ), (
+        "a step in the ruff job is disabled with `if: false` - the commands are "
+        "in the file but never run"
     )
 
 
