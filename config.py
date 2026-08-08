@@ -84,10 +84,6 @@ class Config:
     SESSION_SECRET = os.environ.get("SESSION_SECRET")
 
     # Feature flags
-    AUTO_CREATE_DB = (
-        os.environ.get("AUTO_CREATE_DB", "true" if DEV_MODE else "false").lower()
-        == "true"
-    )
     AUTO_START_SCHEDULER = (
         os.environ.get("AUTO_START_SCHEDULER", "true" if DEV_MODE else "false").lower()
         == "true"

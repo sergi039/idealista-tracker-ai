@@ -96,7 +96,8 @@ def _validate_config(app_config):
 def create_app(testing: bool = False):
     """Application factory.
 
-    Side effects (DB create_all, scheduler start) are gated by config flags.
+    The deployment entrypoint applies SQL migrations before importing this
+    factory. Scheduler startup remains gated by config and disabled in tests.
     """
     app = Flask(__name__)
     app.config.from_object(Config)
@@ -124,10 +125,6 @@ def create_app(testing: bool = False):
             "DATABASE_URL": database_url,
             "SECRET_KEY": os.environ.get("SECRET_KEY"),
             "SESSION_SECRET": os.environ.get("SESSION_SECRET"),
-            "AUTO_CREATE_DB": os.environ.get(
-                "AUTO_CREATE_DB", "true" if dev_mode else "false"
-            ).lower()
-            == "true",
             "AUTO_START_SCHEDULER": os.environ.get(
                 "AUTO_START_SCHEDULER", "true" if dev_mode else "false"
             ).lower()
@@ -220,11 +217,7 @@ def create_app(testing: bool = False):
         # Import models to ensure metadata is registered
         import models  # noqa: F401
 
-        # Optional dev convenience: auto-create tables
-        if app.config.get("AUTO_CREATE_DB", False):
-            db.create_all()
-
-        # Optional: start background scheduler
+        # Start the scheduler only after the migration entrypoint has completed.
         if app.config.get("AUTO_START_SCHEDULER", False) and not app.config.get(
             "TESTING", False
         ):

@@ -261,6 +261,7 @@ class TestSchedulerLockCleanup:
                 "get",
                 side_effect=lambda k, d=None: {
                     "TESTING": False,
+                    "AUTO_START_SCHEDULER": True,
                 }.get(k, d),
             ):
                 with patch("services.scheduler_service.Config") as mock_config:
@@ -271,8 +272,8 @@ class TestSchedulerLockCleanup:
                         "services.scheduler_service.BackgroundScheduler",
                         side_effect=RuntimeError("boom"),
                     ):
-                        result = scheduler_service.init_scheduler(app)
-                        assert result is None
+                        with pytest.raises(RuntimeError, match="boom"):
+                            scheduler_service.init_scheduler(app)
 
             assert scheduler_service.scheduler_lock_file is None
 
@@ -295,6 +296,7 @@ class TestSchedulerLockCleanup:
                 "get",
                 side_effect=lambda k, d=None: {
                     "TESTING": False,
+                    "AUTO_START_SCHEDULER": True,
                 }.get(k, d),
             ):
                 with patch("services.scheduler_service.Config") as mock_config:

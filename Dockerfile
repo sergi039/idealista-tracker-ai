@@ -51,5 +51,7 @@ EXPOSE 5001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:5001/api/healthz || exit 1
 
-# Run with gunicorn in production
-CMD ["gunicorn", "--bind", "0.0.0.0:5001", "--workers", "2", "--threads", "4", "main:app"]
+# Apply tracked SQL migrations before importing the Flask app. A migration
+# failure stops the container; gunicorn never serves a misleading health check.
+# One worker owns the in-process scheduler (threads still serve concurrent HTTP).
+CMD ["sh", "-c", "python -m migrations.runner && exec gunicorn --bind 0.0.0.0:5001 --workers 1 --threads 4 main:app"]
