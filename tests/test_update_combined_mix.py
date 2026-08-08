@@ -19,7 +19,6 @@ from unittest.mock import patch
 import pytest
 
 from app import create_app, db
-from config import Config
 from models import Land, ScoringCriteria
 from tests import setup_test_environment
 
@@ -37,10 +36,6 @@ def app():
     setup_test_environment()
     orig_db_url = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = "sqlite:///:memory:"
-    # ScoringService.__init__ does `self.weights = Config.DEFAULT_SCORING_WEIGHTS`
-    # and then mutates it in place, so exercising the rescore path leaks the
-    # combined-mix rows into class state for the rest of the process.
-    orig_weights = dict(Config.DEFAULT_SCORING_WEIGHTS)
     try:
         app = create_app()
         app.config["TESTING"] = True
@@ -50,8 +45,6 @@ def app():
             yield app
             db.drop_all()
     finally:
-        Config.DEFAULT_SCORING_WEIGHTS.clear()
-        Config.DEFAULT_SCORING_WEIGHTS.update(orig_weights)
         if orig_db_url is not None:
             os.environ["DATABASE_URL"] = orig_db_url
         else:
