@@ -38,7 +38,7 @@ class ScoringService:
                 ScoringCriteria.query.filter_by(active=True)
                 .filter(
                     (ScoringCriteria.profile == "combined")
-                    | (ScoringCriteria.profile == None)
+                    | ScoringCriteria.profile.is_(None)
                 )
                 .all()
             )
@@ -73,7 +73,7 @@ class ScoringService:
             # Validate profiles on load
             self._validate_profiles()
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to load custom weights", exc_info=True)
 
     def calculate_score(self, land) -> Decimal:
@@ -101,15 +101,16 @@ class ScoringService:
                 land.score_investment = Decimal("0")
                 land.score_lifestyle = Decimal("0")
                 land.score_total = Decimal("0")
-                if not land.environment:
-                    land.environment = {}
-                land.environment["scoring"] = {
-                    "individual_scores": {},
-                    "profiles": {},
-                    "combined_mix": self._load_combined_mix(),
-                    "combined_score": 0,
+                land.environment = {
+                    **(land.environment or {}),
+                    "scoring": {
+                        "individual_scores": {},
+                        "profiles": {},
+                        "combined_mix": self._load_combined_mix(),
+                        "combined_score": 0,
+                    },
+                    "score_breakdown": {},
                 }
-                land.environment["score_breakdown"] = {}
                 return land.score_total
 
             # Calculate individual criterion scores once (each returns 0-100 or None)
@@ -154,37 +155,37 @@ class ScoringService:
             land.score_lifestyle = Decimal(str(round(lifestyle_score, 2)))
             land.score_total = Decimal(str(combined_score_rounded))
 
-            # Store comprehensive MCDM breakdown for transparency
-            if not land.environment:
-                land.environment = {}
-
-            land.environment["scoring"] = {
-                "individual_scores": individual_scores,
-                "profiles": {
-                    "investment": {
-                        "score": investment_score,
-                        "weights_used": self._get_profile_weights_used(
-                            individual_scores, "investment"
-                        ),
-                        "score_breakdown": self._get_profile_breakdown(
-                            individual_scores, "investment"
-                        ),
+            # Replace the top-level JSON value so SQLAlchemy persists rescoring.
+            land.environment = {
+                **(land.environment or {}),
+                "scoring": {
+                    "individual_scores": individual_scores,
+                    "profiles": {
+                        "investment": {
+                            "score": investment_score,
+                            "weights_used": self._get_profile_weights_used(
+                                individual_scores, "investment"
+                            ),
+                            "score_breakdown": self._get_profile_breakdown(
+                                individual_scores, "investment"
+                            ),
+                        },
+                        "lifestyle": {
+                            "score": lifestyle_score,
+                            "weights_used": self._get_profile_weights_used(
+                                individual_scores, "lifestyle"
+                            ),
+                            "score_breakdown": self._get_profile_breakdown(
+                                individual_scores, "lifestyle"
+                            ),
+                        },
                     },
-                    "lifestyle": {
-                        "score": lifestyle_score,
-                        "weights_used": self._get_profile_weights_used(
-                            individual_scores, "lifestyle"
-                        ),
-                        "score_breakdown": self._get_profile_breakdown(
-                            individual_scores, "lifestyle"
-                        ),
-                    },
+                    "combined_mix": mix,
+                    "combined_score": combined_score_rounded,
                 },
-                "combined_mix": mix,
-                "combined_score": combined_score_rounded,
+                # Backward-compatible top-level breakdown for templates/tests.
+                "score_breakdown": individual_scores,
             }
-            # Backward-compatible top-level breakdown for templates/tests.
-            land.environment["score_breakdown"] = individual_scores
 
             logger.info(
                 f"Dual MCDM scores calculated for land {land.id}: "
@@ -193,7 +194,7 @@ class ScoringService:
             )
             return land.score_total
 
-        except Exception as e:
+        except Exception:
             logger.error(
                 "Failed to calculate dual MCDM scores for land %s",
                 land.id,
@@ -228,7 +229,7 @@ class ScoringService:
 
             return (score / max_score) * 100
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to score basic infrastructure", exc_info=True)
             return None
 
@@ -260,7 +261,7 @@ class ScoringService:
 
             return min(score, 100)  # Cap at 100
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to score extended infrastructure", exc_info=True)
             return None
 
@@ -303,7 +304,7 @@ class ScoringService:
 
             return min((score / max_possible) * 100, 100)
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to score transport", exc_info=True)
             return None
 
@@ -335,7 +336,7 @@ class ScoringService:
 
             return min(score, 100)  # Cap at 100
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to score environment", exc_info=True)
             return None
 
@@ -368,7 +369,7 @@ class ScoringService:
 
             return min(max(score, 0), 100)  # Keep between 0-100
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to score neighborhood", exc_info=True)
             return None
 
@@ -401,7 +402,7 @@ class ScoringService:
             else:
                 return None
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to score services quality", exc_info=True)
             return None
 
@@ -419,7 +420,7 @@ class ScoringService:
             else:
                 return 0  # Rustic or other (not suitable)
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to score legal status", exc_info=True)
             return None
 
@@ -469,7 +470,7 @@ class ScoringService:
 
             return min(100, score)
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to score location quality", exc_info=True)
             return None
 
@@ -501,7 +502,7 @@ class ScoringService:
 
             return min(100, score)
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to score physical characteristics", exc_info=True)
             return None
 
@@ -551,7 +552,7 @@ class ScoringService:
 
             return min(100, max(0, score))
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to score development potential", exc_info=True)
             return None
 
@@ -632,7 +633,7 @@ class ScoringService:
             else:
                 return None
 
-        except Exception as e:
+        except Exception:
             logger.error(
                 "Failed to score investment yield for land %s", land.id, exc_info=True
             )
@@ -703,7 +704,7 @@ class ScoringService:
             )
             return True
 
-        except Exception as e:
+        except Exception:
             logger.error(
                 "Failed to update weights for profile %s", profile, exc_info=True
             )
@@ -767,7 +768,7 @@ class ScoringService:
             )
             return final_score
 
-        except Exception as e:
+        except Exception:
             logger.error(
                 "Failed to calculate profile score for '%s'", profile, exc_info=True
             )
@@ -796,7 +797,7 @@ class ScoringService:
 
             return weights_used
 
-        except Exception as e:
+        except Exception:
             logger.error(
                 "Failed to get profile weights used for '%s'", profile, exc_info=True
             )
@@ -823,7 +824,7 @@ class ScoringService:
 
             return breakdown
 
-        except Exception as e:
+        except Exception:
             logger.error(
                 "Failed to get profile breakdown for '%s'", profile, exc_info=True
             )
@@ -870,7 +871,7 @@ class ScoringService:
             logger.warning(f"No weights found for profile '{profile}' in DB or Config")
             return {}
 
-        except Exception as e:
+        except Exception:
             logger.error(
                 "Failed to load profile weights for '%s'", profile, exc_info=True
             )
@@ -901,7 +902,7 @@ class ScoringService:
 
             return {"investment": 0.32, "lifestyle": 0.68}
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to load combined mix", exc_info=True)
             return {"investment": 0.32, "lifestyle": 0.68}
 
@@ -961,5 +962,5 @@ class ScoringService:
 
             logger.info("Profile validation completed successfully")
 
-        except Exception as e:
+        except Exception:
             logger.error("Failed to validate profiles", exc_info=True)
