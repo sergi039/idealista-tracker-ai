@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Continuous deployment for IdealistaRank.
+
+  GitHub Actions has no runner on this Mac, so main is deployed by polling:
+  every 5 minutes deploy_watcher.sh checks origin/main, and rebuilds only when
+  something new landed. A tick with no new commit costs one `git fetch` and
+  exits silently.
+
+  Install:
+    cp tools/autopilot/com.idealista.deploy-watcher.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.idealista.deploy-watcher.plist
+  Remove:
+    launchctl unload ~/Library/LaunchAgents/com.idealista.deploy-watcher.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.idealista.deploy-watcher</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/ss/IdealistaRank/tools/autopilot/deploy_watcher.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ss/IdealistaRank</string>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <!-- Deliberately false: a deploy on login races with Docker Desktop
+         starting up, and the 5-minute tick picks it up anyway. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ss/IdealistaRank/data/autopilot-deploy.launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/ss/IdealistaRank/data/autopilot-deploy.launchd.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- launchd hands the job a minimal PATH; docker and git are not on it. -->
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
