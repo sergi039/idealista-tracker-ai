@@ -47,7 +47,7 @@
                 <i class="fas fa-sliders-h me-1"></i>Edit profile
             </a>
         {% endif %}
-        {% if is_admin and selected_profile_id %}
+        {% if selected_profile_id %}
             <form method="POST" action="{{ url_for('main.recalculate_profile_travel', profile_id=selected_profile_id) }}" class="d-inline">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                 <input type="hidden" name="mode" value="all">

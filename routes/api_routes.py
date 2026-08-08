@@ -4,7 +4,6 @@ from flask import Blueprint, current_app, jsonify, request
 from models import Land, LandHistory, SyncHistory, AiAnalysisVariant
 from app import db
 from app import limiter
-from utils.auth import admin_required
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +69,6 @@ def health_check():
 
 
 @api_bp.route("/lands/enrich-all", methods=["POST"])
-@admin_required
 @limiter.limit("2 per 5 minutes")
 def bulk_enrichment():
     """Enrich all properties that are missing extended infrastructure or environment data"""
@@ -135,7 +133,6 @@ def bulk_enrichment():
 
 
 @api_bp.route("/land/<int:land_id>/enrich", methods=["POST"])
-@admin_required
 @limiter.limit("10 per minute")
 def manual_enrichment(land_id):
     """Manually trigger data enrichment for a specific property"""
@@ -196,7 +193,6 @@ def manual_enrichment(land_id):
 
 
 @api_bp.route("/lands/reanalyze-environment", methods=["POST"])
-@admin_required
 def reanalyze_environment():
     """Re-analyze environment (sea_view, mountain_view, etc.) for all lands using updated logic"""
     try:
@@ -267,7 +263,6 @@ def reanalyze_environment():
 
 
 @api_bp.route("/ingest/email/run", methods=["POST"])
-@admin_required
 @limiter.limit("5 per minute")
 def manual_ingestion():
     """Manually trigger email ingestion"""
@@ -278,18 +273,6 @@ def manual_ingestion():
         else:
             data = request.form.to_dict() or {}
         sync_type = data.get("sync_type", "incremental")
-
-        # Full sync is potentially expensive; require admin auth.
-        if sync_type == "full":
-            from utils.auth import check_admin_auth
-
-            if not check_admin_auth():
-                return jsonify(
-                    {
-                        "success": False,
-                        "error": "Unauthorized. Admin authentication required for full sync.",
-                    }
-                ), 401
 
         from config import Config
 
@@ -334,7 +317,6 @@ def manual_ingestion():
 
 
 @api_bp.route("/migrate/lands-to-properties", methods=["POST"])
-@admin_required
 @limiter.limit("2 per 5 minutes")
 def migrate_lands_to_properties():
     """Migrate legacy Land records into universal Property records (one-way helper)."""
@@ -364,7 +346,6 @@ def migrate_lands_to_properties():
 
 
 @api_bp.route("/analyze/property/<int:land_id>/structured", methods=["POST"])
-@admin_required
 @limiter.limit("5 per 5 minutes")
 def analyze_property_structured(land_id):
     """Analyze property using Anthropic Claude AI with structured 5-block format"""
@@ -503,7 +484,6 @@ def analyze_property_structured(land_id):
 
 
 @api_bp.route("/property/<int:property_id>/analyze/structured", methods=["POST"])
-@admin_required
 @limiter.limit("3 per 5 minutes")
 def analyze_universal_property_structured(property_id: int):
     """Analyze a universal Property with a category-aware structured JSON schema."""
@@ -628,7 +608,6 @@ def analyze_universal_property_structured(property_id: int):
 
 
 @api_bp.route("/analysis/generate/<int:land_id>/openai", methods=["POST"])
-@admin_required
 @limiter.limit("3 per 5 minutes")
 def generate_openai_structured(land_id):
     """Generate structured AI analysis with OpenAI (ChatGPT) and store it for comparison."""
@@ -731,7 +710,6 @@ def generate_openai_structured(land_id):
 
 
 @api_bp.route("/analysis/compare/<int:land_id>", methods=["GET"])
-@admin_required
 def compare_ai_analyses(land_id):
     """Return a rubric-based comparison between stored Claude analysis and ChatGPT analysis."""
     try:
@@ -783,7 +761,6 @@ def compare_ai_analyses(land_id):
 
 
 @api_bp.route("/property/<int:property_id>/analysis/compare", methods=["GET"])
-@admin_required
 def compare_property_ai_analyses(property_id: int):
     """Return a rubric-based comparison between stored Claude analysis and ChatGPT analysis for a Property."""
     try:
@@ -870,7 +847,6 @@ def compare_property_ai_analyses(property_id: int):
 
 
 @api_bp.route("/enhance/description/<int:land_id>", methods=["POST"])
-@admin_required
 @limiter.limit("5 per 5 minutes")
 def enhance_description(land_id):
     """Enhance property description using AI"""
@@ -933,7 +909,6 @@ def enhance_description(land_id):
 
 
 @api_bp.route("/description/variants/<int:land_id>", methods=["GET"])
-@admin_required
 def get_description_variants(land_id):
     """Get both enhanced and original descriptions for a property"""
     try:
@@ -961,7 +936,6 @@ def get_description_variants(land_id):
 
 
 @api_bp.route("/land/<int:land_id>/environment", methods=["POST"])
-@admin_required
 def update_environment(land_id):
     """Update environment data for a land property"""
     try:
@@ -1003,7 +977,6 @@ def update_environment(land_id):
 
 
 @api_bp.route("/property/<int:property_id>/environment", methods=["POST"])
-@admin_required
 def update_property_environment(property_id):
     """Update environment data for a universal property."""
     try:
@@ -1049,7 +1022,6 @@ def update_property_environment(property_id):
 
 
 @api_bp.route("/analyze/property/<int:land_id>", methods=["POST"])
-@admin_required
 @limiter.limit("5 per 5 minutes")
 def analyze_property_ai(land_id):
     """Analyze property using Anthropic Claude AI"""
@@ -1104,7 +1076,6 @@ def analyze_property_ai(land_id):
 
 
 @api_bp.route("/lands")
-@admin_required
 def get_lands():
     """Get lands with optional filtering and sorting"""
     try:
@@ -1149,7 +1120,6 @@ def get_lands():
 
 
 @api_bp.route("/lands/<int:land_id>")
-@admin_required
 def get_land_detail(land_id):
     """Get detailed information about a specific land"""
     try:
@@ -1177,7 +1147,6 @@ def get_land_detail(land_id):
 
 
 @api_bp.route("/properties")
-@admin_required
 def get_properties():
     """Get universal Properties with filtering and sorting (defaults to the default SearchProfile)."""
     try:
@@ -1329,7 +1298,6 @@ def get_properties():
 
 
 @api_bp.route("/properties/<int:property_id>")
-@admin_required
 def get_property_detail(property_id: int):
     """Get detailed information about a specific universal Property."""
     try:
@@ -1373,7 +1341,6 @@ def get_criteria():
 
 
 @api_bp.route("/criteria", methods=["PUT"])
-@admin_required
 @limiter.limit("10 per minute")
 def update_criteria():
     """Update scoring criteria weights"""
@@ -1533,7 +1500,6 @@ def toggle_property_favorite(property_id):
 
 
 @api_bp.route("/property/<int:property_id>/enrich", methods=["POST"])
-@admin_required
 @limiter.limit("10 per minute")
 def manual_property_enrichment(property_id: int):
     """Manually trigger Google enrichment for a universal Property."""
@@ -1603,7 +1569,6 @@ def manual_property_enrichment(property_id: int):
 
 
 @api_bp.route("/land/<int:land_id>/set-status", methods=["POST"])
-@admin_required
 def set_land_status(land_id):
     """Manually set the listing status (for when automatic check fails due to captcha)"""
     try:
@@ -1658,7 +1623,6 @@ def set_land_status(land_id):
 
 
 @api_bp.route("/property/<int:property_id>/set-status", methods=["POST"])
-@admin_required
 def set_property_status(property_id):
     """Manually set listing status for a universal Property."""
     try:
@@ -1707,7 +1671,6 @@ def set_property_status(property_id):
 
 
 @api_bp.route("/land/<int:land_id>/check-status", methods=["POST"])
-@admin_required
 def check_land_status(land_id):
     """Check if a listing is still active on Idealista"""
     try:
@@ -1766,7 +1729,6 @@ def check_land_status(land_id):
 
 
 @api_bp.route("/listings/check-favorites", methods=["POST"])
-@admin_required
 def check_favorites_status():
     """Check status of all favorite listings"""
     try:
@@ -1805,7 +1767,6 @@ def check_favorites_status():
 
 
 @api_bp.route("/listings/check-all", methods=["POST"])
-@admin_required
 def check_all_listings_status():
     """Check status of all active listings that need checking"""
     try:
@@ -1849,7 +1810,6 @@ def check_all_listings_status():
 
 
 @api_bp.route("/land/<int:land_id>/history")
-@admin_required
 def get_land_history(land_id):
     """Get change history for a land property"""
     try:
@@ -1883,7 +1843,6 @@ def get_land_history(land_id):
 
 
 @api_bp.route("/stats")
-@admin_required
 def get_stats():
     """Get application statistics"""
     try:

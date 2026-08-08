@@ -2073,15 +2073,6 @@ function runClaudeAnalysis(landId) {
             cooldownButton(button, 20);
             return;
         }
-        if (statusCode === 401) {
-            showTransientAlert(
-                alertsId,
-                'warning',
-                'Admin authentication required. Open /login and sign in with ADMIN_API_TOKEN.',
-                6000
-            );
-            return;
-        }
         showTransientAlert(alertsId, 'warning', message || 'Claude request failed.', 4500);
     };
 
@@ -2394,13 +2385,6 @@ async function generateChatGPTAnalysis() {
             if (statusCode === 429) {
                 showTransientAlert(alertsId, 'warning', `Rate limit reached. Try again in 20 seconds.`, 4500);
                 cooldownButton(btn, 20);
-            } else if (statusCode === 401) {
-                showTransientAlert(
-                    alertsId,
-                    'warning',
-                    'Admin authentication required. Open /login and sign in with ADMIN_API_TOKEN.',
-                    6000
-                );
             } else {
                 showTransientAlert(alertsId, 'warning', message || 'ChatGPT request failed.', 4500);
             }

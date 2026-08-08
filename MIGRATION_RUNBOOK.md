@@ -8,7 +8,7 @@ Merge `feature/properties-universal` into `main` and promote Universal as the pr
 - [ ] All 216 tests passing (`pytest tests/ -q`)
 - [ ] Production hardening tasks complete (SEC-01..05, REL-01..04, DATA-01..02, OPS-01..02)
 - [ ] Docker images build cleanly (`docker compose build`)
-- [ ] `.env` has all required vars: `DATABASE_URL`, `SESSION_SECRET`, `ADMIN_API_TOKEN`
+- [ ] `.env` has all required vars: `DATABASE_URL`, `SESSION_SECRET`
 
 ## Step 1: Backup Legacy
 

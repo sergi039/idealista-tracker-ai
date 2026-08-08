@@ -231,7 +231,6 @@
                     </button>
                 </div>
 
-                {% if is_admin %}
                     <div class="d-flex flex-wrap gap-2 mt-3">
                         <form method="POST" action="{{ url_for('main.set_property_status_form', property_id=property.id) }}" class="d-inline-flex align-items-center gap-2">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
@@ -257,7 +256,6 @@
                             </button>
                         </form>
                     </div>
-                {% endif %}
             </div>
         </div>
 
@@ -270,7 +268,6 @@
         </div>
         {% endif %}
 
-        {% if is_admin %}
         {% set assignment_meta = property.enrichment.get('profile_assignment') if property.enrichment is mapping else {} %}
         <div class="card shadow-sm mb-3">
             <div class="card-body">
@@ -373,7 +370,6 @@
                 </form>
             </div>
         </div>
-        {% endif %}
 
         <!-- AI Analysis Section (legacy parity) -->
         <div id="ai-analysis-section" class="mb-3">
@@ -622,9 +618,7 @@
                 {% else %}
                     <div class="text-body-secondary small">
                         Travel not calculated yet.
-                        {% if is_admin %}
-                            Use “Recalculate travel” after setting coordinates/targets.
-                        {% endif %}
+                        Use “Recalculate travel” after setting coordinates/targets.
                     </div>
                 {% endif %}
             </div>
@@ -1542,13 +1536,6 @@ function runClaudeAnalysis(propertyId) {
         if (statusCode === 429) {
             showTransientAlert(alertsId, 'warning', `Rate limit reached. Try again in 20 seconds.`, 4500);
             cooldownButton(button, 20);
-        } else if (statusCode === 401) {
-            showTransientAlert(
-                alertsId,
-                'warning',
-                'Admin authentication required. Open /login and sign in with ADMIN_API_TOKEN.',
-                6000
-            );
         } else {
             showTransientAlert(alertsId, 'warning', message || 'Claude request failed.', 4500);
         }
@@ -1815,13 +1802,6 @@ async function generateChatGPTAnalysis(propertyId) {
             if (statusCode === 429) {
                 showTransientAlert(alertsId, 'warning', `Rate limit reached. Try again in 20 seconds.`, 4500);
                 cooldownButton(btn, 20);
-            } else if (statusCode === 401) {
-                showTransientAlert(
-                    alertsId,
-                    'warning',
-                    'Admin authentication required. Open /login and sign in with ADMIN_API_TOKEN.',
-                    6000
-                );
             } else {
                 showTransientAlert(alertsId, 'warning', message || 'ChatGPT request failed.', 4500);
             }

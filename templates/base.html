@@ -135,13 +135,6 @@
                             </ul>
                         </div>
                     </li>
-                    {% if session.get('admin_authenticated') %}
-                    <li class="nav-item ms-2">
-                        <a class="btn btn-outline-danger btn-sm" href="{{ url_for('main.logout') }}" title="Logout">
-                            <i class="fas fa-sign-out-alt"></i>
-                        </a>
-                    </li>
-                    {% endif %}
                 </ul>
             </div>
         </div>

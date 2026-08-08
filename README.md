@@ -143,11 +143,20 @@ Use the `*_KEY` names above in your `.env` (legacy aliases like `GOOGLE_MAPS_API
 
 > **Tip:** You can use one or both AI providers. Having both enables side-by-side comparison.
 
-#### Admin access (required for settings + admin endpoints)
+#### Access control: none
 
-| Setting | What it enables |
-|---------|----------------|
-| `ADMIN_API_TOKEN` | Access to admin-only endpoints and settings UI (send as `Authorization: Bearer <token>`) |
+There is no login. Every page and every API endpoint answers without a
+credential, and `ADMIN_API_TOKEN` is no longer read anywhere (removed
+2026-08-08, owner decision: single-owner tool, direct access wanted).
+
+What that means in practice:
+
+- The app must stay bound to loopback. `docker-compose.yml` publishes it as
+  `127.0.0.1:5001:5001` — dropping that prefix exposes the whole database,
+  the settings UI and the paid AI/enrichment endpoints to your network.
+- The JSON API is CSRF-exempt (it used to rely on the token instead), so any
+  page open in your browser can POST to `localhost:5001` and trigger work that
+  costs money. Weigh that before leaving the container running.
 
 ### Example `.env` file
 
@@ -165,9 +174,6 @@ GOOGLE_PLACES_API_KEY=AIza...
 # Optional - AI (for analysis)
 ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
-
-# Optional - Admin
-ADMIN_API_TOKEN=your-random-admin-token
 
 # Email folder containing Idealista alerts
 IMAP_FOLDER=Idealista

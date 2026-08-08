@@ -123,18 +123,8 @@ class TestManualIngestion:
         assert data["processed_count"] == 5
         assert "Successfully processed" in data["message"]
 
-    @patch("utils.auth.check_admin_auth", return_value=False)
-    def test_manual_ingestion_full_requires_admin(self, mock_check_admin, client):
-        response = client.post("/api/ingest/email/run", json={"sync_type": "full"})
-        assert response.status_code == 401
-        data = json.loads(response.data)
-        assert data["success"] is False
-
-    @patch("utils.auth.check_admin_auth", return_value=True)
     @patch("services.property_imap_service.PropertyIMAPService")
-    def test_manual_ingestion_full_uses_run_full_sync(
-        self, mock_imap_service, mock_check_admin, client
-    ):
+    def test_manual_ingestion_full_uses_run_full_sync(self, mock_imap_service, client):
         mock_instance = Mock()
         mock_imap_service.return_value = mock_instance
         mock_instance.run_full_sync.return_value = 7

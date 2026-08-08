@@ -15,12 +15,6 @@
     </div>
 </div>
 
-{% if not is_admin %}
-<div class="alert alert-warning">
-    Admin authentication is required to create profiles. Configure <code>ADMIN_API_TOKEN</code>.
-</div>
-{% endif %}
-
 <div class="card shadow-sm">
     <div class="card-body">
         <form method="POST" class="row g-3">
@@ -50,7 +44,7 @@
             </div>
 
             <div class="col-12 d-flex gap-2">
-                <button class="btn btn-primary" type="submit" {% if not is_admin %}disabled{% endif %}>
+                <button class="btn btn-primary" type="submit">
                     Create profile
                 </button>
                 <a class="btn btn-outline-secondary" href="{{ url_for('main.profiles') }}">Cancel</a>
