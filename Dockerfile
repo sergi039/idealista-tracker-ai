@@ -1,7 +1,15 @@
-# Multi-stage build for smaller image size
-FROM python:3.11-slim as builder
+# Multi-stage build for reproducible, runtime-only dependencies
+FROM ghcr.io/astral-sh/uv:0.9.28@sha256:59240a65d6b57e6c507429b45f01b8f2c7c0bbeee0fb697c41a39c6a8e3a4cfb AS uv
+
+FROM python:3.11.15-slim-trixie@sha256:90744cff8f32887f075c47d747a173ff333e9e98801667af93c357fa9f5e28ff AS builder
 
 WORKDIR /app
+
+COPY --from=uv /uv /uvx /bin/
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=0
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -9,15 +17,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install dependencies
-COPY pyproject.toml .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir .
+# Install exactly the locked runtime dependency set into an isolated environment.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Production stage
-FROM python:3.11-slim
+FROM python:3.11.15-slim-trixie@sha256:90744cff8f32887f075c47d747a173ff333e9e98801667af93c357fa9f5e28ff
 
 WORKDIR /app
+
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -26,9 +35,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --shell /bin/bash appuser
 
-# Copy installed packages from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+# Copy only the locked runtime environment from the builder
+COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
 
 # Copy application code
 COPY --chown=appuser:appuser . .
