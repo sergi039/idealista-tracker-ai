@@ -3,53 +3,16 @@ import logging
 import unicodedata
 from typing import Dict, Optional
 
+# The anchored, dual-grammar grouped-number regex and its parse helpers used
+# to be duplicated verbatim here (GH issue #54): the same grammar had to be
+# corrected twice, once for prices (#21) and once for areas (#22), in two
+# files. utils/idealista_extractors.py is now their single definition site and
+# this legacy parser imports them, so the next grammar fix cannot silently
+# miss one copy. Only the *number grammar* is shared -- the domain rules stay
+# distinct (this parser keeps its land-only >= 100 m² sanity floor).
+from utils.idealista_extractors import _GROUPED_NUMBER, _parse_number_groups
+
 logger = logging.getLogger(__name__)
-
-# Two mutually exclusive number "grammars", anchored with a lookbehind/
-# lookahead so a match can never start or end in the middle of a longer
-# digit/separator run. Root cause of GH issue #22 (identical to #21's price
-# defect): unanchored `\d{1,3}(?:[.,]\d{3})*` patterns matched the trailing
-# digit-group fragment of a longer number, e.g. "373" out of "1.373 m²"
-# instead of the whole "1.373". In the first grammar '.' groups thousands and
-# ',' introduces a 1-2 digit decimal (e.g. "1.373,5"); in the second the
-# roles are swapped (e.g. "1,373.5"). Shared by both price and area parsing
-# since the grouped-number grammar is identical for both.
-_NUMBER_DOT_GROUP = r"(?<![\d.,])(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2}))?(?![\d.,])"
-_NUMBER_COMMA_GROUP = r"(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?![\d.,])"
-_GROUPED_NUMBER = rf"(?:{_NUMBER_DOT_GROUP}|{_NUMBER_COMMA_GROUP})"
-
-
-def _parse_grouped_number(
-    int_part: Optional[str], dec_part: Optional[str]
-) -> Optional[float]:
-    """Combine a group-separated integer part with an optional 1-2 digit
-    decimal part into a float."""
-    if int_part is None:
-        return None
-    digits = re.sub(r"[.,]", "", int_part)
-    if not digits:
-        return None
-    try:
-        value = float(digits)
-    except ValueError:
-        return None
-    if dec_part:
-        try:
-            value += int(dec_part) / (10 ** len(dec_part))
-        except ValueError:
-            return None
-    return value
-
-
-def _parse_grouped_number_groups(groups) -> Optional[float]:
-    """Parse a (dot_int, dot_dec, comma_int, comma_dec) 4-tuple captured by
-    _GROUPED_NUMBER: exactly one grammar's (int, dec) pair is populated."""
-    dot_int, dot_dec, comma_int, comma_dec = groups
-    if dot_int is not None:
-        return _parse_grouped_number(dot_int, dot_dec)
-    if comma_int is not None:
-        return _parse_grouped_number(comma_int, comma_dec)
-    return None
 
 
 class EmailParser:
@@ -298,7 +261,7 @@ class EmailParser:
         candidates = []
         for pattern in self.patterns["area"]:
             for match in re.finditer(pattern, text, re.IGNORECASE):
-                area = _parse_grouped_number_groups(match.groups())
+                area = _parse_number_groups(match.groups())
                 if area is None:
                     continue
                 # Sanity floor: land listings are at least 100 m² (this

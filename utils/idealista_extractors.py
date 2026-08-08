@@ -15,41 +15,45 @@ _PROPERTY_ID_RE = re.compile(r"/inmueble/(\d+)", re.IGNORECASE)
 # a genuinely mixed/invalid number like "1.234,567" (3 "decimal" digits under
 # the dot-group grammar) matches neither grammar and is correctly rejected
 # rather than silently truncated (PR #33 review follow-up finding).
+#
+# This module is the single definition site of that grammar (GH issue #54):
+# utils/email_parser.py imports _GROUPED_NUMBER / _parse_number_groups from
+# here instead of carrying its own copy, so a future correctness fix to the
+# grammar can only be made in one place.
 _NUMBER_DOT_GROUP = r"(?<![\d.,])(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2}))?(?![\d.,])"
 _NUMBER_COMMA_GROUP = r"(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?![\d.,])"
 # Either grammar as one alternation with 4 capture groups: exactly one
 # (dot_int, dot_dec) or (comma_int, comma_dec) pair is populated, depending on
 # which grammar matched. Parse with _parse_number_groups().
-_PRICE_NUMBER = rf"(?:{_NUMBER_DOT_GROUP}|{_NUMBER_COMMA_GROUP})"
+_GROUPED_NUMBER = rf"(?:{_NUMBER_DOT_GROUP}|{_NUMBER_COMMA_GROUP})"
 
 # Price patterns (supports Spanish/English thousand separators, decimal
 # endings, and plain digits with no separator at all, e.g. "59000 €").
 _PRICE_PATTERNS = [
-    rf"(?:Price|Precio):?\s*{_PRICE_NUMBER}\s*€",
-    rf"{_PRICE_NUMBER}\s*€",
+    rf"(?:Price|Precio):?\s*{_GROUPED_NUMBER}\s*€",
+    rf"{_GROUPED_NUMBER}\s*€",
 ]
 
 # Price change patterns: extract (old, new) from "from X€ to Y€" / "de X€ a Y€".
 # Groups 1-4 are the old price (dot_int, dot_dec, comma_int, comma_dec);
 # groups 5-8 are the new price, in the same layout.
 _PRICE_CHANGE_PATTERNS = [
-    rf"\bfrom\s+{_PRICE_NUMBER}\s*€\s+to\s+{_PRICE_NUMBER}\s*€",
-    rf"\bde\s+{_PRICE_NUMBER}\s*€\s+a\s+{_PRICE_NUMBER}\s*€",
+    rf"\bfrom\s+{_GROUPED_NUMBER}\s*€\s+to\s+{_GROUPED_NUMBER}\s*€",
+    rf"\bde\s+{_GROUPED_NUMBER}\s*€\s+a\s+{_GROUPED_NUMBER}\s*€",
 ]
 
 # Area patterns (m² / m2; no minimum size threshold -- this extractor covers
 # every property type, from small apartments to large plots).
 #
 # Reuses the same anchored, dual-grammar grouped-number regex as prices
-# (_PRICE_NUMBER above) because the underlying defect is identical (GH #22,
+# (_GROUPED_NUMBER above) because the underlying defect is identical (GH #22,
 # same root cause as #21 for extract_price()): an unanchored
 # `\d{1,3}(?:[.,]\d{3})*` pattern can match a trailing digit-group fragment of
 # a longer number, e.g. matching "373" out of "1.373 m²" instead of the whole
 # "1.373". Anchoring makes that fragment match structurally impossible.
-_AREA_NUMBER = _PRICE_NUMBER
 _AREA_PATTERNS = [
-    rf"Superficie:?\s*{_AREA_NUMBER}\s*m[²2]",
-    rf"{_AREA_NUMBER}\s*m[²2]",
+    rf"Superficie:?\s*{_GROUPED_NUMBER}\s*m[²2]",
+    rf"{_GROUPED_NUMBER}\s*m[²2]",
 ]
 
 # A parsed area of 0 (or negative) is never a real size -- reject it rather
@@ -136,7 +140,7 @@ def extract_url(text: str) -> Optional[str]:
     return url
 
 
-def _parse_price_match(
+def _parse_grouped_number(
     int_part: Optional[str], dec_part: Optional[str]
 ) -> Optional[float]:
     """Combine a group-separated integer part with an optional 1-2 digit
@@ -162,12 +166,12 @@ def _parse_price_match(
 
 def _parse_number_groups(groups: Tuple[Optional[str], ...]) -> Optional[float]:
     """Parse a (dot_int, dot_dec, comma_int, comma_dec) 4-tuple captured by
-    _PRICE_NUMBER: exactly one grammar's (int, dec) pair is populated."""
+    _GROUPED_NUMBER: exactly one grammar's (int, dec) pair is populated."""
     dot_int, dot_dec, comma_int, comma_dec = groups
     if dot_int is not None:
-        return _parse_price_match(dot_int, dot_dec)
+        return _parse_grouped_number(dot_int, dot_dec)
     if comma_int is not None:
-        return _parse_price_match(comma_int, comma_dec)
+        return _parse_grouped_number(comma_int, comma_dec)
     return None
 
 
@@ -210,13 +214,13 @@ def extract_price_change(text: str) -> Tuple[Optional[float], Optional[float]]:
     # HTML formatting fallback: old price is struck through, new price follows.
     try:
         strike_re = re.compile(
-            rf"(?is)(?:<s[^>]*>|<del[^>]*>|text-decoration\s*:\s*line-through[^>]*>)\s*{_PRICE_NUMBER}\s*€",
+            rf"(?is)(?:<s[^>]*>|<del[^>]*>|text-decoration\s*:\s*line-through[^>]*>)\s*{_GROUPED_NUMBER}\s*€",
         )
         strike_match = strike_re.search(text)
         if strike_match:
             old_price = _parse_number_groups(strike_match.groups())
             tail_plain = _strip_html(text[strike_match.end() :])
-            m = re.search(rf"{_PRICE_NUMBER}\s*€", tail_plain)
+            m = re.search(rf"{_GROUPED_NUMBER}\s*€", tail_plain)
             if m:
                 new_price = _parse_number_groups(m.groups())
                 if old_price is not None and new_price is not None:
@@ -235,7 +239,7 @@ def extract_price_change(text: str) -> Tuple[Optional[float], Optional[float]]:
             return old_price, new_price
 
     all_prices: list[tuple[int, float]] = []
-    for m in re.finditer(rf"{_PRICE_NUMBER}\s*€", plain):
+    for m in re.finditer(rf"{_GROUPED_NUMBER}\s*€", plain):
         parsed = _parse_number_groups(m.groups())
         if parsed is None:
             continue
