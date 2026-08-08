@@ -64,10 +64,7 @@
             </div>
 
             <div class="col-12 mt-2">
-                <button class="btn btn-primary btn-sm" type="submit" {% if not is_admin %}disabled{% endif %}>Save settings</button>
-                {% if not is_admin %}
-                    <span class="text-body-secondary small ms-2">Admin authentication required to save.</span>
-                {% endif %}
+                <button class="btn btn-primary btn-sm" type="submit">Save settings</button>
             </div>
         </form>
     </div>
@@ -144,7 +141,6 @@
     </div>
 </div>
 
-{% if is_admin %}
 <div class="card shadow-sm mb-3">
     <div class="card-body">
         <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
@@ -338,7 +334,7 @@
         </form>
     </div>
 </div>
-{% endif %}
+
 
 <div class="card shadow-sm">
     <div class="card-body">

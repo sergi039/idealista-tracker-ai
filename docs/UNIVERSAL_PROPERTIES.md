@@ -56,7 +56,6 @@ Example:
 ```bash
 curl -X POST http://localhost:5050/api/migrate/lands-to-properties \
   -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer $ADMIN_API_TOKEN" \
   -d '{"dry_run": false, "profile_name": "Legacy Lands"}'
 ```
 

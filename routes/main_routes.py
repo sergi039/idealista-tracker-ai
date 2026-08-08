@@ -11,20 +11,13 @@ from flask import (
     url_for,
     flash,
     jsonify,
-    session,
 )
 from sqlalchemy import or_, case, func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
 from app import db
-from utils.auth import (
-    admin_required,
-    login_admin,
-    logout_admin,
-    safe_redirect_target,
-    safe_referrer_redirect,
-)
+from utils.redirects import safe_referrer_redirect
 
 logger = logging.getLogger(__name__)
 
@@ -45,33 +38,6 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return r * c
 
 
-@main_bp.route("/login", methods=["GET", "POST"])
-def login():
-    """Admin login page"""
-    if session.get("admin_authenticated"):
-        return redirect(
-            safe_redirect_target(request.args.get("next"), url_for("main.lands"))
-        )
-
-    if request.method == "POST":
-        token = request.form.get("token", "").strip()
-        if login_admin(token):
-            next_url = safe_redirect_target(
-                request.form.get("next"), url_for("main.lands")
-            )
-            return redirect(next_url)
-        flash("Invalid admin token.", "error")
-
-    return render_template("login.html", next=request.args.get("next", ""))
-
-
-@main_bp.route("/logout")
-def logout():
-    """Log out and clear session"""
-    logout_admin()
-    return redirect(url_for("main.login"))
-
-
 @main_bp.route("/")
 def index():
     """Home page redirects to the lands listing (the working UI)."""
@@ -79,14 +45,10 @@ def index():
 
 
 @main_bp.route("/properties")
-@admin_required
 def properties():
     """Universal properties listing page (new model, migration-in-progress)."""
     try:
         from services.search_profile_service import SearchProfileService
-        from utils.auth import check_admin_auth
-
-        is_admin = check_admin_auth()
 
         profiles = SearchProfileService.list_profiles(active_only=True)
         default_profile = SearchProfileService.get_default_profile(create=True)
@@ -330,7 +292,6 @@ def properties():
             pagination=pagination,
             profiles=profiles,
             selected_profile_id=selected_profile_id,
-            is_admin=is_admin,
             travel_display_targets=travel_display_targets,
             categories=categories,
             subtypes=subtypes,
@@ -602,11 +563,9 @@ def lands():
 
 
 @main_bp.route("/properties/<int:property_id>")
-@admin_required
 def property_detail(property_id):
     """Detailed view of a specific property (new universal model)."""
     try:
-        from utils.auth import check_admin_auth
         from config import Config
         from services.search_profile_service import SearchProfileService
 
@@ -687,7 +646,6 @@ def property_detail(property_id):
         return render_template(
             "property_detail.html",
             property=prop,
-            is_admin=check_admin_auth(),
             openai_configured=bool(getattr(Config, "AI_BRIDGE_TOKEN", None)),
             openai_analysis=(openai_variant.analysis if openai_variant else None),
             openai_model=(openai_variant.model if openai_variant else None),
@@ -708,7 +666,6 @@ def profiles():
     """List search profiles (MVP; editing comes later)."""
     try:
         from services.search_profile_service import SearchProfileService
-        from utils.auth import check_admin_auth
 
         profiles = SearchProfileService.list_profiles(active_only=False)
         # Ensure at least one profile exists.
@@ -728,27 +685,19 @@ def profiles():
             "profiles.html",
             profiles=profiles,
             property_counts=counts,
-            is_admin=check_admin_auth(),
         )
     except Exception:
         logger.error("Failed to load profiles page", exc_info=True)
         flash("An error occurred while loading profiles. Check server logs.", "error")
-        return render_template(
-            "profiles.html", profiles=[], property_counts={}, is_admin=False
-        )
+        return render_template("profiles.html", profiles=[], property_counts={})
 
 
 @main_bp.route("/profiles/new", methods=["GET", "POST"])
 def create_profile():
     """Create a new search profile."""
-    from utils.auth import check_admin_auth
     from services.search_profile_service import SearchProfileService
 
     if request.method == "POST":
-        if not check_admin_auth():
-            flash("Unauthorized. Admin authentication required.", "error")
-            return redirect(url_for("main.create_profile"))
-
         name = (request.form.get("name") or "").strip()
         description = (request.form.get("description") or "").strip()
         is_active = request.form.get("is_active") == "on"
@@ -795,13 +744,12 @@ def create_profile():
         flash("Profile created", "success")
         return redirect(url_for("main.edit_profile", profile_id=profile.id))
 
-    return render_template("profile_new.html", is_admin=check_admin_auth())
+    return render_template("profile_new.html")
 
 
 @main_bp.route("/profiles/<int:profile_id>/edit", methods=["GET", "POST"])
 def edit_profile(profile_id):
     """Edit a search profile (MVP: travel presets + custom targets)."""
-    from utils.auth import check_admin_auth
     from utils.geocoding import GeocodingService
     from services.search_profile_service import (
         SearchProfileService,
@@ -812,10 +760,6 @@ def edit_profile(profile_id):
     profile = db.get_or_404(SearchProfile, profile_id)
 
     if request.method == "POST":
-        if not check_admin_auth():
-            flash("Unauthorized. Admin authentication required.", "error")
-            return redirect(url_for("main.edit_profile", profile_id=profile_id))
-
         action = (request.form.get("action") or "").strip()
         config = SearchProfileService.get_travel_targets_config(profile)
 
@@ -1167,7 +1111,6 @@ def edit_profile(profile_id):
         classification_rules_json=classification_rules_json,
         email_matchers_json=email_matchers_json,
         global_ai_market_context=SettingsService.get_ai_market_context(),
-        is_admin=check_admin_auth(),
     )
 
 
@@ -1175,12 +1118,6 @@ def edit_profile(profile_id):
 def recalculate_property_travel(property_id: int):
     """Recalculate travel for a single property."""
     try:
-        from utils.auth import check_admin_auth
-
-        if not check_admin_auth():
-            flash("Unauthorized. Admin authentication required.", "error")
-            return redirect(url_for("main.property_detail", property_id=property_id))
-
         prop = db.get_or_404(Property, property_id)
         from services.property_travel_service import PropertyTravelService
 
@@ -1209,12 +1146,6 @@ def recalculate_property_travel(property_id: int):
 def recalculate_property_score(property_id: int):
     """Recalculate scoring for a single property."""
     try:
-        from utils.auth import check_admin_auth
-
-        if not check_admin_auth():
-            flash("Unauthorized. Admin authentication required.", "error")
-            return redirect(url_for("main.property_detail", property_id=property_id))
-
         prop = db.get_or_404(Property, property_id)
         from services.property_scoring_service import PropertyScoringService
 
@@ -1243,12 +1174,6 @@ def recalculate_property_score(property_id: int):
 def recalculate_profile_travel(profile_id: int):
     """Recalculate travel for properties in a profile (bounded, best-effort)."""
     try:
-        from utils.auth import check_admin_auth
-
-        if not check_admin_auth():
-            flash("Unauthorized. Admin authentication required.", "error")
-            return redirect(url_for("main.edit_profile", profile_id=profile_id))
-
         profile = db.get_or_404(SearchProfile, profile_id)
 
         mode = (request.form.get("mode") or "all").strip().lower()
@@ -1302,12 +1227,6 @@ def recalculate_profile_travel(profile_id: int):
 def recalculate_profile_scoring(profile_id: int):
     """Recalculate scoring for properties in a profile (bounded, best-effort)."""
     try:
-        from utils.auth import check_admin_auth
-
-        if not check_admin_auth():
-            flash("Unauthorized. Admin authentication required.", "error")
-            return redirect(url_for("main.edit_profile", profile_id=profile_id))
-
         profile = db.get_or_404(SearchProfile, profile_id)
 
         mode = (request.form.get("mode") or "all").strip().lower()
@@ -1364,12 +1283,6 @@ def recalculate_profile_scoring(profile_id: int):
 def recalculate_profile_classification(profile_id: int):
     """Re-run classification for properties in a profile (bounded, best-effort)."""
     try:
-        from utils.auth import check_admin_auth
-
-        if not check_admin_auth():
-            flash("Unauthorized. Admin authentication required.", "error")
-            return redirect(url_for("main.edit_profile", profile_id=profile_id))
-
         profile = db.get_or_404(SearchProfile, profile_id)
 
         mode = (request.form.get("mode") or "all").strip().lower()
@@ -1450,14 +1363,9 @@ def recalculate_profile_classification(profile_id: int):
 
 @main_bp.route("/properties/<int:property_id>/set-status", methods=["POST"])
 def set_property_status_form(property_id: int):
-    """Set listing status for a Property (admin-only)."""
+    """Set listing status for a Property."""
     try:
-        from utils.auth import check_admin_auth
         from datetime import datetime
-
-        if not check_admin_auth():
-            flash("Unauthorized. Admin authentication required.", "error")
-            return redirect(url_for("main.property_detail", property_id=property_id))
 
         prop = db.get_or_404(Property, property_id)
         new_status = (request.form.get("status") or "removed").strip().lower()
@@ -1491,12 +1399,6 @@ def set_property_status_form(property_id: int):
 def set_property_classification_form(property_id: int):
     """Set category/subtype (manual override) or auto-classify for a Property."""
     try:
-        from utils.auth import check_admin_auth
-
-        if not check_admin_auth():
-            flash("Unauthorized. Admin authentication required.", "error")
-            return redirect(url_for("main.property_detail", property_id=property_id))
-
         prop = db.get_or_404(Property, property_id)
 
         action = (request.form.get("action") or "").strip().lower()
@@ -1598,14 +1500,8 @@ def set_property_classification_form(property_id: int):
 
 @main_bp.route("/properties/<int:property_id>/profile", methods=["POST"])
 def set_property_profile_form(property_id: int):
-    """Assign a property to a specific profile (admin-only)."""
+    """Assign a property to a specific profile."""
     try:
-        from utils.auth import check_admin_auth
-
-        if not check_admin_auth():
-            flash("Unauthorized. Admin authentication required.", "error")
-            return redirect(url_for("main.property_detail", property_id=property_id))
-
         prop = db.get_or_404(Property, property_id)
         profile_id = request.form.get("profile_id", type=int)
         recalc_travel = (request.form.get("recalc_travel") or "").strip().lower() in (
@@ -1707,7 +1603,6 @@ def set_property_profile_form(property_id: int):
 
 
 @main_bp.route("/lands/<int:land_id>")
-@admin_required
 def land_detail(land_id):
     """Detailed view of a specific land"""
     try:
@@ -1800,7 +1695,6 @@ def land_detail(land_id):
 
 
 @main_bp.route("/map")
-@admin_required
 def map_view():
     """Interactive map view of all properties with coordinates"""
     try:
@@ -1971,7 +1865,6 @@ def map_view():
 
 
 @main_bp.route("/criteria")
-@admin_required
 def criteria():
     """Scoring criteria management page with dual scoring profiles"""
     try:
@@ -2044,20 +1937,13 @@ def criteria():
 @main_bp.route("/settings/properties", methods=["GET", "POST"])
 def property_settings():
     """Global settings for universal properties (ingestion + classification rules + AI context)."""
-    from utils.auth import check_admin_auth
     from services.settings_service import (
         SettingsService,
         DEFAULT_PROPERTY_CLASSIFICATION_RULES,
         DEFAULT_AI_MARKET_CONTEXT,
     )
 
-    is_admin = check_admin_auth()
-
     if request.method == "POST":
-        if not is_admin:
-            flash("Unauthorized. Admin authentication required.", "error")
-            return redirect(url_for("main.property_settings"))
-
         action = (request.form.get("action") or "").strip()
 
         if action == "save_reference_cities":
@@ -2198,7 +2084,6 @@ def property_settings():
 
     return render_template(
         "property_settings.html",
-        is_admin=is_admin,
         ai_market_context=SettingsService.get_ai_market_context(),
         classification_rules_json=classification_rules_json,
         default_ai_market_context=DEFAULT_AI_MARKET_CONTEXT,
@@ -2214,7 +2099,6 @@ def property_settings():
 
 
 @main_bp.route("/criteria/update", methods=["POST"])
-@admin_required
 def update_criteria():
     """Update scoring criteria weights"""
     try:
@@ -2260,7 +2144,6 @@ def update_criteria():
 
 
 @main_bp.route("/criteria/update_profile/<profile>", methods=["POST"])
-@admin_required
 def update_criteria_profile(profile):
     """Update scoring criteria weights for a specific profile (investment/lifestyle)"""
     try:
@@ -2306,7 +2189,6 @@ def update_criteria_profile(profile):
 
 
 @main_bp.route("/criteria/update_combined_mix", methods=["POST"])
-@admin_required
 def update_combined_mix():
     """Update the Investment vs Lifestyle balance for combined scoring"""
     from decimal import Decimal as D
@@ -2392,7 +2274,6 @@ def update_combined_mix():
 
 
 @main_bp.route("/criteria/update_reference_cities", methods=["POST"])
-@admin_required
 def update_reference_cities():
     """Update reference cities used for travel-time scoring/display."""
     try:
@@ -2417,7 +2298,6 @@ def update_reference_cities():
 
 
 @main_bp.route("/criteria/update_market_settings", methods=["POST"])
-@admin_required
 def update_market_settings():
     """Update market analysis settings used for AI property enrichment."""
     try:
@@ -2512,7 +2392,6 @@ def update_market_settings():
 
 
 @main_bp.route("/land/<int:land_id>/edit-environment", methods=["GET", "POST"])
-@admin_required
 def edit_environment(land_id):
     """Edit environment data for a land"""
     try:
@@ -2552,7 +2431,6 @@ def edit_environment(land_id):
 
 
 @main_bp.route("/land/<int:land_id>/update-score", methods=["POST"])
-@admin_required
 def update_score(land_id):
     """Update manual score for a land"""
     try:
@@ -2590,7 +2468,6 @@ def update_score(land_id):
 
 
 @main_bp.route("/export.csv")
-@admin_required
 def export_csv():
     """Export current land selection to CSV"""
     try:
@@ -2799,7 +2676,6 @@ def export_csv():
 
 
 @main_bp.route("/properties/export.csv")
-@admin_required
 def export_properties_csv():
     """Export current property selection to CSV (profile-aware)."""
     try:

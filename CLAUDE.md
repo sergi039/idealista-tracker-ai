@@ -75,10 +75,19 @@ and TODO.md; respect it if you ever run both side by side.
   `utils/recalc_travel_times.py`) without an explicit ticket saying so.
 - Preserve the scraping throttle in `services/listing_status_service.py`
   (randomized sleeps between listing fetches). No bulk re-scrape loops.
-- Security posture is hard-won: `admin_required` on state-changing
-  endpoints, CSRF protection, rate limiting, parameterized queries only.
-  Treat any weakening as a defect. An open security/bug audit lives in
-  GitHub issues #16–#30.
+- **There is no authentication** (owner decision, 2026-08-08): the admin
+  login, `ADMIN_API_TOKEN` and `utils/auth.py` were removed, so every page
+  and endpoint is open. This holds only because `docker-compose.yml`
+  publishes the app on `127.0.0.1:5001` — never widen that binding, and
+  never expose the app through a tunnel or reverse proxy without putting
+  authentication back first.
+- The rest of the security posture is hard-won and still applies: CSRF
+  protection on form POSTs, rate limiting, parameterized queries only.
+  Treat any weakening as a defect. Note that the JSON API blueprints are
+  CSRF-exempt (`app.py`) because they used to be token-gated — with the
+  token gone, a browser page can reach them; do not add new state-changing
+  JSON endpoints without thinking about that. An open security/bug audit
+  lives in GitHub issues #16–#30.
 - Never change existing primary key types. Schema changes go through
   migrations (see MIGRATION_RUNBOOK.md).
 - Mock external API calls in tests. Suites needing live services or
