@@ -7,14 +7,48 @@ commit over local-only files. These tests run the real .githooks/pre-push
 against a toy repository whose committed tools/ci/local_ci.sh is a stub
 with a known exit code, then desynchronize the working tree from the
 commit and assert the verdict follows the commit.
+
+The last two tests cover the follow-up defect: the gate must not leak
+git's own environment into the checks it spawns.
 """
 
+import os
+import shlex
 import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HOOK = REPO_ROOT / ".githooks" / "pre-push"
 ZERO_SHA = "0" * 40
+
+# The variables that redirect git to a different repository. git exports
+# GIT_DIR to hooks whenever the push comes from a linked worktree; the rest
+# can be set by a wrapping tool. .githooks/pre-push and tools/ci/local_ci.sh
+# must clear all of them before running anything.
+GIT_ENV_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+    "GIT_QUARANTINE_PATH",
+)
+
+
+def _clean_env(**extra):
+    """os.environ without the repo-redirecting git variables.
+
+    Used for the helpers' own git calls so that running this suite from a
+    shell that happens to have GIT_DIR set cannot make `git init` below
+    re-initialise the caller's repository - which is the very accident
+    these last two tests are about.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in GIT_ENV_VARS}
+    env.update(extra)
+    return env
 
 
 def _git(repo, *args):
@@ -23,15 +57,25 @@ def _git(repo, *args):
         check=True,
         capture_output=True,
         text=True,
+        env=_clean_env(),
     )
 
 
-def _write_gate(repo, exit_code):
+def _write_gate_script(repo, body):
     gate = repo / "tools" / "ci" / "local_ci.sh"
     gate.parent.mkdir(parents=True, exist_ok=True)
-    gate.write_text(f"#!/bin/bash\nexit {exit_code}\n")
+    gate.write_text(body)
     gate.chmod(0o755)
     return gate
+
+
+def _write_gate(repo, exit_code):
+    return _write_gate_script(repo, f"#!/bin/bash\nexit {exit_code}\n")
+
+
+def _commit_all(repo, message):
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", message)
 
 
 def _make_repo(tmp_path, committed_gate_exit):
@@ -41,22 +85,22 @@ def _make_repo(tmp_path, committed_gate_exit):
     _git(repo, "config", "user.email", "hook-test@example.invalid")
     _git(repo, "config", "user.name", "hook test")
     _write_gate(repo, committed_gate_exit)
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "init")
+    _commit_all(repo, "init")
     return repo
 
 
-def _run_hook(repo, stdin_line=None):
+def _run_hook(repo, stdin_line=None, cwd=None, env=None):
     if stdin_line is None:
         sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
         stdin_line = f"refs/heads/main {sha} refs/heads/main {ZERO_SHA}\n"
     return subprocess.run(
         ["bash", str(HOOK)],
         input=stdin_line,
-        cwd=repo,
+        cwd=str(cwd or repo),
         capture_output=True,
         text=True,
         timeout=120,
+        env=env if env is not None else _clean_env(),
     )
 
 
@@ -98,3 +142,74 @@ def test_skip_local_ci_env_bypasses(tmp_path, monkeypatch):
         env={"PATH": "/usr/bin:/bin:/usr/local/bin", "SKIP_LOCAL_CI": "1"},
     )
     assert res.returncode == 0, res.stdout + res.stderr
+
+
+def _push_from_linked_worktree(tmp_path, gate_body):
+    """Reproduce a push started from a linked worktree, with `gate_body` committed.
+
+    git only exports GIT_DIR to the hook when the push comes from a linked
+    worktree, and only a linked worktree's gitdir triggers the damage: it has
+    no work tree of its own, so a `git init` inheriting it re-initialises the
+    shared repository as *bare*. A main-clone gitdir keeps core.bare=false,
+    so a simulation using one would be a false canary.
+    """
+    repo = _make_repo(tmp_path, committed_gate_exit=0)
+    _write_gate_script(repo, gate_body)
+    _commit_all(repo, "gate that shells out to git")
+
+    linked = tmp_path / "linked"
+    _git(repo, "worktree", "add", "-q", "--detach", str(linked), "HEAD")
+    gitdir = repo / ".git" / "worktrees" / "linked"
+    assert gitdir.is_dir(), "linked worktree gitdir not where the test expects it"
+
+    res = _run_hook(repo, cwd=linked, env=_clean_env(GIT_DIR=str(gitdir)))
+    return repo, res
+
+
+def test_gate_does_not_turn_the_pushing_repo_bare(tmp_path):
+    """Regression: the gate must not reconfigure the repo it was invoked from.
+
+    A check that runs git against its own throwaway repository - which is
+    exactly what this file does - must not be able to reach back and
+    reconfigure the repository being pushed. Before the fix this wrote
+    `bare = true` into the shared .git/config and every worktree of the
+    real clone started failing with "must be run in a work tree".
+    """
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    gate = f"#!/bin/bash\ngit -C {shlex.quote(str(scratch))} init -q\nexit 0\n"
+
+    repo, res = _push_from_linked_worktree(tmp_path, gate)
+
+    assert res.returncode == 0, res.stdout + res.stderr
+    is_bare = _git(repo, "rev-parse", "--is-bare-repository").stdout.strip()
+    assert is_bare == "false", (
+        "the gate turned the pushed-from repository into a bare repo; "
+        "every worktree of it is now broken\n" + res.stdout + res.stderr
+    )
+    assert (scratch / ".git").is_dir(), (
+        "the gate's own `git init` silently did nothing instead of creating "
+        "its repository - the git environment is still leaking"
+    )
+
+
+def test_gate_runs_with_a_clean_git_environment(tmp_path):
+    """Regression: no git environment reaches the spawned checks.
+
+    Blanket cover for every other way a leaked git environment corrupts a
+    check: `git ls-files` reading a foreign index, a test's repository
+    resolving to the wrong place, and so on.
+    """
+    dump = tmp_path / "gate-env.txt"
+    gate = f"#!/bin/bash\nenv > {shlex.quote(str(dump))}\nexit 0\n"
+
+    _repo, res = _push_from_linked_worktree(tmp_path, gate)
+
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert dump.exists(), "the gate never ran: " + res.stdout + res.stderr
+    leaked = sorted(
+        line.split("=", 1)[0]
+        for line in dump.read_text().splitlines()
+        if line.split("=", 1)[0] in GIT_ENV_VARS
+    )
+    assert leaked == [], f"gate inherited git environment: {leaked}"
