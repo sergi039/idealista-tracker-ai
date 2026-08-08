@@ -556,6 +556,110 @@ class TestSourceArchiveNotServed:
 
 
 # ---------------------------------------------------------------------------
+# Security: /settings/properties must not expose ADMIN_API_TOKEN via a
+# JS-readable cookie (issue #20)
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def token_login_app():
+    """App fixture with TESTING=False and a known ADMIN_API_TOKEN, so the
+    real POST /login -> session -> POST /settings/properties round trip can
+    be exercised without the TESTING bypass masking auth behaviour."""
+    setup_test_environment()
+    orig_token = os.environ.get("ADMIN_API_TOKEN")
+    os.environ["ADMIN_API_TOKEN"] = "unit-test-admin-token"
+    app = create_app()
+    app.config["TESTING"] = False
+    app.config["WTF_CSRF_ENABLED"] = False
+    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    with app.app_context():
+        db.create_all()
+        yield app
+        db.drop_all()
+    if orig_token is not None:
+        os.environ["ADMIN_API_TOKEN"] = orig_token
+    else:
+        os.environ.pop("ADMIN_API_TOKEN", None)
+
+
+@pytest.fixture
+def token_login_client(token_login_app):
+    return token_login_app.test_client()
+
+
+class TestPropertySettingsNoTokenCookie:
+    """Issue #20: the "Unlock" widget on /settings/properties wrote the
+    master ADMIN_API_TOKEN into a non-HttpOnly, JS-readable `admin_token`
+    cookie via `document.cookie`, and nothing server-side ever read that
+    cookie back (check_admin_auth only looks at the Authorization header and
+    the Flask session) -- so the widget didn't even authenticate the user.
+    The fix removes the paste-a-token widget and points anonymous users at
+    the real POST /login flow, which establishes a proper server-side
+    session instead of a client-readable credential."""
+
+    def test_anonymous_settings_page_has_no_token_widget(self, auth_disabled_client):
+        """The dead cookie-writing widget and its JS must be gone entirely."""
+        resp = auth_disabled_client.get("/settings/properties")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+
+        # The widget's markup/ids must not be present.
+        assert "admin-token-input" not in body
+        assert "admin-token-save" not in body
+        assert "admin-token-clear" not in body
+        assert "Paste ADMIN_API_TOKEN" not in body
+
+        # The cookie-writing JS must not be present.
+        assert "document.cookie" not in body
+        assert "admin_token=" not in body
+
+        # Anonymous users get a real path to authenticate instead.
+        assert 'href="/login' in body or "href=\"/login" in body
+
+    def test_settings_page_response_sets_no_admin_token_cookie(
+        self, auth_disabled_client
+    ):
+        """The server itself must never set an admin_token cookie either."""
+        resp = auth_disabled_client.get("/settings/properties")
+        assert resp.status_code == 200
+        set_cookie_headers = resp.headers.get_all("Set-Cookie")
+        assert not any("admin_token" in h for h in set_cookie_headers)
+
+    def test_login_flow_grants_access_without_client_side_token_storage(
+        self, token_login_client
+    ):
+        """The real fix: POST /login with the correct token establishes a
+        server-side session (admin_authenticated), and the settings page
+        then renders as authenticated -- with no admin_token cookie ever
+        set or read along the way."""
+        # Anonymous: read-only, warning banner shown, no admin_token cookie.
+        anon_resp = token_login_client.get("/settings/properties")
+        assert anon_resp.status_code == 200
+        assert "Admin authentication is required" in anon_resp.get_data(as_text=True)
+        assert not any(
+            "admin_token" in h for h in anon_resp.headers.get_all("Set-Cookie")
+        )
+
+        # Log in via the real, CSRF-protected, session-based flow.
+        login_resp = token_login_client.post(
+            "/login",
+            data={"token": "unit-test-admin-token", "next": "/settings/properties"},
+        )
+        assert login_resp.status_code == 302
+        assert "/settings/properties" in login_resp.headers.get("Location", "")
+        assert not any(
+            "admin_token" in h for h in login_resp.headers.get_all("Set-Cookie")
+        )
+
+        # Now authenticated via the session cookie set by Flask itself, not
+        # a hand-rolled JS cookie holding the master token.
+        auth_resp = token_login_client.get("/settings/properties")
+        assert auth_resp.status_code == 200
+        body = auth_resp.get_data(as_text=True)
+        assert "Admin authentication is required" not in body
+        assert "admin_token" not in body
+
+
+# ---------------------------------------------------------------------------
 # Security: error messages don't leak internals
 # ---------------------------------------------------------------------------
 class TestErrorSanitization:
