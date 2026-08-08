@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Why**: the name parsed out of the subject is a *label*. It gets folded by
   the mail server (#101), reworded by Idealista, or renamed by the owner, and
   each variant used to create another `SearchProfile`.
+- **What counts as a search URL**: only `/areas/` links that carry a non-empty
+  `shape`. The polygon is what tells two custom-area subscriptions apart, so a
+  link that lost its query — wrapped mid-line in a text/plain part, or
+  truncated — yields no identity rather than a key minted from the path.
 - **Consequence to keep in mind**: `search_profiles.name` is no longer UNIQUE —
   two subscriptions may legitimately share a label with a different `shape`, so
   `merge_duplicate_profiles()` now refuses to merge a group holding different

@@ -34,7 +34,10 @@ Deliberately *not* normalized:
   not lowercased - a reordered path is a different search until Idealista is
   shown to emit both forms for one subscription;
 * ``shape`` is compared verbatim. It is not rounded, parsed, or compared
-  geometrically: a different polygon is a different subscription.
+  geometrically: a different polygon is a different subscription. It is also
+  *required*: without it the path is shared by every custom-area search with
+  the same filters, so a truncated link yields no identity rather than a
+  fabricated one.
 
 Only ``/areas/`` searches (the custom-drawn-area kind the mailbox actually
 receives) are recognized. Any other saved search yields no identity, and the
@@ -64,6 +67,11 @@ SEARCH_KEY_LENGTH = len(SEARCH_KEY_PREFIX) + 64
 # Query parameters that are part of the subscription's identity. Everything
 # else - every utm_*, every tracking id - is dropped.
 IDENTITY_QUERY_PARAMS = frozenset({"shape"})
+
+# ... and the ones without which there is no identity at all. `shape` is the
+# polygon that distinguishes two custom-area searches, so a URL that lost it
+# describes no particular subscription, however complete its path looks.
+REQUIRED_QUERY_PARAMS = frozenset({"shape"})
 
 SEARCH_HOSTS = frozenset({"idealista.com"})
 SEARCH_PATH_ROOT = "areas"
@@ -166,22 +174,27 @@ def _canonical_path(raw_path: str) -> Optional[str]:
     )
 
 
-def _canonical_query(raw_query: str) -> str:
+def _identity_query_params(raw_query: str) -> List[Tuple[str, str]]:
+    """The allowlisted parameters, decoded name paired with canonical value.
+
+    A parameter with an empty value is dropped: `shape=` is not a polygon, and
+    treating it as one would make every subscription that lost its query look
+    like the same search.
+    """
     identity_params = []
     for chunk in raw_query.split("&"):
         if not chunk:
             continue
         raw_name, _, raw_value = chunk.partition("=")
-        if _decoded_text(raw_name) not in IDENTITY_QUERY_PARAMS:
+        name = _decoded_text(raw_name)
+        if name not in IDENTITY_QUERY_PARAMS:
             continue
-        identity_params.append(
-            (
-                _normalize_percent_encoding(raw_name, safe=_QUERY_SAFE),
-                _normalize_percent_encoding(raw_value, safe=_QUERY_SAFE),
-            )
-        )
+        value = _normalize_percent_encoding(raw_value, safe=_QUERY_SAFE)
+        if not value:
+            continue
+        identity_params.append((name, value))
     identity_params.sort()
-    return "&".join(f"{name}={value}" for name, value in identity_params)
+    return identity_params
 
 
 def canonicalize_search_url(url: str) -> Optional[str]:
@@ -214,8 +227,23 @@ def canonicalize_search_url(url: str) -> Optional[str]:
     if path is None:
         return None
 
-    query = _canonical_query(split.query)
-    return f"{host}{path}?{query}" if query else f"{host}{path}"
+    identity_params = _identity_query_params(split.query)
+    missing = REQUIRED_QUERY_PARAMS - {name for name, _ in identity_params}
+    if missing:
+        # A /areas/ search is identified by its polygon, not by its filters:
+        # the path alone is shared by every custom-area subscription that
+        # happens to want the same price and size. A link that lost its query -
+        # wrapped mid-line in a text/plain part, or truncated - is therefore
+        # not an identity, and must not mint one.
+        logger.debug(
+            "Ignoring Idealista search URL with no %s: %r",
+            ", ".join(sorted(missing)),
+            candidate[:120],
+        )
+        return None
+
+    query = "&".join(f"{name}={value}" for name, value in identity_params)
+    return f"{host}{path}?{query}"
 
 
 def search_key_for_canonical(canonical: str) -> str:

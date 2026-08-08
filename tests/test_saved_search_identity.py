@@ -229,6 +229,52 @@ def test_material_differences_produce_different_keys(variant):
 @pytest.mark.parametrize(
     "url",
     [
+        TERRENOS_URL.split("?")[0],
+        TERRENOS_URL.split("?")[0] + "?utm_source=email&utm_notification_id=7",
+        TERRENOS_URL.split("?")[0] + "?shape=",
+    ],
+    ids=["truncated-before-shape", "only-tracking-params", "empty-shape"],
+)
+def test_an_areas_url_without_a_polygon_is_not_an_identity(url):
+    """`shape` is what tells two custom-area searches apart.
+
+    A URL that lost its query - wrapped mid-line in a text/plain part, or
+    truncated - would otherwise mint a key from the path alone, collapsing
+    every subscription that happens to share those filters.
+    """
+    assert canonicalize_search_url(url) is None
+    assert search_key_for_url(url) is None
+
+
+def test_a_truncated_link_does_not_invent_an_identity_or_a_twin(app):
+    """The full URL must still land on the profile the label already made."""
+    with app.app_context():
+        truncated = TERRENOS_URL.split("?")[0]
+
+        by_label = SearchProfileService.resolve_profile(
+            SUBJECT_FULL, f'<a href="{truncated}">x</a>'
+        )
+
+        assert by_label is not None
+        assert by_label.source_search_key is None, (
+            "a shapeless URL minted an identity out of the path"
+        )
+
+        identified = SearchProfileService.resolve_profile(
+            SUBJECT_FULL, f'<a href="{TERRENOS_URL}">x</a>'
+        )
+
+        assert identified is not None
+        assert identified.id == by_label.id, (
+            "the real URL created a second profile for the same subscription"
+        )
+        assert identified.source_search_key == TERRENOS_KEY
+        assert SearchProfile.query.count() == 1
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
         "",
         "https://www.idealista.com/en/inmueble/112229931/",
         "https://www.idealista.com/en/venta-viviendas/alicante/",
