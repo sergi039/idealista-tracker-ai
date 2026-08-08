@@ -57,6 +57,13 @@ build, and comparing only the two git refs reports "nothing to deploy" for a
 stale app. The marker is written after the health check passes, so it never
 names a build that failed.
 
+After a rollback the marker is written only when the rollback rebuilt from
+source — that path knows which commit is running. A rollback restored from the
+saved image does not: with no prior marker, that image can predate the checkout
+entirely, and claiming otherwise would make every later tick skip a redeploy
+the app actually needs. The marker is removed instead. One wasted rebuild beats
+a permanently wrong belief about what is running.
+
 ## Scheduled deploys
 
 ```bash

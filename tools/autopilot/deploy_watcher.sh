@@ -151,18 +151,33 @@ rollback() {
             || log "  rollback rebuild failed"
     fi
 
-    # Record what is running now, not what we hoped to run. A marker left
-    # pointing at the failed commit would make the next tick skip the redeploy.
+    if ! check_health; then
+        log "ROLLBACK IS ALSO UNHEALTHY - THE APP IS DOWN, MANUAL ATTENTION NEEDED"
+        rm -f "$DEPLOYED_MARKER" 2>/dev/null || true
+        return
+    fi
+    log "rollback healthy - previous version is serving again"
+
+    # The marker must name the commit that is *serving*, and only the rebuild
+    # path knows that: it built from local_sha and then passed health.
+    #
+    # The saved image carries no such guarantee. With no marker to start from,
+    # that image can predate the checkout entirely - built from B while the tree
+    # sits at A. Writing local_sha then claims A is deployed while B serves, and
+    # the next tick sees local=remote=marker and skips the redeploy forever.
+    # No marker is the honest answer: one wasted rebuild beats a permanently
+    # wrong belief about what is running.
+    if [ "$restored" = "1" ]; then
+        log "  restored from the saved image, whose commit is unknown - clearing"
+        log "  the marker so the next tick redeploys and re-establishes it"
+        rm -f "$DEPLOYED_MARKER" 2>/dev/null || true
+        return
+    fi
+
     if ! record_deployed "$local_sha"; then
         log "  could not update the deployment marker - removing it so the next"
         log "  tick redeploys rather than trusting a stale value"
         rm -f "$DEPLOYED_MARKER" 2>/dev/null || true
-    fi
-
-    if check_health; then
-        log "rollback healthy - previous version is serving again"
-    else
-        log "ROLLBACK IS ALSO UNHEALTHY - THE APP IS DOWN, MANUAL ATTENTION NEEDED"
     fi
 }
 
