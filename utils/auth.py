@@ -3,10 +3,55 @@
 import os
 import hmac
 from functools import wraps
+from urllib.parse import urlparse
 from flask import request, jsonify, session, redirect, url_for, current_app
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def safe_redirect_target(candidate, fallback):
+    """Validate a user-supplied redirect target, e.g. a `next` query/form
+    parameter, and return it only if it is a safe same-site relative path.
+
+    Open-redirect guard (issue #17): `candidate` comes straight from client
+    input on the login page (`?next=` / form field `next`), so it must never
+    be redirected to verbatim. Rejects absolute URLs (any scheme or netloc),
+    protocol-relative URLs (`//evil.com`), and the backslash trick browsers
+    normalize into `//evil.com` (`/\\evil.com`). Falls back to `fallback`
+    for anything that doesn't parse as an unambiguous local path.
+    """
+    if not candidate:
+        return fallback
+    candidate = candidate.strip()
+    if not candidate:
+        return fallback
+
+    parsed = urlparse(candidate)
+    if parsed.scheme or parsed.netloc:
+        return fallback
+
+    normalized = candidate.replace("\\", "/")
+    if not normalized.startswith("/") or normalized.startswith("//"):
+        return fallback
+
+    return candidate
+
+
+def safe_referrer_redirect(fallback):
+    """Return `request.referrer` only when it is same-origin, else `fallback`.
+
+    Open-redirect guard (issue #17): several admin POST handlers redirect
+    back to "wherever the user came from" using the Referer header, but that
+    header is entirely client-controlled. A cross-origin form submission
+    (or a hand-crafted request) can set it to an attacker's origin and bounce
+    the admin's browser there right after the action completes. Only honor
+    it when it points back at this same host.
+    """
+    referrer = request.referrer
+    if referrer and referrer.startswith(request.host_url):
+        return referrer
+    return fallback
 
 
 def check_admin_auth():
