@@ -2,14 +2,21 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from sqlalchemy import func
+
 from app import db
-from models import SearchProfile
+from models import Property, SearchProfile
 from services.settings_service import SettingsService
 
 logger = logging.getLogger(__name__)
 
 
 DEFAULT_PROFILE_NAME = "Default"
+
+# Sentinel accepted in the `profile_id` query param to mean "no profile
+# filter, show every profile at once". An empty string means the same thing
+# (the "All profiles" <option value=""> in the filter form submits this).
+PROFILE_ALL_SENTINEL = "all"
 
 TRAVEL_PRESET_DEFS: Dict[str, Dict[str, Any]] = {
     "airport": {"label": "Nearest airport", "place_types": ["airport"]},
@@ -280,7 +287,6 @@ class SearchProfileService:
     @staticmethod
     def merge_duplicate_profiles(commit: bool = True) -> Dict[str, Any]:
         """Merge profiles that normalize to the same canonical name."""
-        from models import Property
 
         profiles = SearchProfile.query.order_by(SearchProfile.id.asc()).all()
         groups: Dict[str, List[SearchProfile]] = {}
@@ -472,3 +478,74 @@ class SearchProfileService:
         except Exception:
             pass
         return SettingsService.get_ai_market_context()
+
+    @staticmethod
+    def parse_profile_selection(args: Any) -> Tuple[str, Optional[int]]:
+        """Parse a `profile_id` query parameter into an explicit selection state.
+
+        Returns `(state, profile_id)`:
+          - `("auto", None)`: the param is absent entirely -- the caller should
+            apply its own default/auto-select fallback (existing behaviour,
+            so old bookmarked/saved links keep working unchanged).
+          - `("all", None)`: the user explicitly asked to see every profile at
+            once (`profile_id=` empty or `profile_id=all`) -- do not filter.
+          - `("specific", <int>)`: a single profile was explicitly requested.
+
+        An unparseable value that is present but neither empty/"all" nor a
+        valid integer is treated as `("auto", None)`, matching the previous
+        `request.args.get("profile_id", type=int)` behaviour, which silently
+        returned `None` on a bad value instead of erroring.
+        """
+        if "profile_id" not in args:
+            return "auto", None
+
+        raw = (args.get("profile_id") or "").strip()
+        if raw == "" or raw.lower() == PROFILE_ALL_SENTINEL:
+            return "all", None
+
+        try:
+            return "specific", int(raw)
+        except (TypeError, ValueError):
+            return "auto", None
+
+    @staticmethod
+    def resolve_richest_active_profile_id(
+        default_profile: Optional[SearchProfile], profiles: List[SearchProfile]
+    ) -> Optional[int]:
+        """Auto-select a sensible profile when the caller didn't request one.
+
+        Prefers the default profile, but only if it actually has properties --
+        profiles are auto-created from email search names, so a fresh install's
+        "Default" profile is often empty and would otherwise render an empty
+        list. Falls back to the most recently active profile, then the first
+        active profile, then None (no active profiles at all).
+        """
+        default_has_props = False
+        if default_profile:
+            default_has_props = (
+                Property.query.filter(Property.search_profile_id == default_profile.id)
+                .limit(1)
+                .first()
+                is not None
+            )
+        if default_profile and default_has_props:
+            return default_profile.id
+
+        recent = (
+            db.session.query(
+                Property.search_profile_id,
+                func.max(Property.created_at).label("latest"),
+            )
+            .join(SearchProfile, SearchProfile.id == Property.search_profile_id)
+            .filter(SearchProfile.is_active.is_(True))
+            .group_by(Property.search_profile_id)
+            .order_by(func.max(Property.created_at).desc())
+            .first()
+        )
+        if recent and recent[0] is not None:
+            return int(recent[0])
+        if default_profile:
+            return default_profile.id
+        if profiles:
+            return profiles[0].id
+        return None
