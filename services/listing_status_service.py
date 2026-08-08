@@ -8,7 +8,7 @@ import requests
 import time
 import random
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, Tuple
 
 from models import Land, LandHistory, SyncHistory
 from app import db

@@ -6,7 +6,7 @@ Enhances raw property descriptions using AI to create professional, structured c
 import logging
 import json
 import re
-from typing import Dict, Optional, Any
+from typing import Dict, Any
 from services.anthropic_service import get_anthropic_service
 
 logger = logging.getLogger(__name__)

@@ -4,7 +4,6 @@ Tests for database models.
 
 import pytest
 from decimal import Decimal
-from datetime import datetime
 from app import create_app, db
 from models import Land, ScoringCriteria
 from tests import setup_test_environment

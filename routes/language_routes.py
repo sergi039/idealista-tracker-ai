@@ -2,7 +2,7 @@
 Language switching routes
 """
 import logging
-from flask import Blueprint, request, jsonify, redirect, url_for
+from flask import Blueprint, request, jsonify
 from utils.i18n import set_language
 
 logger = logging.getLogger(__name__)

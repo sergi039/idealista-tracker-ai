@@ -1,7 +1,5 @@
-import os
 import logging
 import requests
-import time
 from typing import Dict, Optional
 from config import Config
 from utils.http import request_with_retries

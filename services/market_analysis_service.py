@@ -6,7 +6,7 @@ based on configurable assumptions (defaults are generic for Spain)
 
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from sqlalchemy import and_
 from models import Land
 from app import db

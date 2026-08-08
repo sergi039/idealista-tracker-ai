@@ -4,9 +4,9 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, session
-from sqlalchemy import or_, and_, case, func
+from sqlalchemy import or_, case, func
 from sqlalchemy.orm import defer
-from models import Land, Property, ScoringCriteria, SearchProfile
+from models import Land, Property, SearchProfile
 from app import db
 from utils.auth import admin_required, login_admin, logout_admin
 

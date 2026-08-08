@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from flask import Blueprint, current_app, jsonify, request
-from models import Land, LandHistory, ScoringCriteria, SyncHistory, AiAnalysisVariant
+from models import Land, LandHistory, SyncHistory, AiAnalysisVariant
 from app import db
 from app import limiter
 from utils.auth import admin_required
