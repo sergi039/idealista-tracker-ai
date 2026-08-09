@@ -100,6 +100,22 @@ def _list_table(body):
     return body[start : body.index("</table>", start)]
 
 
+def _media_block(css, header):
+    """The body of one media query, matched by brace depth rather than by the
+    next `}` -- the block contains nested rules."""
+    start = css.index(header)
+    open_brace = css.index("{", start)
+    depth = 0
+    for index in range(open_brace, len(css)):
+        if css[index] == "{":
+            depth += 1
+        elif css[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return css[open_brace : index + 1]
+    raise AssertionError(f"unbalanced braces after {header!r}")
+
+
 class TestDefaultView:
     def test_bare_properties_opens_on_the_table(self, client, listing):
         body = client.get("/properties").get_data(as_text=True)
@@ -150,11 +166,16 @@ class TestColumnWidthsStayInCss:
             selector = styled_elsewhere.get(column_class, f".{column_class}")
             assert selector in css, f"{column_class} has no CSS rule ({selector})"
 
-    def test_container_is_uncapped_below_the_desktop_breakpoint(self):
-        """The 720/960px cap is what left an iPad scrolling sideways."""
+    def test_the_container_cap_is_lifted_at_every_width_above_a_phone(self):
+        """Bootstrap's cap is what left an iPad scrolling sideways *and* a wide
+        monitor showing the table as a strip down the middle. The rule that
+        lifts it must not carry an upper bound: a first attempt stopped at
+        1399.98px, which fixed the tablet and changed nothing on the desktop
+        the owner actually works from."""
         css = STYLESHEET.read_text(encoding="utf-8")
-        assert "@media (min-width: 768px) and (max-width: 1399.98px)" in css
-        assert "main.container" in css
+        block = _media_block(css, "@media (min-width: 768px) {")
+        assert "main.container" in block, "the container rule is not in this block"
+        assert "max-width: none" in block, "the cap is not lifted"
 
     def test_the_phone_breakpoint_stops_below_the_tablet_one(self):
         """At exactly 768px both used to apply: stacked *and* compacted."""
