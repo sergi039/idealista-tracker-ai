@@ -49,9 +49,24 @@
                                title="{{ t('view_on_app_map') }}" aria-label="{{ t('view_on_app_map') }}">
                                 <i class="fas fa-map-marked-alt"></i>
                             </a>
+                            {# Check status sits with them, as on the property page
+                               (owner decision, 2026-08-09). Icon-sized, it cannot
+                               carry its outcome as a label, so the icon changes
+                               and the answer arrives as a toast. #}
+                            <button type="button" id="check-listing-status-btn"
+                                    class="btn btn-sm btn-outline-primary detail-link-icon"
+                                    onclick="checkListingStatus({{ land.id }}, this)"
+                                    title="Check status on Idealista"
+                                    aria-label="Check status on Idealista">
+                                <i class="fas fa-rotate"></i>
+                            </button>
                         </span>
                     </h1>
-                    <div class="d-flex flex-wrap align-items-center gap-2">
+                    {# One line: the place and the coordinate, same as the property
+                       page. Accuracy stays with the coordinate -- an unrecorded or
+                       approximate one is why a sea-view verdict can come back
+                       unknown, so it is not decoration. #}
+                    <div class="d-flex flex-wrap align-items-center gap-2 text-body-secondary small">
                         {% if land.listing_status == 'removed' %}
                             <span class="badge bg-danger">
                                 <i class="fas fa-times-circle me-1"></i>REMOVED
@@ -66,18 +81,10 @@
                                 <i class="fas fa-city me-1"></i>{{ land.municipality }}
                             </span>
                         {% endif %}
-                    </div>
-                    {# The coordinate reads here instead of in a panel of its own,
-                       with its accuracy, exactly as on the property page. The
-                       legacy rows do carry one -- `precise` and `approximate`
-                       both occur in the live table -- and "unknown" is itself
-                       worth reading: an unrecorded accuracy is why a sea-view
-                       verdict can come back unknown. #}
-                    {% if land.location_lat and land.location_lon %}
-                        {% set _coords = "%.6f, %.6f"|format(land.location_lat, land.location_lon) %}
-                        <div class="text-body-secondary small mt-1">
+                        {% if land.location_lat and land.location_lon %}
+                            {% set _coords = "%.6f, %.6f"|format(land.location_lat, land.location_lon) %}
                             <span class="text-nowrap">
-                                <i class="fas fa-location-dot me-1"></i><span class="font-monospace">{{ _coords }}</span>
+                                <span class="font-monospace">{{ _coords }}</span>
                                 <span class="ms-1">({{ land.location_accuracy or 'unknown' }})</span>
                                 <button type="button" class="btn btn-link p-0 ms-1 align-baseline copy-coords-btn"
                                         data-copy-text="{{ _coords }}"
@@ -85,8 +92,8 @@
                                     <i class="fas fa-copy"></i>
                                 </button>
                             </span>
-                        </div>
-                    {% endif %}
+                        {% endif %}
+                    </div>
                 </div>
             </div>
             <a href="{{ url_for('main.lands', sort=request.args.get('sort'), order=request.args.get('order'), land_type=request.args.get('land_type'), municipality=request.args.get('municipality'), search=request.args.get('search'), per_page=request.args.get('per_page')) }}"
@@ -360,26 +367,13 @@
                     </div>
                 </div>
 
-                {# Actions. "View on Idealista" left with the Location panel: the
-                   same link is the Idealista icon next to the title now, and
-                   CLAUDE.md's rule for the property surface -- every control
-                   exists exactly once -- is the reason not to keep both.
-                   "Check status" replaces the manual Mark Status dropdown that
-                   stood here, and the Re-check button that only appeared inside
-                   the removed/sold banner: one control, always reachable, that
-                   asks Idealista instead of overriding it by hand. #}
+                {# Actions, down to the one that belongs here (owner decision,
+                   2026-08-09). "View on Idealista" left with the Location panel
+                   -- the same link is the Idealista icon next to the title.
+                   "Check status" is an icon up there too. "AI Analyses" only
+                   scrolled to a section that already sits above this row, with
+                   its own tabs and heading. #}
                 <div class="mt-4 d-flex justify-content-center flex-wrap gap-2">
-                    <!-- AI Analysis shortcut (opens Claude tab) -->
-                    <button type="button" class="btn btn-outline-info" onclick="openAiSection('claude')">
-                        <i class="fas fa-brain me-2"></i>AI Analyses
-                    </button>
-
-                    <button type="button" class="btn btn-outline-primary" id="check-listing-status-btn"
-                            onclick="checkListingStatus({{ land.id }}, this)"
-                            title="Fetch the listing from Idealista and record what it says">
-                        <i class="fas fa-rotate me-2"></i>Check status
-                    </button>
-
                     <!-- Google Enrichment Button - highlighted if enrichment data exists -->
                     {% set has_enrichment = land.infrastructure_basic or land.infrastructure_extended or land.transport or (land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital) %}
                     <button class="btn {{ 'btn-success' if has_enrichment else 'btn-outline-warning' }}"
@@ -1374,13 +1368,53 @@ async function toggleFavorite(landId) {
 // used to be looked up by the id of the one that lived inside the removed/sold
 // banner, which is gone, and a second call site would have driven that same
 // element instead of itself.
+// Mirrors the property page exactly (2026-08-09). Two things changed with the
+// move into the header: the control is icon-sized, so the icon carries the
+// state and the sentence arrives as a toast; and a blocked fetch is no longer
+// reported as "No Change". `observed === 'error'` means the scraper never
+// reached the listing page -- the stored status was deliberately left alone,
+// and saying "no change" would claim an observation nobody made (issue #136).
 async function checkListingStatus(landId, btn) {
     btn = btn || document.getElementById('check-listing-status-btn');
     if (!btn) return;
-    const originalContent = btn.innerHTML;
+    const icon = btn.querySelector('i');
+    const originalIconClass = icon ? icon.className : null;
+    const originalTitle = btn.title;
     btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Checking...';
-    let queued = false;
+    if (icon) icon.className = 'fas fa-spinner fa-spin';
+
+    const restore = () => setTimeout(() => {
+        if (icon && originalIconClass) icon.className = originalIconClass;
+        btn.title = originalTitle;
+        btn.disabled = false;
+    }, 2500);
+
+    const report = (iconClass, message, type) => {
+        if (icon) icon.className = iconClass;
+        btn.title = message;
+        showTransientAlert(null, type, message);
+        restore();
+    };
+
+    const settle = (result) => {
+        if (!result || !result.success) {
+            report('fas fa-triangle-exclamation', 'Status check failed — see the server logs.', 'error');
+            return;
+        }
+        if (result.changed) {
+            window.location.reload();
+            return;
+        }
+        if (result.observed === 'error') {
+            report(
+                'fas fa-ban',
+                'Could not verify: Idealista did not answer with the listing page (bot protection or a server error). Status left unchanged.',
+                'error'
+            );
+        } else {
+            report('fas fa-check', 'Checked on Idealista: no change.', 'success');
+        }
+    };
 
     try {
         const response = await fetch(`/api/land/${landId}/check-status`, {
@@ -1392,67 +1426,27 @@ async function checkListingStatus(landId, btn) {
 
         const data = await response.json().catch(() => null);
 
-        if (response.status === 202 && data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
-            queued = true;
-            btn.innerHTML = '<i class="fas fa-clock me-1"></i>Queued';
-            IdealistaApp.pollJob(data.job_id, {
-                onSuccess: (job) => {
-                    const result = job && job.result ? job.result : {};
-                    if (result.success) {
-                        if (result.changed) {
-                            window.location.reload();
-                            return;
-                        }
-                        btn.innerHTML = '<i class="fas fa-check me-1"></i>No Change';
-                    } else {
-                        btn.innerHTML = '<i class="fas fa-exclamation-triangle me-1"></i>Error';
-                    }
-                    setTimeout(() => {
-                        btn.innerHTML = originalContent;
-                        btn.disabled = false;
-                    }, 2000);
-                },
-                onError: () => {
-                    btn.innerHTML = '<i class="fas fa-exclamation-triangle me-1"></i>Error';
-                    setTimeout(() => {
-                        btn.innerHTML = originalContent;
-                        btn.disabled = false;
-                    }, 2000);
-                }
-            });
+        if (response.status === 202) {
+            if (data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
+                if (icon) icon.className = 'fas fa-clock';
+                IdealistaApp.pollJob(data.job_id, {
+                    onSuccess: (job) => settle(job && job.result ? job.result : null),
+                    onError: () => settle(null)
+                });
+            } else {
+                report(
+                    'fas fa-clock',
+                    'The check is running in the background. Reload the page to see the result.',
+                    'info'
+                );
+            }
             return;
         }
 
-        if (data && data.success) {
-            if (data.changed) {
-                // Status changed, reload page to show new status
-                window.location.reload();
-            } else {
-                btn.innerHTML = '<i class="fas fa-check me-1"></i>No Change';
-                setTimeout(() => {
-                    btn.innerHTML = originalContent;
-                    btn.disabled = false;
-                }, 2000);
-            }
-        } else {
-            btn.innerHTML = '<i class="fas fa-exclamation-triangle me-1"></i>Error';
-            setTimeout(() => {
-                btn.innerHTML = originalContent;
-                btn.disabled = false;
-            }, 2000);
-        }
+        settle(data);
     } catch (error) {
         console.error('Error checking status:', error);
-        btn.innerHTML = '<i class="fas fa-exclamation-triangle me-1"></i>Error';
-        setTimeout(() => {
-            btn.innerHTML = originalContent;
-            btn.disabled = false;
-        }, 2000);
-    } finally {
-        if (!queued && btn.disabled && btn.innerHTML.includes('Checking')) {
-            btn.innerHTML = originalContent;
-            btn.disabled = false;
-        }
+        settle(null);
     }
 }
 
@@ -2002,18 +1996,10 @@ function setActiveAiTab(tabName) {
     tab.show();
 }
 
-function openAiSection(tabName) {
-    setActiveAiTab(tabName || 'claude');
-    const section = document.getElementById('ai-analysis-section');
-    if (section && typeof section.scrollIntoView === 'function') {
-        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-}
-
-function analyzeWithClaude(landId) {
-    openAiSection('claude');
-    runClaudeAnalysis(landId);
-}
+// openAiSection() went with the "AI Analyses" button that was its only real
+// caller -- it scrolled to a section that already sits above that row. Its
+// other caller, analyzeWithClaude(), had none of its own and went with it.
+// setActiveAiTab() stays: runClaudeAnalysis() and the ChatGPT path use it.
 
 function runClaudeAnalysis(landId) {
     setActiveAiTab('claude');

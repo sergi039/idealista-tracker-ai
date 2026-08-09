@@ -198,11 +198,21 @@ class TestTheManualStatusOverrideIsGone:
 
 
 class TestCheckStatusIsOneButton:
-    def test_it_is_in_the_actions_row_and_appears_once(self, client, land):
+    def test_it_is_an_icon_beside_the_map_links_and_appears_once(self, client, land):
+        """It moved out of the actions row and up to the title, next to Google
+        Maps / Idealista / Our Maps (owner decision, 2026-08-09)."""
         body = client.get(f"/lands/{land}").get_data(as_text=True)
         assert body.count('id="check-listing-status-btn"') == 1
-        assert body.count("Check status") == 1
         assert "/api/land/${landId}/check-status" in body
+        icons = body[body.index('class="detail-link-icons') :]
+        icons = icons[: icons.index("</h1>")]
+        assert 'id="check-listing-status-btn"' in icons
+
+    def test_the_ai_analyses_shortcut_is_gone(self, client, land):
+        body = client.get(f"/lands/{land}").get_data(as_text=True)
+        assert "></i>AI Analyses" not in body, "the labelled button"
+        assert "function openAiSection" not in body
+        assert 'onclick="openAiSection' not in body
 
     def test_the_banner_no_longer_carries_its_own_copy(self, client, removed_land):
         """It used to be the only way to re-check, and only for removed or sold
