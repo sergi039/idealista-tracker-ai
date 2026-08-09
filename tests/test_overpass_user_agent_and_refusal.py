@@ -24,14 +24,23 @@ The behaviour pinned down here:
   retried with a backoff measured in tens of seconds, not the half-second
   default;
 * the marker survives `commit()`, and counts left from an earlier run are
-  carried with the age that lets the page label them stale.
+  carried with the age that lets the page label them stale;
+* a 200 whose body carries a `remark` -- how Overpass reports its own query
+  timeouts and out-of-memory failures -- is a refusal, not an empty answer,
+  and never reaches the seven-day cache.
 
-The last two come from the independent review of PR #144, which caught that
-the first version of this fix asserted only against the in-memory object:
-`Land.infrastructure_extended` is a plain `db.Column(JSON)` with no
-`MutableDict`, so mutating the loaded dict and assigning it back handed
+The last three come from the independent review of PR #144.
+
+It caught that the first version of this fix asserted only against the
+in-memory object: `Land.infrastructure_extended` is a plain `db.Column(JSON)`
+with no `MutableDict`, so mutating the loaded dict and assigning it back handed
 SQLAlchemy the same object twice, no UPDATE was emitted, and every marker was
 lost on commit. A test that never reloads cannot see that.
+
+It then caught that the fix still had a hole of exactly the kind it was written
+to close: Overpass signals a server-side failure *inside* a 200, and reading
+`elements` straight off such a body turns a timed-out query into "no amenities
+nearby" -- cached for a week.
 """
 
 import logging
@@ -44,6 +53,7 @@ import requests
 from app import create_app, db
 from models import Land, Property, SearchProfile
 from services.enrichment_service import (
+    OSM_REASON_QUERY_ERROR,
     OSM_STATE_OK,
     OSM_STATE_UNAVAILABLE,
     OSM_STATUS_KEY,
@@ -51,7 +61,11 @@ from services.enrichment_service import (
 )
 from tests import setup_test_environment
 from utils.cache import cache
-from utils.google_api import REASON_HTTP_ERROR, REASON_NETWORK_ERROR
+from utils.google_api import (
+    REASON_HTTP_ERROR,
+    REASON_MALFORMED_RESPONSE,
+    REASON_NETWORK_ERROR,
+)
 from utils.http import HTTP_USER_AGENT
 
 
@@ -236,6 +250,62 @@ class TestRefusalIsNotAnEmptyResult:
 
             assert failure is not None
             assert failure.reason == REASON_NETWORK_ERROR
+            infrastructure = row.infrastructure_extended or {}
+            assert "osm_amenities" not in infrastructure
+            assert infrastructure[OSM_STATUS_KEY]["state"] == OSM_STATE_UNAVAILABLE
+
+        mock_cache.assert_not_called()
+
+    @patch("services.enrichment_service.cache_enrichment_data")
+    @patch("services.enrichment_service.request_with_retries")
+    def test_a_200_carrying_a_remark_is_not_an_empty_answer(
+        self, mock_request, mock_cache, app, service, land
+    ):
+        """Overpass reports its own failures inside a 200.
+
+        A query that times out or runs out of memory comes back as HTTP 200
+        with a `remark` and an empty `elements`. Counting that as "nothing
+        within 2km" is exactly the defect this module exists to remove -- and
+        the seven-day cache would then keep serving it.
+        """
+        with app.app_context():
+            mock_request.return_value = _response(
+                payload={
+                    "version": 0.6,
+                    "elements": [],
+                    "remark": (
+                        'runtime error: Query timed out in "query" at line 3 '
+                        "after 25 seconds."
+                    ),
+                }
+            )
+
+            row = db.session.get(Land, land)
+            failure = service._enrich_with_osm_data(row)
+
+            assert failure is not None
+            assert failure.reason == OSM_REASON_QUERY_ERROR
+            infrastructure = row.infrastructure_extended or {}
+            assert "osm_amenities" not in infrastructure
+            assert infrastructure[OSM_STATUS_KEY]["state"] == OSM_STATE_UNAVAILABLE
+            assert infrastructure[OSM_STATUS_KEY]["reason"] == OSM_REASON_QUERY_ERROR
+
+        # Above all: a timed-out query must never reach the week-long cache.
+        mock_cache.assert_not_called()
+
+    @patch("services.enrichment_service.cache_enrichment_data")
+    @patch("services.enrichment_service.request_with_retries")
+    def test_a_200_without_an_elements_list_is_not_an_empty_answer(
+        self, mock_request, mock_cache, app, service, land
+    ):
+        with app.app_context():
+            mock_request.return_value = _response(payload={"version": 0.6})
+
+            row = db.session.get(Land, land)
+            failure = service._enrich_with_osm_data(row)
+
+            assert failure is not None
+            assert failure.reason == REASON_MALFORMED_RESPONSE
             infrastructure = row.infrastructure_extended or {}
             assert "osm_amenities" not in infrastructure
             assert infrastructure[OSM_STATUS_KEY]["state"] == OSM_STATE_UNAVAILABLE

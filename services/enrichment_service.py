@@ -30,6 +30,12 @@ OSM_STATUS_KEY = "osm_amenities_status"
 OSM_STATE_OK = "ok"
 OSM_STATE_UNAVAILABLE = "unavailable"
 
+# Overpass answers a server-side failure with HTTP 200 and a `remark` in the
+# body rather than an error status, so this reason exists to keep that case
+# distinguishable from the transport failures in utils.google_api. Persisted in
+# a JSON column and matched by tests: keep it stable.
+OSM_REASON_QUERY_ERROR = "overpass_query_error"
+
 
 class EnrichmentService:
     def __init__(self):
@@ -1025,10 +1031,38 @@ class EnrichmentService:
                     ),
                 )
 
+            # Overpass reports a server-side failure *inside a 200*: the body
+            # carries a `remark` ("runtime error: Query timed out in ...",
+            # "Query run out of memory") and, usually, an empty `elements`.
+            # Reading that as "nothing nearby" is the very defect this function
+            # exists to remove, and it would then be cached for a week.
+            remark = osm_data.get("remark")
+            if remark:
+                return self._osm_refusal(
+                    land,
+                    GoogleApiFailure(
+                        reason=OSM_REASON_QUERY_ERROR, message=str(remark)
+                    ),
+                )
+
+            # No `elements` at all is not an empty answer either - a well-formed
+            # Overpass result always carries the key, even when it is empty.
+            elements = osm_data.get("elements")
+            if not isinstance(elements, list):
+                return self._osm_refusal(
+                    land,
+                    GoogleApiFailure(
+                        reason=REASON_MALFORMED_RESPONSE,
+                        message="response carries no elements list",
+                    ),
+                )
+
             # Process OSM amenities as fallback data
             amenity_counts = {}
-            for element in osm_data.get("elements", []):
-                amenity = element.get("tags", {}).get("amenity")
+            for element in elements:
+                if not isinstance(element, dict):
+                    continue
+                amenity = (element.get("tags") or {}).get("amenity")
                 if amenity:
                     amenity_counts[amenity] = amenity_counts.get(amenity, 0) + 1
 
