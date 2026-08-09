@@ -2,15 +2,12 @@
 
 {% block title %}{{ t('properties') }} - {{ t('app_title') }}{% endblock %}
 
-{% block nav_primary_action %}
-<li class="nav-item me-2">
-    <a class="btn btn-outline-success btn-sm"
-       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort=current_filters.sort_by, order=current_filters.order) }}"
-       title="Download filtered data as CSV">
-        <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
-    </a>
-</li>
-{% endblock %}
+{# The navbar keeps its default action (Manual Sync). This page used to
+   override that slot with an Export CSV button while rendering a second
+   Export CSV above the list and a second Manual Sync in the page header --
+   both actions existed twice on one screen. Each of them lives in exactly
+   one place now: sync in the navbar, export beside the result count, where
+   it exports what the count is counting. #}
 
 {% block content %}
 {# Every in-page link has to carry the whole view state -- filters, scoring
@@ -152,385 +149,361 @@
 
 <div class="row">
     <div class="col-12">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1>
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+            <h1 class="h3 mb-0">
                 <i class="fas fa-map-marked-alt me-2"></i>
                 {{ t('properties') }}
-                <span class="badge bg-secondary">{{ pagination.total if pagination else 0 }}</span>
-                <small class="text-muted ms-3 fw-normal" style="font-size: 0.75rem;">
+                <small class="text-body-secondary ms-2 fw-normal properties-last-sync">
                     {{ t('last_sync') }}: <span id="last-sync">{{ t('loading') }}...</span>
                 </small>
             </h1>
 
-            <div class="d-flex align-items-center gap-2">
-                {# The map has to be reachable *with the current selection* --
-                   left to itself it resolves a subscription of its own. #}
-                <a class="btn btn-outline-secondary"
-                   href="{{ url_for('main.map_view', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None) }}"
-                   title="View properties on map">
-                    <i class="fas fa-map me-1"></i>Map
-                </a>
-                <button class="btn btn-success"
-                        hx-post="{{ url_for('api.manual_ingestion') }}"
-                        hx-trigger="click"
-                        hx-indicator="#ingestion-spinner">
-                    <i class="fas fa-sync-alt me-2"></i>{{ t('manual_sync') }}
-                </button>
-            </div>
+            {# The map has to be reachable *with the current selection* --
+               left to itself it resolves a subscription of its own. #}
+            <a class="btn btn-outline-secondary btn-sm"
+               href="{{ url_for('main.map_view', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None) }}"
+               title="View properties on map">
+                <i class="fas fa-map me-1"></i>Map
+            </a>
         </div>
 
-        {# The saved searches themselves, on the page rather than inside a
-           closed dropdown. The owner has two of them on idealista.com and
-           expects to see both named, with their counts, the way the site
-           lists them -- a control reading "All subscriptions" tells them
-           nothing about what they are subscribed to. The dropdown in the
-           filter bar stays for combinations and for the archive. #}
+        {# One subscription control, not two (2026-08-09). The saved searches
+           are chips, named and counted the way idealista.com lists them; the
+           menu beside them holds everything a chip cannot express -- several
+           subscriptions at once, the retired ones, and listings that carry no
+           subscription at all. The filter bar below used to repeat that whole
+           dropdown, and the archive had a second dropdown of its own up here.
+           Favorites and Hide removed sit on this row for the same reason:
+           they are one-click scope switches, not fields you fill in and
+           submit. #}
         {% set live_subscriptions = profile_options|selectattr('is_active')|list %}
-        <div class="d-flex flex-wrap align-items-center gap-2 mb-3" id="subscription-switcher">
-            <span class="text-body-secondary small me-1">
+        {% set archived_subscriptions = profile_options|rejectattr('is_active')|list %}
+        {% set live_ids = live_subscriptions|map(attribute='id')|list %}
+        {% set selected_option = (profile_options|selectattr('id', 'equalto', profile_selection.single_id)|first|default(none)) if profile_selection.single_id is not none else none %}
+        {# True when a chip already says what is on screen, so the menu must
+           not repeat it. Anything else -- a combination, the archive, the
+           unassigned rows, an empty selection -- is only visible here, so the
+           menu says it instead. #}
+        {% set chip_state = (profile_selection.state == 'all') or (profile_selection.single_id in live_ids and not profile_selection.include_unassigned) %}
+        {% if chip_state %}
+            {% set menu_label = 'More' %}
+        {% elif selected_option %}
+            {% set menu_label = selected_option.name %}
+        {% elif profile_selection.include_unassigned and not profile_selection.checked_ids %}
+            {% set menu_label = 'No subscription' %}
+        {% else %}
+            {% set menu_label = profile_selection.label %}
+        {% endif %}
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-2" id="subscription-switcher">
+            <span class="text-body-secondary small">
                 <i class="fas fa-envelope-open-text me-1"></i>{{ t('subscriptions') }} ({{ live_subscriptions|length }})
             </span>
-            <a class="btn btn-sm {{ 'btn-secondary' if profile_selection.state == 'all' else 'btn-outline-secondary' }}"
-               href="{{ url_for('main.properties', **dict(base_args, profile_id='all', page=1)) }}">
-                {{ t('all_subscriptions') }}
-            </a>
-            {% for option in live_subscriptions %}
-                <a class="btn btn-sm {{ 'btn-primary' if profile_selection.single_id == option.id else 'btn-outline-secondary' }}"
-                   href="{{ url_for('main.properties', **dict(base_args, profile_id=option.id, page=1)) }}"
-                   title="Show only this subscription">
-                    {{ option.name }}
-                    <span class="badge bg-body-tertiary text-body-secondary border ms-1">{{ option.count }}</span>
+            <div class="btn-group btn-group-sm properties-subscription-chips" role="group" aria-label="{{ t('subscriptions') }}">
+                <a class="btn {{ 'btn-primary' if profile_selection.state == 'all' else 'btn-outline-secondary' }}"
+                   href="{{ url_for('main.properties', **dict(base_args, profile_id='all', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">
+                    {{ t('all_subscriptions') }}
                 </a>
-            {% endfor %}
-            {% set archived_subscriptions = profile_options|rejectattr('is_active')|list %}
-            {% if archived_subscriptions %}
-                <div class="dropdown">
-                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle"
-                            type="button" id="archived-subscriptions" data-bs-toggle="dropdown" aria-expanded="false">
-                        <i class="fas fa-box-archive me-1"></i>{{ t('archive') }}
-                    </button>
-                    <ul class="dropdown-menu" aria-labelledby="archived-subscriptions">
-                        {% for option in archived_subscriptions %}
-                            <li>
-                                <a class="dropdown-item small {{ 'active' if profile_selection.single_id == option.id else '' }}"
-                                   href="{{ url_for('main.properties', **dict(base_args, profile_id=option.id, page=1)) }}">
+                {% for option in live_subscriptions %}
+                    <a class="btn {{ 'btn-primary' if profile_selection.single_id == option.id else 'btn-outline-secondary' }}"
+                       href="{{ url_for('main.properties', **dict(base_args, profile_id=option.id, page=1, sort=current_filters.sort_by, order=current_filters.order)) }}"
+                       title="Show only this subscription">
+                        <span class="properties-subscription-name">{{ option.name }}</span>
+                        <span class="badge bg-body-tertiary text-body-secondary border ms-1">{{ option.count }}</span>
+                    </a>
+                {% endfor %}
+            </div>
+
+            {# Combine several / archive / no subscription (#104). Its
+               checkboxes belong to the filter form below via `form=`, so
+               Apply still carries them with JavaScript switched off. #}
+            <div class="dropdown">
+                <button class="btn btn-sm {{ 'btn-outline-secondary' if chip_state else 'btn-primary' }} dropdown-toggle"
+                        type="button"
+                        id="profile-select-dropdown"
+                        data-bs-toggle="dropdown"
+                        data-bs-auto-close="outside"
+                        aria-expanded="false"
+                        title="Combine subscriptions, or open the archive">
+                    <span id="profile-select-label">{{ menu_label }}</span>
+                </button>
+                <div class="dropdown-menu p-2 properties-subscription-menu" id="profile-select-menu"
+                     aria-labelledby="profile-select-dropdown">
+                    <div>
+                        {# Nothing ticked usually means "all subscriptions" --
+                           but a form with nothing ticked submits no profile_id
+                           at all, which is indistinguishable from an old
+                           bookmark. This keeps the choice explicit; ticked
+                           boxes win over it, so the menu still narrows with
+                           JavaScript switched off. On an explicitly empty
+                           selection the value is the impossible marker
+                           instead, or pressing Apply for some other filter
+                           would widen the page to every subscription. #}
+                        <input type="hidden" name="profile_id" value="{{ profile_selection.form_fallback_value }}" form="filter-form">
+                        <div class="d-flex align-items-center justify-content-between mb-1">
+                            <span class="small text-body-secondary">{{ t('subscriptions') }}</span>
+                            <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none"
+                                    id="profile-select-clear">{{ t('all_subscriptions') }}</button>
+                        </div>
+                        {% for option in live_subscriptions %}
+                            <div class="form-check">
+                                <input class="form-check-input profile-select-option"
+                                       type="checkbox"
+                                       name="profile_id"
+                                       value="{{ option.id }}"
+                                       id="profile-option-{{ option.id }}"
+                                       form="filter-form"
+                                       {% if option.id in profile_selection.checked_ids %}checked{% endif %}>
+                                <label class="form-check-label small" for="profile-option-{{ option.id }}">
                                     {{ option.name }}
                                     <span class="text-body-secondary">({{ option.count }})</span>
-                                </a>
-                            </li>
+                                </label>
+                            </div>
+                        {% else %}
+                            <div class="small text-body-secondary">No active subscriptions yet.</div>
                         {% endfor %}
-                    </ul>
+                        {% if archived_subscriptions %}
+                            <hr class="my-2">
+                            <div class="small text-body-secondary mb-1">
+                                <i class="fas fa-box-archive me-1"></i>{{ t('archive') }}
+                            </div>
+                            <ul class="list-unstyled mb-0" id="archived-subscriptions">
+                                {% for option in archived_subscriptions %}
+                                    <li class="form-check">
+                                        <input class="form-check-input profile-select-option"
+                                               type="checkbox"
+                                               name="profile_id"
+                                               value="{{ option.id }}"
+                                               id="profile-option-{{ option.id }}"
+                                               form="filter-form"
+                                               {% if option.id in profile_selection.checked_ids %}checked{% endif %}>
+                                        <label class="form-check-label small" for="profile-option-{{ option.id }}">
+                                            {{ option.name }}
+                                            <span class="text-body-secondary">({{ option.count }})</span>
+                                            <span class="badge badge-neutral">{{ t('archive') }}</span>
+                                        </label>
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        {% endif %}
+                        {# A peer of the subscription list, not a member of it:
+                           these listings have no saved search, so "all" does
+                           not cover them and no id reaches them. Ingestion can
+                           legitimately produce them (issue #110), and this is
+                           their only way onto the page -- so it is offered
+                           only when there are some, or when it is ticked. #}
+                        {% if unassigned_count or profile_selection.include_unassigned %}
+                            <hr class="my-2">
+                            <div class="form-check">
+                                <input class="form-check-input profile-select-option"
+                                       type="checkbox"
+                                       name="profile_id"
+                                       value="unassigned"
+                                       id="profile-option-unassigned"
+                                       form="filter-form"
+                                       {% if profile_selection.include_unassigned %}checked{% endif %}>
+                                <label class="form-check-label small" for="profile-option-unassigned">
+                                    No subscription
+                                    <span class="text-body-secondary">({{ unassigned_count }})</span>
+                                </label>
+                            </div>
+                        {% endif %}
+                    </div>
                 </div>
+            </div>
+            {% if profile_selection.truncated %}
+                <span class="small text-warning-emphasis" id="profile-selection-truncated">
+                    Only the first {{ max_selected_profiles }} subscriptions of that
+                    selection are being shown.
+                </span>
             {% endif %}
+
+            {# Travel targets and the recalculation belong to one saved
+               search, so they only appear when exactly one is on screen --
+               beside the subscription they act on, not inside the filters. #}
+            {% if selected_profile_id %}
+                <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('main.edit_profile', profile_id=selected_profile_id) }}"
+                   title="Edit travel presets/targets for this subscription">
+                    <i class="fas fa-sliders-h me-1"></i>Edit subscription
+                </a>
+                <form method="POST" action="{{ url_for('main.recalculate_profile_travel', profile_id=selected_profile_id) }}" class="d-inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <input type="hidden" name="mode" value="all">
+                    <input type="hidden" name="limit" value="100">
+                    <button class="btn btn-outline-primary btn-sm" type="submit"
+                            title="Recalculate travel for up to 100 active properties in this subscription">
+                        <i class="fas fa-route me-1"></i>Recalculate travel
+                    </button>
+                </form>
+            {% endif %}
+
+            {# Two switches, not two form fields: they change what is on
+               screen straight away, the way the subscription chips do. The
+               filter form re-posts their state as hidden inputs so Apply
+               cannot silently switch them off. #}
+            <div class="ms-auto d-flex flex-wrap align-items-center gap-2">
+                <a class="btn btn-sm {{ 'btn-warning' if current_filters.favorites else 'btn-outline-secondary' }}"
+                   href="{{ url_for('main.properties', **dict(base_args, favorites=none if current_filters.favorites else 'on', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}"
+                   title="Show only the listings you starred"
+                   aria-pressed="{{ 'true' if current_filters.favorites else 'false' }}">
+                    <i class="fas fa-star me-1 {{ '' if current_filters.favorites else 'text-warning' }}"></i>{{ t('favorites') }}
+                </a>
+                <a class="btn btn-sm {{ 'btn-secondary' if current_filters.hide_removed else 'btn-outline-secondary' }}"
+                   href="{{ url_for('main.properties', **dict(base_args, hide_removed=none if current_filters.hide_removed else 'on', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}"
+                   title="Hide listings that were removed or sold"
+                   aria-pressed="{{ 'true' if current_filters.hide_removed else 'false' }}">
+                    <i class="fas fa-eye-slash me-1"></i>{{ t('hide_removed') }}
+                </a>
+            </div>
         </div>
 
         <!-- Filters -->
         <div class="card mb-3 filters-card" id="filters-card">
-            <div class="card-header py-2">
-                <h6 class="card-title mb-0">
-                    <i class="fas fa-filter me-2"></i>{{ t('filters_search') }}
-                </h6>
-            </div>
-            <div class="card-body py-2">
-                <form method="GET" id="filter-form">
+            <div class="card-body p-2">
+                {# One bar, no captions above the controls: every control
+                   names itself in its own first option ("All Types", "All
+                   Municipalities", "Inv. metr: all"), which is what let the
+                   panel shrink from five rows to one. Search leads it, on its
+                   own, because it is the control that is reached for first. #}
+                <form method="GET" id="filter-form" class="d-flex flex-wrap align-items-center gap-2">
                     <!-- Hidden inputs to preserve state -->
                     <input type="hidden" name="mode" value="{{ current_filters.mode or 'combined' }}">
                     <input type="hidden" name="view_type" value="{{ view_type }}">
+                    {# The two switches above are links, so their state has to
+                       travel with the form or pressing Apply would turn them
+                       off behind the owner's back. #}
+                    {% if current_filters.favorites %}
+                        <input type="hidden" name="favorites" value="on">
+                    {% endif %}
+                    {% if current_filters.hide_removed %}
+                        <input type="hidden" name="hide_removed" value="on">
+                    {% endif %}
 
-                    <!-- Row 1: Primary filters -->
-                    <div class="row g-2 align-items-end">
-                        <div class="col-12 col-lg-4">
-                            <label for="search" class="form-label small text-body-secondary mb-1">{{ t('search') }}</label>
-                            <input type="text" class="form-control form-control-sm" id="search" name="search"
-                                   value="{{ current_filters.search or '' }}"
-                                   placeholder="{{ t('search_properties') }}">
-                        </div>
-
-                        {# One control for every saved search (#104): all of them at
-                           once, or exactly the ones ticked. Live subscriptions first,
-                           retired ones under an Archive heading -- their listings are
-                           real and stay reachable, they are just not what arrives in
-                           the mail any more. #}
-                        <div class="col-12 col-lg-3">
-                            <label class="form-label small text-body-secondary mb-1" for="profile-select-dropdown">{{ t('subscription') }}</label>
-                            <div class="dropdown">
-                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle w-100 text-start d-flex justify-content-between align-items-center"
-                                        type="button"
-                                        id="profile-select-dropdown"
-                                        data-bs-toggle="dropdown"
-                                        data-bs-auto-close="outside"
-                                        aria-expanded="false">{{ profile_selection.label }}</button>
-                                <div class="dropdown-menu p-2" id="profile-select-menu"
-                                     style="min-width: 100%; max-height: 20rem; overflow-y: auto;">
-                                    {# Nothing ticked usually means "all subscriptions" --
-                                       but a form with nothing ticked submits no profile_id
-                                       at all, which is indistinguishable from an old
-                                       bookmark. This keeps the choice explicit; ticked
-                                       boxes win over it, so the dropdown still narrows
-                                       with JavaScript switched off. On an explicitly empty
-                                       selection the value is the impossible marker
-                                       instead, or pressing Apply for some other filter
-                                       would widen the page to every subscription. #}
-                                    <input type="hidden" name="profile_id" value="{{ profile_selection.form_fallback_value }}">
-                                    <button type="button" class="btn btn-link btn-sm p-0 mb-2 text-decoration-none"
-                                            id="profile-select-clear">{{ t('all_subscriptions') }}</button>
-                                    {% for option in profile_options if option.is_active %}
-                                        <div class="form-check">
-                                            <input class="form-check-input profile-select-option"
-                                                   type="checkbox"
-                                                   name="profile_id"
-                                                   value="{{ option.id }}"
-                                                   id="profile-option-{{ option.id }}"
-                                                   {% if option.id in profile_selection.checked_ids %}checked{% endif %}>
-                                            <label class="form-check-label small" for="profile-option-{{ option.id }}">
-                                                {{ option.name }}
-                                                <span class="text-body-secondary">({{ option.count }})</span>
-                                            </label>
-                                        </div>
-                                    {% else %}
-                                        <div class="small text-body-secondary">No active subscriptions yet.</div>
-                                    {% endfor %}
-                                    {% set archived = profile_options|rejectattr('is_active')|list %}
-                                    {% if archived %}
-                                        <hr class="my-2">
-                                        <div class="small text-body-secondary mb-1">
-                                            <i class="fas fa-box-archive me-1"></i>{{ t('archive') }}
-                                        </div>
-                                        {% for option in archived %}
-                                            <div class="form-check">
-                                                <input class="form-check-input profile-select-option"
-                                                       type="checkbox"
-                                                       name="profile_id"
-                                                       value="{{ option.id }}"
-                                                       id="profile-option-{{ option.id }}"
-                                                       {% if option.id in profile_selection.checked_ids %}checked{% endif %}>
-                                                <label class="form-check-label small" for="profile-option-{{ option.id }}">
-                                                    {{ option.name }}
-                                                    <span class="text-body-secondary">({{ option.count }})</span>
-                                                    <span class="badge badge-neutral">{{ t('archive') }}</span>
-                                                </label>
-                                            </div>
-                                        {% endfor %}
-                                    {% endif %}
-                                    {# A peer of the subscription list, not a member of it:
-                                       these listings have no saved search, so "all" does
-                                       not cover them and no id reaches them. Ingestion can
-                                       legitimately produce them (issue #110), and this is
-                                       their only way onto the page -- so it is offered
-                                       only when there are some, or when it is ticked. #}
-                                    {% if unassigned_count or profile_selection.include_unassigned %}
-                                        <hr class="my-2">
-                                        <div class="form-check">
-                                            <input class="form-check-input profile-select-option"
-                                                   type="checkbox"
-                                                   name="profile_id"
-                                                   value="unassigned"
-                                                   id="profile-option-unassigned"
-                                                   {% if profile_selection.include_unassigned %}checked{% endif %}>
-                                            <label class="form-check-label small" for="profile-option-unassigned">
-                                                No subscription
-                                                <span class="text-body-secondary">({{ unassigned_count }})</span>
-                                            </label>
-                                        </div>
-                                    {% endif %}
-                                </div>
-                            </div>
-                            {% if profile_selection.truncated %}
-                                <div class="form-text text-warning-emphasis" id="profile-selection-truncated">
-                                    Only the first {{ max_selected_profiles }} subscriptions of that
-                                    selection are being shown.
-                                </div>
-                            {% endif %}
-                        </div>
-
-                        <div class="col-6 col-lg-3">
-                            <label for="category" class="form-label small text-body-secondary mb-1">{{ t('type')|title }}</label>
-                            <div class="input-group input-group-sm">
-                                {# The choices come from the subscriptions on screen, not from
-                                   the whole table, so a saved search for land stops offering
-                                   `apartment`. "Unclassified" follows the "No subscription"
-                                   rule above: offered only when such rows exist here, or when
-                                   the filter is already on it. #}
-                                <select class="form-select" id="category" name="category" aria-label="Category">
-                                    <option value="">{{ t('land_type_all') }}</option>
-                                    {% if has_unclassified_category or current_filters.category == '__none__' %}
-                                        <option value="__none__" {{ 'selected' if current_filters.category == '__none__' }}>Unclassified</option>
-                                    {% endif %}
-                                    {% for c in categories %}
-                                        <option value="{{ c }}" {{ 'selected' if current_filters.category == c }}>{{ c }}</option>
-                                    {% endfor %}
-                                </select>
-                                <select class="form-select" id="subtype" name="subtype" aria-label="Subtype">
-                                    <option value="">All subtypes</option>
-                                    {% if has_unclassified_subtype or current_filters.subtype == '__none__' %}
-                                        <option value="__none__" {{ 'selected' if current_filters.subtype == '__none__' }}>Unclassified</option>
-                                    {% endif %}
-                                    {% for s in subtypes %}
-                                        <option value="{{ s }}" {{ 'selected' if current_filters.subtype == s }}>{{ s }}</option>
-                                    {% endfor %}
-                                </select>
-                            </div>
-                        </div>
-
-                        <div class="col-6 col-lg-2">
-                            <label for="municipality" class="form-label small text-body-secondary mb-1">{{ t('municipality') }}</label>
-                            <select class="form-select form-select-sm" id="municipality" name="municipality">
-                                <option value="">{{ t('all_municipalities') }}</option>
-                                {% for municipality in municipalities %}
-                                    <option value="{{ municipality }}"
-                                            {{ 'selected' if current_filters.municipality == municipality }}>
-                                        {{ municipality }}
-                                    </option>
-                                {% endfor %}
-                            </select>
-                        </div>
+                    <div class="input-group input-group-sm properties-filter-search">
+                        <span class="input-group-text" aria-hidden="true"><i class="fas fa-search"></i></span>
+                        <input type="text" class="form-control" id="search" name="search"
+                               value="{{ current_filters.search or '' }}"
+                               aria-label="{{ t('search') }}"
+                               placeholder="{{ t('search_properties') }}">
                     </div>
 
-                    <!-- Row 2: Options + sort + actions -->
-                    <div class="row g-2 align-items-end mt-1">
-                        <div class="col-12 col-lg-4">
-                            <label class="form-label small text-body-secondary mb-1">Options</label>
-                            <div class="d-flex flex-wrap gap-3">
-                                <div class="form-check form-check-inline m-0">
-                                    <input class="form-check-input" type="checkbox" id="favorites" name="favorites"
-                                           {{ 'checked' if current_filters.favorites }}>
-                                    <label class="form-check-label small" for="favorites">
-                                        <i class="fas fa-star me-1 text-warning"></i>Favorites
-                                    </label>
-                                </div>
-                                <div class="form-check form-check-inline m-0">
-                                    <input class="form-check-input" type="checkbox" id="hide_removed" name="hide_removed"
-                                           {{ 'checked' if current_filters.hide_removed }}>
-                                    <label class="form-check-label small" for="hide_removed">
-                                        <i class="fas fa-eye-slash me-1 text-muted"></i>Hide removed
-                                    </label>
-                                </div>
-                            </div>
-                        </div>
+                    <div class="vr d-none d-xl-block my-1"></div>
 
-                        {# Sea view is a four-state verdict, not a flag: `yes` needs the
-                           listing text and the terrain to agree, `likely` is one source
-                           unopposed, and `unknown` -- an approximate coordinate, or a
-                           source that refused -- is never quietly counted as a match.
-                           See services/sea_view_service.py.
+                    <div class="input-group input-group-sm properties-filter-type">
+                        {# The choices come from the subscriptions on screen, not from
+                           the whole table, so a saved search for land stops offering
+                           `apartment`. "Unclassified" follows the "No subscription"
+                           rule in the menu above: offered only when such rows exist
+                           here, or when the filter is already on it. #}
+                        <select class="form-select" id="category" name="category" aria-label="{{ t('type')|title }}">
+                            <option value="">{{ t('land_type_all') }}</option>
+                            {% if has_unclassified_category or current_filters.category == '__none__' %}
+                                <option value="__none__" {{ 'selected' if current_filters.category == '__none__' }}>Unclassified</option>
+                            {% endif %}
+                            {% for c in categories %}
+                                <option value="{{ c }}" {{ 'selected' if current_filters.category == c }}>{{ c }}</option>
+                            {% endfor %}
+                        </select>
+                        <select class="form-select" id="subtype" name="subtype" aria-label="Subtype">
+                            <option value="">All subtypes</option>
+                            {% if has_unclassified_subtype or current_filters.subtype == '__none__' %}
+                                <option value="__none__" {{ 'selected' if current_filters.subtype == '__none__' }}>Unclassified</option>
+                            {% endif %}
+                            {% for s in subtypes %}
+                                <option value="{{ s }}" {{ 'selected' if current_filters.subtype == s }}>{{ s }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
 
-                           Beach distance is still missing and for a different reason:
-                           it needs Google Distance Matrix, and per #98 not one row holds
-                           a travel time. Sea view needs no paid API, which is why it
-                           came back on its own. #}
-                        <div class="col-6 col-lg-3">
-                            <label for="sea_view" class="form-label small text-body-secondary mb-1">
-                                <i class="fas fa-water me-1"></i>{{ t('sea_view') }}
-                            </label>
-                            <select class="form-select form-select-sm" id="sea_view" name="sea_view">
-                                <option value="" {{ 'selected' if not current_filters.sea_view }}>{{ t('sea_view_any') }}</option>
-                                <option value="yes" {{ 'selected' if current_filters.sea_view == 'yes' }}>{{ t('sea_view_confirmed') }}</option>
-                                <option value="likely" {{ 'selected' if current_filters.sea_view in ('likely', 'on') }}>{{ t('sea_view_yes_or_likely') }}</option>
-                            </select>
-                        </div>
+                    <select class="form-select form-select-sm properties-filter-select" id="municipality" name="municipality"
+                            aria-label="{{ t('municipality') }}">
+                        <option value="">{{ t('all_municipalities') }}</option>
+                        {% for municipality in municipalities %}
+                            <option value="{{ municipality }}"
+                                    {{ 'selected' if current_filters.municipality == municipality }}>
+                                {{ municipality }}
+                            </option>
+                        {% endfor %}
+                    </select>
 
-                        <div class="col-6 col-lg-2">
-                            <label for="inv_metr" class="form-label small text-body-secondary mb-1">Inv. Metr.</label>
-                            <select class="form-select form-select-sm" id="inv_metr" name="inv_metr">
-                                <option value="" {{ 'selected' if not current_filters.inv_metr }}>All</option>
-                                <option value="EXCELLENT" {{ 'selected' if current_filters.inv_metr == 'EXCELLENT' }}>Excellent</option>
-                                <option value="GOOD" {{ 'selected' if current_filters.inv_metr == 'GOOD' }}>Good</option>
-                                <option value="MODERATE" {{ 'selected' if current_filters.inv_metr == 'MODERATE' }}>Moderate</option>
-                                <option value="BELOW" {{ 'selected' if current_filters.inv_metr == 'BELOW' }}>Below</option>
-                            </select>
-                        </div>
+                    {# Sea view is a four-state verdict, not a flag: `yes` needs the
+                       listing text and the terrain to agree, `likely` is one source
+                       unopposed, and `unknown` -- an approximate coordinate, or a
+                       source that refused -- is never quietly counted as a match.
+                       See services/sea_view_service.py.
 
-                        <div class="col-6 col-lg-3">
-                            <label for="sort" class="form-label small text-body-secondary mb-1">{{ t('sort_by') }}</label>
-                            <div class="input-group input-group-sm">
-                                <select class="form-select" id="sort" name="sort">
-                                    {% if current_filters.mode == 'investment' %}
-                                        <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>&#128188; Investment Score</option>
-                                        <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>&#127969; Lifestyle Score</option>
-                                        <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>Combined Score</option>
-                                    {% elif current_filters.mode == 'lifestyle' %}
-                                        <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>&#127969; Lifestyle Score</option>
-                                        <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>&#128188; Investment Score</option>
-                                        <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>Combined Score</option>
-                                    {% else %}
-                                        <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>Combined Score</option>
-                                        <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>&#128188; Investment Score</option>
-                                        <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>&#127969; Lifestyle Score</option>
-                                    {% endif %}
-                                    <option value="price" {{ 'selected' if current_filters.sort_by == 'price' }}>{{ t('price') }}</option>
-                                    <option value="area" {{ 'selected' if current_filters.sort_by == 'area' }}>{{ t('area') }}</option>
-                                    <option value="investment_metrics" {{ 'selected' if current_filters.sort_by == 'investment_metrics' }}>Inv. Metr.</option>
-                                    <option value="title" {{ 'selected' if current_filters.sort_by == 'title' }}>{{ t('title')|title }}</option>
-                                    <option value="created_at" {{ 'selected' if current_filters.sort_by == 'created_at' }}>{{ t('date_added') }}</option>
-                                    {# No beach travel time exists on `Property` (#98). #}
-                                    <option value="travel_time_nearest_beach" disabled>{{ t('beach_distance') }} &mdash; unavailable (#98)</option>
-                                </select>
-                                <select class="form-select" name="order" style="max-width: 90px;">
-                                    <option value="desc" {{ 'selected' if current_filters.order == 'desc' }}>↓</option>
-                                    <option value="asc" {{ 'selected' if current_filters.order == 'asc' }}>↑</option>
-                                </select>
-                            </div>
-                        </div>
+                       Beach distance is still missing and for a different reason:
+                       it needs Google Distance Matrix, and per #98 not one row holds
+                       a travel time. Sea view needs no paid API, which is why it
+                       came back on its own. #}
+                    <select class="form-select form-select-sm properties-filter-select" id="sea_view" name="sea_view"
+                            aria-label="{{ t('sea_view') }}">
+                        <option value="" {{ 'selected' if not current_filters.sea_view }}>{{ t('sea_view_any') }}</option>
+                        <option value="yes" {{ 'selected' if current_filters.sea_view == 'yes' }}>{{ t('sea_view_confirmed') }}</option>
+                        <option value="likely" {{ 'selected' if current_filters.sea_view in ('likely', 'on') }}>{{ t('sea_view_yes_or_likely') }}</option>
+                    </select>
 
-                        <div class="col-12 col-lg-3 d-flex flex-wrap align-items-end justify-content-lg-end gap-2">
-                            <button type="submit" class="btn btn-primary btn-sm">
-                                <i class="fas fa-search me-1"></i>{{ t('apply') }}
-                            </button>
-                            <a href="{{ url_for('main.properties') }}" class="btn btn-outline-secondary btn-sm">
-                                <i class="fas fa-times me-1"></i>{{ t('clear') }}
-                            </a>
+                    <select class="form-select form-select-sm properties-filter-select" id="inv_metr" name="inv_metr"
+                            aria-label="Investment metrics rating">
+                        <option value="" {{ 'selected' if not current_filters.inv_metr }}>Inv. metr: all</option>
+                        <option value="EXCELLENT" {{ 'selected' if current_filters.inv_metr == 'EXCELLENT' }}>Inv. metr: excellent</option>
+                        <option value="GOOD" {{ 'selected' if current_filters.inv_metr == 'GOOD' }}>Inv. metr: good</option>
+                        <option value="MODERATE" {{ 'selected' if current_filters.inv_metr == 'MODERATE' }}>Inv. metr: moderate</option>
+                        <option value="BELOW" {{ 'selected' if current_filters.inv_metr == 'BELOW' }}>Inv. metr: below</option>
+                    </select>
 
-                            <div class="btn-group btn-group-sm" role="group" aria-label="View type">
-                                <a id="view-list-btn"
-                                   class="btn btn-outline-secondary {{ 'active' if view_type == 'list' else '' }}"
-                                   href="{{ url_for('main.properties', **dict(base_args, view_type='list', sort=current_filters.sort_by, order=current_filters.order)) }}"
-                                   title="Table view - Compact data in rows">
-                                    <i class="fas fa-list"></i>
-                                </a>
-                                <a id="view-cards-btn"
-                                   class="btn btn-outline-secondary {{ 'active' if view_type == 'cards' else '' }}"
-                                   href="{{ url_for('main.properties', **dict(base_args, view_type='cards', sort=current_filters.sort_by, order=current_filters.order)) }}"
-                                   title="Card view - Visual property cards">
-                                    <i class="fas fa-th-large"></i>
-                                </a>
-                            </div>
-                        </div>
+                    <div class="input-group input-group-sm properties-filter-sort">
+                        <span class="input-group-text" title="{{ t('sort_by') }}" aria-hidden="true">
+                            <i class="fas fa-arrow-down-wide-short"></i>
+                        </span>
+                        <select class="form-select" id="sort" name="sort" aria-label="{{ t('sort_by') }}">
+                            {% if current_filters.mode == 'investment' %}
+                                <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>&#128188; Investment Score</option>
+                                <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>&#127969; Lifestyle Score</option>
+                                <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>Combined Score</option>
+                            {% elif current_filters.mode == 'lifestyle' %}
+                                <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>&#127969; Lifestyle Score</option>
+                                <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>&#128188; Investment Score</option>
+                                <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>Combined Score</option>
+                            {% else %}
+                                <option value="score_total" {{ 'selected' if current_filters.sort_by == 'score_total' }}>Combined Score</option>
+                                <option value="score_investment" {{ 'selected' if current_filters.sort_by == 'score_investment' }}>&#128188; Investment Score</option>
+                                <option value="score_lifestyle" {{ 'selected' if current_filters.sort_by == 'score_lifestyle' }}>&#127969; Lifestyle Score</option>
+                            {% endif %}
+                            <option value="price" {{ 'selected' if current_filters.sort_by == 'price' }}>{{ t('price') }}</option>
+                            <option value="area" {{ 'selected' if current_filters.sort_by == 'area' }}>{{ t('area') }}</option>
+                            <option value="investment_metrics" {{ 'selected' if current_filters.sort_by == 'investment_metrics' }}>Inv. Metr.</option>
+                            <option value="title" {{ 'selected' if current_filters.sort_by == 'title' }}>{{ t('title')|title }}</option>
+                            <option value="created_at" {{ 'selected' if current_filters.sort_by == 'created_at' }}>{{ t('date_added') }}</option>
+                            {# No beach travel time exists on `Property` (#98). #}
+                            <option value="travel_time_nearest_beach" disabled>{{ t('beach_distance') }} &mdash; unavailable (#98)</option>
+                        </select>
+                        <select class="form-select properties-filter-order" name="order" aria-label="Sort direction">
+                            <option value="desc" {{ 'selected' if current_filters.order == 'desc' }}>↓</option>
+                            <option value="asc" {{ 'selected' if current_filters.order == 'asc' }}>↑</option>
+                        </select>
+                    </div>
+
+                    <div class="d-flex align-items-center gap-2 ms-auto">
+                        <button type="submit" class="btn btn-primary btn-sm">
+                            <i class="fas fa-search me-1"></i>{{ t('apply') }}
+                        </button>
+                        <a href="{{ url_for('main.properties') }}" class="btn btn-outline-secondary btn-sm"
+                           title="Clear every filter">
+                            <i class="fas fa-times me-1"></i>{{ t('clear') }}
+                        </a>
                     </div>
                 </form>
-
-                {# Per-subscription actions. Travel targets and the recalculation
-                   belong to one saved search, so they only appear when exactly one
-                   is on screen -- and when several are, the page says why instead
-                   of leaving the reader wondering. #}
-                {% if selected_profile_id %}
-                    <div class="d-flex flex-wrap gap-2 mt-2 pt-2 border-top">
-                        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('main.edit_profile', profile_id=selected_profile_id) }}"
-                           title="Edit travel presets/targets for this subscription">
-                            <i class="fas fa-sliders-h me-1"></i>Edit subscription
-                        </a>
-                        <form method="POST" action="{{ url_for('main.recalculate_profile_travel', profile_id=selected_profile_id) }}" class="d-inline">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                            <input type="hidden" name="mode" value="all">
-                            <input type="hidden" name="limit" value="100">
-                            <button class="btn btn-outline-primary btn-sm" type="submit"
-                                    title="Recalculate travel for up to 100 active properties in this subscription">
-                                <i class="fas fa-route me-1"></i>Recalculate travel
-                            </button>
-                        </form>
-                    </div>
-                {% elif profile_selection.withholds_profile_travel %}
-                    <div class="small text-body-secondary mt-2 pt-2 border-top" id="profile-travel-notice">
-                        <i class="fas fa-circle-info me-1"></i>{{ profile_selection.travel_notice }}
-                    </div>
-                {% endif %}
             </div>
         </div>
 
-        {# Outside the "any rows?" branch on purpose: the scoring modes and the
-           export are view controls, and a filter that happens to match nothing
-           must not take them off the page. #}
-        <div class="mb-3 d-flex justify-content-between align-items-center">
-                <div>
+        {# Outside the "any rows?" branch on purpose: the scoring modes, the
+           view switch and the export are view controls, and a filter that
+           happens to match nothing must not take them off the page. The view
+           switch sits here with the other display controls rather than in the
+           filter bar -- it changes how the same rows are drawn, it does not
+           change which rows they are. #}
+        <div class="mb-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <div class="d-flex flex-wrap align-items-center gap-2">
                     <strong>{{ pagination.total if pagination else properties|length }} {{ t('properties_found') }}</strong>
                     {# Whether that total covers the listings with no subscription
                        at all (issue #111). `all` means every *active* subscription,
@@ -549,8 +522,13 @@
                                     href="{{ url_for('main.properties', **dict(base_args, profile_id='unassigned', page=1)) }}">show them</a>)</span>
                         {% endif %}
                     {% endif %}
+                    {% if not selected_profile_id and profile_selection.withholds_profile_travel %}
+                        <span class="small text-body-secondary" id="profile-travel-notice">
+                            <i class="fas fa-circle-info me-1"></i>{{ profile_selection.travel_notice }}
+                        </span>
+                    {% endif %}
                 </div>
-                <div class="d-flex align-items-center gap-3">
+                <div class="d-flex align-items-center gap-2">
                     <!-- Compact Mode Toggle Buttons -->
                     <div class="btn-group btn-group-sm" role="group" aria-label="Analysis mode">
                         <a id="mode-combined-btn"
@@ -572,10 +550,24 @@
                             <i class="fas fa-home"></i>
                         </a>
                     </div>
+                    <div class="btn-group btn-group-sm" role="group" aria-label="View type">
+                        <a id="view-list-btn"
+                           class="btn btn-outline-secondary {{ 'active' if view_type == 'list' else '' }}"
+                           href="{{ url_for('main.properties', **dict(base_args, view_type='list', sort=current_filters.sort_by, order=current_filters.order)) }}"
+                           title="Table view - Compact data in rows">
+                            <i class="fas fa-list"></i>
+                        </a>
+                        <a id="view-cards-btn"
+                           class="btn btn-outline-secondary {{ 'active' if view_type == 'cards' else '' }}"
+                           href="{{ url_for('main.properties', **dict(base_args, view_type='cards', sort=current_filters.sort_by, order=current_filters.order)) }}"
+                           title="Card view - Visual property cards">
+                            <i class="fas fa-th-large"></i>
+                        </a>
+                    </div>
                     <a class="btn btn-success btn-sm"
                        href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort=current_filters.sort_by, order=current_filters.order) }}"
-                       title="Export the filtered rows to CSV">
-                        <i class="fas fa-download me-1"></i>Export CSV
+                       title="Download filtered data as CSV">
+                        <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
                     </a>
                 </div>
         </div>
@@ -1032,22 +1024,29 @@
 
 {% block scripts %}
 <script>
-    // Subscription dropdown (issue #104). Progressive enhancement only: the
+    // Subscription menu (issue #104). Progressive enhancement only: the
     // server reads the ticked checkboxes on its own, so with JavaScript off
-    // the dropdown still filters -- it just keeps the redundant
+    // the menu still filters -- it just keeps the redundant
     // `profile_id=all` fallback in the URL and shows a stale button label.
     (function () {
         const toggle = document.getElementById('profile-select-dropdown');
         const menu = document.getElementById('profile-select-menu');
+        const label = document.getElementById('profile-select-label') || toggle;
+        const form = document.getElementById('filter-form');
         if (!toggle || !menu) {
             return;
         }
         const fallback = menu.querySelector('input[type="hidden"][name="profile_id"]');
         const options = Array.from(menu.querySelectorAll('input.profile-select-option'));
 
+        function ticked() {
+            return options.filter(option => option.checked).map(option => option.value).join(',');
+        }
+        let applied = ticked();
+
         function refresh() {
             const checked = options.filter(option => option.checked);
-            toggle.textContent = checked.length ? checked.length + ' selected' : 'All subscriptions';
+            label.textContent = checked.length ? checked.length + ' selected' : 'All subscriptions';
             if (fallback) {
                 // A disabled input is not submitted, so the fallback only
                 // travels when nothing is ticked -- which is exactly when it
@@ -1067,6 +1066,22 @@
             clear.addEventListener('click', function () {
                 options.forEach(option => { option.checked = false; });
                 refresh();
+            });
+        }
+
+        // The menu sits beside the subscription chips now, outside the filter
+        // form, so the form's auto-submit no longer sees these boxes -- which
+        // is what makes ticking several of them possible in the first place.
+        // Closing the menu is the moment the selection is finished, so that is
+        // when it is applied; Apply in the filter bar does the same thing for
+        // anyone who never opens it.
+        const dropdown = toggle.closest('.dropdown');
+        if (dropdown && form) {
+            dropdown.addEventListener('hidden.bs.dropdown', function () {
+                if (ticked() !== applied) {
+                    applied = ticked();
+                    form.submit();
+                }
             });
         }
 
