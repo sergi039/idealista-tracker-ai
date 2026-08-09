@@ -505,6 +505,23 @@
         <div class="mb-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
                 <div class="d-flex flex-wrap align-items-center gap-2">
                     <strong>{{ pagination.total if pagination else properties|length }} {{ t('properties_found') }}</strong>
+                    {# Whether that total covers the listings with no subscription
+                       at all (issue #111). `all` means every *active* subscription,
+                       so those rows are outside every selection but their own --
+                       a bare total would be a claim the page cannot back up. The
+                       count is computed under the filters currently applied, and
+                       the link replaces the subscription selection rather than
+                       adding to it, so the number disclosed here is the number
+                       that page shows. #}
+                    {% if unassigned_count %}
+                        {% if profile_selection.include_unassigned %}
+                            <span id="unassigned-count-note" class="text-body-secondary small">(includes {{ unassigned_count }} with no subscription)</span>
+                        {% else %}
+                            <span id="unassigned-count-note" class="text-body-secondary small">&mdash; {{ unassigned_count }} with no subscription not shown
+                                (<a id="unassigned-count-link"
+                                    href="{{ url_for('main.properties', **dict(base_args, profile_id='unassigned', page=1)) }}">show them</a>)</span>
+                        {% endif %}
+                    {% endif %}
                     {% if not selected_profile_id and profile_selection.withholds_profile_travel %}
                         <span class="small text-body-secondary" id="profile-travel-notice">
                             <i class="fas fa-circle-info me-1"></i>{{ profile_selection.travel_notice }}

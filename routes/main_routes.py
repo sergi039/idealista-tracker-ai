@@ -552,9 +552,10 @@ def properties():
         per_page = request.args.get("per_page", 25, type=int)
         per_page = min(max(per_page, 10), 100)
 
-        query = apply_profile_filter(
-            Property.query, Property.search_profile_id, profile_selection
-        )
+        # The subscription filter is applied *last* (below, after every other
+        # filter), so `unassigned_count` can branch off the same base query.
+        # See the comment there for why the order matters.
+        query = Property.query
 
         if category_filter:
             if category_filter == UNCLASSIFIED_FILTER:
@@ -593,6 +594,24 @@ def properties():
 
         if hide_removed_filter:
             query = query.filter(Property.listing_status.notin_(["removed", "sold"]))
+
+        # Listings with no subscription at all (issue #111). They are invisible
+        # to every profile selection including `all`, so the page has to say
+        # whether its total covers them -- and the number it discloses has to
+        # be the number the "show them" link lands on. That is why this counts
+        # off the query with every *other* filter already applied and the
+        # subscription filter not yet: SQLAlchemy queries are immutable, so the
+        # two branches cannot drift the way a second hand-written filter chain
+        # would.
+        #
+        # This is the page's only unassigned count: the "No subscription" entry
+        # in the subscription dropdown (#104/#112) reads the same number, so
+        # the option, the disclosure next to the total and the page the link
+        # lands on cannot state three different figures under one filter.
+        unassigned_count = query.filter(Property.search_profile_id.is_(None)).count()
+        query = apply_profile_filter(
+            query, Property.search_profile_id, profile_selection
+        )
 
         # Sorting (safe allow-list). An unknown sort -- an old /lands bookmark
         # asking for travel_time_nearest_beach, say -- falls back to the
@@ -676,10 +695,7 @@ def properties():
             profiles=profiles,
             profile_options=_profile_dropdown_options(profiles, profile_selection),
             profile_names=profile_names,
-            unassigned_count=db.session.query(func.count(Property.id))
-            .filter(Property.search_profile_id.is_(None))
-            .scalar()
-            or 0,
+            unassigned_count=unassigned_count,
             max_selected_profiles=MAX_SELECTED_PROFILE_IDS,
             selected_profile_id=selected_profile_id,
             profile_selection=profile_selection,
@@ -716,6 +732,8 @@ def properties():
             profiles=[],
             profile_options=[],
             profile_names={},
+            # The page failed before it could count anything; claiming a number
+            # here would be worse than the missing disclosure.
             unassigned_count=0,
             max_selected_profiles=MAX_SELECTED_PROFILE_IDS,
             selected_profile_id=None,
@@ -862,7 +880,10 @@ def profiles():
         # Ensure at least one profile exists.
         SearchProfileService.get_default_profile(create=True)
         profiles = SearchProfileService.list_profiles(active_only=False)
-        # Lightweight properties count per profile for display.
+        # Lightweight properties count per profile for display. The NULL bucket
+        # is taken off the same group-by rather than dropped (issue #111): a
+        # column of per-profile counts that silently sums to less than the
+        # table is the page telling the reader something untrue.
         counts = {
             pid: cnt
             for pid, cnt in db.session.query(
@@ -870,17 +891,20 @@ def profiles():
             )
             .group_by(Property.search_profile_id)
             .all()
-            if pid is not None
         }
+        unassigned_count = counts.pop(None, 0)
         return render_template(
             "profiles.html",
             profiles=profiles,
             property_counts=counts,
+            unassigned_count=unassigned_count,
         )
     except Exception:
         logger.error("Failed to load profiles page", exc_info=True)
         flash("An error occurred while loading profiles. Check server logs.", "error")
-        return render_template("profiles.html", profiles=[], property_counts={})
+        return render_template(
+            "profiles.html", profiles=[], property_counts={}, unassigned_count=0
+        )
 
 
 @main_bp.route("/profiles/new", methods=["GET", "POST"])
