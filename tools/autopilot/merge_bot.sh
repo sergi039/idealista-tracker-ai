@@ -171,9 +171,10 @@ ci_is_green() {
     # SKIPPED and NEUTRAL are tolerated *alongside* real results, never instead
     # of them: a run where every check skipped verifies exactly as much as a run
     # with no checks at all, and must not read as green.
-    local required state missing=0
+    local required state missing=0 seen=0
     while IFS= read -r required; do
         [ -n "$required" ] || continue
+        seen=$((seen + 1))
         state="$(printf '%s' "$checks" \
             | jq -r --arg n "$required" '[.[] | select(.name == $n) | .state] | first // "MISSING"')"
         if [ "$state" != "SUCCESS" ]; then
@@ -181,6 +182,20 @@ ci_is_green() {
             missing=1
         fi
     done <<<"$(required_checks)"
+
+    # An empty list is not "everything passed", it is "nobody said what has to
+    # pass". This whole file treats protection as the authority on that, so an
+    # authority with nothing to say leaves the bot with no gate at all: the loop
+    # above would run zero times and any PR carrying one unrelated green check
+    # would merge without pytest. Protection can return `contexts: []` from a
+    # half-configured branch or an API hiccup, and neither is a reason to merge.
+    if [ "$seen" = "0" ]; then
+        log "  PR #${pr}: ${BASE_BRANCH} protection lists no required checks - refusing."
+        log "            With nothing declared required there is nothing to verify;"
+        log "            a green tick from an unrelated job is not a CI gate."
+        return 1
+    fi
+
     [ "$missing" = "0" ]
 }
 
