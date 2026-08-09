@@ -51,13 +51,31 @@ pinned version for CI, the hook and you. Rule selection is explicit in
 not stable across releases — do not delete it expecting the default to be
 equivalent.
 
-**Working UI is `/lands`** (owner decision, 2026-08-07): the lands view —
-cards/list with Land Type, Sea View and to-beach filters — is what the app
-serves from `/`. The universal `/properties` page and its search-profile
-model still exist and stay wired up, but they are an **archived view**
-(linked in the navbar as "Universal (archive)"); do not build new work on
-them without asking. Both read the same database: `lands` holds the 168
-land rows, `properties` mirrors them under the "Legacy Lands" profile.
+**Working UI is `/properties`** (owner decision, 2026-08-08, issue #105 —
+this *supersedes* the 2026-08-07 decision that named `/lands`): `/` and the
+navbar point at `/properties`, and that is where new work goes. The reason
+is where the data is. `lands` froze at 168 rows with nothing newer than
+2026-02-18; every ingested listing goes to `properties`
+(`INGESTION_TARGET` defaults to it), and of the 182 rows that arrived after
+the mirror, 77 are houses — which the legacy `Land` model cannot represent
+at all, so switching ingestion back was rejected.
+
+`/lands` stays reachable and working, linked in the navbar as "Lands
+(archive)" and carrying an archive banner; do not delete it, and do not
+build new work on it. Both views read the same database: `lands` holds the
+168 legacy rows and `properties` mirrors them under the "Legacy Lands"
+profile alongside everything newer.
+
+`/properties` carries the controls the owner actually used on `/lands`: the
+cards/list toggle (`view_type`), the combined/investment/lifestyle modes
+(`mode`, with `score_total` / `score_investment` / `score_lifestyle`), and
+the investment-rating filter (`inv_metr`). A bare `/properties` still sorts
+by date so the freshest listings stay on top. **Sea View and the "to beach"
+sort are deliberately rendered as unavailable, not implemented**: `Property`
+has no sea-view field and no beach travel target, and per issue #98 not one
+of the 350 rows holds a single travel time (Google billing is off). Do not
+"fix" that by wiring the controls to empty data — they come back when #98
+does.
 
 The dual-build isolation contract
 from the transition — legacy on 5001 vs universal on 5050, unique Docker

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Properties - {{ t('app_title') }}{% endblock %}
+{% block title %}Lands (archive) - {{ t('app_title') }}{% endblock %}
 
 {% block nav_primary_action %}
 <li class="nav-item me-2">
@@ -19,6 +19,17 @@
    wrong city on top of Oviedo/Gijón numbers. #}
 {% set ref_city_a = {'name': 'Oviedo', 'abbr': 'OV', 'lat': 43.3619, 'lon': -5.8494} %}
 {% set ref_city_b = {'name': 'Gijón', 'abbr': 'GJ', 'lat': 43.5322, 'lon': -5.6611} %}
+<div class="alert alert-secondary d-flex align-items-start gap-2" role="note">
+    <i class="fas fa-box-archive mt-1"></i>
+    <div>
+        <strong>Archive.</strong>
+        This is the legacy <code>lands</code> table. Nothing new is ingested into it
+        &mdash; the newest row here dates from February 2026, and every listing since
+        then (plots <em>and</em> houses, which this model cannot represent) goes to
+        <a href="{{ url_for('main.properties') }}">Properties</a>, the working page
+        since 2026-08-08.
+    </div>
+</div>
 <div class="row">
     <div class="col-12">
 	        <div class="d-flex justify-content-between align-items-center mb-4">
