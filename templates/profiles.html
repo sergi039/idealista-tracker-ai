@@ -74,12 +74,49 @@
                         </td>
                     </tr>
                 {% endif %}
+                {# Not a profile -- it has no id, no default flag and nothing to
+                   edit -- but its listings are real, and leaving the bucket out
+                   made this column sum to less than the table (issue #111). #}
+                <tr id="profiles-unassigned-row" class="table-light">
+                    <td class="text-body-secondary">&mdash;</td>
+                    <td>
+                        <div class="fw-semibold">No subscription</div>
+                        <div class="text-body-secondary small">
+                            Listings stored without a saved search &mdash; see the note below.
+                        </div>
+                    </td>
+                    <td>
+                        <a class="small text-decoration-none"
+                           href="{{ url_for('main.properties', profile_id='unassigned') }}">
+                            {{ unassigned_count }}
+                        </a>
+                    </td>
+                    <td class="text-body-secondary">&mdash;</td>
+                    <td class="text-body-secondary">&mdash;</td>
+                    <td class="text-body-secondary">&mdash;</td>
+                    <td class="text-end text-body-secondary">&mdash;</td>
+                </tr>
             </tbody>
         </table>
     </div>
 </div>
 
 <div class="alert alert-info mt-3 mb-0">
-    Idealista emails are routed into profiles by saved-search name (or optional regex matchers). Unknown emails fall back to the default profile.
+    <div>
+        Idealista emails are routed by the saved-search link they carry (issue #102); an email
+        with no recognizable link falls back to the saved-search name, the optional regex
+        matchers, and finally the default profile.
+    </div>
+    <div class="mt-2">
+        <strong>A listing can end up with no subscription at all.</strong> That happens when one
+        email links to several different saved searches (guessing one would be silently wrong),
+        when a link was read but its profile could not be resolved, or when a profile is deleted
+        &mdash; its listings are kept and detached rather than removed. They are counted in the
+        <em>No subscription</em> row above and listed under
+        <a href="{{ url_for('main.properties', profile_id='unassigned') }}">that entry on the properties list</a>.
+        There is no control to file one by hand: ingestion is the only writer of a listing's
+        subscription (issue #130), so a row sits here precisely because its email named no single
+        saved search.
+    </div>
 </div>
 {% endblock %}

@@ -156,6 +156,78 @@
     box-shadow: 0 0 0 0.2rem rgba(var(--bs-primary-rgb), 0.25);
 }
 
+/* Properties toolbar (/properties): one wrapping row instead of a stack of
+   labelled grid rows. Every control keeps a floor it cannot shrink past, so
+   a narrow window wraps the bar rather than squeezing the selects into
+   unreadable stubs. */
+.properties-filter-search {
+    flex: 1 1 18rem;
+    min-width: 14rem;
+    max-width: 32rem;
+}
+
+.properties-filter-type {
+    flex: 0 1 20rem;
+    min-width: 14rem;
+    width: auto;
+}
+
+.properties-filter-select {
+    flex: 0 1 12rem;
+    min-width: 10rem;
+    width: auto;
+}
+
+.properties-filter-sort {
+    flex: 0 1 17rem;
+    min-width: 13rem;
+    width: auto;
+}
+
+.properties-filter-order {
+    max-width: 4.5rem;
+    flex-grow: 0;
+}
+
+/* Disabled on purpose (#98) -- keep it visibly inert rather than merely
+   greyed by the browser default. */
+.properties-filter-unavailable {
+    opacity: 0.75;
+}
+
+.properties-last-sync {
+    font-size: 0.75rem;
+}
+
+/* Subscription chips: long saved-search names must not push the rest of the
+   toolbar off the row. */
+.properties-subscription-name {
+    display: inline-block;
+    max-width: 18rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+}
+
+.properties-subscription-menu {
+    min-width: 18rem;
+    max-height: 20rem;
+    overflow-y: auto;
+}
+
+/* A button group does not wrap, so on a phone the chips have to give way
+   rather than push the page sideways. */
+@media (max-width: 575.98px) {
+    .properties-subscription-name {
+        max-width: 7rem;
+    }
+
+    .properties-subscription-menu {
+        min-width: 14rem;
+    }
+}
+
 /* Progress bars in criteria page */
 .progress {
     height: 8px;
@@ -354,6 +426,17 @@ footer {
 .badge {
     font-weight: 500;
     letter-spacing: 0.025em;
+}
+
+/* Quiet neutral badge (property subtype, "Archive" marker).
+   Bootstrap never redefines --bs-light-rgb for the dark theme, so `.bg-light`
+   stays near-white there; paired with `.text-body-secondary` it painted light
+   grey on white and the word was unreadable. These variables flip with the
+   theme, so one rule covers both. */
+.badge.badge-neutral {
+    background-color: var(--bs-secondary-bg);
+    color: var(--bs-body-color);
+    border: var(--bs-border-width) solid var(--bs-border-color);
 }
 
 /* Alert improvements */
