@@ -473,16 +473,28 @@ footer {
     }
 }
 
-/* ---- Tablets ----
-   Bootstrap caps `.container` at 720px (md) and 960px (lg), so an iPad spends
-   100-220px of its screen on empty margins while the eleven-column list
-   scrolls sideways inside its card. Below the xxl breakpoint the page uses the
-   width it actually has; a desktop window of 1400px and up is untouched. */
-@media (min-width: 768px) and (max-width: 1399.98px) {
+/* ---- The page uses the width it has ----
+   Bootstrap caps `.container` at 720px (md) through 1320px (xxl). On an iPad
+   that spends 100-220px of the screen on empty margins while the eleven-column
+   list scrolls sideways inside its card; on a wide monitor it leaves the table
+   as a narrow strip in the middle with most of the display unused. There is no
+   upper bound here on purpose: the cap is what the owner asked to be rid of,
+   at every size above a phone. */
+@media (min-width: 768px) {
     .navbar > .container,
     main.container,
     footer > .container {
         max-width: none;
+        padding-left: 1.5rem;
+        padding-right: 1.5rem;
+    }
+}
+
+/* Width freed by the line above goes to the title, which is the column that
+   can actually use it -- the rest would only pad numbers with whitespace. */
+@media (min-width: 1200px) {
+    .properties-list-table .lands-title-col {
+        width: 30%;
     }
 }
 

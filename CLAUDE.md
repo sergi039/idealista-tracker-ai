@@ -111,16 +111,21 @@ reads as `likely` (it came from the same weak keyword pass) and never as `yes`.
 Matrix and per issue #98 not one row holds a travel time. Do not "fix" that by
 wiring the control to empty data — it comes back when #98 does.
 
-**That table has to fit a tablet without scrolling sideways.** Two rules in
-`static/css/style.css` keep it there, and both are easy to break by accident:
-below the xxl breakpoint `.container` drops Bootstrap's 720/960px cap, and
-between 768px and 1200px the list table shrinks its padding, wraps its badges
-and (in portrait, under 992px) hides the Coords column, whose municipality
-moves under the title instead. This only works because the column widths live
-in `.col-*` classes rather than inline `style="min-width: … !important"`
-attributes — an inline `!important` outranks every media query, which is what
-made the table 1344px wide at any viewport. `tests/test_tablet_list_layout.py`
-fails if those widths move back into the markup.
+**The page uses the width it has, and the table fits a tablet without
+scrolling sideways.** Two rules in `static/css/style.css` do that, and both
+are easy to break by accident. Above 768px `.container` drops Bootstrap's cap
+(720px at md through 1320px at xxl) — **with no upper bound**, because the cap
+is as wrong on a 2560px monitor, where the table became a strip down the
+middle, as it is on an iPad. A first attempt stopped that rule at 1399.98px
+and therefore changed nothing on the owner's own screen; do not reintroduce a
+ceiling. Between 768px and 1200px the list table also shrinks its padding,
+wraps its badges and (in portrait, under 992px) hides the Coords column, whose
+municipality moves under the title instead. All of it only works because the
+column widths live in `.col-*` classes rather than inline
+`style="min-width: … !important"` attributes — an inline `!important` outranks
+every media query, which is what made the table 1344px wide at any viewport.
+`tests/test_tablet_list_layout.py` fails if those widths move back into the
+markup or if the cap comes back.
 
 The dual-build isolation contract
 from the transition — legacy on 5001 vs universal on 5050, unique Docker
