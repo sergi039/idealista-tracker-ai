@@ -1,14 +1,20 @@
 #!/bin/bash
-# Merge open PRs that pass both gates: green CI and an independent reviewer.
+# Add the one gate GitHub cannot: an independent reviewer, then merge.
 #
-# The owner authorised unattended squash-merges for this repository only, and
-# only behind those two gates. Everything else here exists to make that safe:
+# Branch protection on main now requires the status checks listed in the
+# protection itself and refuses any branch that is behind — enforced by GitHub,
+# atomically, at merge time. This script no longer re-implements either rule.
+# What it adds is the reviewer, and the bookkeeping that makes a verdict mean
+# something:
 #
-#   - a PR is never merged on a stale verdict: the review is keyed to the exact
-#     head SHA, and a new push invalidates it
-#   - `rx` reserves a bounded number of review attempts per diff, so verdicts
-#     are cached in a journal rather than re-requested on every tick
-#   - UNAVAILABLE is not a pass. Neither is a pending check.
+#   - a verdict is keyed to base..head, so a new push or a moved base gets a
+#     fresh review instead of inheriting an old PASS
+#   - the commit that was reviewed is the commit that gets merged
+#     (`--match-head-commit`), never a force-push in between
+#   - `rx` reserves a bounded number of attempts per diff, so verdicts are
+#     journalled rather than re-requested every tick
+#   - UNAVAILABLE is not a pass, and a BLOCKER is posted on the PR rather than
+#     buried in a local log
 #
 # Usage:
 #   merge_bot.sh              # review and merge what qualifies
@@ -25,9 +31,63 @@ LOG_FILE="${AUTOPILOT_MERGE_LOG:-${REPO_DIR}/data/autopilot-merge.log}"
 # One line per reviewed head SHA. Keyed by SHA so a re-push gets a fresh review
 # and a re-run does not burn another rx attempt on an unchanged diff.
 JOURNAL="${AUTOPILOT_REVIEW_JOURNAL:-${REPO_DIR}/data/autopilot-reviews.tsv}"
-# CI is not a required status check on this repository, so the bot enforces its
-# own list. A check that is absent, skipped or neutral is not a pass.
-REQUIRED_CHECKS="${AUTOPILOT_REQUIRED_CHECKS:-pytest no-source-bundles}"
+# Branch protection is the authority on what must be green. Reading its list
+# rather than keeping a copy here means the two can never drift: add a check to
+# protection and the bot honours it on the next tick, with no edit.
+#
+# Overridable for a dry run against a repository whose protection is not set
+# up. Refused outside --dry-run, below: the override also stands in for the
+# `strict` verification, so honouring it during a real merge would let one
+# environment variable disable the only guarantee that the reviewed diff is
+# the diff that lands.
+REQUIRED_CHECKS_OVERRIDE="${AUTOPILOT_REQUIRED_CHECKS:-}"
+
+# One name per line, split on newlines only. A check may legitimately be called
+# "Unit tests / pytest", and word-splitting would turn that into four names
+# that match nothing, quietly blocking every PR - which is exactly what the
+# unquoted expansion here used to do.
+required_checks() {
+    if [ -n "$REQUIRED_CHECKS_OVERRIDE" ]; then
+        # `|| [ -n "$name" ]` keeps a last line that has no trailing newline,
+        # which is the normal shape of AUTOPILOT_REQUIRED_CHECKS=pytest.
+        printf '%s' "$REQUIRED_CHECKS_OVERRIDE" | while IFS= read -r name || [ -n "$name" ]; do
+            [ -n "$name" ] && printf '%s\n' "$name"
+        done
+        return 0
+    fi
+    # Read both shapes and take their union. GitHub returns the same list twice
+    # today - `contexts` (deprecated) and `checks[].context`, which also carries
+    # the app_id that may report it - but a branch configured through the newer
+    # API can populate `checks` while leaving `contexts` empty. Reading only
+    # `contexts` would then see nothing required, which since the empty-list
+    # guard below means refusing every PR on a correctly protected branch.
+    gh api "repos/${REPO_SLUG}/branches/${BASE_BRANCH}/protection/required_status_checks" \
+        --jq '[(.contexts // [])[], ((.checks // [])[] | .context)] | unique[]' 2>/dev/null || true
+}
+
+# The bot no longer re-checks the base before merging, because `strict` makes
+# GitHub refuse a behind-branch atomically. That deletion is only sound while
+# `strict` is actually on - switch it off and the guarantee vanishes with no
+# sign in the log. Verify it, and refuse to merge rather than merge blind.
+#
+# `strict` alone is not enough, and this is the subtle part. It describes the
+# rule; `enforce_admins` decides whether the rule binds the identity doing the
+# merge. The bot authenticates as the repository owner, an administrator. With
+# enforce_admins off, protection would still report strict=true while GitHub
+# waved the merge through - and `--match-head-commit` pins only the head, so a
+# base that moved from B to B2 after the review passed for B..H would take H
+# anyway. That is exactly the race the removed base recheck used to cover.
+strict_protection_is_on() {
+    # Only reachable with the override set under --dry-run; a real run exits
+    # before this point rather than accepting the substitute.
+    [ -n "$REQUIRED_CHECKS_OVERRIDE" ] && return 0
+
+    [ "$(gh api "repos/${REPO_SLUG}/branches/${BASE_BRANCH}/protection/required_status_checks" \
+        --jq '.strict' 2>/dev/null)" = "true" ] || return 1
+
+    [ "$(gh api "repos/${REPO_SLUG}/branches/${BASE_BRANCH}/protection/enforce_admins" \
+        --jq '.enabled' 2>/dev/null)" = "true" ]
+}
 
 DRY_RUN=0
 ONLY_PR=""
@@ -39,6 +99,19 @@ while [ $# -gt 0 ]; do
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
+
+# The override answers both "what must be green" and "is strict protection on",
+# so a real run that honoured it would merge without ever checking that the
+# base has not moved since the review - the one thing `strict` guarantees. One
+# environment variable must not be able to switch that off. Fail closed and say
+# why, rather than merging under a weaker rule than the log implies.
+if [ -n "$REQUIRED_CHECKS_OVERRIDE" ] && [ "$DRY_RUN" = "0" ]; then
+    echo "AUTOPILOT_REQUIRED_CHECKS is a --dry-run affordance: it stands in for" >&2
+    echo "branch protection, including the 'strict' verification that keeps the" >&2
+    echo "reviewed diff and the merged diff identical. Refusing to merge with it" >&2
+    echo "set. Re-run with --dry-run, or unset it and let protection answer." >&2
+    exit 2
+fi
 
 log() {
     printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG_FILE"
@@ -74,6 +147,8 @@ record_verdict() {
 }
 
 # --- gate 1: CI ------------------------------------------------------------
+# Not a gate any more - branch protection is. This only avoids spending a
+# minutes-long independent review on a PR that GitHub is going to refuse.
 ci_is_green() {
     local pr="$1" checks bad pending
     # `gh pr checks` exits non-zero both for a failure and while checks are
@@ -81,9 +156,7 @@ ci_is_green() {
     checks="$(gh pr checks "$pr" --repo "$REPO_SLUG" --json name,state 2>/dev/null || true)"
 
     if [ -z "$checks" ] || [ "$(printf '%s' "$checks" | jq 'length')" = "0" ]; then
-        # CI is not a required status check on this repo, so "no checks" means
-        # nothing verified this diff - which is not the same as green.
-        log "  PR #${pr}: no checks reported - not merging an unverified diff"
+        log "  PR #${pr}: no checks reported yet"
         return 1
     fi
 
@@ -104,16 +177,32 @@ ci_is_green() {
     # SKIPPED and NEUTRAL are tolerated *alongside* real results, never instead
     # of them: a run where every check skipped verifies exactly as much as a run
     # with no checks at all, and must not read as green.
-    for required in $REQUIRED_CHECKS; do
-        local state
+    local required state missing=0 seen=0
+    while IFS= read -r required; do
+        [ -n "$required" ] || continue
+        seen=$((seen + 1))
         state="$(printf '%s' "$checks" \
             | jq -r --arg n "$required" '[.[] | select(.name == $n) | .state] | first // "MISSING"')"
         if [ "$state" != "SUCCESS" ]; then
             log "  PR #${pr}: required check '${required}' is ${state}, not SUCCESS"
-            return 1
+            missing=1
         fi
-    done
-    return 0
+    done <<<"$(required_checks)"
+
+    # An empty list is not "everything passed", it is "nobody said what has to
+    # pass". This whole file treats protection as the authority on that, so an
+    # authority with nothing to say leaves the bot with no gate at all: the loop
+    # above would run zero times and any PR carrying one unrelated green check
+    # would merge without pytest. Protection can return `contexts: []` from a
+    # half-configured branch or an API hiccup, and neither is a reason to merge.
+    if [ "$seen" = "0" ]; then
+        log "  PR #${pr}: ${BASE_BRANCH} protection lists no required checks - refusing."
+        log "            With nothing declared required there is nothing to verify;"
+        log "            a green tick from an unrelated job is not a CI gate."
+        return 1
+    fi
+
+    [ "$missing" = "0" ]
 }
 
 # A BLOCKER that only reaches data/autopilot-merge.log is a verdict nobody
@@ -193,13 +282,13 @@ review_is_pass() {
     # against the old helper, each side reviews clean, and the merge silently
     # combines them into something nobody looked at.
     #
-    # Requiring the branch to already contain the current base makes
-    # base..head exactly the code that will land. This is the same rule as
-    # GitHub's "require branches to be up to date before merging" - enforced
-    # here because the repository does not have it switched on.
+    # Branch protection now enforces the same rule at merge time ("require
+    # branches to be up to date"), so this is no longer what keeps a stale
+    # branch out of main. It stays because it protects the *review*: sending a
+    # reviewer a diff that is not the merge result buys a verdict about code
+    # that will never exist, and costs a bounded rx attempt to do it.
     if ! git merge-base --is-ancestor "$base_sha" "$ref" 2>/dev/null; then
-        log "  PR #${pr}: behind ${BASE_BRANCH} (${base_sha:0:7}) - rebase it; a diff that"
-        log "            is not the merge result cannot be reviewed as one"
+        log "  PR #${pr}: behind ${BASE_BRANCH} (${base_sha:0:7}) - rebase it before it can be reviewed"
         return 1
     fi
 
@@ -237,43 +326,25 @@ parameterised queries)." >>"$LOG_FILE" 2>&1
     esac
 }
 
-# --- after the fact --------------------------------------------------------
-# GitHub offers no "merge only if the base is still X". `--match-head-commit`
-# pins the head; the base can still advance between the last check and the
-# merge, and the squash then lands on a base nobody reviewed. The window is
-# a second or two and cannot be closed from a script - the real fix is branch
-# protection's "require branches to be up to date before merging", which is the
-# owner's setting to make.
+# A required context is matched by name. Rename a job in ci.yml and the old
+# name stays required and never reports - GitHub blocks every merge on a check
+# that will be pending forever, and nothing says why. Cheap to catch here, on
+# the way past, rather than from a PR that mysteriously will not merge.
 #
-# What a script *can* do is refuse to pretend it did not happen: the first
-# parent of a squash commit is the base it landed on, so compare it and say so.
-verify_merged_onto_reviewed_base() {
-    local pr="$1" reviewed_base="$2" merge_sha actual_base
-
-    # "Could not check" is not "checked and fine". Both unreadable cases return
-    # non-zero so the caller reports the merge as needing eyes, rather than
-    # logging a warning nobody acts on and carrying on as if verified.
-    merge_sha="$(gh pr view "$pr" --repo "$REPO_SLUG" \
-        --json mergeCommit --jq '.mergeCommit.oid // empty' 2>/dev/null || true)"
-    if [ -z "$merge_sha" ]; then
-        log "  ALERT: #${pr} merged but the merge commit could not be read - base UNVERIFIED"
-        return 1
-    fi
-
-    actual_base="$(gh api "repos/${REPO_SLUG}/commits/${merge_sha}" \
-        --jq '.parents[0].sha // empty' 2>/dev/null || true)"
-    if [ -z "$actual_base" ]; then
-        log "  ALERT: #${pr} merged (${merge_sha:0:7}) but its base could not be read - UNVERIFIED"
-        return 1
-    fi
-
-    if [ "$actual_base" != "$reviewed_base" ]; then
-        log "  ALERT: #${pr} was reviewed against ${reviewed_base:0:7} but landed on ${actual_base:0:7}."
-        log "         ${BASE_BRANCH} moved during the merge; the merged result differs from"
-        log "         the reviewed diff. Inspect ${merge_sha:0:7} by hand."
-        return 1
-    fi
-    return 0
+# Defined up here with the other helpers, not below its call site: bash resolves
+# a function only once its definition has been executed, so the version that sat
+# after `main` never ran at all - the call printed "command not found" into the
+# log and the warning this exists to give was never given.
+warn_about_unreported_checks() {
+    local workflow="${REPO_DIR}/.github/workflows/ci.yml" required
+    [ -f "$workflow" ] || return 0
+    while IFS= read -r required; do
+        [ -n "$required" ] || continue
+        grep -qF "name: ${required}" "$workflow" && continue
+        log "WARNING: required check '${required}' is not a job name in ci.yml."
+        log "         If nothing else reports it, every PR will sit on a check that"
+        log "         never arrives. Fix the name in protection or in the workflow."
+    done <<<"$(required_checks)"
 }
 
 # --- main ------------------------------------------------------------------
@@ -286,6 +357,20 @@ if ! git fetch --quiet origin "$BASE_BRANCH"; then
 fi
 BASE_SHA="$(git rev-parse "origin/${BASE_BRANCH}")"
 log "merge base: ${BASE_SHA:0:7}"
+warn_about_unreported_checks
+
+# Fail closed. Everything below assumes GitHub will reject a merge whose branch
+# is behind; without `strict` that assumption is silently false and the bot
+# would merge a diff nobody reviewed.
+if ! strict_protection_is_on; then
+    log "FATAL: ${BASE_BRANCH} protection does not both require branches to be up to"
+    log "       date and apply that to administrators. The bot merges as the owner,"
+    log "       so either one missing means GitHub would accept a merge onto a base"
+    log "       that moved after the review - which is what this check replaces."
+    log "       gh api -X PATCH repos/${REPO_SLUG}/branches/${BASE_BRANCH}/protection/required_status_checks -f strict=true"
+    log "       gh api -X POST repos/${REPO_SLUG}/branches/${BASE_BRANCH}/protection/enforce_admins"
+    exit 1
+fi
 
 if [ -n "$ONLY_PR" ]; then
     pr_query="$(gh pr view "$ONLY_PR" --repo "$REPO_SLUG" \
@@ -326,31 +411,18 @@ printf '%s' "$pr_query" | jq -c '.[]' | while read -r pr_json; do
         continue
     fi
 
-    # A review takes minutes. If main moved while it ran, the reviewed diff is
-    # not the diff GitHub would merge — `--match-head-commit` guards the head
-    # but nothing guards the base. Re-check and defer; the next tick reviews
-    # against the new base and the verdict key makes that a fresh review.
-    base_now="$(git ls-remote origin "refs/heads/${BASE_BRANCH}" 2>/dev/null | cut -f1)"
-    if [ -z "$base_now" ]; then
-        log "  cannot confirm ${BASE_BRANCH} head - deferring merge of #${number}"
-        continue
-    fi
-    if [ "$base_now" != "$BASE_SHA" ]; then
-        log "  ${BASE_BRANCH} moved ${BASE_SHA:0:7} -> ${base_now:0:7} during review - deferring #${number}"
-        continue
-    fi
-
+    # Branch protection settles the base race: with `strict` on, GitHub refuses
+    # a merge whose branch is behind main, atomically, at merge time. The bot
+    # used to re-check the base here and audit the squash commit's first parent
+    # afterwards — both were approximations of exactly that rule, with a window
+    # a script cannot close. They are gone; `--match-head-commit` still pins the
+    # head so the merged commit is the reviewed one.
     if gh pr merge "$number" --repo "$REPO_SLUG" --squash --delete-branch \
         --match-head-commit "$head_sha" >>"$LOG_FILE" 2>&1; then
         log "  MERGED #${number}"
-        # Explicit `if`: a bare call returning non-zero would trip `set -e` and
-        # abort the whole pass right after a successful merge.
-        if ! verify_merged_onto_reviewed_base "$number" "$BASE_SHA"; then
-            log "  #${number} NEEDS MANUAL INSPECTION - see the ALERT above"
-        fi
     else
-        # --match-head-commit fails the merge if someone pushed after the
-        # review; that is the desired outcome, not an error to work around.
-        log "  merge failed for #${number} (head moved, or branch protection refused)"
+        # Expected outcomes, not errors to work around: the head moved after the
+        # review, or main moved and protection now wants a rebase.
+        log "  merge refused for #${number} (head moved, branch behind ${BASE_BRANCH}, or a required check is not green)"
     fi
 done
