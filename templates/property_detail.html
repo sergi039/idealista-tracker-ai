@@ -390,7 +390,7 @@
                                     <th style="min-width: 190px;">Metric</th>
                                     <th style="min-width: 160px;">Claude</th>
                                     <th style="min-width: 160px;">ChatGPT</th>
-                                    <th style="min-width: 160px;">Baseline</th>
+                                    <th style="min-width: 160px;" id="ai-compare-baseline-head">Baseline</th>
                                 </tr>
                             </thead>
                             <tbody id="ai-compare-tbody"></tbody>
@@ -1730,6 +1730,7 @@ async function refreshAiComparison() {
 
     const claudeModelLabel = document.getElementById('ai-claude-model-label');
     const chatgptModelLabel = document.getElementById('ai-chatgpt-model-label');
+    const baselineHead = document.getElementById('ai-compare-baseline-head');
 
     if (!statusEl || !tableEl || !tbody) return;
 
@@ -1756,10 +1757,14 @@ async function refreshAiComparison() {
         const claude = data.comparison?.claude;
         const gpt = data.comparison?.chatgpt;
         const expected = data.comparison?.expected || {};
+        /* Without a baseline the fourth column is nothing but em dashes, so it
+           is dropped rather than drawn empty. */
+        const baselineAvailable = data.comparison?.baseline?.available === true;
+        if (baselineHead) baselineHead.style.display = baselineAvailable ? '' : 'none';
 
         const MISSING = '—';
-        const claudeGenerated = !!(window.__EXISTING_CLAUDE_ANALYSIS__ && claude);
-        const gptGenerated = !!(window.__EXISTING_OPENAI_ANALYSIS__ && gpt);
+        const claudeGenerated = !!(data.has_claude && claude);
+        const gptGenerated = !!(data.has_chatgpt && gpt);
 
         const c = claude?.metrics || {};
         const g = gpt?.metrics || {};
@@ -1784,16 +1789,63 @@ async function refreshAiComparison() {
             td1.textContent = claudeVal;
             const td2 = document.createElement('td');
             td2.textContent = gptVal;
-            const td3 = document.createElement('td');
-            td3.className = 'text-body-secondary';
-            td3.textContent = baselineVal;
             tr.appendChild(td0);
             tr.appendChild(td1);
             tr.appendChild(td2);
-            tr.appendChild(td3);
+            if (baselineAvailable) {
+                const td3 = document.createElement('td');
+                td3.className = 'text-body-secondary';
+                td3.textContent = baselineVal;
+                tr.appendChild(td3);
+            }
             tbodyEl.appendChild(tr);
         };
 
+        const _appendSection = (tbodyEl, title) => {
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.colSpan = baselineAvailable ? 4 : 3;
+            td.className = 'text-body-secondary small fw-semibold pt-3';
+            td.textContent = title;
+            tr.appendChild(td);
+            tbodyEl.appendChild(tr);
+        };
+
+        const ch = claude?.highlights || {};
+        const gh = gpt?.highlights || {};
+
+        /* The verdicts come first: they are what both providers always answer,
+           and on a listing where neither model would price the rent they are
+           the whole of the comparison. */
+        _appendSection(tbody, 'Verdicts');
+        _appendRow(
+            tbody,
+            'Price verdict',
+            claudeGenerated ? _formatMetricValue(ch.price_verdict) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.price_verdict) : MISSING,
+            MISSING
+        );
+        _appendRow(
+            tbody,
+            'Investment potential',
+            claudeGenerated ? _formatMetricValue(ch.investment_potential_rating) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.investment_potential_rating) : MISSING,
+            MISSING
+        );
+        _appendRow(
+            tbody,
+            'Risk level',
+            claudeGenerated ? _formatMetricValue(ch.risk_level) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.risk_level) : MISSING,
+            MISSING
+        );
+        _appendRow(
+            tbody,
+            'Market trend',
+            claudeGenerated ? _formatMetricValue(ch.market_trend) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.market_trend) : MISSING,
+            MISSING
+        );
         _appendRow(
             tbody,
             'Investment rating',
@@ -1801,6 +1853,8 @@ async function refreshAiComparison() {
             gptGenerated ? _formatMetricValue(g.investment_rating) : MISSING,
             _formatMetricValue(expected.investment_rating)
         );
+
+        _appendSection(tbody, 'Rental figures');
         _appendRow(
             tbody,
             'Rental yield',
@@ -1830,6 +1884,30 @@ async function refreshAiComparison() {
             _formatMetricValue(expected.payback_period_years)
         );
 
+        _appendSection(tbody, 'Qualitative highlights (often differ)');
+        _appendRow(
+            tbody,
+            'Price summary',
+            claudeGenerated ? _formatMetricValue(ch.price_summary) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.price_summary) : MISSING,
+            MISSING
+        );
+        _appendRow(
+            tbody,
+            'Key drivers',
+            claudeGenerated ? _formatMetricValue(ch.key_drivers) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.key_drivers) : MISSING,
+            MISSING
+        );
+        _appendRow(
+            tbody,
+            'Best use',
+            claudeGenerated ? _formatMetricValue(ch.best_use) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.best_use) : MISSING,
+            MISSING
+        );
+
+        _appendSection(tbody, baselineAvailable ? 'Schema + baseline match' : 'Schema + coverage');
         _appendRow(
             tbody,
             'Schema completeness',
@@ -1837,16 +1915,29 @@ async function refreshAiComparison() {
             gptGenerated ? `${gpt?.schema?.found || 0}/${gpt?.schema?.total || 0}` : MISSING,
             MISSING
         );
+        /* Which figures the provider was willing to put a number on. It is the
+           measurable half of "the table looks empty": a model that answered
+           null four times scores 0/4 here, and that is about the answer, not
+           about the page. */
         _appendRow(
             tbody,
-            'Numeric fidelity (vs baseline)',
-            claudeGenerated ? _formatMetricValue(claude?.fidelity_score, '/100') : MISSING,
-            gptGenerated ? _formatMetricValue(gpt?.fidelity_score, '/100') : MISSING,
+            'Rental figures given',
+            claudeGenerated ? `${claude?.numeric_coverage?.found ?? 0}/${claude?.numeric_coverage?.total ?? 0}` : MISSING,
+            gptGenerated ? `${gpt?.numeric_coverage?.found ?? 0}/${gpt?.numeric_coverage?.total ?? 0}` : MISSING,
             MISSING
         );
+        if (baselineAvailable) {
+            _appendRow(
+                tbody,
+                'Numeric fidelity (vs baseline)',
+                claudeGenerated ? _formatMetricValue(claude?.fidelity_score, '/100') : MISSING,
+                gptGenerated ? _formatMetricValue(gpt?.fidelity_score, '/100') : MISSING,
+                MISSING
+            );
+        }
         _appendRow(
             tbody,
-            'Overall score (baseline)',
+            baselineAvailable ? 'Overall score (baseline)' : 'Overall score (schema + coverage)',
             claudeGenerated ? _formatMetricValue(claude?.overall_score, '/100') : MISSING,
             gptGenerated ? _formatMetricValue(gpt?.overall_score, '/100') : MISSING,
             MISSING
@@ -1871,6 +1962,21 @@ async function refreshAiComparison() {
             statusParts.push(`ChatGPT: ${data.chatgpt_model || 'unknown'}`);
         } else {
             statusParts.push('ChatGPT: not generated (press “Enrich”).');
+        }
+
+        if (!baselineAvailable && data.comparison?.baseline?.reason) {
+            statusParts.push(`Baseline: ${data.comparison.baseline.reason}`);
+        }
+
+        /* A provider that answered every rental figure with null is not a
+           failed request; saying so keeps the em dashes from reading like a
+           broken page. */
+        const _noFigures = (side) => (side?.numeric_coverage?.found ?? 0) === 0;
+        const silent = [];
+        if (claudeGenerated && _noFigures(claude)) silent.push('Claude');
+        if (gptGenerated && _noFigures(gpt)) silent.push('ChatGPT');
+        if (silent.length) {
+            statusParts.push(`${silent.join(' and ')} gave no rental figures for this listing.`);
         }
 
         statusEl.textContent = statusParts.join(' • ');
