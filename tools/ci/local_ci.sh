@@ -72,6 +72,14 @@ check_source_bundles() {
 }
 
 run_pytest() {
+    # tests/test_postgres_migrations.py is the only thing that executes the
+    # repository's (PostgreSQL-only) migration SQL, and it skips without a
+    # server. CI always has one, so say so rather than letting a green local
+    # run imply the migrations were covered.
+    if [ -z "${TEST_DATABASE_URL_POSTGRES:-}" ]; then
+        printf '  note: TEST_DATABASE_URL_POSTGRES unset -> the PostgreSQL '
+        printf 'migration tests will skip (CI runs them; see CONTRIBUTING.md)\n'
+    fi
     uv run pytest tests/ -q
 }
 

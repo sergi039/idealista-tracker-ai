@@ -14,6 +14,37 @@ jobs:
     name: pytest
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    # Everything in migrations/ is PostgreSQL-only and multi-statement, which
+    # pysqlite refuses outright, so the SQLite tests can only cover migrations
+    # that are never executed (the frozen 000-012 baseline). Without a real
+    # server, tests/test_postgres_migrations.py would skip and migration SQL
+    # would first run in production - which is where migration 013 would have
+    # died on a psycopg2 percent-sign collision (issue #102).
+    #
+    # Pinned by digest; the tag stays alongside it as the readable label. The
+    # digest is the multi-arch OCI index, which carries linux/amd64.
+    services:
+      postgres:
+        image: postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f
+        env:
+          POSTGRES_USER: idealista_ci
+          POSTGRES_PASSWORD: idealista_ci
+          POSTGRES_DB: idealista_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U idealista_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL_POSTGRES: postgresql://idealista_ci:idealista_ci@127.0.0.1:5432/idealista_ci
+      # A server that never came up must fail the job, never quietly turn the
+      # only tests that execute migration SQL into skips.
+      REQUIRE_POSTGRES_TESTS: "1"
+
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
