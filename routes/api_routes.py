@@ -1,18 +1,32 @@
 import logging
 from datetime import datetime, timezone
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, Response, current_app, jsonify, request
 
 # get_or_404 raises HTTPException, and the blanket `except Exception` handlers
 # below would answer 500 for it: every one of them re-raises it first so an
 # unknown id stays a 404 (issue #136).
 from werkzeug.exceptions import HTTPException
 from models import Land, LandHistory, SyncHistory, AiAnalysisVariant
+from utils.api_errors import json_http_error
 from app import db
 from app import limiter
 
 logger = logging.getLogger(__name__)
 
 api_bp = Blueprint("api", __name__)
+
+
+@api_bp.errorhandler(HTTPException)
+def handle_api_http_exception(error: HTTPException) -> tuple[Response, int]:
+    """Answer every HTTP error raised in this blueprint as JSON (issue #140).
+
+    The 404 from `db.get_or_404()` and the 415 from `request.get_json()` used
+    to arrive as werkzeug's HTML page while every failure the handlers report
+    themselves is `{"success": false, "error": ...}`. A blueprint handler only
+    sees what its own views raise; a URL matching no rule at all is caught by
+    the app-level handler in app.py.
+    """
+    return json_http_error(error)
 
 
 def _should_run_sync(allow_request_override: bool = True) -> bool:
