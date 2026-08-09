@@ -350,14 +350,18 @@ def properties():
             rank = _investment_rating_rank(Property)
             rank_order = rank.asc() if sort_order == "asc" else rank.desc()
             query = query.order_by(
-                rank_order.nullslast(), Property.score_total.desc().nullslast()
+                rank_order.nullslast(),
+                Property.score_total.desc().nullslast(),
+                Property.id.asc(),
             )
         else:
             sort_column = sort_columns[sort_by]
             if sort_order == "asc":
-                query = query.order_by(sort_column.asc().nullslast())
+                query = query.order_by(sort_column.asc().nullslast(), Property.id.asc())
             else:
-                query = query.order_by(sort_column.desc().nullslast())
+                query = query.order_by(
+                    sort_column.desc().nullslast(), Property.id.asc()
+                )
 
         # Derive the highlighted mode from the sort actually applied, the same
         # way /lands does, so the buttons cannot disagree with the ordering.
@@ -650,16 +654,18 @@ def lands():
             rank = _investment_rating_rank(Land)
             rank_order = rank.asc() if sort_order == "asc" else rank.desc()
             query = query.order_by(
-                rank_order.nullslast(), Land.score_total.desc().nullslast()
+                rank_order.nullslast(),
+                Land.score_total.desc().nullslast(),
+                Land.id.asc(),
             )
         elif hasattr(Land, sort_by):
             sort_column = getattr(Land, sort_by)
             if sort_order == "asc":
                 # For ascending, NULLs go last
-                query = query.order_by(sort_column.asc().nullslast())
+                query = query.order_by(sort_column.asc().nullslast(), Land.id.asc())
             else:
                 # For descending (default for score), NULLs go last
-                query = query.order_by(sort_column.desc().nullslast())
+                query = query.order_by(sort_column.desc().nullslast(), Land.id.asc())
 
         # Get paginated results
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
@@ -2794,23 +2800,33 @@ def export_csv():
             rank = _investment_rating_rank(Land)
             rank_order = rank.asc() if sort_order == "asc" else rank.desc()
             lands = query.order_by(
-                rank_order.nullslast(), Land.score_total.desc().nullslast()
+                rank_order.nullslast(),
+                Land.score_total.desc().nullslast(),
+                Land.id.asc(),
             ).all()
         elif hasattr(Land, sort_by):
             sort_column = getattr(Land, sort_by)
             if sort_order == "asc":
                 # For ascending, NULLs go last
-                lands = query.order_by(sort_column.asc().nullslast()).all()
+                lands = query.order_by(
+                    sort_column.asc().nullslast(), Land.id.asc()
+                ).all()
             else:
                 # For descending (default for scores), NULLs go last
-                lands = query.order_by(sort_column.desc().nullslast()).all()
+                lands = query.order_by(
+                    sort_column.desc().nullslast(), Land.id.asc()
+                ).all()
         else:
             # Fallback to mode default if invalid sort field
             fallback_column = getattr(Land, default_sort)
             if sort_order == "asc":
-                lands = query.order_by(fallback_column.asc().nullslast()).all()
+                lands = query.order_by(
+                    fallback_column.asc().nullslast(), Land.id.asc()
+                ).all()
             else:
-                lands = query.order_by(fallback_column.desc().nullslast()).all()
+                lands = query.order_by(
+                    fallback_column.desc().nullslast(), Land.id.asc()
+                ).all()
 
         # Create CSV
         output = io.StringIO()
@@ -3009,14 +3025,20 @@ def export_properties_csv():
             rank = _investment_rating_rank(Property)
             rank_order = rank.asc() if sort_order == "asc" else rank.desc()
             props = query.order_by(
-                rank_order.nullslast(), Property.score_total.desc().nullslast()
+                rank_order.nullslast(),
+                Property.score_total.desc().nullslast(),
+                Property.id.asc(),
             ).all()
         else:
             sort_column = sort_columns.get(sort_by, Property.created_at)
             if sort_order == "asc":
-                props = query.order_by(sort_column.asc().nullslast()).all()
+                props = query.order_by(
+                    sort_column.asc().nullslast(), Property.id.asc()
+                ).all()
             else:
-                props = query.order_by(sort_column.desc().nullslast()).all()
+                props = query.order_by(
+                    sort_column.desc().nullslast(), Property.id.asc()
+                ).all()
 
         travel_display_targets = []
         if selected_profile_id is not None:
