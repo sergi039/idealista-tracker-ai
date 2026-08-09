@@ -15,9 +15,41 @@
                     <i class="fas fa-star {{ 'text-warning' if land.is_favorite else 'text-muted' }}"></i>
                 </button>
                 <div>
-                    <h1 class="h3 mb-1">
-                        <i class="fas fa-map-marker-alt me-2"></i>
-                        {{ land.title }}
+                    {# Same header treatment as the property page (2026-08-09):
+                       one Google Maps link for both cases -- the coordinate when
+                       we have one, the municipality when we do not. #}
+                    {% if land.location_lat and land.location_lon %}
+                        {% set _maps_url = 'https://www.google.com/maps/search/?api=1&query=' ~ land.location_lat ~ ',' ~ land.location_lon %}
+                    {% elif land.municipality %}
+                        {% set _maps_url = 'https://www.google.com/maps/search/' ~ land.municipality|urlencode ~ ',+Spain' %}
+                    {% else %}
+                        {% set _maps_url = none %}
+                    {% endif %}
+                    <h1 class="h3 mb-1 d-flex flex-wrap align-items-center gap-2">
+                        <span>
+                            <i class="fas fa-map-marker-alt me-2"></i>{{ land.title }}
+                        </span>
+                        <span class="detail-link-icons d-inline-flex align-items-center gap-1">
+                            {% if _maps_url %}
+                            <a href="{{ _maps_url }}" target="_blank" rel="noopener"
+                               class="btn btn-sm btn-outline-primary detail-link-icon"
+                               title="Google Maps" aria-label="Google Maps">
+                                <i class="fas fa-map"></i>
+                            </a>
+                            {% endif %}
+                            {% if land.url %}
+                            <a href="{{ land.url }}" target="_blank" rel="noopener"
+                               class="btn btn-sm btn-outline-success detail-link-icon"
+                               title="Idealista" aria-label="Idealista">
+                                <i class="fas fa-home"></i>
+                            </a>
+                            {% endif %}
+                            <a href="{{ url_for('main.map_view', focus=land.id) }}"
+                               class="btn btn-sm btn-outline-secondary detail-link-icon"
+                               title="{{ t('view_on_app_map') }}" aria-label="{{ t('view_on_app_map') }}">
+                                <i class="fas fa-map-marked-alt"></i>
+                            </a>
+                        </span>
                     </h1>
                     <div class="d-flex flex-wrap align-items-center gap-2">
                         {% if land.listing_status == 'removed' %}
@@ -35,6 +67,27 @@
                             </span>
                         {% endif %}
                     </div>
+                    {# The coordinate reads here instead of in a panel of its own.
+                       Accuracy only when it says something: `Land.location_accuracy`
+                       defaults to "unknown" and these legacy rows never set it,
+                       so printing it would annotate all 168 of them with nothing.
+                       The property page prints it unconditionally because there
+                       the field is populated and "approximate" is why a sea-view
+                       verdict can come back unknown. #}
+                    {% if land.location_lat and land.location_lon %}
+                        {% set _coords = "%.6f, %.6f"|format(land.location_lat, land.location_lon) %}
+                        <div class="text-body-secondary small mt-1">
+                            <span class="text-nowrap">
+                                <i class="fas fa-location-dot me-1"></i><span class="font-monospace">{{ _coords }}</span>
+                                {% if land.location_accuracy and land.location_accuracy != 'unknown' %}<span class="ms-1">({{ land.location_accuracy }})</span>{% endif %}
+                                <button type="button" class="btn btn-link p-0 ms-1 align-baseline copy-coords-btn"
+                                        data-copy-text="{{ _coords }}"
+                                        title="Copy coordinates" aria-label="Copy coordinates">
+                                    <i class="fas fa-copy"></i>
+                                </button>
+                            </span>
+                        </div>
+                    {% endif %}
                 </div>
             </div>
             <a href="{{ url_for('main.lands', sort=request.args.get('sort'), order=request.args.get('order'), land_type=request.args.get('land_type'), municipality=request.args.get('municipality'), search=request.args.get('search'), per_page=request.args.get('per_page')) }}"
@@ -61,10 +114,6 @@
                     <small>Removed on {{ land.listing_removed_date.strftime('%d %B %Y') }}</small>
                 {% endif %}
             </div>
-            <button class="btn btn-sm btn-outline-{{ 'danger' if land.listing_status == 'removed' else 'secondary' }} ms-auto"
-                    onclick="checkListingStatus({{ land.id }})" id="recheck-btn">
-                <i class="fas fa-sync-alt me-1"></i>Re-check Status
-            </button>
         </div>
     </div>
 </div>
@@ -148,68 +197,10 @@
                     </div>
                 </div>
 
-                <!-- Location -->
-                {% if land.location_lat and land.location_lon %}
-                    <div class="overview-location bg-body-tertiary border rounded p-3 mb-4">
-                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-                            <div>
-                                <div class="overview-label text-body-secondary">
-                                    <i class="fas fa-location-dot me-1"></i>Location
-                                </div>
-                                <div class="overview-value font-monospace">
-                                    {{ "%.6f"|format(land.location_lat) }}, {{ "%.6f"|format(land.location_lon) }}
-                                </div>
-                            </div>
-                            <div class="btn-group btn-group-sm" role="group" aria-label="Location links">
-                                <a href="https://www.google.com/maps/search/?api=1&query={{ land.location_lat }},{{ land.location_lon }}"
-                                   target="_blank" class="btn btn-outline-primary">
-                                    <i class="fas fa-map me-1"></i>Google Maps
-                                </a>
-                                {% if land.url %}
-                                <a href="{{ land.url }}"
-                                   target="_blank" class="btn btn-outline-success">
-                                    <i class="fas fa-home me-1"></i>Idealista
-                                </a>
-                                {% endif %}
-                                <a href="{{ url_for('main.map_view', focus=land.id) }}"
-                                   class="btn btn-outline-secondary"
-                                   title="{{ t('view_on_app_map') }}">
-                                    <i class="fas fa-map-marked-alt me-1"></i>Our Maps
-                                </a>
-                            </div>
-                        </div>
-                    </div>
-                {% elif land.municipality %}
-                    <div class="overview-location bg-body-tertiary border rounded p-3 mb-4">
-                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-                            <div>
-                                <div class="overview-label text-body-secondary">
-                                    <i class="fas fa-location-dot me-1"></i>Location
-                                </div>
-                                <div class="overview-value">
-                                    {{ land.municipality }}
-                                </div>
-                            </div>
-                            <div class="btn-group btn-group-sm" role="group" aria-label="Location links">
-                                <a href="https://www.google.com/maps/search/{{ land.municipality|urlencode }},+Spain"
-                                   target="_blank" class="btn btn-outline-primary">
-                                    <i class="fas fa-map me-1"></i>Google Maps
-                                </a>
-                                {% if land.url %}
-                                <a href="{{ land.url }}"
-                                   target="_blank" class="btn btn-outline-success">
-                                    <i class="fas fa-home me-1"></i>Idealista
-                                </a>
-                                {% endif %}
-                                <a href="{{ url_for('main.map_view', focus=land.id) }}"
-                                   class="btn btn-outline-secondary"
-                                   title="{{ t('view_on_app_map') }}">
-                                    <i class="fas fa-map-marked-alt me-1"></i>Our Maps
-                                </a>
-                            </div>
-                        </div>
-                    </div>
-                {% endif %}
+                {# The Location panel that stood here is gone: the coordinate reads
+                   in the header and its three links are the icons next to the
+                   title. The municipality it displayed is still on screen -- the
+                   chip under the title and the Municipality stat. #}
 
                 <!-- Enhanced Description -->
                 {% if land.description %}
@@ -370,21 +361,26 @@
                     </div>
                 </div>
 
-                <!-- Actions -->
-                <div class="mt-4 d-flex justify-content-center gap-2" style="flex-wrap: nowrap;">
-                    {% if land.url %}
-                        <a href="{{ land.url }}" target="_blank" class="btn btn-success">
-                            <i class="fas fa-home me-2"></i>
-                            View on Idealista
-                        </a>
-                    {% endif %}
-                    
+                {# Actions. "View on Idealista" left with the Location panel: the
+                   same link is the Idealista icon next to the title now, and
+                   CLAUDE.md's rule for the property surface -- every control
+                   exists exactly once -- is the reason not to keep both.
+                   "Check status" replaces the manual Mark Status dropdown that
+                   stood here, and the Re-check button that only appeared inside
+                   the removed/sold banner: one control, always reachable, that
+                   asks Idealista instead of overriding it by hand. #}
+                <div class="mt-4 d-flex justify-content-center flex-wrap gap-2">
                     <!-- AI Analysis shortcut (opens Claude tab) -->
                     <button type="button" class="btn btn-outline-info" onclick="openAiSection('claude')">
                         <i class="fas fa-brain me-2"></i>AI Analyses
                     </button>
-                    
-                    
+
+                    <button type="button" class="btn btn-outline-primary" id="check-listing-status-btn"
+                            onclick="checkListingStatus({{ land.id }}, this)"
+                            title="Fetch the listing from Idealista and record what it says">
+                        <i class="fas fa-rotate me-2"></i>Check status
+                    </button>
+
                     <!-- Google Enrichment Button - highlighted if enrichment data exists -->
                     {% set has_enrichment = land.infrastructure_basic or land.infrastructure_extended or land.transport or (land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital) %}
                     <button class="btn {{ 'btn-success' if has_enrichment else 'btn-outline-warning' }}"
@@ -400,26 +396,6 @@
                         {% endif %}
                     </button>
 
-                    <!-- Mark as Removed Button (dropdown for status options) -->
-                    {% if land.listing_status == 'active' %}
-                    <div class="dropdown">
-                        <button class="btn btn-outline-danger dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                            <i class="fas fa-times-circle me-1"></i>Mark Status
-                        </button>
-                        <ul class="dropdown-menu">
-                            <li><a class="dropdown-item" href="#" onclick="setListingStatus({{ land.id }}, 'removed'); return false;">
-                                <i class="fas fa-times-circle text-danger me-2"></i>Mark as Removed
-                            </a></li>
-                            <li><a class="dropdown-item" href="#" onclick="setListingStatus({{ land.id }}, 'sold'); return false;">
-                                <i class="fas fa-check-circle text-secondary me-2"></i>Mark as Sold
-                            </a></li>
-                        </ul>
-                    </div>
-                    {% else %}
-                    <button class="btn btn-outline-success" onclick="setListingStatus({{ land.id }}, 'active')">
-                        <i class="fas fa-undo me-1"></i>Mark as Active
-                    </button>
-                    {% endif %}
                 </div>
             </div>
         </div>
@@ -1391,37 +1367,17 @@ async function toggleFavorite(landId) {
 }
 
 // Manually set listing status
-async function setListingStatus(landId, status) {
-    if (!confirm(`Are you sure you want to mark this listing as "${status}"?`)) {
-        return;
-    }
+// setListingStatus() went with the Mark Status dropdown (2026-08-09): the same
+// hand-set override the property page lost, and the one thing the check below
+// cannot correct. /api/land/<id>/set-status is untouched.
 
-    try {
-        const response = await fetch(`/api/land/${landId}/set-status`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ status: status })
-        });
-
-        const data = await response.json();
-
-        if (data.success) {
-            // Reload page to show updated status
-            window.location.reload();
-        } else {
-            alert('Error: ' + (data.error || 'Unknown error'));
-        }
-    } catch (error) {
-        console.error('Error setting status:', error);
-        alert('Error setting status');
-    }
-}
-
-// Check listing status on Idealista
-async function checkListingStatus(landId) {
-    const btn = document.getElementById('recheck-btn') || event.target.closest('button');
+// Check listing status on Idealista. The button comes from the call site: it
+// used to be looked up by the id of the one that lived inside the removed/sold
+// banner, which is gone, and a second call site would have driven that same
+// element instead of itself.
+async function checkListingStatus(landId, btn) {
+    btn = btn || document.getElementById('check-listing-status-btn');
+    if (!btn) return;
     const originalContent = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Checking...';
@@ -1915,7 +1871,58 @@ document.addEventListener('DOMContentLoaded', function() {
     // Render existing analyses into tabs
     renderAnalysisInto('ai-claude-structured-analysis', window.__EXISTING_CLAUDE_ANALYSIS__, 'ai-claude-placeholder');
     renderAnalysisInto('ai-chatgpt-structured-analysis', window.__EXISTING_OPENAI_ANALYSIS__, 'ai-chatgpt-placeholder');
+    wireCopyButtons();
 });
+
+/* Copy the coordinate pair. navigator.clipboard needs a secure context --
+   http://localhost:5001 counts as one, but the same container reached over a
+   LAN address does not -- so fall back to the hidden-textarea path, and when
+   neither works say so on the button instead of flashing a tick for a
+   clipboard that never changed. */
+async function copyTextToClipboard(text) {
+    if (!text) throw new Error('nothing to copy');
+    if (window.isSecureContext && navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+        return;
+    }
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.top = '-1000px';
+    document.body.appendChild(area);
+    area.select();
+    let copied = false;
+    try {
+        copied = document.execCommand('copy');
+    } finally {
+        document.body.removeChild(area);
+    }
+    if (!copied) throw new Error('execCommand("copy") was refused');
+}
+
+function wireCopyButtons() {
+    document.querySelectorAll('.copy-coords-btn').forEach((btn) => {
+        const icon = btn.querySelector('i');
+        const originalIconClass = icon ? icon.className : null;
+        const originalTitle = btn.title;
+        btn.addEventListener('click', async () => {
+            try {
+                await copyTextToClipboard(btn.dataset.copyText);
+                if (icon) icon.className = 'fas fa-check text-success';
+                btn.title = 'Copied';
+            } catch (error) {
+                console.error('Copy failed', error);
+                if (icon) icon.className = 'fas fa-triangle-exclamation text-danger';
+                btn.title = 'Could not copy — select the coordinates and copy them by hand';
+            }
+            setTimeout(() => {
+                if (icon && originalIconClass) icon.className = originalIconClass;
+                btn.title = originalTitle;
+            }, 1800);
+        });
+    });
+}
 
 function _normalizeAnalysisData(raw) {
     if (raw === null || raw === undefined) return null;

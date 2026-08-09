@@ -1,0 +1,221 @@
+"""The legacy land page gets the property page's header treatment (2026-08-09).
+
+`/lands/<id>` still renders the 168 frozen legacy rows, and it carried the same
+two shapes the property page just lost: a full-width Location panel holding two
+numbers and three labelled links, rendered twice (once per branch of "do we have
+a coordinate"), and a manual status override.
+
+What replaced them, exactly as on `/properties/<id>`:
+
+* The coordinate reads in the header with a copy button; Google Maps / Idealista
+  / Our Maps are icon links next to the title, once each.
+* "Mark Status" / "Mark as Active" are gone, and so is the "Re-check Status"
+  button that only appeared inside the removed/sold banner. One "Check status"
+  button stands in the actions row instead: always reachable, and it asks
+  Idealista rather than overriding it by hand.
+* "View on Idealista" is gone from the actions row -- that same link is the
+  Idealista icon in the header now, and this repo's rule for the property
+  surface is that every control exists exactly once.
+"""
+
+from decimal import Decimal
+
+import pytest
+
+from app import create_app, db
+from models import Land
+from tests import setup_test_environment
+
+
+@pytest.fixture
+def app():
+    setup_test_environment()
+    app = create_app()
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    with app.app_context():
+        db.create_all()
+        yield app
+        db.drop_all()
+
+
+@pytest.fixture
+def client(app):
+    return app.test_client()
+
+
+@pytest.fixture
+def land(app):
+    with app.app_context():
+        row = Land(
+            source_email_id="land_page_actions",
+            title="LandActionsFixtureTitle",
+            municipality="Cudillero",
+            land_type="developed",
+            listing_status="active",
+            description="A legacy plot with a view",
+            price=Decimal("150000.00"),
+            area=Decimal("1500.00"),
+            location_lat=Decimal("43.560000"),
+            location_lon=Decimal("-6.150000"),
+            url="https://www.idealista.com/inmueble/98765432/",
+        )
+        db.session.add(row)
+        db.session.commit()
+        return row.id
+
+
+@pytest.fixture
+def land_without_coordinates(app):
+    """The other branch of the old Location panel: municipality only."""
+    with app.app_context():
+        row = Land(
+            source_email_id="land_page_actions_no_coords",
+            title="LandNoCoordinatesFixtureTitle",
+            municipality="Cudillero",
+            land_type="developed",
+            listing_status="active",
+        )
+        db.session.add(row)
+        db.session.commit()
+        return row.id
+
+
+@pytest.fixture
+def removed_land(app):
+    """A removed listing renders the banner that used to carry its own
+    re-check button."""
+    with app.app_context():
+        row = Land(
+            source_email_id="land_page_actions_removed",
+            title="LandRemovedFixtureTitle",
+            municipality="Cudillero",
+            land_type="developed",
+            listing_status="removed",
+        )
+        db.session.add(row)
+        db.session.commit()
+        return row.id
+
+
+class TestTheLocationPanelIsGone:
+    def test_the_panel_itself_is_gone(self, client, land):
+        body = client.get(f"/lands/{land}").get_data(as_text=True)
+        assert "overview-location" not in body
+        assert 'aria-label="Location links"' not in body
+        assert "Our Maps</a>" not in body
+        assert "Google Maps</a>" not in body
+
+    def test_the_three_links_are_icons_next_to_the_title(self, client, land):
+        body = client.get(f"/lands/{land}").get_data(as_text=True)
+        icons = body[body.index('class="detail-link-icons') :]
+        icons = icons[: icons.index("</h1>")]
+        assert 'aria-label="Google Maps"' in icons
+        assert 'aria-label="Idealista"' in icons
+        assert 'aria-label="Our Maps"' in icons
+        assert "https://www.google.com/maps/search/?api=1&amp;query=43.56" in icons
+        assert "https://www.idealista.com/inmueble/98765432/" in icons
+        assert f"/map?focus={land}" in icons
+
+    def test_each_link_exists_exactly_once(self, client, land):
+        """Two panel branches rendered the same three links, and a third copy of
+        the Idealista one sat in the actions row as "View on Idealista"."""
+        body = client.get(f"/lands/{land}").get_data(as_text=True)
+        assert body.count('aria-label="Google Maps"') == 1
+        assert body.count('aria-label="Idealista"') == 1
+        assert body.count('aria-label="Our Maps"') == 1
+        assert "View on Idealista" not in body
+
+    def test_a_land_without_coordinates_still_maps_its_municipality(
+        self, client, land_without_coordinates
+    ):
+        body = client.get(f"/lands/{land_without_coordinates}").get_data(as_text=True)
+        assert "https://www.google.com/maps/search/Cudillero,+Spain" in body
+        # Nothing to copy, so no copy button over an empty string.
+        assert "data-copy-text" not in body
+        # The municipality the panel used to show is still on screen twice.
+        assert body.count("Cudillero") >= 2
+
+    def test_the_coordinate_reads_in_the_header_with_a_copy_button(self, client, land):
+        body = client.get(f"/lands/{land}").get_data(as_text=True)
+        assert 'data-copy-text="43.560000, -6.150000"' in body
+        # In the header, above the description card.
+        assert body.index("data-copy-text") < body.index("Property Description")
+
+    def test_the_default_unknown_accuracy_is_not_printed(self, client, land):
+        """`Land.location_accuracy` defaults to "unknown" and the legacy rows
+        never set it, so printing it would annotate every one of them with
+        nothing. A real value still shows."""
+        body = client.get(f"/lands/{land}").get_data(as_text=True)
+        coords_line = body[body.index("data-copy-text") - 400 :]
+        coords_line = coords_line[: coords_line.index("data-copy-text") + 400]
+        assert "(unknown)" not in coords_line
+
+    def test_a_recorded_accuracy_is_printed(self, client, app):
+        with app.app_context():
+            row = Land(
+                source_email_id="land_page_actions_precise",
+                title="LandPreciseFixtureTitle",
+                municipality="Cudillero",
+                land_type="developed",
+                listing_status="active",
+                location_lat=Decimal("43.560000"),
+                location_lon=Decimal("-6.150000"),
+                location_accuracy="approximate",
+            )
+            db.session.add(row)
+            db.session.commit()
+            land_id = row.id
+        body = client.get(f"/lands/{land_id}").get_data(as_text=True)
+        assert "(approximate)" in body
+
+    def test_a_failed_copy_is_reported_rather_than_faked(self, client, land):
+        body = client.get(f"/lands/{land}").get_data(as_text=True)
+        assert "Could not copy" in body
+        assert "execCommand" in body
+
+
+class TestTheManualStatusOverrideIsGone:
+    def test_the_controls_are_gone(self, client, land):
+        body = client.get(f"/lands/{land}").get_data(as_text=True)
+        assert "Mark Status" not in body.replace("Mark Status dropdown", "")
+        assert "Mark as Removed" not in body
+        assert "Mark as Sold" not in body
+        assert "Mark as Active" not in body
+
+    def test_its_javascript_went_with_it(self, client, land):
+        body = client.get(f"/lands/{land}").get_data(as_text=True)
+        assert "function setListingStatus" not in body
+        assert 'onclick="setListingStatus' not in body
+        assert "/api/land/${landId}/set-status" not in body
+
+    def test_a_removed_land_offers_no_status_override_either(
+        self, client, removed_land
+    ):
+        body = client.get(f"/lands/{removed_land}").get_data(as_text=True)
+        assert "no longer available on Idealista" in body  # the banner still renders
+        assert "Mark as Active" not in body
+        assert "function setListingStatus" not in body
+        assert 'onclick="setListingStatus' not in body
+
+
+class TestCheckStatusIsOneButton:
+    def test_it_is_in_the_actions_row_and_appears_once(self, client, land):
+        body = client.get(f"/lands/{land}").get_data(as_text=True)
+        assert body.count('id="check-listing-status-btn"') == 1
+        assert body.count("Check status") == 1
+        assert "/api/land/${landId}/check-status" in body
+
+    def test_the_banner_no_longer_carries_its_own_copy(self, client, removed_land):
+        """It used to be the only way to re-check, and only for removed or sold
+        listings; a second call site would also have driven that element by id
+        instead of itself."""
+        body = client.get(f"/lands/{removed_land}").get_data(as_text=True)
+        assert 'id="recheck-btn"' not in body
+        assert "Re-check Status" not in body
+        assert body.count('id="check-listing-status-btn"') == 1
+
+    def test_the_button_passes_itself_to_the_handler(self, client, land):
+        body = client.get(f"/lands/{land}").get_data(as_text=True)
+        assert f"checkListingStatus({land}, this)" in body
+        assert "async function checkListingStatus(landId, btn)" in body
