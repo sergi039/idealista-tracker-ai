@@ -91,12 +91,13 @@ Default recommendation:
   were measured against the live instance on 2026-08-09, not inferred, and
   each one silently produced "no amenities nearby" until #144 fixed it.
   This entry documents shipped behaviour: the handling lives in
-  `EnrichmentService._enrich_with_osm_data` and `_osm_refusal`
+  `EnrichmentService._fetch_osm_amenities` and `_osm_refusal`
   (`services/enrichment_service.py`) plus `fetch_coastline_points`
   (`services/sea_view_service.py`), and is pinned by
   `tests/test_overpass_user_agent_and_refusal.py` — `TestOutgoingRequest`
   for the User-Agent and the backoff, `TestRefusalIsNotAnEmptyResult` for
-  all four refusal shapes including the `remark` case.
+  all four refusal shapes including the `remark` case — and, for the
+  property path, by `tests/test_issue_152_property_osm_amenities.py`.
   - It answers `406 Not Acceptable` to the default `python-requests`
     User-Agent, **and** to any User-Agent carrying a parenthetical comment.
     Only a bare product token is served — `utils/http.py` `HTTP_USER_AGENT`.
@@ -109,12 +110,19 @@ Default recommendation:
     runs out of memory returns `{"elements": [], "remark": "runtime error:
     Query timed out ..."}`. Reading `elements` off such a body records a
     computed negative for a query that never ran.
+  - Every Overpass caller in the process shares one pacer,
+    `utils/http.py` `OVERPASS_GATE`, because the two slots above are per IP
+    rather than per caller (#152). Pacing the coastline query and the amenity
+    query separately paced neither.
 - Enrichment writes to `Land.infrastructure_extended`, a plain
   `db.Column(JSON)` with **no `MutableDict`**. Mutating the loaded dict and
   assigning the same object back never marks the attribute dirty, so the flush
   emits no UPDATE and the write is lost on commit while still looking correct
   in memory. Copy before merging — `EnrichmentService._write_infrastructure_extended`
   is the one place that does it. A test that does not reload cannot see this.
+  `Property.enrichment` is the same kind of column one level deeper, so its
+  writer (`_write_property_infrastructure_extended`) copies the blob *and* the
+  section and calls `flag_modified`, as `services/sea_distance_service.py` does.
 
 ## Next
 

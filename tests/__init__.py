@@ -11,6 +11,8 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+from utils.http import OVERPASS_GATE  # noqa: E402  (needs the path above)
+
 # Set up test logging
 logging.basicConfig(
     level=logging.WARNING,  # Reduce noise in tests
@@ -37,6 +39,12 @@ TEST_GOOGLE_PLACES_API_KEY = "test_places_key"
 # a module that forgets it would otherwise inherit whatever DATABASE_URL the
 # developer's shell exports -- possibly a real database.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+
+# Overpass is mocked in every suite, so the two-second interval the shared gate
+# keeps against the live instance would only add real seconds to a run that
+# never reaches it. The gate's own behaviour is tested directly, by setting an
+# interval and a clock -- see tests/test_issue_152_property_osm_amenities.py.
+OVERPASS_GATE.min_interval_s = 0.0
 
 
 def setup_test_environment():

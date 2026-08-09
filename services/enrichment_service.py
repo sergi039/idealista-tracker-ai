@@ -1,11 +1,16 @@
 import re
 import logging
 import hashlib
+import math
 import requests
 import time
 import unicodedata
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+from sqlalchemy.orm.attributes import flag_modified
+
 from utils.geocoding import GeocodingService
 from utils.google_api import (
     REASON_HTTP_ERROR,
@@ -15,7 +20,7 @@ from utils.google_api import (
     failure_from_exception,
     read_api_payload,
 )
-from utils.http import HTTP_USER_AGENT, request_with_retries
+from utils.http import HTTP_USER_AGENT, OVERPASS_GATE, request_with_retries
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 from config import Config
 from services.scoring_service import ScoringService
@@ -40,6 +45,55 @@ OSM_REASON_QUERY_ERROR = "overpass_query_error"
 # cache hit can report their real age instead of the age of the read. A v1
 # entry is a bare counts dict, which this key simply never looks at.
 OSM_CACHE_KEY = "osm_amenities_v2"
+
+# A property with no usable coordinates was never asked about, which is not the
+# same as "nothing nearby". Geocoding it would be a paid Google call, so the
+# amenity lookup records the gap instead of reaching for one. Same wording as
+# `services/sea_distance_service.STATUS_NO_COORDINATES`, for the same reason.
+OSM_REASON_NO_COORDINATES = "no_coordinates"
+
+# The section of `Property.enrichment` the amenity counts live in. It is the
+# same name the legacy `Land` column has, so `Property.infrastructure_extended`
+# and the property page read both without a second code path.
+PROPERTY_INFRASTRUCTURE_KEY = "infrastructure_extended"
+
+# Amenity kinds counted within this radius. Frozen into the cache key by
+# OSM_CACHE_KEY: widen either and bump that, or a cached count answers a
+# question it was never asked.
+OSM_AMENITY_KINDS = ("supermarket", "school", "hospital", "restaurant", "cafe", "fuel")
+OSM_AMENITY_RADIUS_M = 2000
+
+
+def _osm_coordinate(value: Any, *, limit: float) -> Optional[float]:
+    """A usable coordinate, or None when it is missing or off the globe.
+
+    Same rule as `_coordinate` in services/sea_distance_service.py, and for the
+    same reason: an out-of-range latitude would still come back with nothing
+    nearby, and that absence would then be filed as a measurement.
+    """
+    try:
+        if value is None:
+            return None
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(result) or abs(result) > limit:
+        return None
+    return result
+
+
+@dataclass(frozen=True)
+class OsmAmenityReading:
+    """The outcome of one Overpass amenity lookup, with no model attached.
+
+    Exactly one of `counts` and `failure` is set. Empty counts with no failure
+    is a real answer -- Overpass looked and there is nothing within the radius
+    -- and that distinction is the whole point of #98, #144 and this class.
+    """
+
+    counts: Optional[Dict[str, int]] = None
+    measured_at: Optional[str] = None
+    failure: Optional[GoogleApiFailure] = None
 
 
 class EnrichmentService:
@@ -912,6 +966,70 @@ class EnrichmentService:
         merged.update(entries)
         land.infrastructure_extended = merged
 
+    @staticmethod
+    def _write_property_infrastructure_extended(prop, **entries) -> None:
+        """Merge `entries` into the property's infrastructure_extended section.
+
+        `Property.enrichment` is a plain `db.Column(JSON)` too, so the same
+        copy-before-assign rule as above applies, one level deeper: both the
+        blob and the section have to be new objects. `flag_modified` is what
+        services/sea_distance_service.py already uses for this column.
+
+        The base is `prop.infrastructure_extended`, the model property, and not
+        `enrichment["infrastructure_extended"]` directly. On the 139 rows
+        mirrored from `lands` that section only exists under `legacy_land`, and
+        the model falls back to it *only while there is no top-level one*. So
+        the first write here would otherwise hide every Google-derived key the
+        page already showed. Seeding from the model property means the write
+        adds the amenity counts and takes nothing away.
+        """
+        enrichment = dict(prop.enrichment) if isinstance(prop.enrichment, dict) else {}
+        section = dict(prop.infrastructure_extended or {})
+        section.update(entries)
+        enrichment[PROPERTY_INFRASTRUCTURE_KEY] = section
+        prop.enrichment = enrichment
+        flag_modified(prop, "enrichment")
+
+    @staticmethod
+    def _osm_status_entry(
+        current: Dict[str, Any],
+        state: str,
+        failure: Optional[GoogleApiFailure] = None,
+        measured_at: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Build the status entry for the last Overpass call.
+
+        Written on every run so an absent `osm_amenities` can be read back as
+        either "Overpass answered, nothing nearby" or "we never got to look".
+        `measured_at` says when the counts now on the record were actually
+        measured, which is not the same as when they were last fetched.
+
+        `current` is the infrastructure section as it stands, so a refusal can
+        carry the age of the counts it leaves behind. `Land` and `Property`
+        keep that section in different columns and share this shape.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        status: Dict[str, Any] = {"state": state, "checked_at": now}
+
+        if failure is None:
+            # Counts read back from the cache were measured when the cache
+            # entry was written, up to a week ago - stamping "now" on them
+            # would refresh an age the page then reports as fact.
+            status["measured_at"] = measured_at or now
+            return status
+
+        status["reason"] = failure.reason
+        if failure.http_status is not None:
+            status["http_status"] = failure.http_status
+        # Counts from an earlier, successful run stay on the record - they
+        # were true once and deleting them loses real data. Carry their
+        # age forward so the page can label them as stale instead of
+        # rendering them as though this run had just measured them.
+        previous = current.get(OSM_STATUS_KEY)
+        if isinstance(previous, dict) and previous.get("measured_at"):
+            status["measured_at"] = previous["measured_at"]
+        return status
+
     def _record_osm_status(
         self,
         land,
@@ -919,34 +1037,24 @@ class EnrichmentService:
         failure: Optional[GoogleApiFailure] = None,
         measured_at: Optional[str] = None,
     ) -> None:
-        """Stamp the outcome of the last Overpass call onto the land.
-
-        Written on every run so an absent `osm_amenities` can be read back as
-        either "Overpass answered, nothing nearby" or "we never got to look".
-        `measured_at` says when the counts now on the record were actually
-        measured, which is not the same as when they were last fetched.
-        """
-        now = datetime.now(timezone.utc).isoformat()
-        status: Dict = {"state": state, "checked_at": now}
-
-        if failure is None:
-            # Counts read back from the cache were measured when the cache
-            # entry was written, up to a week ago - stamping "now" on them
-            # would refresh an age the page then reports as fact.
-            status["measured_at"] = measured_at or now
-        else:
-            status["reason"] = failure.reason
-            if failure.http_status is not None:
-                status["http_status"] = failure.http_status
-            # Counts from an earlier, successful run stay on the record - they
-            # were true once and deleting them loses real data. Carry their
-            # age forward so the page can label them as stale instead of
-            # rendering them as though this run had just measured them.
-            previous = (land.infrastructure_extended or {}).get(OSM_STATUS_KEY)
-            if isinstance(previous, dict) and previous.get("measured_at"):
-                status["measured_at"] = previous["measured_at"]
-
+        """Stamp the outcome of the last Overpass call onto the land."""
+        status = self._osm_status_entry(
+            land.infrastructure_extended or {}, state, failure, measured_at
+        )
         self._write_infrastructure_extended(land, **{OSM_STATUS_KEY: status})
+
+    def _record_property_osm_status(
+        self,
+        prop,
+        state: str,
+        failure: Optional[GoogleApiFailure] = None,
+        measured_at: Optional[str] = None,
+    ) -> None:
+        """Stamp the outcome of the last Overpass call onto the property."""
+        status = self._osm_status_entry(
+            prop.infrastructure_extended or {}, state, failure, measured_at
+        )
+        self._write_property_infrastructure_extended(prop, **{OSM_STATUS_KEY: status})
 
     def _osm_refusal(self, land, failure: GoogleApiFailure) -> GoogleApiFailure:
         """Log a refused Overpass call, stamp it on the land, hand it back."""
@@ -956,41 +1064,49 @@ class EnrichmentService:
         self._record_osm_status(land, OSM_STATE_UNAVAILABLE, failure)
         return failure
 
-    def _enrich_with_osm_data(self, land) -> Optional[GoogleApiFailure]:
-        """Enrich with OpenStreetMap data as fallback.
+    def _fetch_osm_amenities(self, lat: float, lon: float) -> OsmAmenityReading:
+        """Count amenities near a point, or say why Overpass refused.
 
-        Returns the failure that stopped it, or None when Overpass answered.
-        A refused request never becomes an empty `osm_amenities` - that is the
-        #98 mistake, and it is exactly what happened here: the app sent the
-        default `python-requests` User-Agent, which overpass-api.de rejects
-        with `406 Not Acceptable`, and the empty result was recorded as
-        "no amenities nearby".
+        The one Overpass amenity client in the app: `Land` and `Property` both
+        write what it returns, so the three refusals overpass-api.de delivers
+        are read the same way for both, and a second client cannot drift away
+        from them (#152). Those three, all measured against the live instance:
+
+        * `406 Not Acceptable` for a User-Agent it dislikes -- the default
+          `python-requests/x.y.z`, and any token carrying a parenthetical
+          comment (#144);
+        * `504` while both of its two per-IP slots are busy, which is a queue
+          rather than a broken request;
+        * a server-side failure delivered *inside a 200*, as a `remark` in the
+          body with an empty or absent `elements`.
+
+        A refusal never comes back as empty counts. That is the #98 mistake,
+        and it would then be cached for a week.
         """
         try:
-            lat, lon = float(land.location_lat), float(land.location_lon)
-
             cached = get_cached_enrichment_data(lat, lon, OSM_CACHE_KEY)
             if isinstance(cached, dict) and isinstance(cached.get("counts"), dict):
-                self._write_infrastructure_extended(
-                    land, osm_amenities=cached["counts"]
+                logger.debug("OSM amenities cache hit for %s,%s", lat, lon)
+                return OsmAmenityReading(
+                    counts=cached["counts"], measured_at=cached.get("measured_at")
                 )
-                self._record_osm_status(
-                    land, OSM_STATE_OK, measured_at=cached.get("measured_at")
-                )
-                logger.debug("OSM amenities cache hit for land %s", land.id)
-                return None
 
-            # OSM Overpass query for nearby amenities
+            amenities = "|".join(OSM_AMENITY_KINDS)
+            around = f"around:{OSM_AMENITY_RADIUS_M},{lat},{lon}"
             overpass_query = f"""
             [out:json][timeout:25];
             (
-              node["amenity"~"^(supermarket|school|hospital|restaurant|cafe|fuel)$"](around:2000,{lat},{lon});
-              way["amenity"~"^(supermarket|school|hospital|restaurant|cafe|fuel)$"](around:2000,{lat},{lon});
-              relation["amenity"~"^(supermarket|school|hospital|restaurant|cafe|fuel)$"](around:2000,{lat},{lon});
+              node["amenity"~"^({amenities})$"]({around});
+              way["amenity"~"^({amenities})$"]({around});
+              relation["amenity"~"^({amenities})$"]({around});
             );
             out center;
             """
 
+            # Both Overpass callers in this process share one gate, so a bulk
+            # run over hundreds of rows does not become hundreds of
+            # back-to-back queries against an endpoint that grants two slots.
+            OVERPASS_GATE.wait()
             try:
                 response = request_with_retries(
                     requests.post,
@@ -1002,12 +1118,11 @@ class EnrichmentService:
                         # sent and every call comes back 406. See HTTP_USER_AGENT.
                         "User-Agent": HTTP_USER_AGENT,
                     },
-                    # overpass-api.de grants two query slots per IP and answers
-                    # 504 while both are busy - that is a queue, not a broken
-                    # request, and a slot frees up in roughly a minute. The
-                    # default half-second backoff gives up long before then, so
-                    # widen it: 8+16+32 out-waits a typical turnover without
-                    # stalling a bulk run for minutes on a *fallback* source.
+                    # A 504 here means "both slots are busy", and a slot frees
+                    # up in roughly a minute. The default half-second backoff
+                    # gives up long before then, so widen it: 8+16+32 out-waits
+                    # a typical turnover without stalling a bulk run for
+                    # minutes on a *fallback* source.
                     max_attempts=4,
                     backoff_base=8.0,
                     backoff_max=90.0,
@@ -1015,37 +1130,36 @@ class EnrichmentService:
                     logger=logger,
                 )
             except requests.RequestException as exc:
-                return self._osm_refusal(land, failure_from_exception(exc))
+                return OsmAmenityReading(failure=failure_from_exception(exc))
+            finally:
+                OVERPASS_GATE.mark()
 
             status_code = getattr(response, "status_code", None)
             if status_code != 200:
-                return self._osm_refusal(
-                    land,
-                    GoogleApiFailure(
+                return OsmAmenityReading(
+                    failure=GoogleApiFailure(
                         reason=REASON_HTTP_ERROR,
                         http_status=status_code
                         if isinstance(status_code, int)
                         else None,
-                    ),
+                    )
                 )
 
             try:
                 osm_data = response.json()
             except ValueError as exc:
-                return self._osm_refusal(
-                    land,
-                    GoogleApiFailure(
+                return OsmAmenityReading(
+                    failure=GoogleApiFailure(
                         reason=REASON_MALFORMED_RESPONSE, message=str(exc)
-                    ),
+                    )
                 )
 
             if not isinstance(osm_data, dict):
-                return self._osm_refusal(
-                    land,
-                    GoogleApiFailure(
+                return OsmAmenityReading(
+                    failure=GoogleApiFailure(
                         reason=REASON_MALFORMED_RESPONSE,
                         message=f"expected an object, got {type(osm_data).__name__}",
-                    ),
+                    )
                 )
 
             # Overpass reports a server-side failure *inside a 200*: the body
@@ -1055,27 +1169,24 @@ class EnrichmentService:
             # exists to remove, and it would then be cached for a week.
             remark = osm_data.get("remark")
             if remark:
-                return self._osm_refusal(
-                    land,
-                    GoogleApiFailure(
+                return OsmAmenityReading(
+                    failure=GoogleApiFailure(
                         reason=OSM_REASON_QUERY_ERROR, message=str(remark)
-                    ),
+                    )
                 )
 
             # No `elements` at all is not an empty answer either - a well-formed
             # Overpass result always carries the key, even when it is empty.
             elements = osm_data.get("elements")
             if not isinstance(elements, list):
-                return self._osm_refusal(
-                    land,
-                    GoogleApiFailure(
+                return OsmAmenityReading(
+                    failure=GoogleApiFailure(
                         reason=REASON_MALFORMED_RESPONSE,
                         message="response carries no elements list",
-                    ),
+                    )
                 )
 
-            # Process OSM amenities as fallback data
-            amenity_counts = {}
+            amenity_counts: Dict[str, int] = {}
             for element in elements:
                 if not isinstance(element, dict):
                     continue
@@ -1083,15 +1194,13 @@ class EnrichmentService:
                 if amenity:
                     amenity_counts[amenity] = amenity_counts.get(amenity, 0) + 1
 
-            # Store OSM fallback data. An empty dict here is a real answer:
-            # Overpass looked and there is nothing within 2km.
+            # An empty dict here is a real answer: Overpass looked and there is
+            # nothing within the radius.
             measured_at = datetime.now(timezone.utc).isoformat()
-            self._write_infrastructure_extended(land, osm_amenities=amenity_counts)
-            self._record_osm_status(land, OSM_STATE_OK, measured_at=measured_at)
 
             # Best effort, and deliberately last. Overpass answered and the
-            # counts are on the record; a cache that refuses the write is a
-            # slower next run, not a failed enrichment, so it must not fall
+            # counts are the caller's to store; a cache that refuses the write
+            # is a slower next run, not a failed lookup, so it must not fall
             # through to the handler below and relabel this call "unavailable".
             try:
                 cache_enrichment_data(
@@ -1103,18 +1212,92 @@ class EnrichmentService:
                 )
             except Exception:
                 logger.warning(
-                    "Could not cache OSM amenities for land %s", land.id, exc_info=True
+                    "Could not cache OSM amenities for %s,%s", lat, lon, exc_info=True
                 )
-            return None
+            return OsmAmenityReading(counts=amenity_counts, measured_at=measured_at)
 
         except Exception as exc:
+            logger.error("Failed to fetch OSM amenities", exc_info=True)
+            return OsmAmenityReading(failure=failure_from_exception(exc))
+
+    def _enrich_with_osm_data(self, land) -> Optional[GoogleApiFailure]:
+        """Write nearby-amenity counts onto a legacy `Land`.
+
+        Returns the failure that stopped it, or None when Overpass answered.
+        """
+        try:
+            lat, lon = float(land.location_lat), float(land.location_lon)
+        except (TypeError, ValueError) as exc:
+            return self._osm_refusal(land, failure_from_exception(exc))
+
+        reading = self._fetch_osm_amenities(lat, lon)
+        if reading.failure is not None:
+            return self._osm_refusal(land, reading.failure)
+
+        try:
+            self._write_infrastructure_extended(land, osm_amenities=reading.counts)
+            self._record_osm_status(land, OSM_STATE_OK, measured_at=reading.measured_at)
+        except Exception as exc:
             failure = failure_from_exception(exc)
-            logger.error("Failed to enrich with OSM data", exc_info=True)
-            try:
-                self._record_osm_status(land, OSM_STATE_UNAVAILABLE, failure)
-            except Exception:
-                logger.debug("Could not stamp OSM status on land", exc_info=True)
+            logger.error("Failed to store OSM amenities on land", exc_info=True)
             return failure
+        return None
+
+    def enrich_osm_amenities(
+        self, prop, *, commit: bool = True
+    ) -> Optional[GoogleApiFailure]:
+        """Measure nearby amenities for a universal `Property`.
+
+        Free and keyless: OpenStreetMap, no Google billing (#152). Until this
+        existed the amenity lookup was reachable only from the legacy `Land`
+        endpoints, so 213 of 352 listings had an Extended Infrastructure card
+        that was simply absent -- which reads as "nothing nearby" rather than
+        "never asked".
+
+        Lives here rather than in `PropertyEnrichmentService` because the
+        Overpass client and its refusal handling do, and the issue asks for one
+        client, not two. Returns the failure, or None when Overpass answered.
+        """
+        from app import db
+
+        lat = _osm_coordinate(prop.location_lat, limit=90.0)
+        lon = _osm_coordinate(prop.location_lon, limit=180.0)
+
+        if lat is None or lon is None:
+            # Geocoding is a paid Google call; do not reach for one to count
+            # cafés. Recorded so the page can say "not asked" rather than
+            # showing an absence that reads like a measurement.
+            failure = GoogleApiFailure(reason=OSM_REASON_NO_COORDINATES)
+            logger.info(
+                "OSM amenities skipped for property %s: no usable coordinates",
+                prop.id,
+            )
+            self._record_property_osm_status(prop, OSM_STATE_UNAVAILABLE, failure)
+            if commit:
+                db.session.commit()
+            return failure
+
+        reading = self._fetch_osm_amenities(lat, lon)
+        if reading.failure is not None:
+            logger.error(
+                "OSM amenities unavailable for property %s: %s",
+                prop.id,
+                reading.failure.describe(),
+            )
+            self._record_property_osm_status(
+                prop, OSM_STATE_UNAVAILABLE, reading.failure
+            )
+        else:
+            self._write_property_infrastructure_extended(
+                prop, osm_amenities=reading.counts
+            )
+            self._record_property_osm_status(
+                prop, OSM_STATE_OK, measured_at=reading.measured_at
+            )
+
+        if commit:
+            db.session.commit()
+        return reading.failure
 
     def _analyze_environment(self, land):
         """Analyze environment features like views and orientation"""

@@ -212,14 +212,17 @@ and TODO.md; respect it if you ever run both side by side.
 - External APIs cost real money (Anthropic, OpenAI, Google Places /
   Distance Matrix). Never run bulk backfills (`utils/bulk_ai_analysis.py`,
   `utils/recalc_travel_times.py`) without an explicit ticket saying so.
-  `utils/backfill_sea_view.py` is the exception that proves the rule: it
-  spends nothing, because OpenStreetMap and OpenTopoData are free. It is
-  still paced — overpass-api.de grants two query slots per IP and answers
-  504 while they are busy, and it refuses the default `python-requests`
-  User-Agent outright — so keep the per-cell caching and the bare product
-  token, now `utils/http.py` `HTTP_USER_AGENT`, shared by
-  `services/sea_view_service.py` and the OSM amenity call in
-  `services/enrichment_service.py`.
+  `utils/backfill_sea_view.py` and `utils/backfill_osm_amenities.py` are the
+  exceptions that prove the rule: they spend nothing, because OpenStreetMap
+  and OpenTopoData are free. They are still paced — overpass-api.de grants two
+  query slots per IP and answers 504 while they are busy, and it refuses the
+  default `python-requests` User-Agent outright — so keep the caching, the
+  shared `utils/http.py` `OVERPASS_GATE`, and the bare product token
+  `HTTP_USER_AGENT`, both used by `services/sea_view_service.py` and the OSM
+  amenity call in `services/enrichment_service.py`. The amenity backfill calls
+  `EnrichmentService.enrich_osm_amenities` **directly and never
+  `PropertyEnrichmentService.enrich_property`**, which would fire the paid
+  Google travel and Places calls once per row.
 - **Every Overpass caller reads three refusals, not one** (#144, all measured
   against the live instance): the `406` above, which also fires for a UA
   carrying a parenthetical comment; the `504` above, which needs a backoff in
@@ -229,9 +232,20 @@ and TODO.md; respect it if you ever run both side by side.
   `elements` off that last one writes a computed negative for a query that
   never ran, and caches it — the #98 defect, in a free API. Treat a `remark`,
   and a body with no `elements` list, as refusals. All three are already
-  handled in `EnrichmentService._enrich_with_osm_data` and pinned by
+  handled in `EnrichmentService._fetch_osm_amenities` and pinned by
   `tests/test_overpass_user_agent_and_refusal.py`; this rule exists so the
   next Overpass caller does not have to rediscover them.
+- **Amenities are measured for `Property`, through the same one client**
+  (#152). `_fetch_osm_amenities` is the whole Overpass amenity client — cache,
+  gate, transport, refusals — and `_enrich_with_osm_data` (legacy `Land`) and
+  `enrich_osm_amenities` (universal `Property`) are thin writers over it. The
+  property one runs inside `PropertyEnrichmentService.enrich_property`, lands
+  in `enrichment["infrastructure_extended"]`, and a refusal never fails that
+  run: no score reads these counts. Before this the lookup was reachable only
+  from the `Land` endpoints, so 213 of 352 listings had no Extended
+  Infrastructure card at all — an absence that reads as "nothing nearby". Do
+  not add a second amenity client, and do not let a refusal become empty
+  counts.
 - Preserve the scraping throttle in `services/listing_status_service.py`
   (randomized sleeps between listing fetches). No bulk re-scrape loops.
 - **There is no authentication** (owner decision, 2026-08-08): the admin

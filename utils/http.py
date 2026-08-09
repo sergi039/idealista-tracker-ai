@@ -1,5 +1,6 @@
 import logging
 import random
+import threading
 import time
 from typing import Callable, Iterable, Optional
 
@@ -15,6 +16,52 @@ _DEFAULT_RETRY_STATUSES = (429, 500, 502, 503, 504)
 # `IdealistaRank/1.0 (personal property tracker)` is refused while the bare
 # product token is served. Keep this a plain token.
 HTTP_USER_AGENT = "IdealistaRank/1.0"
+
+# overpass-api.de grants two query slots per IP and answers 504 while both are
+# busy. Two seconds between calls keeps a bulk run inside that budget.
+OVERPASS_MIN_INTERVAL_S = 2.0
+
+
+class RateGate:
+    """Pace the calls this process makes to one shared endpoint.
+
+    The wait is taken while holding the lock on purpose: several worker threads
+    reaching a busy endpoint at once would otherwise all measure the same gap,
+    all decide it has passed, and fire together. Only the wait is serialised --
+    the request itself runs outside, so callers stay concurrent, merely spaced.
+
+    `wait()` before the request, `mark()` when it returns, so the interval is
+    measured from the end of the previous call rather than its start.
+    """
+
+    def __init__(self, min_interval_s: float, name: str = ""):
+        self.min_interval_s = min_interval_s
+        self.name = name
+        self._lock = threading.Lock()
+        self._last_call_at = 0.0
+
+    def wait(self) -> float:
+        """Block until the next call is due. Returns the seconds slept."""
+        with self._lock:
+            slept = 0.0
+            delay = self.min_interval_s - (time.monotonic() - self._last_call_at)
+            if delay > 0:
+                time.sleep(delay)
+                slept = delay
+            self._last_call_at = time.monotonic()
+            return slept
+
+    def mark(self) -> None:
+        """Record that a call has just finished."""
+        with self._lock:
+            self._last_call_at = time.monotonic()
+
+
+# One gate for every Overpass caller in the process: the coastline query in
+# services/sea_view_service.py and the amenity query in
+# services/enrichment_service.py hit the same two per-IP slots, so pacing them
+# separately would pace neither.
+OVERPASS_GATE = RateGate(OVERPASS_MIN_INTERVAL_S, name="overpass")
 
 
 def _compute_backoff(attempt: int, base: float, max_delay: float) -> float:
