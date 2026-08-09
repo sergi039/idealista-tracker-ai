@@ -428,6 +428,17 @@ footer {
     letter-spacing: 0.025em;
 }
 
+/* Quiet neutral badge (property subtype, "Archive" marker).
+   Bootstrap never redefines --bs-light-rgb for the dark theme, so `.bg-light`
+   stays near-white there; paired with `.text-body-secondary` it painted light
+   grey on white and the word was unreadable. These variables flip with the
+   theme, so one rule covers both. */
+.badge.badge-neutral {
+    background-color: var(--bs-secondary-bg);
+    color: var(--bs-body-color);
+    border: var(--bs-border-width) solid var(--bs-border-color);
+}
+
 /* Alert improvements */
 .alert {
     border: none;

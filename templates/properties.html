@@ -279,7 +279,7 @@
                                         <label class="form-check-label small" for="profile-option-{{ option.id }}">
                                             {{ option.name }}
                                             <span class="text-body-secondary">({{ option.count }})</span>
-                                            <span class="badge bg-body-tertiary text-body-secondary border">{{ t('archive') }}</span>
+                                            <span class="badge badge-neutral">{{ t('archive') }}</span>
                                         </label>
                                     </li>
                                 {% endfor %}
@@ -736,7 +736,7 @@
                                                         <span class="text-muted">-</span>
                                                     {% endif %}
                                                     {% if p.property_subtype and p.property_subtype != p.property_category and not (p.property_category == 'land' and p.property_subtype == 'plot') %}
-                                                        <span class="badge bg-light text-body-secondary border">{{ p.property_subtype }}</span>
+                                                        <span class="badge badge-neutral">{{ p.property_subtype }}</span>
                                                     {% endif %}
                                                     {% if p.listing_status and p.listing_status != 'active' %}
                                                         <span class="badge bg-secondary">{{ p.listing_status }}</span>
@@ -807,7 +807,7 @@
                                             <span class="badge text-bg-secondary" style="flex-shrink: 0;">{{ p.property_category }}</span>
                                         {% endif %}
                                         {% if p.property_subtype and p.property_subtype != p.property_category %}
-                                            <span class="badge bg-light text-body-secondary border" style="flex-shrink: 0;">{{ p.property_subtype }}</span>
+                                            <span class="badge badge-neutral" style="flex-shrink: 0;">{{ p.property_subtype }}</span>
                                         {% endif %}
                                     </div>
                                     <div class="ms-2 d-flex align-items-center" style="flex-shrink: 0;">
