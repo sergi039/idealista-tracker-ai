@@ -48,7 +48,7 @@ This repo is a **separate universal build** that must run side-by-side with the 
   - Comparison endpoint: `GET /api/property/<id>/analysis/compare` (baseline is placeholder until a universal market model exists).
 - **UI parity**
   - `/properties`: `Export CSV` is in the navbar; `Manual Sync` is in the page header.
-  - `/properties`: `Category/Subtype` filters include `Unclassified` to find items missing classification.
+  - `/properties`: `Category/Subtype/Municipality` choices come from the subscriptions currently on screen (subtypes narrow again to the chosen category); `Unclassified` is offered only when such rows exist there.
   - Navbar order: `Properties → Profiles → Map → Scoring Criteria → Settings`.
   - `/properties/<id>`: has `Enrich with Google APIs` + AI tabs (Claude/ChatGPT) + comparison block.
 - **DB sanity (as of this snapshot)**

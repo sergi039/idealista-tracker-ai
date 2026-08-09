@@ -12,11 +12,17 @@ from flask import (
     flash,
     jsonify,
 )
+
+# get_or_404 raises HTTPException, and the blanket `except Exception` handlers
+# below would answer 500 for it: every one of them re-raises it first so an
+# unknown id stays a 404 (issue #136).
+from werkzeug.exceptions import HTTPException
 from sqlalchemy import or_, case, func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
 from app import db
+from services import sea_view_service
 from services.profile_selection import (
     MAX_SELECTED_PROFILE_IDS,
     ProfileSelection,
@@ -39,6 +45,9 @@ PROPERTY_MODE_SORT_DEFAULTS = {
     "lifestyle": "score_lifestyle",
 }
 PROPERTY_VIEW_TYPES = ("cards", "list")
+# The table is what a bare /properties opens on (owner decision, 2026-08-09):
+# it puts price, area, travel and date side by side, which the cards cannot.
+DEFAULT_PROPERTY_VIEW_TYPE = "list"
 # A bare /properties must open on the freshest listings, so the mode default
 # only applies once the user actually picks a mode.
 DEFAULT_PROPERTY_SORT = "created_at"
@@ -46,6 +55,10 @@ DEFAULT_PROPERTY_SORT = "created_at"
 # Investment ratings the AI analysis emits, ordered worst to best. The rank is
 # what "sort by Inv. Metr." orders on; the keys are what the filter accepts.
 INVESTMENT_RATING_ORDER = ("BELOW", "MODERATE", "GOOD", "EXCELLENT")
+
+# What the Type / Subtype filters send for "classified as nothing at all".
+# A query-string sentinel, never a stored value.
+UNCLASSIFIED_FILTER = "__none__"
 
 
 def _investment_rating_expr(model):
@@ -82,6 +95,50 @@ def _investment_rating_rank(model):
         ],
         else_=None,
     )
+
+
+# Sea view is a four-state verdict, not a flag -- see services/sea_view_service
+# for why. The filter offers two useful cuts of it: the corroborated rows, and
+# everything geometry or the listing text says is plausible.
+SEA_VIEW_FILTER_VALUES = {
+    "yes": ("yes",),
+    "likely": ("yes", "likely"),
+    # A bookmark from the retired /lands page says sea_view=on and means the
+    # old boolean. Reading it as "yes or likely" is the closest honest
+    # translation of what it used to select.
+    "on": ("yes", "likely"),
+}
+
+
+def _sea_view_state_expr(model):
+    """Effective sea-view state, with the mirrored `Land` boolean folded in.
+
+    Legacy rows keep their flag at enrichment.legacy_land.environment.sea_view.
+    It came from the same weak keyword pass the new verdict replaces, so a
+    legacy `true` reads as `likely` and never as `yes`; a legacy `false` is not
+    evidence of anything and stays absent.
+
+    Only the four known states are recognised at the computed path. Anything
+    else there -- a boolean the pre-verdict environment endpoint might have
+    left behind -- falls through to NULL, which reads as `unknown`: the
+    conservative answer, and the only one both dialects agree on, since a JSON
+    boolean casts to `true` on PostgreSQL and `1` on SQLite.
+    """
+    computed = model.enrichment["environment"]["sea_view"].as_string()
+    legacy = model.enrichment["legacy_land"]["environment"]["sea_view"].as_boolean()
+    return case(
+        (computed.in_(sea_view_service.VALID_STATES), computed),
+        (legacy.is_(True), "likely"),
+        else_=None,
+    )
+
+
+def _filter_by_sea_view(query, model, raw_value):
+    """Keep only rows whose sea-view verdict is in the requested bucket."""
+    wanted = SEA_VIEW_FILTER_VALUES.get((raw_value or "").strip().lower())
+    if not wanted:
+        return query
+    return query.filter(_sea_view_state_expr(model).in_(wanted))
 
 
 def _map_auto_profile_id(default_profile, profiles):
@@ -293,6 +350,98 @@ def _travel_display_targets(profile_ids, include_custom=False):
     return targets
 
 
+def _unclassified_clause(column):
+    """Rows the classifier never labelled: NULL or an empty string."""
+    return or_(column.is_(None), column == "")
+
+
+def _visible_distinct_values(column, profile_selection, extra_filter=None):
+    """Distinct non-empty values of `column` within the subscriptions shown."""
+    query = apply_profile_filter(
+        db.session.query(column).distinct(),
+        Property.search_profile_id,
+        profile_selection,
+    )
+    if extra_filter is not None:
+        query = query.filter(extra_filter)
+    return sorted({row[0] for row in query.all() if row and row[0]})
+
+
+def _selection_has_unclassified(column, profile_selection, extra_filter=None):
+    """Whether the subscriptions shown hold a row with no value in `column`."""
+    query = apply_profile_filter(
+        db.session.query(Property.id),
+        Property.search_profile_id,
+        profile_selection,
+    ).filter(_unclassified_clause(column))
+    if extra_filter is not None:
+        query = query.filter(extra_filter)
+    return bool(db.session.query(query.exists()).scalar())
+
+
+def _keep_applied_choice(values, applied):
+    """Keep an applied filter in its dropdown even when the selection lost it.
+
+    Switching subscriptions with a filter on would otherwise leave the select
+    reading "All types" over a page that is still filtered -- the control
+    would disagree with the query it produced.
+    """
+    if applied and applied != UNCLASSIFIED_FILTER and applied not in values:
+        values.append(applied)
+        values.sort()
+    return values
+
+
+def _property_filter_options(
+    profile_selection,
+    category_filter="",
+    subtype_filter="",
+    municipality_filter="",
+):
+    """Type / Subtype / Municipality choices for the subscriptions on screen.
+
+    These dropdowns used to be built from the whole `properties` table, so a
+    saved search for land offered `apartment` and `developed` as well --
+    values owned by other subscriptions, which can only ever return an empty
+    page here. They now come from the same selection the listing is filtered
+    by, and the subtypes narrow again to the chosen category.
+
+    "Unclassified" is offered the way the "No subscription" box is: only when
+    such rows exist in the selection, or when the filter is already on it.
+    Ingestion can still produce a listing no classification rule matched, and
+    hiding the only way to find those would trade dead UI for lost rows.
+    """
+    if category_filter == UNCLASSIFIED_FILTER:
+        category_clause = _unclassified_clause(Property.property_category)
+    elif category_filter:
+        category_clause = Property.property_category == category_filter
+    else:
+        category_clause = None
+
+    return {
+        "categories": _keep_applied_choice(
+            _visible_distinct_values(Property.property_category, profile_selection),
+            category_filter,
+        ),
+        "subtypes": _keep_applied_choice(
+            _visible_distinct_values(
+                Property.property_subtype, profile_selection, category_clause
+            ),
+            subtype_filter,
+        ),
+        "municipalities": _keep_applied_choice(
+            _visible_distinct_values(Property.municipality, profile_selection),
+            municipality_filter,
+        ),
+        "has_unclassified_category": _selection_has_unclassified(
+            Property.property_category, profile_selection
+        ),
+        "has_unclassified_subtype": _selection_has_unclassified(
+            Property.property_subtype, profile_selection, category_clause
+        ),
+    }
+
+
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance between two points, in kilometers."""
     r = 6371.0
@@ -355,6 +504,7 @@ def properties():
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
+        sea_view_filter = request.args.get("sea_view", "")
 
         # Hide removed: ON by default (similar to /lands)
         hide_removed_param = request.args.get("hide_removed", None)
@@ -367,6 +517,7 @@ def properties():
                 "municipality",
                 "search",
                 "inv_metr",
+                "sea_view",
                 "sort",
                 "order",
                 "favorites",
@@ -383,9 +534,9 @@ def properties():
         mode = request.args.get("mode", "combined")
         if mode not in PROPERTY_MODE_SORT_DEFAULTS:
             mode = "combined"
-        view_type = request.args.get("view_type", "cards")
+        view_type = request.args.get("view_type", DEFAULT_PROPERTY_VIEW_TYPE)
         if view_type not in PROPERTY_VIEW_TYPES:
-            view_type = "cards"
+            view_type = DEFAULT_PROPERTY_VIEW_TYPE
 
         # Sorting. Picking a mode switches to that mode's score; a bare
         # /properties keeps its date order so the newest listings stay on top.
@@ -406,23 +557,13 @@ def properties():
         )
 
         if category_filter:
-            if category_filter == "__none__":
-                query = query.filter(
-                    or_(
-                        Property.property_category.is_(None),
-                        Property.property_category == "",
-                    )
-                )
+            if category_filter == UNCLASSIFIED_FILTER:
+                query = query.filter(_unclassified_clause(Property.property_category))
             else:
                 query = query.filter(Property.property_category == category_filter)
         if subtype_filter:
-            if subtype_filter == "__none__":
-                query = query.filter(
-                    or_(
-                        Property.property_subtype.is_(None),
-                        Property.property_subtype == "",
-                    )
-                )
+            if subtype_filter == UNCLASSIFIED_FILTER:
+                query = query.filter(_unclassified_clause(Property.property_subtype))
             else:
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
@@ -443,6 +584,9 @@ def properties():
             query = _filter_by_investment_rating(
                 query, Property, investment_metrics_filter
             )
+
+        if sea_view_filter:
+            query = _filter_by_sea_view(query, Property, sea_view_filter)
 
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
@@ -516,36 +660,14 @@ def properties():
             )
         }
 
-        # Distinct lists for dropdowns (small, best-effort)
-        categories = [
-            r[0]
-            for r in db.session.query(Property.property_category)
-            .distinct()
-            .filter(Property.property_category.isnot(None))
-            .all()
-            if r and r[0]
-        ]
-        categories.sort()
-
-        subtypes = [
-            r[0]
-            for r in db.session.query(Property.property_subtype)
-            .distinct()
-            .filter(Property.property_subtype.isnot(None))
-            .all()
-            if r and r[0]
-        ]
-        subtypes.sort()
-
-        municipalities = [
-            r[0]
-            for r in db.session.query(Property.municipality)
-            .distinct()
-            .filter(Property.municipality.isnot(None))
-            .all()
-            if r and r[0]
-        ]
-        municipalities.sort()
+        # Dropdown choices for the subscriptions actually on screen -- see
+        # `_property_filter_options` for why they are not global lists.
+        filter_options = _property_filter_options(
+            profile_selection,
+            category_filter=category_filter,
+            subtype_filter=subtype_filter,
+            municipality_filter=municipality_filter,
+        )
 
         return render_template(
             "properties.html",
@@ -562,9 +684,7 @@ def properties():
             selected_profile_id=selected_profile_id,
             profile_selection=profile_selection,
             travel_display_targets=travel_display_targets,
-            categories=categories,
-            subtypes=subtypes,
-            municipalities=municipalities,
+            **filter_options,
             current_filters={
                 # A list, so `url_for` repeats the parameter instead of
                 # stringifying it -- every in-page link is rebuilt from here.
@@ -574,6 +694,7 @@ def properties():
                 "municipality": municipality_filter,
                 "search": search_query,
                 "inv_metr": investment_metrics_filter,
+                "sea_view": sea_view_filter,
                 "favorites": favorites_filter,
                 "hide_removed": hide_removed_filter,
                 "sort_by": sort_by,
@@ -603,10 +724,12 @@ def properties():
             categories=[],
             subtypes=[],
             municipalities=[],
+            has_unclassified_category=False,
+            has_unclassified_subtype=False,
             current_filters={
                 "mode": "combined",
                 "active_mode": "combined",
-                "view_type": "cards",
+                "view_type": DEFAULT_PROPERTY_VIEW_TYPE,
             },
         )
 
@@ -716,8 +839,10 @@ def property_detail(property_id):
             openai_analysis=(openai_variant.analysis if openai_variant else None),
             openai_model=(openai_variant.model if openai_variant else None),
             travel_display_targets=travel_display_targets,
-            profiles=SearchProfileService.list_profiles(active_only=False),
+            sea_view_verdict=sea_view_service.read_verdict(prop),
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to load property detail %s", property_id, exc_info=True)
         flash(
@@ -1252,6 +1377,8 @@ def recalculate_profile_travel(profile_id: int):
         return redirect(
             safe_referrer_redirect(url_for("main.properties", profile_id=profile_id))
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "Failed to recalculate travel for profile %s", profile_id, exc_info=True
@@ -1306,6 +1433,8 @@ def recalculate_profile_scoring(profile_id: int):
             safe_referrer_redirect(url_for("main.properties", profile_id=profile_id))
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "Failed to recalculate scoring for profile %s", profile_id, exc_info=True
@@ -1393,6 +1522,8 @@ def recalculate_profile_classification(profile_id: int):
             safe_referrer_redirect(url_for("main.edit_profile", profile_id=profile_id))
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to reclassify profile %s", profile_id, exc_info=True)
         flash(
@@ -1428,6 +1559,8 @@ def set_property_status_form(property_id: int):
                 url_for("main.property_detail", property_id=property_id)
             )
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to set property status %s", property_id, exc_info=True)
         db.session.rollback()
@@ -1519,6 +1652,8 @@ def land_detail(land_id):
             openai_model=openai_model,
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to load land detail %s", land_id, exc_info=True)
         flash(
@@ -1566,25 +1701,16 @@ def map_view():
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
+        sea_view_filter = request.args.get("sea_view", "")
 
         if category_filter:
-            if category_filter == "__none__":
-                query = query.filter(
-                    or_(
-                        Property.property_category.is_(None),
-                        Property.property_category == "",
-                    )
-                )
+            if category_filter == UNCLASSIFIED_FILTER:
+                query = query.filter(_unclassified_clause(Property.property_category))
             else:
                 query = query.filter(Property.property_category == category_filter)
         if subtype_filter:
-            if subtype_filter == "__none__":
-                query = query.filter(
-                    or_(
-                        Property.property_subtype.is_(None),
-                        Property.property_subtype == "",
-                    )
-                )
+            if subtype_filter == UNCLASSIFIED_FILTER:
+                query = query.filter(_unclassified_clause(Property.property_subtype))
             else:
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
@@ -1604,6 +1730,9 @@ def map_view():
             query = _filter_by_investment_rating(
                 query, Property, investment_metrics_filter
             )
+        if sea_view_filter:
+            query = _filter_by_sea_view(query, Property, sea_view_filter)
+
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
 
@@ -2276,6 +2405,8 @@ def edit_environment(land_id):
 
         return render_template("edit_environment.html", land=land)
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to edit environment for land %s", land_id, exc_info=True)
         flash(
@@ -2315,6 +2446,8 @@ def update_score(land_id):
 
         return redirect(url_for("main.land_detail", land_id=land_id))
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to update score for land %s", land_id, exc_info=True)
         flash("An error occurred while updating score. Check server logs.", "error")
@@ -2548,6 +2681,7 @@ def export_properties_csv():
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
+        sea_view_filter = request.args.get("sea_view", "")
 
         hide_removed_param = request.args.get("hide_removed", None)
         form_submitted = any(
@@ -2559,6 +2693,7 @@ def export_properties_csv():
                 "municipality",
                 "search",
                 "inv_metr",
+                "sea_view",
                 "sort",
                 "order",
                 "favorites",
@@ -2584,23 +2719,13 @@ def export_properties_csv():
         )
 
         if category_filter:
-            if category_filter == "__none__":
-                query = query.filter(
-                    or_(
-                        Property.property_category.is_(None),
-                        Property.property_category == "",
-                    )
-                )
+            if category_filter == UNCLASSIFIED_FILTER:
+                query = query.filter(_unclassified_clause(Property.property_category))
             else:
                 query = query.filter(Property.property_category == category_filter)
         if subtype_filter:
-            if subtype_filter == "__none__":
-                query = query.filter(
-                    or_(
-                        Property.property_subtype.is_(None),
-                        Property.property_subtype == "",
-                    )
-                )
+            if subtype_filter == UNCLASSIFIED_FILTER:
+                query = query.filter(_unclassified_clause(Property.property_subtype))
             else:
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
@@ -2621,6 +2746,9 @@ def export_properties_csv():
             query = _filter_by_investment_rating(
                 query, Property, investment_metrics_filter
             )
+
+        if sea_view_filter:
+            query = _filter_by_sea_view(query, Property, sea_view_filter)
 
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
@@ -2728,6 +2856,8 @@ def export_properties_csv():
             "Subtype",
             "Status",
             "Favorite",
+            "Sea View",
+            "Sea View Source",
             "Latitude",
             "Longitude",
             "Created At",
@@ -2756,6 +2886,7 @@ def export_properties_csv():
             attrs = prop.attributes if isinstance(prop.attributes, dict) else {}
             bedrooms = attrs.get("bedrooms") if isinstance(attrs, dict) else None
             bathrooms = attrs.get("bathrooms") if isinstance(attrs, dict) else None
+            sea_view_verdict = sea_view_service.read_verdict(prop)
 
             row = [
                 prop.id,
@@ -2773,6 +2904,8 @@ def export_properties_csv():
                 prop.property_subtype,
                 prop.listing_status,
                 bool(prop.is_favorite),
+                sea_view_verdict["state"],
+                sea_view_verdict["source"],
                 float(prop.location_lat) if prop.location_lat else None,
                 float(prop.location_lon) if prop.location_lon else None,
                 prop.created_at.isoformat() if prop.created_at else "",

@@ -1,6 +1,11 @@
 import logging
 from datetime import datetime, timezone
 from flask import Blueprint, current_app, jsonify, request
+
+# get_or_404 raises HTTPException, and the blanket `except Exception` handlers
+# below would answer 500 for it: every one of them re-raises it first so an
+# unknown id stays a 404 (issue #136).
+from werkzeug.exceptions import HTTPException
 from models import Land, LandHistory, SyncHistory, AiAnalysisVariant
 from app import db
 from app import limiter
@@ -10,12 +15,22 @@ logger = logging.getLogger(__name__)
 api_bp = Blueprint("api", __name__)
 
 
-def _should_run_sync() -> bool:
+def _should_run_sync(allow_request_override: bool = True) -> bool:
+    """Should this request do the work inline instead of queueing it?
+
+    `allow_request_override=False` drops the `?sync=1` escape hatch for
+    endpoints where holding a worker for the full outbound timeout is a way to
+    exhaust the pool -- the API is unauthenticated, so a handful of concurrent
+    calls is all it takes, and a per-IP rate limit does not stop concurrency
+    (issue #136).
+    """
     try:
         if current_app and current_app.config.get("TESTING"):
             return True
     except Exception:
         pass
+    if not allow_request_override:
+        return False
     return request.args.get("sync") in ("1", "true", "yes", "on")
 
 
@@ -166,6 +181,8 @@ def manual_enrichment(land_id):
             }
         ), 202
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Manual enrichment failed for land %s", land_id, exc_info=True)
         return jsonify(
@@ -455,6 +472,8 @@ def analyze_property_structured(land_id):
             }
         ), 202
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "Structured AI analysis failed for land %s", land_id, exc_info=True
@@ -579,6 +598,8 @@ def analyze_universal_property_structured(property_id: int):
             }
         ), 202
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "Structured AI analysis failed for property %s", property_id, exc_info=True
@@ -681,6 +702,8 @@ def generate_openai_structured(land_id):
             }
         ), 202
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "OpenAI structured analysis failed for land %s", land_id, exc_info=True
@@ -734,6 +757,8 @@ def compare_ai_analyses(land_id):
                 "comparison": comparison,
             }
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.error("AI comparison failed for land %s", land_id, exc_info=True)
         return jsonify(
@@ -820,6 +845,8 @@ def compare_property_ai_analyses(property_id: int):
                 "comparison": comparison,
             }
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.error("AI comparison failed for property %s", property_id, exc_info=True)
         return jsonify(
@@ -880,6 +907,8 @@ def enhance_description(land_id):
                 }
             ), 500
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "Description enhancement failed for land %s", land_id, exc_info=True
@@ -950,6 +979,8 @@ def update_environment(land_id):
             }
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to update environment for land %s", land_id, exc_info=True)
         return jsonify(
@@ -960,17 +991,43 @@ def update_environment(land_id):
         ), 500
 
 
+def _manual_sea_view_state(raw):
+    """Read the sea-view value a human submitted.
+
+    The property form sends one of the four states; the older boolean form (and
+    any caller still posting `true`/`false`) is mapped onto the two states a
+    person can actually assert by looking at the listing.
+    """
+    from services import sea_view_service
+
+    if isinstance(raw, str) and raw.strip().lower() in sea_view_service.VALID_STATES:
+        return raw.strip().lower()
+    if isinstance(raw, bool):
+        return sea_view_service.YES if raw else sea_view_service.NO
+    return sea_view_service.UNKNOWN
+
+
 @api_bp.route("/property/<int:property_id>/environment", methods=["POST"])
 def update_property_environment(property_id):
     """Update environment data for a universal property."""
     try:
+        from datetime import datetime, timezone
+
         from models import Property
 
         prop = db.get_or_404(Property, property_id)
         data = request.get_json() or {}
 
+        sea_view_state = _manual_sea_view_state(data.get("sea_view"))
         environment = {
-            "sea_view": bool(data.get("sea_view", False)),
+            "sea_view": sea_view_state,
+            # A hand-set verdict outranks both models, and saying so is what
+            # stops the next backfill from quietly overwriting it.
+            "sea_view_detail": {
+                "source": "manual",
+                "reason": "set by hand",
+                "set_at": datetime.now(timezone.utc).isoformat(),
+            },
             "mountain_view": bool(data.get("mountain_view", False)),
             "forest_view": bool(data.get("forest_view", False)),
             "orientation": data.get("orientation", ""),
@@ -980,6 +1037,7 @@ def update_property_environment(property_id):
         }
 
         enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
+        enrichment = dict(enrichment)
         enrichment["environment"] = environment
         prop.enrichment = enrichment
         db.session.commit()
@@ -993,6 +1051,8 @@ def update_property_environment(property_id):
                 "environment": environment,
             }
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "Failed to update environment for property %s", property_id, exc_info=True
@@ -1049,6 +1109,8 @@ def analyze_property_ai(land_id):
                 error_msg = result.get("error", "Analysis failed")
             return jsonify({"success": False, "error": error_msg}), 500
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("AI analysis failed for land %s", land_id, exc_info=True)
         return jsonify(
@@ -1441,6 +1503,8 @@ def toggle_favorite(land_id):
             }
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to toggle favorite for land %s", land_id, exc_info=True)
         return jsonify(
@@ -1470,6 +1534,8 @@ def toggle_property_favorite(property_id):
                 "message": f"Property {'added to' if prop.is_favorite else 'removed from'} favorites",
             }
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "Failed to toggle favorite for property %s", property_id, exc_info=True
@@ -1551,6 +1617,8 @@ def manual_property_enrichment(property_id: int):
                 "message": "Enrichment queued",
             }
         ), 202
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "Manual property enrichment failed for property %s",
@@ -1609,6 +1677,8 @@ def set_land_status(land_id):
             }
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to set status for land %s", land_id, exc_info=True)
         return jsonify(
@@ -1657,6 +1727,8 @@ def set_property_status(property_id):
             }
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to set status for property %s", property_id, exc_info=True)
         return jsonify(
@@ -1715,8 +1787,92 @@ def check_land_status(land_id):
             }
         ), 202
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to check status for land %s", land_id, exc_info=True)
+        return jsonify(
+            {
+                "success": False,
+                "error": "An internal error occurred. Check server logs for details.",
+            }
+        ), 500
+
+
+@api_bp.route("/property/<int:property_id>/check-status", methods=["POST"])
+@limiter.limit("5 per minute")
+def check_property_status(property_id):
+    """Check whether a universal Property listing is still live on Idealista.
+
+    Rate-limited on purpose: this endpoint is unauthenticated and CSRF-exempt
+    like the rest of the JSON API, and every call spends one outbound request
+    on idealista. Without a cap, a page left in a loop would drive the scraper
+    straight past the throttle the lands sweep is careful to respect.
+
+    It also refuses `?sync=1`. The fetch can hold a worker for its full 15s
+    timeout, and the per-IP limit bounds the rate but not the concurrency: five
+    simultaneous calls would tie up five workers while idealista stalls.
+    """
+    try:
+        from models import Property
+        from services.listing_status_service import ListingStatusService
+
+        prop = db.get_or_404(Property, property_id)
+
+        if not prop.url:
+            return jsonify(
+                {"success": False, "error": "No URL available for this listing"}
+            ), 400
+
+        def _run():
+            prop_local = db.session.get(Property, property_id)
+            if not prop_local or not prop_local.url:
+                return {"success": False, "error": "No URL available for this listing"}
+
+            service = ListingStatusService()
+            result = service.check_property_status(prop_local)
+
+            return {
+                "success": True,
+                "property_id": property_id,
+                "status": prop_local.listing_status,
+                # The observed answer, which is not the stored status when the
+                # fetch was blocked or failed: that case reports "error" here
+                # while `status` keeps whatever we already knew.
+                "observed": result.get("new_status"),
+                "previous_status": result.get("previous_status"),
+                "changed": result.get("changed", False),
+                "last_checked": prop_local.listing_last_checked.isoformat()
+                if prop_local.listing_last_checked
+                else None,
+                "removed_date": prop_local.listing_removed_date.isoformat()
+                if prop_local.listing_removed_date
+                else None,
+            }
+
+        if _should_run_sync(allow_request_override=False):
+            return jsonify(_run())
+
+        job_id = _enqueue(
+            _run, job_type="property_check_status", meta={"property_id": prop.id}
+        )
+        return jsonify(
+            {
+                "success": True,
+                "status": "queued",
+                "job_id": job_id,
+                "message": "Listing status check queued",
+            }
+        ), 202
+
+    except HTTPException:
+        # get_or_404 on an unknown id is an answer, not a server fault; the
+        # blanket handler below would turn it into a 500.
+        raise
+    except Exception:
+        logger.error(
+            "Failed to check status for property %s", property_id, exc_info=True
+        )
         return jsonify(
             {
                 "success": False,
@@ -1829,6 +1985,8 @@ def get_land_history(land_id):
             }
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to get history for land %s", land_id, exc_info=True)
         return jsonify(

@@ -1100,7 +1100,6 @@ def test_the_search_url_reaches_profile_resolution_through_ingestion(app):
     with app.app_context():
         Config.AUTO_TRAVEL_ENRICHMENT = False
         Config.AUTO_PROPERTY_SCORING = False
-        Config.AUTO_PROFILE_ASSIGNMENT = False
 
         with patch("services.property_imap_service.IMAPClient", _FakeIMAPClient):
             service = PropertyIMAPService()

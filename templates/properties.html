@@ -20,13 +20,16 @@
     'municipality': current_filters.municipality or None,
     'search': current_filters.search or None,
     'inv_metr': current_filters.inv_metr or None,
+    'sea_view': current_filters.sea_view or None,
     'favorites': 'on' if current_filters.favorites else None,
     'hide_removed': 'on' if current_filters.hide_removed else None,
     'mode': current_filters.mode,
     'view_type': current_filters.view_type,
     'per_page': current_filters.per_page
 } %}
-{% set view_type = current_filters.view_type or 'cards' %}
+{# The table is the default view (owner decision, 2026-08-09): it is the one
+   that shows price, area, travel and date side by side. #}
+{% set view_type = current_filters.view_type or 'list' %}
 {% set active_mode = current_filters.active_mode or 'combined' %}
 {# With several subscriptions on screen the rows have to say which one they
    came from, or "all subscriptions" is an undifferentiated pile. #}
@@ -63,6 +66,19 @@
     <span class="badge bg-body-tertiary text-body-secondary border fw-normal property-subscription-badge">
         <i class="fas fa-envelope-open-text me-1"></i>{{ name or 'No subscription' }}
     </span>
+{%- endmacro %}
+
+{# Only the two positive states get a badge in a list: `no` and `unknown`
+   describe most rows and would be noise on every one of them. The detail page
+   shows all four, with the provenance behind them. #}
+{% macro sea_view_badge(p) -%}
+    {% set verdict = sea_view_verdict_for(p) %}
+    {% if verdict.state in ('yes', 'likely') %}
+        <span class="badge {{ 'bg-success' if verdict.state == 'yes' else 'bg-info text-dark' }} fw-normal"
+              title="{{ verdict.source }}{% if verdict.reason %} — {{ verdict.reason }}{% endif %}">
+            <i class="fas fa-water me-1"></i>{{ t('sea_view_state_' ~ verdict.state) }}
+        </span>
+    {% endif %}
 {%- endmacro %}
 
 {# Short label under a travel time, the way /lands captioned its OV | GJ
@@ -145,7 +161,7 @@
             {# The map has to be reachable *with the current selection* --
                left to itself it resolves a subscription of its own. #}
             <a class="btn btn-outline-secondary btn-sm"
-               href="{{ url_for('main.map_view', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, favorites='on' if current_filters.favorites else None) }}"
+               href="{{ url_for('main.map_view', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None) }}"
                title="View properties on map">
                 <i class="fas fa-map me-1"></i>Map
             </a>
@@ -373,16 +389,25 @@
                     <div class="vr d-none d-xl-block my-1"></div>
 
                     <div class="input-group input-group-sm properties-filter-type">
+                        {# The choices come from the subscriptions on screen, not from
+                           the whole table, so a saved search for land stops offering
+                           `apartment`. "Unclassified" follows the "No subscription"
+                           rule in the menu above: offered only when such rows exist
+                           here, or when the filter is already on it. #}
                         <select class="form-select" id="category" name="category" aria-label="{{ t('type')|title }}">
                             <option value="">{{ t('land_type_all') }}</option>
-                            <option value="__none__" {{ 'selected' if current_filters.category == '__none__' }}>Unclassified</option>
+                            {% if has_unclassified_category or current_filters.category == '__none__' %}
+                                <option value="__none__" {{ 'selected' if current_filters.category == '__none__' }}>Unclassified</option>
+                            {% endif %}
                             {% for c in categories %}
                                 <option value="{{ c }}" {{ 'selected' if current_filters.category == c }}>{{ c }}</option>
                             {% endfor %}
                         </select>
                         <select class="form-select" id="subtype" name="subtype" aria-label="Subtype">
                             <option value="">All subtypes</option>
-                            <option value="__none__" {{ 'selected' if current_filters.subtype == '__none__' }}>Unclassified</option>
+                            {% if has_unclassified_subtype or current_filters.subtype == '__none__' %}
+                                <option value="__none__" {{ 'selected' if current_filters.subtype == '__none__' }}>Unclassified</option>
+                            {% endif %}
                             {% for s in subtypes %}
                                 <option value="{{ s }}" {{ 'selected' if current_filters.subtype == s }}>{{ s }}</option>
                             {% endfor %}
@@ -398,6 +423,23 @@
                                 {{ municipality }}
                             </option>
                         {% endfor %}
+                    </select>
+
+                    {# Sea view is a four-state verdict, not a flag: `yes` needs the
+                       listing text and the terrain to agree, `likely` is one source
+                       unopposed, and `unknown` -- an approximate coordinate, or a
+                       source that refused -- is never quietly counted as a match.
+                       See services/sea_view_service.py.
+
+                       Beach distance is still missing and for a different reason:
+                       it needs Google Distance Matrix, and per #98 not one row holds
+                       a travel time. Sea view needs no paid API, which is why it
+                       came back on its own. #}
+                    <select class="form-select form-select-sm properties-filter-select" id="sea_view" name="sea_view"
+                            aria-label="{{ t('sea_view') }}">
+                        <option value="" {{ 'selected' if not current_filters.sea_view }}>{{ t('sea_view_any') }}</option>
+                        <option value="yes" {{ 'selected' if current_filters.sea_view == 'yes' }}>{{ t('sea_view_confirmed') }}</option>
+                        <option value="likely" {{ 'selected' if current_filters.sea_view in ('likely', 'on') }}>{{ t('sea_view_yes_or_likely') }}</option>
                     </select>
 
                     <select class="form-select form-select-sm properties-filter-select" id="inv_metr" name="inv_metr"
@@ -439,24 +481,6 @@
                             <option value="desc" {{ 'selected' if current_filters.order == 'desc' }}>↓</option>
                             <option value="asc" {{ 'selected' if current_filters.order == 'asc' }}>↑</option>
                         </select>
-                    </div>
-
-                    {# Rendered dead on purpose: `Property` has no sea-view field
-                       and no beach target, so a working-looking control would
-                       filter on nothing. It comes back with #98. #}
-                    <div class="form-check form-check-inline m-0 properties-filter-unavailable">
-                        <input class="form-check-input" type="checkbox" id="sea_view" name="sea_view" disabled
-                               aria-describedby="sea-view-unavailable">
-                        <label class="form-check-label small text-body-secondary" for="sea_view">
-                            <i class="fas fa-water me-1"></i>{{ t('sea_view_only') }}
-                        </label>
-                        <a id="sea-view-unavailable"
-                           href="https://github.com/sergi039/idealista-tracker-ai/issues/98"
-                           target="_blank" rel="noopener"
-                           class="text-body-secondary ms-1"
-                           title="Sea view and beach distance only ever existed on the archived lands rows - see issue #98">
-                            <i class="fas fa-circle-info"></i>
-                        </a>
                     </div>
 
                     <div class="d-flex align-items-center gap-2 ms-auto">
@@ -524,7 +548,7 @@
                         </a>
                     </div>
                     <a class="btn btn-success btn-sm"
-                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort=current_filters.sort_by, order=current_filters.order) }}"
+                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort=current_filters.sort_by, order=current_filters.order) }}"
                        title="Download filtered data as CSV">
                         <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
                     </a>
@@ -541,47 +565,51 @@
                         <div class="table-responsive">
                             <table class="table table-hover mb-0 lands-table properties-list-table">
                                 <thead class="lands-table-head">
+                                    {# Column widths live in style.css (`.col-*`), not in inline
+                                       styles: an inline `min-width: 120px !important` cannot be
+                                       relaxed by a media query, which is exactly what the tablet
+                                       layout has to do to fit 11 columns on screen. #}
                                     <tr>
                                         {% if active_mode == 'investment' %}
-                                            <th style="background-color: #198754; color: #fff; white-space: nowrap;">
+                                            <th class="col-score" style="background-color: #198754; color: #fff;">
                                                 {{ sort_header('score_investment', 'Investment', base_args, current_filters) }}
                                             </th>
                                         {% elif active_mode == 'lifestyle' %}
-                                            <th style="background-color: #ffc107; color: #212529; white-space: nowrap;">
+                                            <th class="col-score" style="background-color: #ffc107; color: #212529;">
                                                 {{ sort_header('score_lifestyle', 'Lifestyle', base_args, current_filters) }}
                                             </th>
                                         {% else %}
-                                            <th style="white-space: nowrap;">
+                                            <th class="col-score">
                                                 {{ sort_header('score_total', t('score'), base_args, current_filters) }}
                                             </th>
                                         {% endif %}
-                                        <th style="width: 40px; text-align: center;" title="Favorites">
+                                        <th class="col-fav" title="Favorites">
                                             <i class="fas fa-star text-warning"></i>
                                         </th>
-                                        <th class="lands-title-col">{{ sort_header('title', t('title'), base_args, current_filters) }}</th>
-                                        <th style="min-width: 120px !important; white-space: nowrap !important;">
+                                        <th class="lands-title-col col-title">{{ sort_header('title', t('title'), base_args, current_filters) }}</th>
+                                        <th class="col-price">
                                             {{ sort_header('price', t('price'), base_args, current_filters) }}
                                         </th>
-                                        <th style="min-width: 100px !important; white-space: nowrap !important;">
+                                        <th class="col-area">
                                             {{ sort_header('area', t('area'), base_args, current_filters) }}
                                         </th>
-                                        <th style="white-space: nowrap;">{{ t('coords') }}</th>
-                                        <th style="white-space: nowrap;">{{ t('travel') }}</th>
-                                        <th style="min-width: 90px; width: 90px; white-space: nowrap;" title="Investment Metrics">
+                                        <th class="col-coords">{{ t('coords') }}</th>
+                                        <th class="col-travel">{{ t('travel') }}</th>
+                                        <th class="col-inv" title="Investment Metrics">
                                             {{ sort_header('investment_metrics', 'Inv. Metr.', base_args, current_filters) }}
                                         </th>
-                                        <th>{{ t('type') }}</th>
-                                        <th style="min-width: 120px !important; white-space: nowrap !important;">
+                                        <th class="col-type">{{ t('type') }}</th>
+                                        <th class="col-added">
                                             {{ sort_header('created_at', t('added'), base_args, current_filters) }}
                                         </th>
-                                        <th style="white-space: nowrap;">{{ t('actions') }}</th>
+                                        <th class="col-actions">{{ t('actions') }}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {% for p in properties %}
                                         <tr class="property-row {% if p.listing_status in ('removed', 'sold') %}listing-inactive{% endif %}"
                                             data-listing-status="{{ p.listing_status or 'active' }}">
-                                            <td {% if active_mode == 'investment' %}style="background-color: rgba(25, 135, 84, 0.2);"{% elif active_mode == 'lifestyle' %}style="background-color: rgba(255, 193, 7, 0.2);"{% endif %}>
+                                            <td class="col-score" {% if active_mode == 'investment' %}style="background-color: rgba(25, 135, 84, 0.2);"{% elif active_mode == 'lifestyle' %}style="background-color: rgba(255, 193, 7, 0.2);"{% endif %}>
                                                 {% if active_mode == 'investment' %}
                                                     {{ score_badge(p.score_investment|float if p.score_investment is not none else none, 'font-weight: bold; font-size: 0.9em;') }}
                                                 {% elif active_mode == 'lifestyle' %}
@@ -590,7 +618,7 @@
                                                     {{ score_badge(p.score_total|float if p.score_total is not none else none, '') }}
                                                 {% endif %}
                                             </td>
-                                            <td style="text-align: center;">
+                                            <td class="col-fav">
                                                 <button class="btn btn-link p-0 property-favorite-btn"
                                                         data-property-id="{{ p.id }}"
                                                         title="{{ 'Remove from favorites' if p.is_favorite else 'Add to favorites' }}">
@@ -598,7 +626,7 @@
                                                        style="font-size: 1.1rem; cursor: pointer;"></i>
                                                 </button>
                                             </td>
-                                            <td class="lands-title-col">
+                                            <td class="lands-title-col col-title">
                                                 <div class="fw-bold">
                                                     <a href="{{ url_for('main.property_detail', property_id=p.id) }}"
                                                        class="text-decoration-none table-title property-table-title"
@@ -606,11 +634,20 @@
                                                         {{ p.title or ('Property #' ~ p.id) }}
                                                     </a>
                                                 </div>
-                                                {% if show_subscription %}
-                                                    <div class="mt-1">{{ subscription_badge(p, profile_names) }}</div>
+                                                {# The coords column is dropped on a portrait tablet, so the
+                                                   municipality moves here rather than off the page; CSS shows
+                                                   this line only in the width band where that happens. #}
+                                                {% if p.municipality %}
+                                                    <div class="small text-muted property-row-municipality">
+                                                        <i class="fas fa-map-marker-alt me-1"></i>{{ p.municipality }}
+                                                    </div>
                                                 {% endif %}
+                                                <div class="mt-1 d-flex flex-wrap gap-1">
+                                                    {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
+                                                    {{ sea_view_badge(p) }}
+                                                </div>
                                             </td>
-                                            <td style="min-width: 120px !important; white-space: nowrap !important;">
+                                            <td class="col-price">
                                                 {% if p.price %}
                                                     <div>
                                                         <strong>{{ '{:,.0f}'.format(p.price|float) }}€</strong>
@@ -638,14 +675,14 @@
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td style="min-width: 100px !important; white-space: nowrap !important;">
+                                            <td class="col-area">
                                                 {% if p.area %}
                                                     {{ '{:,.0f}'.format(p.area|float) }} m²
                                                 {% else %}
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td>
+                                            <td class="col-coords">
                                                 {% if p.location_lat and p.location_lon %}
                                                     <a href="https://www.google.com/maps/search/?api=1&amp;query={{ p.location_lat }},{{ p.location_lon }}"
                                                        target="_blank" rel="noopener" class="text-decoration-none"
@@ -663,8 +700,8 @@
                                                     </span>
                                                 {% endif %}
                                             </td>
-                                            <td>{{ travel_badges(p, travel_display_targets) }}</td>
-                                            <td style="text-align: center; min-width: 90px; width: 90px; white-space: nowrap;">
+                                            <td class="col-travel">{{ travel_badges(p, travel_display_targets) }}</td>
+                                            <td class="col-inv">
                                                 {% if p.investment_metrics_rating %}
                                                     <span class="badge inv-metr-badge {{ p.investment_metrics_badge_class or 'bg-secondary' }}"
                                                           title="{{ p.investment_metrics_rating_full or '' }}">
@@ -674,7 +711,7 @@
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td>
+                                            <td class="col-type">
                                                 <div class="d-flex flex-wrap gap-1 properties-type-badges">
                                                     {% if p.property_category %}
                                                         <span class="badge text-bg-secondary">{{ p.property_category }}</span>
@@ -689,19 +726,19 @@
                                                     {% endif %}
                                                 </div>
                                             </td>
-                                            <td style="min-width: 120px !important; white-space: nowrap !important;">
+                                            <td class="col-added">
                                                 {% if p.created_at %}
-                                                    <small style="white-space: nowrap !important; display: inline-block;">{{ p.created_at.strftime('%d %b %y') }}</small>
+                                                    <small>{{ p.created_at.strftime('%d %b %y') }}</small>
                                                 {% else %}
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td>
-                                                <div class="d-flex gap-1 flex-nowrap properties-actions">
+                                            <td class="col-actions">
+                                                <div class="d-flex gap-1 properties-actions">
                                                     {% if p.location_lat and p.location_lon %}
                                                         {# Carry the selection: /map auto-selects a different
                                                            profile, and the focused listing may not be in it. #}
-                                                        <a href="{{ url_for('main.map_view', focus=p.id, profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, favorites='on' if current_filters.favorites else None) }}"
+                                                        <a href="{{ url_for('main.map_view', focus=p.id, profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None) }}"
                                                            class="btn btn-info btn-sm" aria-label="Show on map" title="Show on Map">
                                                             <i class="fas fa-map-marker-alt"></i>
                                                         </a>
@@ -732,7 +769,10 @@
             <div id="properties-cards-view" class="view-container mb-4">
                 <div class="row" id="properties-grid">
                 {% for p in properties %}
-                    <div class="col-lg-6 col-xl-4 mb-4" data-listing-status="{{ p.listing_status or 'active' }}">
+                    {# Two per row from the tablet breakpoint up: the container
+                       is no longer capped at 720px there, and one card spanning
+                       the whole width just stretches the same content. #}
+                    <div class="col-md-6 col-xl-4 mb-4" data-listing-status="{{ p.listing_status or 'active' }}">
                         <div class="card h-100 property-card {% if p.listing_status in ('removed', 'sold') %}listing-inactive-card{% endif %}"
                              data-property-id="{{ p.id }}" style="overflow: hidden;">
                             <!-- Card Header with Score and Type -->
@@ -775,9 +815,10 @@
                                     </a>
                                 </h6>
 
-                                {% if show_subscription %}
-                                    <div class="mb-2">{{ subscription_badge(p, profile_names) }}</div>
-                                {% endif %}
+                                <div class="mb-2 d-flex flex-wrap gap-1">
+                                    {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
+                                    {{ sea_view_badge(p) }}
+                                </div>
 
                                 <!-- Price and Area -->
                                 <div class="row mb-3">
@@ -843,7 +884,7 @@
                                     {% if p.location_lat and p.location_lon %}
                                         {# Same as the table view: `focus` alone is not enough,
                                            /map would resolve its own profile. #}
-                                        <a href="{{ url_for('main.map_view', focus=p.id, profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, favorites='on' if current_filters.favorites else None) }}"
+                                        <a href="{{ url_for('main.map_view', focus=p.id, profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None) }}"
                                            class="btn btn-outline-info btn-sm" title="Show on Map">
                                             <i class="fas fa-map"></i>
                                         </a>

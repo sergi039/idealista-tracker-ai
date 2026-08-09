@@ -221,8 +221,15 @@ def run_listing_status_check():
 
             target = getattr(Config, "INGESTION_TARGET", "properties")
             if target != "lands":
+                # Not "email-driven" -- nothing checks Property statuses on a
+                # schedule at all. ListingStatusService.check_all_active_properties
+                # exists and works, but idealista currently answers 403 + captcha
+                # to the scraper, so an unattended sweep would only burn requests
+                # against a blocked host. The per-listing button on
+                # /properties/<id> is the way in until that changes (issue #136).
                 logger.info(
-                    "Skipping scheduled listing status check (target=%s, email-driven)",
+                    "Skipping scheduled listing status check: target=%s has no "
+                    "scheduled sweep, use the per-listing check on /properties/<id>",
                     target,
                 )
                 return

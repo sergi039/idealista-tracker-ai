@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🌊 Added: sea view is computed again, as four states instead of a flag (2026-08-09)
+- **What**: `services/sea_view_service.py` estimates a sea view from two
+  independent signals and stores the verdict at
+  `enrichment.environment.sea_view`. Geometry: nearest OpenStreetMap coastline
+  (`natural=coastline`) plus a terrain profile sampled from Copernicus EU-DEM
+  25 m, with earth curvature and standard refraction, deciding whether the line
+  of sight to the water clears the ground between. Text: the listing wording,
+  with the subscription bridge asked to separate "vistas al mar" from "cerca
+  del mar" — its only job is to demote the false positives that made the old
+  flag untrustworthy. The states are `yes` (both agree), `likely` (one source
+  unopposed), `no` (computed and negative) and `unknown` (not computable). The
+  `/properties` control is a working select again — *Any* / *Confirmed* /
+  *Confirmed or likely* — carried through every in-page link, the map and the
+  CSV export, which gains `Sea View` and `Sea View Source` columns. The
+  property page shows the verdict with its provenance, and its Environment card
+  now renders even when there is no data yet, which is what makes the hand-set
+  override reachable; a hand-set verdict outranks both models and survives
+  recalculation. `python -m utils.backfill_sea_view` fills it.
+- **Why**: the control was rendered dead because `Property` had no field behind
+  it. But the underlying question needs no paid API — Google billing (#98) is
+  irrelevant to it — and the old `Land` boolean it replaced was `true` on
+  exactly one of 168 rows, built by matching keywords against the
+  ~300-character fragment an alert email carries. Four states exist so that
+  "we could not compute this" stops being written as "no", which is the same
+  confusion #98 documented for travel times. Geometry alone never reaches
+  `yes`: EU-DEM is bare earth, so it cannot see trees or buildings. The
+  mirrored `Land` boolean reads as `likely`, never `yes`, for the same reason.
+- **Notes**: overpass-api.de refuses the default `python-requests` User-Agent
+  with a 406 (and any UA carrying a parenthetical comment), and grants two
+  query slots per IP. Coastline is therefore fetched once per 0.1° grid cell —
+  67 queries for 351 rows instead of one per property — behind a bare product
+  token. The "to beach" sort stays unavailable: that one really does need
+  Google Distance Matrix.
+### 🧹 Fixed: the type filters now describe the subscription on screen (2026-08-09)
+- **What**: `/properties` builds its `Type`, `Subtype` and `Municipality`
+  choices from the subscriptions currently selected instead of from the whole
+  `properties` table, and the subtypes narrow again to the chosen type. The
+  hard-coded `Unclassified` option is now offered only when the selection
+  really holds a row with no category/subtype (or the filter is already on
+  it) — the same rule the "No subscription" checkbox follows. An applied
+  filter stays listed even when the new selection has none of it, so the
+  control can never read "All types" over a filtered page.
+- **Why**: a saved search for land offered `apartment`, `house` and
+  `developed` — values owned by other, mostly retired subscriptions, which
+  can only ever return an empty page there — plus `Unclassified`, which
+  matched **zero** of the 351 stored listings because every one of them is
+  classified.
+
+### 🧹 Fixed: an address no longer decides a listing's type (2026-08-09)
+- **What**: classification reads the head of a title (the part before ` in ` /
+  ` en `) before falling back to the full text, so the type comes from what
+  the listing *is*, not from where it is.
+- **Why**: the `casa` rule outranks the land rule and matched the *address*:
+  five plots — "Land plot in Caserio **Casa** de Anes", "Land in Camín de
+  **Casa** Pelayo" and three more — were stored as `housing/house`, one of
+  them inside the owner's land subscription. Re-checked against all 351
+  production titles: the fix changes those five rows and nothing else.
+
 ### 🧭 Changed: one listing surface, with the saved searches on it (2026-08-09, #125)
 - **What**: `/lands` redirects to `/properties`; `templates/lands.html` and its
   archive banner are gone. `/properties` is rebuilt in the layout the owner
@@ -42,6 +100,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   potential analysis available" and "No similar properties found". ChatGPT's
   N/A rental metrics are *not* part of this: those are real nulls, the model
   declined to put numbers on a single-comparable market.
+### 🧹 Removed: the geo heuristic that overwrote a listing's subscription (2026-08-09)
+- **What**: `services/profile_assignment_service.py`, the `AUTO_PROFILE_ASSIGNMENT`
+  flag and the enrichment call behind them are gone, and migration `014` clears
+  the `enrichment.profile_assignment` metadata they left on existing rows.
+  `Property.search_profile_id` now has exactly one writer: ingestion, which reads
+  the saved-search URL out of the alert email
+  (`services/property_imap_service.py`). This finishes the removal the same-day
+  UI change (#131) started by dropping the "Profile assignment" editor.
+- **Why**: the email knows which saved search a listing arrived through.
+  `assign_nearest_profile` then silently refiled it under whichever *active*
+  profile had the geographically nearest custom target — so a listing from
+  "houses norte" could end up filed under a coastal profile, and nothing in the
+  UI said so. The manual editor's real function was to set `manual_override`,
+  which made the heuristic skip the row: the only defence against the automation
+  was to override it by hand, which is backwards. Owner decision, 2026-08-09.
+- **Why the metadata had to go too**: `search_profile_repair_service` refuses to
+  move a row carrying `manual_override`, and with the editor deleted nothing can
+  clear that flag any more. A stale pin would freeze a listing in a fragmented
+  profile permanently. The clause itself stays, as a guard should any future
+  writer set the key again.
 
 ### 🛟 Fixed: listing pagination has a deterministic order (2026-08-09, #113)
 - **What**: `/properties`, `/lands`, and their CSV exports now use the model ID

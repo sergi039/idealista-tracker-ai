@@ -83,16 +83,44 @@ rows carry a subscription badge, and the travel columns fall back to the
 preset targets — a *custom* target id belongs to one profile, so it would
 label a column with a destination most rows were never measured against.
 
-`/properties` carries the controls the owner actually used on `/lands` — the
-cards/list toggle (`view_type`), the combined/investment/lifestyle modes
-(`mode`, with `score_total` / `score_investment` / `score_lifestyle`), the
-investment-rating filter (`inv_metr`), and the Score / ★ / Title / Price /
-Area / Coords / Travel / Inv. Metr. / Type / Added / Actions table. A bare
-`/properties` still sorts by date so the freshest listings stay on top.
-**Sea View and the "to beach" sort are deliberately rendered as unavailable,
-not implemented**: `Property` has no sea-view field and no beach travel
-target (issue #98). Do not "fix" that by wiring the controls to empty data —
-they come back when #98 does.
+`/properties` carries the controls the owner actually used on `/lands`: the
+cards/list toggle
+(`view_type`), the combined/investment/lifestyle modes (`mode`, with
+`score_total` / `score_investment` / `score_lifestyle`), the investment-rating
+filter (`inv_metr`), and the Score / ★ / Title / Price / Area / Coords /
+Travel / Inv. Metr. / Type / Added / Actions table. A bare `/properties`
+opens on **that table, not the cards** (owner decision, 2026-08-09;
+`DEFAULT_PROPERTY_VIEW_TYPE` in `routes/main_routes.py`) and still sorts by
+date so the freshest listings stay on top.
+
+**Sea view is a four-state verdict, not a flag** (`services/sea_view_service.py`):
+`yes` needs the listing text and the terrain to agree, `likely` is one source
+unopposed, `no` is computed and negative, and `unknown` means it could not be
+computed — an approximate coordinate, or a source that refused. `unknown` is
+never folded into `no`, and the filter never counts it as a match. Geometry
+alone stops at `likely` on purpose: Copernicus EU-DEM is a *bare-earth* model,
+so trees and buildings are invisible to it. A hand-set verdict on the property
+page outranks both and survives recalculation. Both sources are free and
+keyless — OpenStreetMap coastline, EU-DEM 25 m via OpenTopoData — so Google
+billing is not involved. Fill it with `python -m utils.backfill_sea_view`;
+`enrichment.environment.sea_view` is where it lands, and mirrored `Land` rows
+keep their old boolean at `enrichment.legacy_land.environment.sea_view`, which
+reads as `likely` (it came from the same weak keyword pass) and never as `yes`.
+
+**The "to beach" sort stays rendered as unavailable**: it needs Google Distance
+Matrix and per issue #98 not one row holds a travel time. Do not "fix" that by
+wiring the control to empty data — it comes back when #98 does.
+
+**That table has to fit a tablet without scrolling sideways.** Two rules in
+`static/css/style.css` keep it there, and both are easy to break by accident:
+below the xxl breakpoint `.container` drops Bootstrap's 720/960px cap, and
+between 768px and 1200px the list table shrinks its padding, wraps its badges
+and (in portrait, under 992px) hides the Coords column, whose municipality
+moves under the title instead. This only works because the column widths live
+in `.col-*` classes rather than inline `style="min-width: … !important"`
+attributes — an inline `!important` outranks every media query, which is what
+made the table 1344px wide at any viewport. `tests/test_tablet_list_layout.py`
+fails if those widths move back into the markup.
 
 **Every one of those controls exists exactly once** (owner decision,
 2026-08-09, superseding "the page is a copy of the /lands layout"). The page
@@ -142,7 +170,7 @@ and TODO.md; respect it if you ever run both side by side.
 - `models.py` — SQLAlchemy models; `migrations/` — schema migrations
 - `utils/` — `auth` (admin_required, rate limits), `security`, `cache`,
   `email_parser`, `idealista_extractors`, bulk tools
-  (`bulk_ai_analysis`, `recalc_travel_times`)
+  (`bulk_ai_analysis`, `recalc_travel_times`, `backfill_sea_view`)
 - `templates/`, `static/` — Jinja2, Bootstrap, minimal vanilla JS/HTMX
 - `tests/` — pytest suite; external APIs are mocked
 - `docs/` — DEV_RULES.md, STATE.md, UNIVERSAL_PROPERTIES.md,
@@ -156,6 +184,12 @@ and TODO.md; respect it if you ever run both side by side.
 - External APIs cost real money (Anthropic, OpenAI, Google Places /
   Distance Matrix). Never run bulk backfills (`utils/bulk_ai_analysis.py`,
   `utils/recalc_travel_times.py`) without an explicit ticket saying so.
+  `utils/backfill_sea_view.py` is the exception that proves the rule: it
+  spends nothing, because OpenStreetMap and OpenTopoData are free. It is
+  still paced — overpass-api.de grants two query slots per IP and answers
+  504 while they are busy, and it refuses the default `python-requests`
+  User-Agent outright — so keep the per-cell caching and the bare product
+  token in `services/sea_view_service.py`.
 - Preserve the scraping throttle in `services/listing_status_service.py`
   (randomized sleeps between listing fetches). No bulk re-scrape loops.
 - **There is no authentication** (owner decision, 2026-08-08): the admin

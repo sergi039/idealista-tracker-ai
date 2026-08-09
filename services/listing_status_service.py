@@ -4,13 +4,14 @@ Periodically checks if listings are still active or have been removed.
 """
 
 import logging
+import re
 import requests
 import time
 import random
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Tuple
 
-from models import Land, LandHistory, SyncHistory
+from models import Land, LandHistory, Property, SyncHistory
 from app import db
 from utils.http import request_with_retries
 
@@ -97,6 +98,19 @@ class ListingStatusService:
                     logger.warning(f"Hit captcha protection for: {url}")
                     return "error", None
 
+            # Everything below reads the body as if it were the listing page,
+            # so refuse anything that is not a plain 200 first. An error page
+            # that happens to carry "no longer published" is not evidence the
+            # advertiser removed anything, and a 403 or 5xx is not evidence the
+            # listing is alive either -- both mean the check did not happen.
+            if response.status_code != 200:
+                logger.warning(
+                    "Unexpected HTTP %s checking listing %s; reporting as error",
+                    response.status_code,
+                    url,
+                )
+                return "error", None
+
             # Check for sold patterns
             for pattern in self.SOLD_PATTERNS:
                 if pattern.lower() in content:
@@ -111,11 +125,17 @@ class ListingStatusService:
                     removed_date = self._extract_removal_date(response.text)
                     return "removed", removed_date
 
-            # If we get here and status is 200, listing is likely active
-            if response.status_code == 200:
-                # Additional check: look for price element to confirm it's a valid listing
-                if "info-data-price" in content or "precio" in content:
-                    return "active", None
+            # A 200 only proves the listing is up if what came back *is* the
+            # listing page. idealista answers plenty of requests by sending us
+            # somewhere else -- a search page, the home page -- with a perfectly
+            # good status code, and calling that "active" would be a false
+            # confirmation (issue #136).
+            if not self._looks_like_listing_page(url, response):
+                logger.warning(
+                    "200 for %s did not come back as the listing page; reporting as error",
+                    url,
+                )
+                return "error", None
 
             return "active", None
 
@@ -126,9 +146,34 @@ class ListingStatusService:
             logger.error("Error checking listing %s", url, exc_info=True)
             return "error", None
 
+    @staticmethod
+    def _listing_id_from_url(url: str) -> Optional[str]:
+        """The /inmueble/<id>/ number, which is what identifies a listing page."""
+        match = re.search(r"/inmueble/(\d+)", url or "")
+        return match.group(1) if match else None
+
+    def _looks_like_listing_page(self, url: str, response) -> bool:
+        """Did a 200 actually hand us the listing we asked for?
+
+        Judged on the **final URL only**, after redirects. That is where the
+        server says what it served; the body is not, because any page can echo
+        or link the URL we asked for -- an error page reading "could not load
+        /inmueble/1234/" would otherwise pass as the listing itself.
+
+        The id needs a boundary after it: plain substring matching accepts
+        /inmueble/12345/ as an answer for /inmueble/1234/, which is a different
+        listing entirely. A URL with no id to anchor on falls back to the status
+        code rather than refusing every non-standard link.
+        """
+        listing_id = self._listing_id_from_url(url)
+        if not listing_id:
+            return True
+
+        final_url = (getattr(response, "url", "") or "").lower()
+        return bool(re.search(rf"inmueble/{listing_id}(?!\d)", final_url))
+
     def _extract_removal_date(self, html_content: str) -> Optional[str]:
         """Try to extract the removal date from the page content"""
-        import re
 
         # Pattern: "The advertiser removed it on 01/12/2025"
         patterns = [
@@ -144,6 +189,47 @@ class ListingStatusService:
 
         return None
 
+    def _apply_observed_status(
+        self, record, status: str, removed_date_str: Optional[str]
+    ) -> Tuple[bool, Optional[str]]:
+        """Write a freshly observed status onto a Land or Property row.
+
+        Returns (changed, transition), where transition is 'deactivated',
+        'relisted' or None.
+
+        An 'error' observation writes nothing at all -- not even
+        listing_last_checked. A blocked or failed fetch is not a check, and
+        stamping a date on it would make the page read "Status: active,
+        Checked: today" about a listing nobody ever verified. That is the exact
+        false confirmation this work exists to remove (issue #136).
+        """
+        if status == "error":
+            return False, None
+
+        record.listing_last_checked = datetime.now(timezone.utc)
+        current = record.listing_status or "active"
+
+        if status in ("removed", "sold") and current == "active":
+            if removed_date_str:
+                try:
+                    record.listing_removed_date = datetime.strptime(
+                        removed_date_str, "%d/%m/%Y"
+                    )
+                except ValueError:
+                    record.listing_removed_date = datetime.now(timezone.utc)
+            else:
+                record.listing_removed_date = datetime.now(timezone.utc)
+
+            record.listing_status = status
+            return True, "deactivated"
+
+        if status == "active" and current in ("removed", "sold"):
+            record.listing_status = "active"
+            record.listing_removed_date = None
+            return True, "relisted"
+
+        return False, None
+
     def check_land_status(self, land: Land) -> Dict:
         """
         Check the listing status for a single Land object.
@@ -155,57 +241,75 @@ class ListingStatusService:
 
         # Check the listing
         status, removed_date_str = self.check_listing_status(land.url)
+        previous_status = land.listing_status
 
-        result = {
-            "success": True,
-            "land_id": land.id,
-            "previous_status": land.listing_status,
-            "new_status": status,
-            "changed": False,
-        }
+        changed, transition = self._apply_observed_status(
+            land, status, removed_date_str
+        )
 
-        # Update last checked time
-        land.listing_last_checked = datetime.now(timezone.utc)
-
-        # If status changed to removed or sold
-        if status in ("removed", "sold") and land.listing_status == "active":
-            result["changed"] = True
-
-            # Parse removal date if available
-            if removed_date_str:
-                try:
-                    land.listing_removed_date = datetime.strptime(
-                        removed_date_str, "%d/%m/%Y"
-                    )
-                except ValueError:
-                    land.listing_removed_date = datetime.now(timezone.utc)
-            else:
-                land.listing_removed_date = datetime.now(timezone.utc)
-
-            land.listing_status = status
-
+        if changed:
             # Create history record for favorites
             if land.is_favorite:
-                snapshot = LandHistory.create_snapshot(land, "removed_from_listing")
-                db.session.add(snapshot)
-                logger.info(f"Created removal snapshot for favorite land {land.id}")
+                event = (
+                    "removed_from_listing"
+                    if transition == "deactivated"
+                    else "relisted"
+                )
+                db.session.add(LandHistory.create_snapshot(land, event))
+                logger.info("Created %s snapshot for favorite land %s", event, land.id)
 
-            logger.info(f"Land {land.id} status changed: active -> {status}")
-
-        # If status changed back to active (re-listed)
-        elif status == "active" and land.listing_status in ("removed", "sold"):
-            result["changed"] = True
-            land.listing_status = "active"
-            land.listing_removed_date = None
-
-            # Create history record for favorites
-            if land.is_favorite:
-                snapshot = LandHistory.create_snapshot(land, "relisted")
-                db.session.add(snapshot)
-                logger.info(f"Land {land.id} was re-listed")
+            logger.info(
+                "Land %s status changed: %s -> %s",
+                land.id,
+                previous_status,
+                land.listing_status,
+            )
 
         db.session.commit()
-        return result
+        return {
+            "success": True,
+            "land_id": land.id,
+            "previous_status": previous_status,
+            "new_status": status,
+            "changed": changed,
+        }
+
+    def check_property_status(self, prop: Property) -> Dict:
+        """
+        Check the listing status for a single universal Property row.
+
+        Properties have no history table, so unlike Land there is no snapshot
+        side effect here -- the row itself carries status, removal date and
+        last-checked time.
+        """
+        if not prop.url:
+            return {
+                "success": False,
+                "error": "No URL available",
+                "property_id": prop.id,
+            }
+
+        status, removed_date_str = self.check_listing_status(prop.url)
+        previous_status = prop.listing_status
+
+        changed, _ = self._apply_observed_status(prop, status, removed_date_str)
+
+        if changed:
+            logger.info(
+                "Property %s status changed: %s -> %s",
+                prop.id,
+                previous_status,
+                prop.listing_status,
+            )
+
+        db.session.commit()
+        return {
+            "success": True,
+            "property_id": prop.id,
+            "previous_status": previous_status,
+            "new_status": status,
+            "changed": changed,
+        }
 
     def check_favorites_status(self, limit: int = 50) -> Dict:
         """

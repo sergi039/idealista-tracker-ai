@@ -43,7 +43,13 @@
                         <span class="me-2">ID: {{ property.id }}</span>
                         {% if property.idealista_property_id %}<span class="me-2">Idealista: {{ property.idealista_property_id }}</span>{% endif %}
                         {% if property.listing_status %}<span class="me-2">Status: {{ property.listing_status }}</span>{% endif %}
-                        {% if property.listing_last_checked %}<span class="me-2">Checked: {{ property.listing_last_checked.strftime('%Y-%m-%d') }}</span>{% endif %}
+                        {# "active" is the ingest default, not an observation, so say
+                           plainly when nobody ever verified it (issue #136). #}
+                        {% if property.listing_last_checked %}
+                            <span class="me-2">Checked: {{ property.listing_last_checked.strftime('%Y-%m-%d') }}</span>
+                        {% else %}
+                            <span class="me-2 fst-italic" title="Nobody has checked this listing on Idealista yet — the status above is the default it was ingested with">Checked: never</span>
+                        {% endif %}
                         {% if property.listing_removed_date %}<span class="me-2">Removed: {{ property.listing_removed_date.strftime('%Y-%m-%d') }}</span>{% endif %}
                         {% if property.search_profile %}<span class="me-2">Profile: {{ property.search_profile.name }}</span>{% endif %}
                     </div>
@@ -242,7 +248,12 @@
                     </button>
                 </div>
 
-                    <div class="d-flex flex-wrap gap-2 mt-3">
+                    <div class="d-flex flex-wrap gap-2 mt-3 align-items-center">
+                        <button type="button" class="btn btn-outline-primary btn-sm" id="check-listing-status-btn"
+                                onclick="checkPropertyListingStatus({{ property.id }})"
+                                title="Fetch the listing from Idealista and record what it says">
+                            <i class="fas fa-rotate me-1"></i>Check status
+                        </button>
                         <form method="POST" action="{{ url_for('main.set_property_status_form', property_id=property.id) }}" class="d-inline-flex align-items-center gap-2">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                             <select name="status" class="form-select form-select-sm" style="width: 140px;" aria-label="Set listing status">
@@ -841,15 +852,19 @@
             </div>
         {% endif %}
 
-        {% if property.environment %}
-            {% set environment_items = [] %}
-            {% for key, value in property.environment.items() %}
-                {% if key != 'score_breakdown' %}
-                    {% set _ = environment_items.append((key, value)) %}
-                {% endif %}
-            {% endfor %}
+        {# The environment card is always rendered. Gating it on existing data
+           meant the sea-view override -- the one control a human can use to
+           correct the estimate -- was unreachable on every row that had no
+           environment data yet, which is exactly where it is needed. #}
+        {% set env = property.environment or {} %}
+        {% set environment_items = [] %}
+        {% for key, value in env.items() %}
+            {% if key not in ['score_breakdown', 'sea_view', 'sea_view_detail'] %}
+                {% set _ = environment_items.append((key, value)) %}
+            {% endif %}
+        {% endfor %}
+        {% set sea_badge = {'yes': 'bg-success', 'likely': 'bg-info text-dark', 'no': 'bg-secondary', 'unknown': 'bg-warning text-dark'} %}
 
-            {% if environment_items %}
                 <div class="card mb-4">
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <h6 class="card-title mb-0">
@@ -860,9 +875,25 @@
                         </button>
                     </div>
                     <div class="card-body" id="environment-display">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <span class="small"><i class="fas fa-water me-1"></i>{{ t('sea_view') }}</span>
+                            <span class="badge {{ sea_badge.get(sea_view_verdict.state, 'bg-warning text-dark') }}">
+                                {{ t('sea_view_state_' ~ sea_view_verdict.state) }}
+                            </span>
+                        </div>
+                        {# Provenance, not decoration: a `likely` from bare-earth terrain
+                           and a `likely` from a marketing phrase are not the same claim. #}
+                        <div class="small text-body-secondary mb-3">
+                            {{ sea_view_verdict.source }}{% if sea_view_verdict.reason %} &mdash; {{ sea_view_verdict.reason }}{% endif %}
+                            {% set geometry = sea_view_verdict.detail.get('geometry') or {} %}
+                            {% if geometry.get('distance_m') %}
+                                <br><i class="fas fa-ruler-horizontal me-1"></i>{{ (geometry.distance_m / 1000)|round(1) }} km to the coastline
+                                {%- if geometry.get('observer_elevation_m') is not none %}, {{ geometry.observer_elevation_m|round(0)|int }} m above sea level{% endif %}
+                            {% endif %}
+                        </div>
                         {% for key, value in environment_items %}
                             <div class="d-flex justify-content-between align-items-center mb-2">
-                                {% if key in ['sea_view', 'forest_view', 'mountain_view'] %}
+                                {% if key in ['forest_view', 'mountain_view'] %}
                                     <span class="small">{{ key.replace('_view', '').replace('_', ' ').title() }} View</span>
                                     {% if value is sameas true %}
                                         <i class="fas fa-check-circle text-success"></i>
@@ -887,41 +918,46 @@
                     <div class="card-body" id="environment-edit" style="display: none;">
                         <form id="environment-form" onsubmit="saveEnvironment(event, {{ property.id }}, 'property')">
                             <div class="mb-3">
-                                <div class="form-check mb-2">
-                                    <input class="form-check-input" type="checkbox" id="sea_view" name="sea_view"
-                                           {{ 'checked' if property.environment.get('sea_view') }}>
-                                    <label class="form-check-label" for="sea_view">Sea View</label>
-                                </div>
+                                <label for="sea_view" class="form-label small">{{ t('sea_view') }}</label>
+                                <select class="form-select form-select-sm" id="sea_view" name="sea_view">
+                                    <option value="yes" {{ 'selected' if sea_view_verdict.state == 'yes' }}>{{ t('sea_view_state_yes') }}</option>
+                                    <option value="likely" {{ 'selected' if sea_view_verdict.state == 'likely' }}>{{ t('sea_view_state_likely') }}</option>
+                                    <option value="no" {{ 'selected' if sea_view_verdict.state == 'no' }}>{{ t('sea_view_state_no') }}</option>
+                                    <option value="unknown" {{ 'selected' if sea_view_verdict.state == 'unknown' }}>{{ t('sea_view_state_unknown') }}</option>
+                                </select>
+                                <div class="form-text small">Saving marks this as set by hand; a recalculation will not overwrite it.</div>
+                            </div>
+                            <div class="mb-3">
                                 <div class="form-check mb-2">
                                     <input class="form-check-input" type="checkbox" id="mountain_view" name="mountain_view"
-                                           {{ 'checked' if property.environment.get('mountain_view') }}>
+                                           {{ 'checked' if env.get('mountain_view') }}>
                                     <label class="form-check-label" for="mountain_view">Mountain View</label>
                                 </div>
                                 <div class="form-check mb-2">
                                     <input class="form-check-input" type="checkbox" id="forest_view" name="forest_view"
-                                           {{ 'checked' if property.environment.get('forest_view') }}>
+                                           {{ 'checked' if env.get('forest_view') }}>
                                     <label class="form-check-label" for="forest_view">Forest View</label>
                                 </div>
                             </div>
                             <div class="mb-3">
                                 <label for="orientation" class="form-label small">Orientation</label>
                                 <input type="text" class="form-control form-control-sm" id="orientation" name="orientation"
-                                       value="{{ property.environment.get('orientation', '') }}">
+                                       value="{{ env.get('orientation', '') }}">
                             </div>
                             <div class="mb-3">
                                 <label for="buildable_floors" class="form-label small">Buildable Floors</label>
                                 <input type="text" class="form-control form-control-sm" id="buildable_floors" name="buildable_floors"
-                                       value="{{ property.environment.get('buildable_floors', '') }}">
+                                       value="{{ env.get('buildable_floors', '') }}">
                             </div>
                             <div class="mb-3">
                                 <label for="access_type" class="form-label small">Access Type</label>
                                 <input type="text" class="form-control form-control-sm" id="access_type" name="access_type"
-                                       value="{{ property.environment.get('access_type', '') }}">
+                                       value="{{ env.get('access_type', '') }}">
                             </div>
                             <div class="mb-3">
                                 <label for="certified_for" class="form-label small">Certified For</label>
                                 <input type="text" class="form-control form-control-sm" id="certified_for" name="certified_for"
-                                       value="{{ property.environment.get('certified_for', '') }}">
+                                       value="{{ env.get('certified_for', '') }}">
                             </div>
                             <div class="d-flex gap-2">
                                 <button type="submit" class="btn btn-sm btn-success">Save</button>
@@ -930,8 +966,6 @@
                         </form>
                     </div>
                 </div>
-            {% endif %}
-        {% endif %}
 
         {% if property.services_quality %}
             <div class="card mb-4">
@@ -977,6 +1011,71 @@
 
 {% block scripts %}
 <script>
+// Ask Idealista whether this listing is still up and record the answer.
+// A blocked or failed fetch reports "error" and deliberately leaves the stored
+// status alone, so the button must not claim "no change" -- say we could not
+// verify it (issue #136).
+async function checkPropertyListingStatus(propertyId) {
+    const btn = document.getElementById('check-listing-status-btn');
+    const originalContent = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Checking...';
+
+    const restore = () => setTimeout(() => {
+        btn.innerHTML = originalContent;
+        btn.disabled = false;
+    }, 2500);
+
+    const settle = (result) => {
+        if (!result || !result.success) {
+            btn.innerHTML = '<i class="fas fa-triangle-exclamation me-1"></i>Error';
+            restore();
+            return;
+        }
+        if (result.changed) {
+            window.location.reload();
+            return;
+        }
+        if (result.observed === 'error') {
+            btn.innerHTML = '<i class="fas fa-ban me-1"></i>Could not verify';
+            btn.title = 'Idealista did not answer with the listing page (bot protection or a server error). Status left unchanged.';
+        } else {
+            btn.innerHTML = '<i class="fas fa-check me-1"></i>No change';
+        }
+        restore();
+    };
+
+    try {
+        const response = await fetch(`/api/property/${propertyId}/check-status`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+        const data = await response.json().catch(() => null);
+
+        if (response.status === 202) {
+            // Queued is not an answer. Without a poller we cannot learn the
+            // outcome, so say it is still running rather than let settle()
+            // read the envelope's success:true as "no change".
+            btn.innerHTML = '<i class="fas fa-clock me-1"></i>Queued';
+            if (data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
+                IdealistaApp.pollJob(data.job_id, {
+                    onSuccess: (job) => settle(job && job.result ? job.result : null),
+                    onError: () => settle(null)
+                });
+            } else {
+                btn.title = 'The check is running in the background. Reload the page to see the result.';
+                restore();
+            }
+            return;
+        }
+
+        settle(data);
+    } catch (error) {
+        console.error('Error checking listing status:', error);
+        settle(null);
+    }
+}
+
 // Formatting functions for AI analysis (ported from legacy land detail)
 
 // Issue #23: listing descriptions/titles are untrusted third-party text (any

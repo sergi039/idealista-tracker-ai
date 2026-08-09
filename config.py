@@ -97,9 +97,6 @@ class Config:
     AUTO_PROPERTY_SCORING = (
         os.environ.get("AUTO_PROPERTY_SCORING", "true").lower() == "true"
     )
-    AUTO_PROFILE_ASSIGNMENT = (
-        os.environ.get("AUTO_PROFILE_ASSIGNMENT", "true").lower() == "true"
-    )
 
     # Universal build is sale-first; rentals are excluded unless explicitly enabled.
     SALE_ONLY = os.environ.get("SALE_ONLY", "true").lower() == "true"
@@ -119,6 +116,20 @@ class Config:
 
     # OSM Overpass API
     OSM_OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+
+    # Sea-view estimation. Both sources are free and keyless -- Google billing
+    # is off (#98) and is not needed here: the coastline comes from
+    # OpenStreetMap and the terrain from Copernicus EU-DEM (25 m).
+    SEA_VIEW_ELEVATION_URL = os.environ.get(
+        "SEA_VIEW_ELEVATION_URL", "https://api.opentopodata.org/v1/eudem25m"
+    )
+    # OpenTopoData's public instance asks for one call per second and caps a
+    # request at 100 locations. Staying under that is why a backfill is slow
+    # rather than parallel.
+    SEA_VIEW_ELEVATION_MIN_INTERVAL_S = float(
+        os.environ.get("SEA_VIEW_ELEVATION_MIN_INTERVAL_S", "1.1")
+    )
+    SEA_VIEW_ELEVATION_MAX_LOCATIONS = 100
 
     # Paths
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))

@@ -11,6 +11,9 @@ These tests pin the reversal on the real routes through the Flask test client:
 * the navbar must point at `/properties` and label `/lands` an archive;
 * the cards/list toggle and the combined/investment/lifestyle modes -- the two
   things the owner actually used on `/lands` -- must work on `/properties`;
+* sea view filters on a real four-state verdict, and `unknown` never passes for
+  a match. The beach sort stays dead: it needs Google Distance Matrix and per
+  #98 no row holds a travel time, while sea view needs no paid API at all;
 * and, most importantly, no control may *claim* to filter by sea view or by
   beach travel time. `Property` has no beach target and no sea-view field of
   its own, and per #98 not one of the 350 rows holds a single travel time. A
@@ -281,36 +284,165 @@ class TestInvestmentRatingFilter:
         assert 'name="inv_metr"' in body
 
 
-class TestUnavailableControlsAreHonest:
-    """Sea view and beach travel time have no data behind them on `Property`.
+@pytest.fixture
+def sea_view_properties(app):
+    """One property per verdict, plus a mirrored legacy row.
 
-    They must be visible as *unavailable*, never as working filters.
+    The legacy row matters most: its `true` came from the keyword pass over a
+    truncated email body, so it must read as `likely` and never as `yes`.
+    """
+    from datetime import datetime
+
+    with app.app_context():
+        profile = SearchProfile(
+            name="Coast", is_active=True, is_default=True, travel_targets={}
+        )
+        db.session.add(profile)
+        db.session.commit()
+
+        def _row(title, enrichment, day):
+            return Property(
+                source_email_id=f"seaview_{title}",
+                title=title,
+                municipality="Cudillero",
+                search_profile_id=profile.id,
+                listing_status="active",
+                property_category="land",
+                price=100000,
+                area=1000,
+                created_at=datetime(2026, 8, day, 10, 0, 0),
+                enrichment=enrichment,
+            )
+
+        def _verdict(state, source):
+            return {
+                "environment": {
+                    "sea_view": state,
+                    "sea_view_detail": {"source": source, "reason": "test"},
+                }
+            }
+
+        rows = [
+            _row("SeaYesTitle", _verdict("yes", "text+geometry"), 1),
+            _row("SeaLikelyTitle", _verdict("likely", "geometry"), 2),
+            _row("SeaNoTitle", _verdict("no", "geometry"), 3),
+            _row("SeaUnknownTitle", _verdict("unknown", "none"), 4),
+            _row(
+                "SeaLegacyTrueTitle",
+                {"legacy_land": {"environment": {"sea_view": True}}},
+                5,
+            ),
+            _row(
+                "SeaLegacyFalseTitle",
+                {"legacy_land": {"environment": {"sea_view": False}}},
+                6,
+            ),
+        ]
+        db.session.add_all(rows)
+        db.session.commit()
+        return {"profile_id": profile.id}
+
+
+class TestSeaViewFilter:
+    """Sea view is a four-state verdict now, and the filter must respect that.
+
+    `unknown` is the state that matters: it means the estimate could not be
+    computed -- an approximate coordinate, or a source that refused -- and it
+    must never be quietly counted as either a match or a negative.
     """
 
-    def test_sea_view_control_is_disabled_and_explains_itself(
-        self, client, scored_properties
+    def test_the_control_is_a_working_three_way_select(
+        self, client, sea_view_properties
     ):
         body = client.get("/properties").get_data(as_text=True)
-        match = re.search(r"<input[^>]*name=\"sea_view\"[^>]*>", body)
-        assert match, "the sea-view control should be visible, marked unavailable"
-        assert "disabled" in match.group(0)
+        match = re.search(r"<select[^>]*name=\"sea_view\"[^>]*>", body)
+        assert match, "the sea-view control should be a select"
+        assert "disabled" not in match.group(0)
+        for value in ('value=""', 'value="yes"', 'value="likely"'):
+            assert value in body
 
-    def test_unavailable_controls_link_to_the_tracking_issue(
-        self, client, scored_properties
+    def test_confirmed_keeps_only_the_corroborated_row(
+        self, client, sea_view_properties
     ):
-        body = client.get("/properties").get_data(as_text=True)
-        assert "issues/98" in body
+        body = client.get("/properties?sea_view=yes").get_data(as_text=True)
+        assert "SeaYesTitle" in body
+        for title in (
+            "SeaLikelyTitle",
+            "SeaNoTitle",
+            "SeaUnknownTitle",
+            "SeaLegacyTrueTitle",
+        ):
+            assert title not in body
 
-    def test_sea_view_parameter_does_not_silently_filter(
-        self, client, scored_properties
+    def test_likely_keeps_confirmed_and_likely_and_nothing_else(
+        self, client, sea_view_properties
     ):
-        """A stale bookmark carrying sea_view=on must not appear to work:
-        the page shows the same rows it shows without the parameter."""
-        plain = client.get("/properties").get_data(as_text=True)
-        with_param = client.get("/properties?sea_view=on").get_data(as_text=True)
-        for title in ("InvestorPickUniqueTitle", "LifestylePickUniqueTitle"):
-            assert (title in plain) == (title in with_param)
-        assert "InvestorPickUniqueTitle" in with_param
+        body = client.get("/properties?sea_view=likely").get_data(as_text=True)
+        assert "SeaYesTitle" in body
+        assert "SeaLikelyTitle" in body
+        assert "SeaNoTitle" not in body
+        assert "SeaUnknownTitle" not in body
+
+    def test_unknown_is_never_treated_as_a_match(self, client, sea_view_properties):
+        """The whole reason the state exists: an uncomputable estimate is not a
+        quiet yes and not a quiet no."""
+        for value in ("yes", "likely"):
+            body = client.get(f"/properties?sea_view={value}").get_data(as_text=True)
+            assert "SeaUnknownTitle" not in body
+            assert "SeaLegacyFalseTitle" not in body
+
+    def test_a_mirrored_legacy_flag_is_likely_and_never_confirmed(
+        self, client, sea_view_properties
+    ):
+        confirmed = client.get("/properties?sea_view=yes").get_data(as_text=True)
+        plausible = client.get("/properties?sea_view=likely").get_data(as_text=True)
+        assert "SeaLegacyTrueTitle" not in confirmed
+        assert "SeaLegacyTrueTitle" in plausible
+
+    def test_a_stale_lands_bookmark_still_selects_something_sensible(
+        self, client, sea_view_properties
+    ):
+        """`sea_view=on` is what the retired /lands page sent. Reading it as
+        "confirmed or likely" beats both silently ignoring it and pretending it
+        means `yes`."""
+        body = client.get("/properties?sea_view=on").get_data(as_text=True)
+        assert "SeaYesTitle" in body
+        assert "SeaLikelyTitle" in body
+        assert "SeaNoTitle" not in body
+
+    def test_the_filter_survives_paging_and_sorting_links(
+        self, client, sea_view_properties
+    ):
+        body = client.get("/properties?sea_view=likely&sort=price").get_data(
+            as_text=True
+        )
+        hrefs = _hrefs_containing(body, "/properties?")
+        assert hrefs, "the page should link back to itself"
+        assert any(
+            _query_params(href).get("sea_view") == ["likely"] for href in hrefs
+        ), "an in-page link dropped the sea-view filter"
+
+    def test_the_csv_export_carries_the_filter(self, client, sea_view_properties):
+        body = client.get("/properties?sea_view=yes").get_data(as_text=True)
+        export = _hrefs_containing(body, "export")
+        assert export
+        assert _query_params(export[0]).get("sea_view") == ["yes"]
+
+    def test_a_positive_verdict_is_visible_on_the_row(
+        self, client, sea_view_properties
+    ):
+        """A filter you cannot see the effect of is not much of a filter."""
+        body = client.get("/properties?sea_view=likely").get_data(as_text=True)
+        assert "sea_view_state" not in body, "a missing translation key leaked"
+        assert body.count("fa-water") >= 2
+
+
+class TestBeachControlsRemainUnavailable:
+    """The beach sort still has nothing behind it: #98, Google billing off.
+
+    Sea view came back because it needs no paid API; the beach sort does, so
+    the two are no longer the same story.
+    """
 
     def test_beach_sort_is_never_offered_as_an_enabled_option(
         self, client, scored_properties
