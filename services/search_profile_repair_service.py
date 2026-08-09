@@ -115,13 +115,22 @@ What the code guarantees on its own, with another writer running
   ``INSERT`` into ``properties`` referencing it needs a ``FOR KEY SHARE``
   lock on that same row, so a concurrent ingestion waits for this
   transaction and then fails its foreign key rather than slipping in.
-- **The plan is re-checked against the database before any of it is applied.**
-  Every profile it touches is re-read -- by column, so a stale object from
-  planning cannot answer -- and its name and default flag compared with what
-  the plan decided from. Each reassignment names the profile the row is
-  expected to be in, and every planned row's pinned state is read again after
-  the moves. A profile renamed, a profile made default, a listing moved or
-  pinned in between: each aborts before COMMIT.
+- **Every profile the plan touches is locked, then re-checked, before any of
+  it is applied.** The rows are taken ``FOR UPDATE`` in id order and held to
+  the end of the transaction, so nothing can change them between the check
+  and the write. Each is then re-read -- by column, so a stale object from
+  planning cannot answer -- and *every* field a decision came from is
+  compared with what the plan read: the name, the default flag, and each
+  setting `_plan_settings_merge()` used to build its updates. Each
+  reassignment also names the profile the row is expected to be in, and every
+  planned row's pinned state is read again after the moves. A profile
+  renamed, made default or reconfigured, a listing moved or pinned in
+  between: each aborts before COMMIT.
+
+  The lock is Postgres semantics. SQLite ignores ``FOR UPDATE`` -- and
+  serialises writers anyway -- so the test suite pins that the lock is
+  *requested* but cannot demonstrate it, the same honest limitation as the
+  foreign-key lock below.
 - **The counts in the report were verified**, twice, inside the transaction.
 - **The exit code does not overstate what is known** (table below).
 
@@ -189,7 +198,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 
 from app import db
 from models import Property, SearchProfile
@@ -219,6 +228,23 @@ MERGEABLE_JSON_FIELDS = (
     "ai_config",
     "ui_config",
 )
+
+# Every profile column a decision is taken from: the name the plan matched and
+# renames, the flag that decides what may be deleted, and everything
+# `_plan_settings_merge()` reads to build `group.updates`. All of it is
+# snapshotted at planning time and compared again before anything is written,
+# because a plan applied from stale settings overwrites whatever was set in
+# between.
+VERIFIED_PROFILE_FIELDS = (
+    "name",
+    "is_default",
+    "is_active",
+    "description",
+    "travel_targets",
+) + MERGEABLE_JSON_FIELDS
+
+# Columns whose stored value may be None but whose meaning is boolean.
+BOOLEAN_PROFILE_FIELDS = frozenset({"is_default", "is_active"})
 
 # Bulk UPDATE ... WHERE id IN (...) is chunked so the parameter count stays
 # well under every backend's limit regardless of how large a group gets.
@@ -336,6 +362,7 @@ class RepairPlan:
     profiles_retained: List[Dict[str, int]] = field(default_factory=list)
     profile_names: Dict[int, str] = field(default_factory=dict)
     profile_defaults: Dict[int, bool] = field(default_factory=dict)
+    profile_snapshot: Dict[int, Dict[str, Any]] = field(default_factory=dict)
     left_in_place: List[Dict[str, Any]] = field(default_factory=list)
     unresolved_properties: int = 0
     orphan_properties: int = 0
@@ -746,9 +773,22 @@ def build_plan() -> RepairPlan:
     """Work out the whole repair without touching a single row."""
     plan = RepairPlan()
     profiles = SearchProfile.query.order_by(SearchProfile.id.asc()).all()
-    plan.profile_names = {profile.id: profile.name for profile in profiles}
+    # Deep-copied: the JSON columns are mutable containers, and a snapshot that
+    # aliases them would compare equal to itself no matter what changed.
+    plan.profile_snapshot = {
+        profile.id: {
+            field_name: copy.deepcopy(getattr(profile, field_name))
+            for field_name in VERIFIED_PROFILE_FIELDS
+        }
+        for profile in profiles
+    }
+    plan.profile_names = {
+        profile_id: snapshot["name"]
+        for profile_id, snapshot in plan.profile_snapshot.items()
+    }
     plan.profile_defaults = {
-        profile.id: bool(profile.is_default) for profile in profiles
+        profile_id: bool(snapshot["is_default"])
+        for profile_id, snapshot in plan.profile_snapshot.items()
     }
     plan.counts_before = _profile_property_counts()
 
@@ -865,46 +905,85 @@ def _counts_report(
     return report
 
 
+def _profile_field(field: str, value: Any) -> Any:
+    """Normalise a column for comparison (a NULL boolean means False)."""
+    return bool(value) if field in BOOLEAN_PROFILE_FIELDS else value
+
+
+def _involved_profile_ids(plan: RepairPlan) -> List[int]:
+    return sorted(
+        {group.target_id for group in plan.groups}
+        | {fid for group in plan.groups for fid in group.fragment_ids}
+        | set(plan.profiles_to_delete)
+    )
+
+
+def _lock_profiles_statement(profile_ids: Sequence[int]):
+    """``SELECT id FROM search_profiles WHERE id IN (...) FOR UPDATE``."""
+    return (
+        select(SearchProfile.id)
+        .where(SearchProfile.id.in_(list(profile_ids)))
+        .with_for_update()
+    )
+
+
+def _lock_profiles(profile_ids: Sequence[int]) -> None:
+    """Hold every profile row the plan touches for the rest of the transaction.
+
+    Without it the verification below is only a snapshot comparison: under
+    READ COMMITTED another transaction can rename a fragment, or make it the
+    default, in the gap between the check and the ``DELETE``, and the repair
+    would remove it and report success -- contradicting two of the guarantees
+    this module states. The lock closes that gap, and as a side effect closes
+    the orphan window from the start rather than only from the delete flush,
+    because an ``INSERT`` referencing a locked profile needs ``FOR KEY SHARE``
+    on the same row.
+
+    Locked in id order so two runs cannot deadlock against each other.
+
+    Postgres semantics. SQLite ignores ``FOR UPDATE`` (and serialises writers
+    anyway), so the test suite can pin that the lock is *requested* but cannot
+    demonstrate it -- the same honest limitation as the foreign-key lock.
+    """
+    for chunk in _chunks(sorted(profile_ids), UPDATE_CHUNK):
+        db.session.execute(_lock_profiles_statement(chunk)).all()
+
+
 def _verify_profile_metadata(plan: RepairPlan) -> List[str]:
     """Re-read the profiles the plan touches and compare them with the snapshot.
 
-    Counts and pins were already re-checked before anything is applied, so the
-    contract "verify the snapshot before acting on it" is settled; name and
-    `is_default` had simply fallen out of it. They decide what gets renamed and
-    what may be deleted, so a profile renamed or made default in between would
-    otherwise sail through every other check.
+    Every column a decision was taken from, not just the name: `is_default`
+    decides what may be deleted, and the settings columns are what
+    `_plan_settings_merge()` turned into `group.updates`. Applying a plan built
+    from stale settings silently overwrites whatever was set in between, which
+    no count or pin check would notice.
 
     Reads columns rather than entities on purpose: an ORM `get()` can hand back
     the instance loaded during planning, which is exactly the stale answer this
     is trying to catch.
     """
-    involved = sorted(
-        {group.target_id for group in plan.groups}
-        | {fid for group in plan.groups for fid in group.fragment_ids}
-        | set(plan.profiles_to_delete)
-    )
+    involved = _involved_profile_ids(plan)
+    columns = [getattr(SearchProfile, field) for field in VERIFIED_PROFILE_FIELDS]
     problems: List[str] = []
     for chunk in _chunks(involved, UPDATE_CHUNK):
         rows = (
-            db.session.query(
-                SearchProfile.id, SearchProfile.name, SearchProfile.is_default
-            )
+            db.session.query(SearchProfile.id, *columns)
             .filter(SearchProfile.id.in_(chunk))
             .all()
         )
-        found = {profile_id for profile_id, _, _ in rows}
-        for profile_id, name, is_default in rows:
-            planned_name = plan.profile_names.get(profile_id)
-            if name != planned_name:
-                problems.append(
-                    f"profile {profile_id} was renamed after planning: the plan "
-                    f"read {planned_name!r}, the database now says {name!r}"
-                )
-            if bool(is_default) != plan.profile_defaults.get(profile_id, False):
-                problems.append(
-                    f"profile {profile_id} changed its default flag after "
-                    f"planning (now is_default={bool(is_default)})"
-                )
+        found = {row[0] for row in rows}
+        for row in rows:
+            profile_id = row[0]
+            planned = plan.profile_snapshot.get(profile_id, {})
+            for field_name, value in zip(VERIFIED_PROFILE_FIELDS, row[1:]):
+                current = _profile_field(field_name, value)
+                expected = _profile_field(field_name, planned.get(field_name))
+                if current != expected:
+                    problems.append(
+                        f"profile {profile_id} had its {field_name} changed "
+                        f"after planning: the plan read {expected!r}, the "
+                        f"database now says {current!r}"
+                    )
         for profile_id in chunk:
             if profile_id not in found:
                 problems.append(f"profile {profile_id} disappeared after planning")
@@ -1079,10 +1158,13 @@ class SearchProfileRepairService:
 
         try:
             # Nothing has been written yet, so this compares the plan against
-            # the database as it stands. Expiring first means the checks below
-            # -- and the objects mutated after them -- come from the database
-            # rather than from whatever planning happened to load.
+            # the database as it stands. Take the row locks first, so no other
+            # transaction can change these profiles between the comparison and
+            # the writes; then expire, so the checks -- and the objects mutated
+            # after them -- come from the database rather than from whatever
+            # planning happened to load.
             db.session.expire_all()
+            _lock_profiles(_involved_profile_ids(plan))
             errors.extend(_verify_profile_metadata(plan))
             if errors:
                 return abort(errors)

@@ -236,13 +236,20 @@ After that flush the database closes the window itself: the pending `DELETE`
 holds the profile row, so a concurrent insert referencing it waits for this
 transaction and then fails its foreign key instead of being orphaned.
 
-The plan is also re-checked against the database before any of it is applied.
-Every profile it touches is re-read — by column, so a stale object from
-planning cannot answer — and its name and default flag compared with what the
-plan decided from; each reassignment names the profile the row is expected to
-be in; and every planned row's pinned state is read again after the moves. A
-profile renamed, a profile made default, a listing moved or pinned by hand in
+Every profile the plan touches is also locked and re-checked before any of it
+is applied. The rows are taken `FOR UPDATE` in id order and held to the end of
+the transaction, so nothing can change them between the check and the write.
+Each is then re-read — by column, so a stale object from planning cannot
+answer — and every field a decision came from is compared with what the plan
+read: the name, the default flag, and each setting that went into the planned
+updates. Each reassignment names the profile the row is expected to be in, and
+every planned row's pinned state is read again after the moves. A profile
+renamed, made default or reconfigured, a listing moved or pinned by hand in
 between: each of those aborts the repair before `COMMIT`.
+
+The row lock is Postgres semantics; SQLite ignores `FOR UPDATE` and serialises
+writers anyway, so the tests pin that the lock is requested but cannot
+demonstrate it — the same limitation as the foreign-key lock above.
 
 So stopping ingestion is not what makes the repair safe — it is what makes it
 **succeed**. A concurrent write turns the run into a clean abort (exit 1, no

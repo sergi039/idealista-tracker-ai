@@ -1106,12 +1106,60 @@ def test_a_profile_renamed_after_planning_aborts_the_repair(fragmented, monkeypa
         report = SearchProfileRepairService.apply()
 
         assert report["status"] == "mismatch"
-        assert any("renamed after planning" in m for m in report["errors"])
+        assert any("its name changed after planning" in m for m in report["errors"])
 
         db.session.expire_all()
         assert _count(TARGET_ID) == FRAGMENTS[TARGET_ID][2], "nothing was committed"
         for fragment_id in FRAGMENT_IDS:
             assert db.session.get(SearchProfile, fragment_id) is not None
+
+
+def test_settings_changed_after_planning_abort_the_repair(fragmented, monkeypatch):
+    """The plan carries the donor settings it read; they can go stale.
+
+    A fragment's `ai_config` is planned onto the survivor because the survivor
+    had none. If the owner configures the survivor a moment later, applying
+    the plan unchanged overwrites what they just set -- and no count or pin
+    check notices, because nothing about the configuration is compared.
+    """
+    with fragmented.app_context():
+        db.session.get(SearchProfile, 7).ai_config = {"market_context": "the fragment"}
+        db.session.commit()
+
+        def the_owner_configures_the_survivor():
+            db.session.get(SearchProfile, TARGET_ID).ai_config = {
+                "market_context": "just set by the owner"
+            }
+
+        _plan_then(monkeypatch, the_owner_configures_the_survivor)
+
+        report = SearchProfileRepairService.apply()
+
+        assert report["status"] == "mismatch"
+        assert any("ai_config" in message for message in report["errors"])
+
+        db.session.expire_all()
+        assert db.session.get(SearchProfile, TARGET_ID).ai_config == {
+            "market_context": "just set by the owner"
+        }, "the setting made after planning must survive"
+        assert _count(TARGET_ID) == FRAGMENTS[TARGET_ID][2], "nothing was committed"
+
+
+def test_the_repair_locks_every_profile_it_touches():
+    """Pin that the lock is actually requested.
+
+    SQLite ignores `FOR UPDATE`, so this suite cannot demonstrate the locking
+    itself -- only that the statement asks for it. The semantics come from
+    Postgres, the same honest limitation as the foreign-key lock.
+    """
+    from sqlalchemy.dialects import postgresql
+
+    from services.search_profile_repair_service import _lock_profiles_statement
+
+    sql = str(_lock_profiles_statement([7, 8, 9]).compile(dialect=postgresql.dialect()))
+
+    assert "FOR UPDATE" in sql
+    assert "search_profiles" in sql
 
 
 def test_a_fragment_made_default_after_planning_aborts_the_repair(
