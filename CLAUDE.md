@@ -89,7 +89,9 @@ the page is deliberately a copy of that layout: the cards/list toggle
 `score_total` / `score_investment` / `score_lifestyle`), the investment-rating
 filter (`inv_metr`), and the Score / ★ / Title / Price / Area / Coords /
 Travel / Inv. Metr. / Type / Added / Actions table. A bare `/properties`
-still sorts by date so the freshest listings stay on top.
+opens on **that table, not the cards** (owner decision, 2026-08-09;
+`DEFAULT_PROPERTY_VIEW_TYPE` in `routes/main_routes.py`) and still sorts by
+date so the freshest listings stay on top.
 
 **Sea view is a four-state verdict, not a flag** (`services/sea_view_service.py`):
 `yes` needs the listing text and the terrain to agree, `likely` is one source
@@ -108,6 +110,17 @@ reads as `likely` (it came from the same weak keyword pass) and never as `yes`.
 **The "to beach" sort stays rendered as unavailable**: it needs Google Distance
 Matrix and per issue #98 not one row holds a travel time. Do not "fix" that by
 wiring the control to empty data — it comes back when #98 does.
+
+**That table has to fit a tablet without scrolling sideways.** Two rules in
+`static/css/style.css` keep it there, and both are easy to break by accident:
+below the xxl breakpoint `.container` drops Bootstrap's 720/960px cap, and
+between 768px and 1200px the list table shrinks its padding, wraps its badges
+and (in portrait, under 992px) hides the Coords column, whose municipality
+moves under the title instead. This only works because the column widths live
+in `.col-*` classes rather than inline `style="min-width: … !important"`
+attributes — an inline `!important` outranks every media query, which is what
+made the table 1344px wide at any viewport. `tests/test_tablet_list_layout.py`
+fails if those widths move back into the markup.
 
 The dual-build isolation contract
 from the transition — legacy on 5001 vs universal on 5050, unique Docker

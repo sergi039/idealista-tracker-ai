@@ -30,7 +30,9 @@
     'view_type': current_filters.view_type,
     'per_page': current_filters.per_page
 } %}
-{% set view_type = current_filters.view_type or 'cards' %}
+{# The table is the default view (owner decision, 2026-08-09): it is the one
+   that shows price, area, travel and date side by side. #}
+{% set view_type = current_filters.view_type or 'list' %}
 {% set active_mode = current_filters.active_mode or 'combined' %}
 {# With several subscriptions on screen the rows have to say which one they
    came from, or "all subscriptions" is an undifferentiated pile. #}
@@ -571,47 +573,51 @@
                         <div class="table-responsive">
                             <table class="table table-hover mb-0 lands-table properties-list-table">
                                 <thead class="lands-table-head">
+                                    {# Column widths live in style.css (`.col-*`), not in inline
+                                       styles: an inline `min-width: 120px !important` cannot be
+                                       relaxed by a media query, which is exactly what the tablet
+                                       layout has to do to fit 11 columns on screen. #}
                                     <tr>
                                         {% if active_mode == 'investment' %}
-                                            <th style="background-color: #198754; color: #fff; white-space: nowrap;">
+                                            <th class="col-score" style="background-color: #198754; color: #fff;">
                                                 {{ sort_header('score_investment', 'Investment', base_args, current_filters) }}
                                             </th>
                                         {% elif active_mode == 'lifestyle' %}
-                                            <th style="background-color: #ffc107; color: #212529; white-space: nowrap;">
+                                            <th class="col-score" style="background-color: #ffc107; color: #212529;">
                                                 {{ sort_header('score_lifestyle', 'Lifestyle', base_args, current_filters) }}
                                             </th>
                                         {% else %}
-                                            <th style="white-space: nowrap;">
+                                            <th class="col-score">
                                                 {{ sort_header('score_total', t('score'), base_args, current_filters) }}
                                             </th>
                                         {% endif %}
-                                        <th style="width: 40px; text-align: center;" title="Favorites">
+                                        <th class="col-fav" title="Favorites">
                                             <i class="fas fa-star text-warning"></i>
                                         </th>
-                                        <th class="lands-title-col">{{ sort_header('title', t('title'), base_args, current_filters) }}</th>
-                                        <th style="min-width: 120px !important; white-space: nowrap !important;">
+                                        <th class="lands-title-col col-title">{{ sort_header('title', t('title'), base_args, current_filters) }}</th>
+                                        <th class="col-price">
                                             {{ sort_header('price', t('price'), base_args, current_filters) }}
                                         </th>
-                                        <th style="min-width: 100px !important; white-space: nowrap !important;">
+                                        <th class="col-area">
                                             {{ sort_header('area', t('area'), base_args, current_filters) }}
                                         </th>
-                                        <th style="white-space: nowrap;">{{ t('coords') }}</th>
-                                        <th style="white-space: nowrap;">{{ t('travel') }}</th>
-                                        <th style="min-width: 90px; width: 90px; white-space: nowrap;" title="Investment Metrics">
+                                        <th class="col-coords">{{ t('coords') }}</th>
+                                        <th class="col-travel">{{ t('travel') }}</th>
+                                        <th class="col-inv" title="Investment Metrics">
                                             {{ sort_header('investment_metrics', 'Inv. Metr.', base_args, current_filters) }}
                                         </th>
-                                        <th>{{ t('type') }}</th>
-                                        <th style="min-width: 120px !important; white-space: nowrap !important;">
+                                        <th class="col-type">{{ t('type') }}</th>
+                                        <th class="col-added">
                                             {{ sort_header('created_at', t('added'), base_args, current_filters) }}
                                         </th>
-                                        <th style="white-space: nowrap;">{{ t('actions') }}</th>
+                                        <th class="col-actions">{{ t('actions') }}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {% for p in properties %}
                                         <tr class="property-row {% if p.listing_status in ('removed', 'sold') %}listing-inactive{% endif %}"
                                             data-listing-status="{{ p.listing_status or 'active' }}">
-                                            <td {% if active_mode == 'investment' %}style="background-color: rgba(25, 135, 84, 0.2);"{% elif active_mode == 'lifestyle' %}style="background-color: rgba(255, 193, 7, 0.2);"{% endif %}>
+                                            <td class="col-score" {% if active_mode == 'investment' %}style="background-color: rgba(25, 135, 84, 0.2);"{% elif active_mode == 'lifestyle' %}style="background-color: rgba(255, 193, 7, 0.2);"{% endif %}>
                                                 {% if active_mode == 'investment' %}
                                                     {{ score_badge(p.score_investment|float if p.score_investment is not none else none, 'font-weight: bold; font-size: 0.9em;') }}
                                                 {% elif active_mode == 'lifestyle' %}
@@ -620,7 +626,7 @@
                                                     {{ score_badge(p.score_total|float if p.score_total is not none else none, '') }}
                                                 {% endif %}
                                             </td>
-                                            <td style="text-align: center;">
+                                            <td class="col-fav">
                                                 <button class="btn btn-link p-0 property-favorite-btn"
                                                         data-property-id="{{ p.id }}"
                                                         title="{{ 'Remove from favorites' if p.is_favorite else 'Add to favorites' }}">
@@ -628,7 +634,7 @@
                                                        style="font-size: 1.1rem; cursor: pointer;"></i>
                                                 </button>
                                             </td>
-                                            <td class="lands-title-col">
+                                            <td class="lands-title-col col-title">
                                                 <div class="fw-bold">
                                                     <a href="{{ url_for('main.property_detail', property_id=p.id) }}"
                                                        class="text-decoration-none table-title property-table-title"
@@ -636,12 +642,20 @@
                                                         {{ p.title or ('Property #' ~ p.id) }}
                                                     </a>
                                                 </div>
+                                                {# The coords column is dropped on a portrait tablet, so the
+                                                   municipality moves here rather than off the page; CSS shows
+                                                   this line only in the width band where that happens. #}
+                                                {% if p.municipality %}
+                                                    <div class="small text-muted property-row-municipality">
+                                                        <i class="fas fa-map-marker-alt me-1"></i>{{ p.municipality }}
+                                                    </div>
+                                                {% endif %}
                                                 <div class="mt-1 d-flex flex-wrap gap-1">
                                                     {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
                                                     {{ sea_view_badge(p) }}
                                                 </div>
                                             </td>
-                                            <td style="min-width: 120px !important; white-space: nowrap !important;">
+                                            <td class="col-price">
                                                 {% if p.price %}
                                                     <div>
                                                         <strong>{{ '{:,.0f}'.format(p.price|float) }}€</strong>
@@ -669,14 +683,14 @@
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td style="min-width: 100px !important; white-space: nowrap !important;">
+                                            <td class="col-area">
                                                 {% if p.area %}
                                                     {{ '{:,.0f}'.format(p.area|float) }} m²
                                                 {% else %}
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td>
+                                            <td class="col-coords">
                                                 {% if p.location_lat and p.location_lon %}
                                                     <a href="https://www.google.com/maps/search/?api=1&amp;query={{ p.location_lat }},{{ p.location_lon }}"
                                                        target="_blank" rel="noopener" class="text-decoration-none"
@@ -694,8 +708,8 @@
                                                     </span>
                                                 {% endif %}
                                             </td>
-                                            <td>{{ travel_badges(p, travel_display_targets) }}</td>
-                                            <td style="text-align: center; min-width: 90px; width: 90px; white-space: nowrap;">
+                                            <td class="col-travel">{{ travel_badges(p, travel_display_targets) }}</td>
+                                            <td class="col-inv">
                                                 {% if p.investment_metrics_rating %}
                                                     <span class="badge inv-metr-badge {{ p.investment_metrics_badge_class or 'bg-secondary' }}"
                                                           title="{{ p.investment_metrics_rating_full or '' }}">
@@ -705,7 +719,7 @@
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td>
+                                            <td class="col-type">
                                                 <div class="d-flex flex-wrap gap-1 properties-type-badges">
                                                     {% if p.property_category %}
                                                         <span class="badge text-bg-secondary">{{ p.property_category }}</span>
@@ -720,15 +734,15 @@
                                                     {% endif %}
                                                 </div>
                                             </td>
-                                            <td style="min-width: 120px !important; white-space: nowrap !important;">
+                                            <td class="col-added">
                                                 {% if p.created_at %}
-                                                    <small style="white-space: nowrap !important; display: inline-block;">{{ p.created_at.strftime('%d %b %y') }}</small>
+                                                    <small>{{ p.created_at.strftime('%d %b %y') }}</small>
                                                 {% else %}
                                                     <span class="text-muted">-</span>
                                                 {% endif %}
                                             </td>
-                                            <td>
-                                                <div class="d-flex gap-1 flex-nowrap properties-actions">
+                                            <td class="col-actions">
+                                                <div class="d-flex gap-1 properties-actions">
                                                     {% if p.location_lat and p.location_lon %}
                                                         {# Carry the selection: /map auto-selects a different
                                                            profile, and the focused listing may not be in it. #}
@@ -763,7 +777,10 @@
             <div id="properties-cards-view" class="view-container mb-4">
                 <div class="row" id="properties-grid">
                 {% for p in properties %}
-                    <div class="col-lg-6 col-xl-4 mb-4" data-listing-status="{{ p.listing_status or 'active' }}">
+                    {# Two per row from the tablet breakpoint up: the container
+                       is no longer capped at 720px there, and one card spanning
+                       the whole width just stretches the same content. #}
+                    <div class="col-md-6 col-xl-4 mb-4" data-listing-status="{{ p.listing_status or 'active' }}">
                         <div class="card h-100 property-card {% if p.listing_status in ('removed', 'sold') %}listing-inactive-card{% endif %}"
                              data-property-id="{{ p.id }}" style="overflow: hidden;">
                             <!-- Card Header with Score and Type -->

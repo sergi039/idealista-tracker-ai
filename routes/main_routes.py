@@ -45,6 +45,9 @@ PROPERTY_MODE_SORT_DEFAULTS = {
     "lifestyle": "score_lifestyle",
 }
 PROPERTY_VIEW_TYPES = ("cards", "list")
+# The table is what a bare /properties opens on (owner decision, 2026-08-09):
+# it puts price, area, travel and date side by side, which the cards cannot.
+DEFAULT_PROPERTY_VIEW_TYPE = "list"
 # A bare /properties must open on the freshest listings, so the mode default
 # only applies once the user actually picks a mode.
 DEFAULT_PROPERTY_SORT = "created_at"
@@ -531,9 +534,9 @@ def properties():
         mode = request.args.get("mode", "combined")
         if mode not in PROPERTY_MODE_SORT_DEFAULTS:
             mode = "combined"
-        view_type = request.args.get("view_type", "cards")
+        view_type = request.args.get("view_type", DEFAULT_PROPERTY_VIEW_TYPE)
         if view_type not in PROPERTY_VIEW_TYPES:
-            view_type = "cards"
+            view_type = DEFAULT_PROPERTY_VIEW_TYPE
 
         # Sorting. Picking a mode switches to that mode's score; a bare
         # /properties keeps its date order so the newest listings stay on top.
@@ -726,7 +729,7 @@ def properties():
             current_filters={
                 "mode": "combined",
                 "active_mode": "combined",
-                "view_type": "cards",
+                "view_type": DEFAULT_PROPERTY_VIEW_TYPE,
             },
         )
 
