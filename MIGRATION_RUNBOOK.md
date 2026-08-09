@@ -204,6 +204,9 @@ alone:
 - **It never deletes the default profile and never makes another profile the
   default.** One default goes in and the same one comes out, even if the repair
   empties it.
+- **It never deletes a profile carrying a saved-search identity key** (#110),
+  and never moves a key between profiles — `merge_duplicate_profiles()` owns
+  that. An emptied profile that still holds a key is kept and reported.
 - **It never creates a profile**, and **never adopts an already-orphaned
   listing** — both are reported, neither is acted on.
 - **It never touches a listing whose saved-search name cannot be recomputed.**

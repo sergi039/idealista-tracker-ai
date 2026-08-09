@@ -1145,6 +1145,64 @@ def test_settings_changed_after_planning_abort_the_repair(fragmented, monkeypatc
         assert _count(TARGET_ID) == FRAGMENTS[TARGET_ID][2], "nothing was committed"
 
 
+def test_a_profile_carrying_a_subscription_key_is_never_deleted(fragmented):
+    """#110 gives a profile a saved-search identity; deleting it destroys one.
+
+    `merge_duplicate_profiles()` already refuses to lose a key when it removes
+    a duplicate, so the repository has settled that this is not acceptable
+    collateral. This repair does not carry keys around -- that is the merge's
+    job, and the unique index and the default-profile CHECK make it a decision
+    with consequences -- so it declines to delete the profile instead.
+    """
+    if not hasattr(SearchProfile, "source_search_key"):
+        pytest.skip("#110 (saved-search identity) is not present in this tree")
+
+    with fragmented.app_context():
+        db.session.get(SearchProfile, 9).source_search_key = "k" * 20
+        db.session.commit()
+
+        report = SearchProfileRepairService.apply()
+
+        assert report["status"] == "applied"
+        assert sorted(report["profiles_deleted"]) == [7, 10]
+        assert db.session.get(SearchProfile, 9) is not None, (
+            "a profile carrying a subscription key must survive the repair"
+        )
+        assert {
+            "profile_id": 9,
+            "remaining": 0,
+            "reason": "carries a saved-search identity key",
+        } in report["profiles_retained"]
+
+        # Its listings still moved; only the empty row is kept.
+        assert _count(9) == 0
+        assert _count(TARGET_ID) == TOTAL_LISTINGS
+
+
+def test_a_subscription_key_appearing_after_planning_aborts_the_repair(
+    fragmented, monkeypatch
+):
+    """A key assigned between planning and applying must not be deleted over."""
+    if not hasattr(SearchProfile, "source_search_key"):
+        pytest.skip("#110 (saved-search identity) is not present in this tree")
+
+    with fragmented.app_context():
+
+        def ingestion_claims_the_fragment():
+            db.session.get(SearchProfile, 9).source_search_key = "k" * 20
+
+        _plan_then(monkeypatch, ingestion_claims_the_fragment)
+
+        report = SearchProfileRepairService.apply()
+
+        assert report["status"] == "mismatch"
+        assert any("source_search_key" in m for m in report["errors"])
+
+        db.session.expire_all()
+        assert db.session.get(SearchProfile, 9) is not None
+        assert _count(TARGET_ID) == FRAGMENTS[TARGET_ID][2], "nothing was committed"
+
+
 def test_the_repair_locks_every_profile_it_touches():
     """Pin that the lock is actually requested.
 

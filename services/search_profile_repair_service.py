@@ -81,6 +81,11 @@ alone:
   the default.** One default goes in and the same one comes out, even if this
   repair empties it -- the app assumes a single default, and which one it is
   is the owner's call.
+- **It never deletes a profile carrying a saved-search identity key** (#110),
+  and never moves a key between profiles. `merge_duplicate_profiles()` owns
+  that decision -- it has a unique index and the default-profile CHECK behind
+  it -- so an emptied profile that still holds a key is kept and reported
+  rather than removed.
 - **It never creates a profile**, and **never adopts a listing that is
   already orphaned** -- both are reported, neither is acted on.
 - **It never touches a listing whose saved-search name cannot be recomputed.**
@@ -242,6 +247,13 @@ VERIFIED_PROFILE_FIELDS = (
     "description",
     "travel_targets",
 ) + MERGEABLE_JSON_FIELDS
+
+# The saved-search identity from #110, when the model carries it. A profile
+# holding one is never deleted here, so a key appearing between planning and
+# applying has to abort the run. Looked up rather than assumed, so this module
+# still imports in a tree where #110 has not landed.
+if hasattr(SearchProfile, "source_search_key"):
+    VERIFIED_PROFILE_FIELDS += ("source_search_key",)
 
 # Columns whose stored value may be None but whose meaning is boolean.
 BOOLEAN_PROFILE_FIELDS = frozenset({"is_default", "is_active"})
@@ -868,6 +880,19 @@ def build_plan() -> RepairPlan:
                     "profile_id": profile_id,
                     "remaining": remaining,
                     "reason": "is the survivor of another saved search",
+                }
+            )
+        elif getattr(by_id.get(profile_id), "source_search_key", None):
+            # #110 identity. merge_duplicate_profiles() carries a key over to
+            # the survivor when it removes a duplicate; this repair does not
+            # move keys around -- that decision has a unique index and the
+            # default-profile CHECK behind it -- so it keeps the row instead of
+            # destroying the identity.
+            plan.profiles_retained.append(
+                {
+                    "profile_id": profile_id,
+                    "remaining": remaining,
+                    "reason": "carries a saved-search identity key",
                 }
             )
         elif bool(getattr(by_id.get(profile_id), "is_default", False)):
