@@ -10,6 +10,7 @@ one email collide with the `properties.source_email_id` unique constraint. No DB
 call is mocked, so the assertion is about what actually got committed.
 """
 
+import logging
 from datetime import datetime, timezone
 from email.message import EmailMessage
 
@@ -387,6 +388,57 @@ class TestParsingFailureHoldsTheCursor:
             assert _FakeIMAPClient.fetched_uids == [2, 3]
             assert Property.query.filter_by(source_email_id="imap_2").one_or_none()
             assert read_uid_file(str(uid_file)) == 3
+
+    def test_property_pipeline_logs_the_traceback_when_it_parks_the_cursor(
+        self, app, uid_file, monkeypatch, caplog
+    ):
+        """The parked-cursor log line must carry the frame that raised.
+
+        Parking the cursor stalls every later email until someone reads the
+        log, so this line is the one you go looking for when ingestion stopped
+        advancing. A bare `KeyError: 'price'` with no frame costs a diagnosis;
+        the legacy path has always logged `exc_info=True`. Issue #127 is the
+        pipeline that actually runs catching up with it.
+        """
+        Config.AUTO_TRAVEL_ENRICHMENT = False
+        Config.AUTO_PROPERTY_SCORING = False
+
+        _FakeIMAPClient.payloads = {uid: _land_email(uid) for uid in (1, 2)}
+
+        real_extract = property_imap_module.extract_idealista_property_id
+        failing_url = f"https://www.idealista.com/inmueble/{100000 + 2}/"
+
+        def explode_on_uid_2(url):
+            if url == failing_url:
+                raise ValueError("temporary parser failure")
+            return real_extract(url)
+
+        with app.app_context():
+            monkeypatch.setattr(
+                property_imap_module,
+                "extract_idealista_property_id",
+                explode_on_uid_2,
+            )
+
+            service = _make_service(monkeypatch)
+            with caplog.at_level(logging.ERROR, logger=property_imap_module.__name__):
+                service.run_ingestion(sync_type="test")
+
+        parked = [
+            record
+            for record in caplog.records
+            if "holding last_seen_uid" in record.getMessage()
+        ]
+        assert len(parked) == 1, caplog.text
+
+        # The exception itself, not just its str(): a message without a frame
+        # names the error and hides where it came from.
+        assert parked[0].exc_info is not None
+        assert parked[0].exc_info[0] is ValueError
+
+        # And it survives formatting, which is what reaches the log file.
+        assert "Traceback (most recent call last)" in caplog.text
+        assert "temporary parser failure" in caplog.text
 
     def test_legacy_pipeline_holds_the_cursor_at_a_raising_email(
         self, app, uid_file, monkeypatch
