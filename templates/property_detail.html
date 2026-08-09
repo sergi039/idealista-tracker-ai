@@ -59,9 +59,28 @@
                                title="{{ t('view_on_app_map') }}" aria-label="{{ t('view_on_app_map') }}">
                                 <i class="fas fa-map-marked-alt"></i>
                             </a>
+                            {# Check status sits with them (owner decision,
+                               2026-08-09): it was a labelled button in a row of
+                               its own inside the Overview card. Icon-sized, it
+                               cannot carry its outcome as a label, so the icon
+                               changes and the answer arrives as a toast. #}
+                            <button type="button" id="check-listing-status-btn"
+                                    class="btn btn-sm btn-outline-primary detail-link-icon"
+                                    onclick="checkPropertyListingStatus({{ property.id }})"
+                                    title="Check status on Idealista"
+                                    aria-label="Check status on Idealista">
+                                <i class="fas fa-rotate"></i>
+                            </button>
                         </span>
                     </h1>
-                    <div class="d-flex flex-wrap align-items-center gap-2">
+                    {# One line, not three (owner decision, 2026-08-09): the place
+                       and the coordinate. ID reads in the URL, the Idealista id
+                       is what the Idealista icon links to, and "Status: active /
+                       Checked: never" went together -- with no status text left
+                       to mistake for an observation, the qualifier #136 added to
+                       it has nothing to qualify. A removed or sold listing still
+                       says so, in the badge here and in the banner below. #}
+                    <div class="d-flex flex-wrap align-items-center gap-2 text-body-secondary small">
                         {% if property.listing_status == 'removed' %}
                             <span class="badge bg-danger">
                                 <i class="fas fa-times-circle me-1"></i>REMOVED
@@ -94,28 +113,13 @@
                                 <i class="fas fa-city me-1"></i>{{ property.municipality }}
                             </span>
                         {% endif %}
-                    </div>
-                    <div class="text-body-secondary small mt-1">
-                        <span class="me-2">ID: {{ property.id }}</span>
-                        {% if property.idealista_property_id %}<span class="me-2">Idealista: {{ property.idealista_property_id }}</span>{% endif %}
-                        {% if property.listing_status %}<span class="me-2">Status: {{ property.listing_status }}</span>{% endif %}
-                        {# "active" is the ingest default, not an observation, so say
-                           plainly when nobody ever verified it (issue #136). #}
-                        {% if property.listing_last_checked %}
-                            <span class="me-2">Checked: {{ property.listing_last_checked.strftime('%Y-%m-%d') }}</span>
-                        {% else %}
-                            <span class="me-2 fst-italic" title="Nobody has checked this listing on Idealista yet — the status above is the default it was ingested with">Checked: never</span>
-                        {% endif %}
-                        {% if property.listing_removed_date %}<span class="me-2">Removed: {{ property.listing_removed_date.strftime('%Y-%m-%d') }}</span>{% endif %}
-                        {% if property.search_profile %}<span class="me-2">Profile: {{ property.search_profile.name }}</span>{% endif %}
-                        {# The coordinate reads here, in the metadata line, rather
-                           than in a panel of its own. Accuracy stays with it: an
-                           "approximate" coordinate is why a sea view can come back
-                           `unknown`, so it is not decoration. #}
+                        {# Accuracy stays with the coordinate: an "approximate" one
+                           is why a sea view can come back `unknown`, so it is not
+                           decoration. #}
                         {% if property.location_lat and property.location_lon %}
                             {% set _coords = "%.6f, %.6f"|format(property.location_lat, property.location_lon) %}
-                            <span class="me-2 text-nowrap">
-                                <i class="fas fa-location-dot me-1"></i><span class="font-monospace">{{ _coords }}</span>
+                            <span class="text-nowrap">
+                                <span class="font-monospace">{{ _coords }}</span>
                                 <span class="ms-1">({{ property.location_accuracy or 'unknown' }})</span>
                                 <button type="button" class="btn btn-link p-0 ms-1 align-baseline copy-coords-btn"
                                         data-copy-text="{{ _coords }}"
@@ -248,25 +252,11 @@
                     </div>
                 </div>
 
-                {# The Location panel that stood here is gone: the coordinate reads
-                   in the header metadata line and its three links are the icons
-                   next to the title. #}
-
-                {# Two buttons, one row. They were two rows, and the second also
-                   carried a status dropdown with a Set status submit -- a manual
-                   override of what "Check status" observes on Idealista. Nobody
-                   asked for it, and a hand-set status is the one thing the scraper
-                   cannot correct. #}
-                <div class="d-flex flex-wrap gap-2 mt-3 align-items-center">
-                    <button type="button" class="btn btn-outline-info btn-sm" onclick="openAiSection('claude')">
-                        <i class="fas fa-brain me-1"></i>AI Analyses
-                    </button>
-                    <button type="button" class="btn btn-outline-primary btn-sm" id="check-listing-status-btn"
-                            onclick="checkPropertyListingStatus({{ property.id }})"
-                            title="Fetch the listing from Idealista and record what it says">
-                        <i class="fas fa-rotate me-1"></i>Check status
-                    </button>
-                </div>
+                {# Nothing else belongs at the bottom of this card (owner decision,
+                   2026-08-09). The Location panel went first, then the two
+                   buttons under it: "Check status" is an icon next to the title
+                   now, and "AI Analyses" only scrolled to a section that already
+                   sits directly below, with its own tabs and its own heading. #}
             </div>
         </div>
 
@@ -1035,23 +1025,36 @@
 <script>
 // Ask Idealista whether this listing is still up and record the answer.
 // A blocked or failed fetch reports "error" and deliberately leaves the stored
-// status alone, so the button must not claim "no change" -- say we could not
-// verify it (issue #136).
+// status alone, so this must not claim "no change" -- say we could not verify
+// it (issue #136). Since 2026-08-09 the control is an icon next to the title
+// and has no room for that sentence, so the icon carries the state and the
+// sentence arrives as a toast; the title attribute keeps it readable on hover
+// after the toast is gone.
 async function checkPropertyListingStatus(propertyId) {
     const btn = document.getElementById('check-listing-status-btn');
-    const originalContent = btn.innerHTML;
+    if (!btn) return;
+    const icon = btn.querySelector('i');
+    const originalIconClass = icon ? icon.className : null;
+    const originalTitle = btn.title;
     btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Checking...';
+    if (icon) icon.className = 'fas fa-spinner fa-spin';
 
     const restore = () => setTimeout(() => {
-        btn.innerHTML = originalContent;
+        if (icon && originalIconClass) icon.className = originalIconClass;
+        btn.title = originalTitle;
         btn.disabled = false;
     }, 2500);
 
+    const report = (iconClass, message, type) => {
+        if (icon) icon.className = iconClass;
+        btn.title = message;
+        _notify(message, type);
+        restore();
+    };
+
     const settle = (result) => {
         if (!result || !result.success) {
-            btn.innerHTML = '<i class="fas fa-triangle-exclamation me-1"></i>Error';
-            restore();
+            report('fas fa-triangle-exclamation', 'Status check failed — see the server logs.', 'error');
             return;
         }
         if (result.changed) {
@@ -1059,12 +1062,14 @@ async function checkPropertyListingStatus(propertyId) {
             return;
         }
         if (result.observed === 'error') {
-            btn.innerHTML = '<i class="fas fa-ban me-1"></i>Could not verify';
-            btn.title = 'Idealista did not answer with the listing page (bot protection or a server error). Status left unchanged.';
+            report(
+                'fas fa-ban',
+                'Could not verify: Idealista did not answer with the listing page (bot protection or a server error). Status left unchanged.',
+                'error'
+            );
         } else {
-            btn.innerHTML = '<i class="fas fa-check me-1"></i>No change';
+            report('fas fa-check', 'Checked on Idealista: no change.', 'success');
         }
-        restore();
     };
 
     try {
@@ -1078,15 +1083,18 @@ async function checkPropertyListingStatus(propertyId) {
             // Queued is not an answer. Without a poller we cannot learn the
             // outcome, so say it is still running rather than let settle()
             // read the envelope's success:true as "no change".
-            btn.innerHTML = '<i class="fas fa-clock me-1"></i>Queued';
             if (data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
+                if (icon) icon.className = 'fas fa-clock';
                 IdealistaApp.pollJob(data.job_id, {
                     onSuccess: (job) => settle(job && job.result ? job.result : null),
                     onError: () => settle(null)
                 });
             } else {
-                btn.title = 'The check is running in the background. Reload the page to see the result.';
-                restore();
+                report(
+                    'fas fa-clock',
+                    'The check is running in the background. Reload the page to see the result.',
+                    'info'
+                );
             }
             return;
         }
@@ -1443,21 +1451,9 @@ function cooldownButton(buttonEl, seconds) {
     const timer = setInterval(tick, 1000);
 }
 
-function setActiveAiTab(tabName) {
-    const tabId = tabName === 'chatgpt' ? 'ai-chatgpt-tab' : 'ai-claude-tab';
-    const trigger = document.getElementById(tabId);
-    if (!trigger) return;
-    const tab = bootstrap.Tab.getOrCreateInstance(trigger);
-    tab.show();
-}
-
-function openAiSection(tabName) {
-    setActiveAiTab(tabName || 'claude');
-    const section = document.getElementById('ai-analysis-section');
-    if (section && typeof section.scrollIntoView === 'function') {
-        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-}
+// setActiveAiTab()/openAiSection() went with the "AI Analyses" button that was
+// their only caller: it scrolled to a section that already sits directly below
+// this card, under its own heading.
 
 function _notify(message, type) {
     if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {

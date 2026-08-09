@@ -1771,6 +1771,13 @@ def check_land_status(land_id):
                 "success": True,
                 "land_id": land_id,
                 "status": land_local.listing_status,
+                # The observed answer, which is not the stored status when the
+                # fetch was blocked or failed: that case reports "error" here
+                # while `status` keeps whatever we already knew. Same contract
+                # as the property endpoint (issue #136) -- without it the page
+                # reads success:true and says "no change" for a check that
+                # never reached the listing.
+                "observed": result.get("new_status"),
                 "previous_status": result.get("previous_status"),
                 "changed": result.get("changed", False),
                 "last_checked": land_local.listing_last_checked.isoformat()

@@ -380,23 +380,95 @@ class TestTheApiAndThePage:
     def test_endpoint_404s_on_an_unknown_property(self, app, client):
         assert client.post("/api/property/999999/check-status").status_code == 404
 
-    def test_page_offers_the_check_and_admits_it_never_ran(self, app, client):
+    def test_page_offers_the_check(self, app, client):
         prop = make_property(key="page")
 
         body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
 
-        assert "Check status" in body
-        assert "Checked: never" in body, (
-            "an unverified 'active' must not read as a checked fact"
-        )
+        assert 'id="check-listing-status-btn"' in body
+        assert "Check status on Idealista" in body
 
-    def test_page_shows_the_date_once_a_check_has_run(self, app, client):
-        prop = make_property(
-            key="page-checked",
-            listing_last_checked=datetime(2026, 8, 9, 12, 0),
-        )
+    def test_page_makes_no_claim_about_an_unverified_status(self, app, client):
+        """This is what became of "Checked: never" (owner decision, 2026-08-09).
+
+        #136's page-side fix was that qualifier standing beside "Status:
+        active", so an ingest default could not read as an observation. The
+        owner removed the whole metadata line -- ID, Idealista id, Status,
+        Checked, Profile -- and the claim went with the qualifier: the page no
+        longer states an active listing's status at all, so there is nothing
+        left to mistake for a fact. The endpoint contract above is where #136
+        actually lives, and it is untouched.
+        """
+        for key, checked in (
+            ("page-unverified", None),
+            ("page-verified", datetime(2026, 8, 9, 12, 0)),
+        ):
+            prop = make_property(key=key, listing_last_checked=checked)
+            body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
+            assert "Status: active" not in body
+            assert "Checked:" not in body
+
+    def test_a_status_that_was_observed_still_shows(self, app, client):
+        """What survived the line: `removed` and `sold` are only ever written
+        by a check, so the page still says them -- in the badge and in the
+        banner."""
+        prop = make_property(key="page-removed", listing_status="removed")
 
         body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
 
-        assert "Checked: 2026-08-09" in body
-        assert "Checked: never" not in body
+        assert "REMOVED" in body
+        assert "This listing is no longer available on Idealista" in body
+
+
+class TestTheLandEndpointHasTheSameContract:
+    """The legacy `/lands/<id>` page gained the same "Check status" control
+    (2026-08-09), and its endpoint had no `observed` field: a blocked fetch
+    came back `success: true, changed: false`, which the page read as "No
+    Change". That is the #136 defect in the other half of the app -- a check
+    that never reached the listing, reported as a confirmation.
+    """
+
+    def _make_land(self, key, **overrides):
+        from models import Land
+
+        fields = {
+            "source_email_id": f"issue136-land-{key}",
+            "title": "Legacy land",
+            "url": LISTING_URL,
+            "listing_status": "active",
+        }
+        fields.update(overrides)
+        land = Land(**fields)
+        db.session.add(land)
+        db.session.commit()
+        return land
+
+    def test_it_separates_the_observation_from_the_stored_status(self, app, client):
+        land = self._make_land("blocked")
+
+        with with_response(FakeResponse(403, CAPTCHA_PAGE)):
+            payload = client.post(f"/api/land/{land.id}/check-status").get_json()
+
+        assert payload["observed"] == "error", "what idealista actually gave us"
+        assert payload["status"] == "active", "what we still know, unchanged"
+        assert payload["changed"] is False
+
+    def test_it_reports_a_real_observation(self, app, client):
+        land = self._make_land("removed")
+
+        with with_response(FakeResponse(200, REMOVED_PAGE)):
+            payload = client.post(f"/api/land/{land.id}/check-status").get_json()
+
+        assert payload["observed"] == "removed"
+        assert payload["status"] == "removed"
+        assert payload["changed"] is True
+
+    def test_the_page_says_could_not_verify_rather_than_no_change(self, app, client):
+        """The template must read `observed`, not just `success`."""
+        land = self._make_land("page")
+
+        body = client.get(f"/lands/{land.id}").get_data(as_text=True)
+        check = body[body.index("async function checkListingStatus") :]
+
+        assert "result.observed === 'error'" in check
+        assert "Could not verify" in check

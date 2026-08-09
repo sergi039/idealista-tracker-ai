@@ -375,9 +375,28 @@ class TestTheManualStatusOverrideIsGone:
         assert f"checkPropertyListingStatus({listing})" in body
         assert "/api/property/${propertyId}/check-status" in body
 
-    def test_the_two_buttons_share_one_row(self, client, listing):
-        """AI Analyses and Check status were two stacked rows of one button."""
+    def test_check_status_moved_up_to_the_map_icons(self, client, listing):
+        """It was a labelled button in a row of its own at the bottom of the
+        Overview card; it is an icon beside Google Maps / Idealista / Our Maps
+        (owner decision, 2026-08-09)."""
         body = client.get(f"/properties/{listing}").get_data(as_text=True)
-        row = body[: body.index('id="check-listing-status-btn"')]
-        row = row[row.rindex('<div class="d-flex') :]
-        assert "AI Analyses" in row
+        icons = body[body.index('class="detail-link-icons') :]
+        icons = icons[: icons.index("</h1>")]
+        assert 'id="check-listing-status-btn"' in icons
+        assert "detail-link-icon" in icons
+
+    def test_the_ai_analyses_shortcut_is_gone(self, client, listing):
+        """It only scrolled to a section that sits directly below that card."""
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        assert "></i>AI Analyses" not in body, "the labelled button"
+        assert "function openAiSection" not in body
+        assert 'onclick="openAiSection' not in body
+
+    def test_the_outcome_is_a_toast_not_a_label(self, client, listing):
+        """An icon has no room for "Could not verify", and #136 says that
+        sentence must be said rather than swallowed."""
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        check = body[body.index("async function checkPropertyListingStatus") :]
+        check = check[: check.index("// Formatting functions")]
+        assert "Could not verify" in check
+        assert "_notify(message, type)" in check
