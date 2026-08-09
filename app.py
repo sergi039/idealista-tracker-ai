@@ -9,6 +9,7 @@ from flask_wtf.csrf import CSRFProtect
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.orm import DeclarativeBase
+from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 from config import Config
 
@@ -231,6 +232,16 @@ def create_app(testing: bool = False):
     # Exempt JSON API blueprints from CSRF (they use token/session auth, not form submissions)
     csrf.exempt(api_bp)
     csrf.exempt(language_bp)
+
+    # Issue #140: those two blueprints answer JSON, so their errors must too.
+    # Each registers its own HTTPException handler for what its views raise;
+    # this one covers the errors raised before dispatch -- a URL matching no
+    # rule (404), a rule rejecting the method (405) -- where there is no
+    # blueprint to ask. It answers JSON only under /api and hands every other
+    # request back to werkzeug's HTML error page.
+    from utils.api_errors import http_error_response
+
+    app.register_error_handler(HTTPException, http_error_response)
 
     # Initialize caching
     from utils.cache import init_cache
