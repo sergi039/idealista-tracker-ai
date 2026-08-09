@@ -1,0 +1,154 @@
+"""Regression coverage for merge_bot reviewer-attempt handling."""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import textwrap
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+MERGE_BOT = REPO_ROOT / "tools" / "autopilot" / "merge_bot.sh"
+BASE_SHA = "1" * 40
+HEAD_SHA = "2" * 40
+MERGE_SHA = "3" * 40
+
+
+def _write_executable(path: Path, body: str) -> None:
+    path.write_text(textwrap.dedent(body))
+    path.chmod(0o755)
+
+
+def _run_merge_bot(tmp_path: Path, *args: str, journal: str = ""):
+    if shutil.which("jq") is None:
+        pytest.skip("merge_bot.sh needs jq")
+    if shutil.which("python3") is None:
+        pytest.skip("merge_bot.sh needs python3 for locking")
+
+    repo = tmp_path / "repo"
+    bin_dir = tmp_path / "bin"
+    repo.mkdir()
+    bin_dir.mkdir()
+
+    rx_marker = tmp_path / "rx-called"
+    merge_marker = tmp_path / "merge-called"
+    review_journal = tmp_path / "reviews.tsv"
+    review_journal.write_text(journal)
+
+    _write_executable(
+        bin_dir / "git",
+        """
+        #!/bin/bash
+        set -eu
+        case "$1" in
+            fetch) exit 0 ;;
+            rev-parse)
+                case "${2:-}" in
+                    origin/main) printf '%s\n' "$TEST_BASE_SHA" ;;
+                    refs/autopilot/*) printf '%s\n' "$TEST_HEAD_SHA" ;;
+                    *) exit 91 ;;
+                esac
+                ;;
+            merge-base) exit 0 ;;
+            ls-remote)
+                printf '%s\trefs/heads/main\n' "$TEST_BASE_SHA"
+                ;;
+            *) exit 92 ;;
+        esac
+        """,
+    )
+    _write_executable(
+        bin_dir / "gh",
+        """
+        #!/bin/bash
+        set -eu
+        case "$1:${2:-}" in
+            pr:list)
+                printf '[{"number":117,"title":"Dry run","isDraft":false,"mergeable":"MERGEABLE","headRefOid":"%s"}]\n' "$TEST_HEAD_SHA"
+                ;;
+            pr:checks)
+                printf '[{"name":"pytest","state":"SUCCESS"},{"name":"no-source-bundles","state":"SUCCESS"}]\n'
+                ;;
+            pr:merge)
+                : >"$TEST_MERGE_MARKER"
+                ;;
+            pr:view)
+                printf '%s\n' "$TEST_MERGE_SHA"
+                ;;
+            api:*)
+                printf '%s\n' "$TEST_BASE_SHA"
+                ;;
+            *) exit 93 ;;
+        esac
+        """,
+    )
+    _write_executable(
+        bin_dir / "rx",
+        """
+        #!/bin/bash
+        : >"$TEST_RX_MARKER"
+        exit 0
+        """,
+    )
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "AUTOPILOT_REPO_DIR": str(repo),
+            "AUTOPILOT_REPO_SLUG": "test/example",
+            "AUTOPILOT_MERGE_LOCK_DIR": str(tmp_path / "merge.lock"),
+            "AUTOPILOT_MERGE_LOG": str(tmp_path / "merge.log"),
+            "AUTOPILOT_REVIEW_JOURNAL": str(review_journal),
+            "TEST_BASE_SHA": BASE_SHA,
+            "TEST_HEAD_SHA": HEAD_SHA,
+            "TEST_MERGE_SHA": MERGE_SHA,
+            "TEST_RX_MARKER": str(rx_marker),
+            "TEST_MERGE_MARKER": str(merge_marker),
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(MERGE_BOT), *args],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    return result, rx_marker, merge_marker
+
+
+def test_dry_run_does_not_spend_a_reviewer_attempt(tmp_path):
+    result, rx_marker, merge_marker = _run_merge_bot(tmp_path, "--dry-run")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not rx_marker.exists(), "--dry-run invoked rx and spent a reviewer attempt"
+    assert not merge_marker.exists(), "--dry-run invoked gh pr merge"
+    assert f"would request review of {BASE_SHA}..{HEAD_SHA}" in result.stdout
+    assert "no cached verdict, so would not merge" in result.stdout
+
+
+def test_dry_run_reports_cached_pass_as_would_merge(tmp_path):
+    cached_pass = f"{BASE_SHA}..{HEAD_SHA}\tPASS\t2026-08-09T00:00:00\tpr-117\n"
+    result, rx_marker, merge_marker = _run_merge_bot(
+        tmp_path, "--dry-run", journal=cached_pass
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not rx_marker.exists(), "a cached dry-run verdict must not invoke rx"
+    assert not merge_marker.exists(), "--dry-run invoked gh pr merge"
+    assert "cached PASS" in result.stdout
+    assert "WOULD MERGE #117 (dry run)" in result.stdout
+
+
+def test_normal_run_still_reviews_and_merges(tmp_path):
+    result, rx_marker, merge_marker = _run_merge_bot(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert rx_marker.exists(), "normal mode did not request an uncached review"
+    assert merge_marker.exists(), "normal mode did not merge after review PASS"
+    assert "review PASS" in result.stdout
+    assert "MERGED #117" in result.stdout

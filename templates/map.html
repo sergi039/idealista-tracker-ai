@@ -21,6 +21,15 @@
             </a>
         </div>
 
+        {# Same rule as /properties (issue #104): custom travel target ids
+           belong to one profile, so the popups drop them rather than mixing
+           several profiles' destinations together. #}
+        {% if profile_selection.withholds_profile_travel %}
+            <div class="alert alert-light border py-2 px-3 small text-body-secondary" id="profile-travel-notice">
+                <i class="fas fa-circle-info me-1"></i>{{ profile_selection.travel_notice }}
+            </div>
+        {% endif %}
+
         <div class="card">
             <div class="card-body p-0">
                 <div id="map" style="height: calc(100vh - 250px); min-height: 500px; border-radius: 0.375rem;"></div>
