@@ -1037,7 +1037,26 @@ function renderListItems(items, label, colorClass) {
 }
 
 function renderSimilarProperties(similarProperties) {
-    if (!similarProperties || !Array.isArray(similarProperties) || similarProperties.length === 0) {
+    if (!similarProperties) {
+        return '<p class="text-muted">No similar properties found</p>';
+    }
+
+    // The AI providers answer with {comparison_summary, recommended_alternatives},
+    // not with property records. Rendering only the array shape reported
+    // "No similar properties found" over an analysis that was actually there.
+    if (!Array.isArray(similarProperties) && typeof similarProperties === 'object') {
+        const summary = similarProperties.comparison_summary || similarProperties.summary || '';
+        const alternatives = similarProperties.recommended_alternatives
+            || similarProperties.alternatives
+            || [];
+        if (!summary && (!Array.isArray(alternatives) || alternatives.length === 0)) {
+            return '<p class="text-muted">No similar properties found</p>';
+        }
+        const summaryHtml = summary ? `<p class="mb-2 small">${summary}</p>` : '';
+        return `${summaryHtml}${renderListItems(alternatives, 'Recommended alternatives', 'info')}`;
+    }
+
+    if (!Array.isArray(similarProperties) || similarProperties.length === 0) {
         return '<p class="text-muted">No similar properties found</p>';
     }
 
@@ -1208,7 +1227,8 @@ function renderStructuredAIAnalysis(analysis) {
                                 <span class="badge bg-warning text-dark">${humanizeEnumLabel(riskLevel)}</span>
                             </div>
                         </div>
-                        <p class="mb-0 small">${investment.summary || 'No investment potential analysis available'}</p>
+                        <p class="mb-0 small">${investment.summary || investment.forecast || 'No investment potential analysis available'}</p>
+                        ${renderListItems(investment.key_drivers, 'Key drivers', 'primary')}
                     </div>
                 </div>
             </div>
