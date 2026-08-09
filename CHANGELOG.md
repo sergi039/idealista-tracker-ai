@@ -40,6 +40,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   67 queries for 351 rows instead of one per property — behind a bare product
   token. The "to beach" sort stays unavailable: that one really does need
   Google Distance Matrix.
+### 🔎 Added: the unassigned listings are counted where the page claims a total (2026-08-09, #111)
+- **What**: `/properties` discloses, next to its total, how many listings with
+  `search_profile_id IS NULL` the current view leaves out — with a link that
+  shows exactly those — or says the total already includes them. `/profiles`
+  grew a "No subscription" row, so its per-profile counts stop summing to less
+  than the table.
+- **Why**: #102 stopped guessing a subscription for an email that names several
+  saved searches or whose lookup failed, on the grounds that "visible and
+  unassigned beats silently wrong". #104/#112 made those rows reachable through
+  the dropdown; the page's total still left them out without saying so —
+  `profile_id=all` means every *active profile*, never "no filter".
+- **A third way a listing loses its subscription**: deleting a profile.
+  `properties.search_profile_id` is `ON DELETE SET NULL` (models.py), so the
+  listings are detached rather than removed.
+- **The count is computed under the filters currently applied**, off the same
+  query as the page's own result, with the subscription filter applied last. A
+  global count would advertise a number the "show them" link does not land on
+  the moment any other filter is set. It is now the page's *only* unassigned
+  count: the "No subscription" entry in the subscription dropdown (#104/#112)
+  was counting the whole table, so one screen carried two different numbers
+  under one label. That entry reads the scoped count too, which also means it
+  drops out of the dropdown when the current filters leave nothing for it to
+  show — the rule already applied to a subscription that would only ever
+  return an empty page.
+- **No control to file one by hand**, although issue #111 asked for that too.
+  The version of this change written before #130 landed reinstated `POST
+  /properties/<id>/profile` and wrote
+  `enrichment.profile_assignment.manual_override` — precisely the stale pin
+  migration `014` had just cleared, and one nothing can clear again now that
+  the editor is gone, while `search_profile_repair_service` refuses to move a
+  row carrying it. Ingestion stays the only writer of a listing's
+  subscription: the route stays deleted and the guard tests in
+  `tests/test_subscription_assignment_is_automatic.py` stay untouched. A row
+  lands in this bucket because its email named no single saved search, so the
+  fix belongs in ingestion rather than in a dropdown.
+- **Not in scope**: `/api/properties` still defaults to the default profile and
+  offers no unassigned selection.
+
 ### 🧹 Fixed: the type filters now describe the subscription on screen (2026-08-09)
 - **What**: `/properties` builds its `Type`, `Subtype` and `Municipality`
   choices from the subscriptions currently selected instead of from the whole
@@ -156,7 +194,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no profile at all — the listing is stored unassigned rather than guessed into
   a same-named subscription, and so does an email whose search URL *was* read
   but could not be resolved (contested retries exhausted, or the insert
-  failed). Unassigned listings are not yet surfaced in the UI.
+  failed). Unassigned listings are surfaced in the UI since #111.
 - **The catch-all stays a catch-all**, enforced by the schema: `013` adds
   `CHECK (source_search_key IS NULL OR is_default IS NOT TRUE)`, so a profile
   tied to one saved search cannot be the fallback for everything else — through
