@@ -248,6 +248,53 @@
     padding: 0.25rem 0.45rem;
 }
 
+/* Column geometry for the list table. It lives here instead of in inline
+   `style="min-width: … !important"` attributes because the tablet media
+   queries further down have to relax these widths, and no stylesheet can
+   override an inline !important. */
+.properties-list-table .col-score,
+.properties-list-table .col-coords,
+.properties-list-table .col-travel,
+.properties-list-table .col-actions {
+    white-space: nowrap;
+}
+
+.properties-list-table .col-fav {
+    width: 40px;
+    text-align: center;
+}
+
+.properties-list-table .col-price,
+.properties-list-table .col-added {
+    min-width: 120px;
+    white-space: nowrap;
+}
+
+.properties-list-table .col-area {
+    min-width: 100px;
+    white-space: nowrap;
+}
+
+.properties-list-table .col-inv {
+    min-width: 90px;
+    width: 90px;
+    white-space: nowrap;
+    text-align: center;
+}
+
+/* Badges do not wrap by default, so a long subscription name ("houses at your
+   custom search area norte") sets the width of the whole title column on its
+   own and pushes the table past the viewport -- at every width, not only on a
+   tablet. Wrapping costs a line of row height and buys back ~150px. */
+.properties-list-table .badge {
+    white-space: normal;
+}
+
+/* Only rendered in the width band that drops the coords column. */
+.property-row-municipality {
+    display: none;
+}
+
 /* Card enhancements */
 .card {
     border: 1px solid var(--bs-border-color);
@@ -365,7 +412,10 @@ footer {
 }
 
 /* Responsive improvements */
-@media (max-width: 768px) {
+/* Phone width only. The bound is 767.98px, not 768px, so that it cannot
+   overlap the tablet rules below -- at exactly 768px both used to apply and
+   the table was stacked and compacted at the same time. */
+@media (max-width: 767.98px) {
     .table-responsive table,
     .table-responsive thead,
     .table-responsive tbody,
@@ -409,6 +459,136 @@ footer {
         display: flex;
         justify-content: center;
         width: 100%;
+    }
+}
+
+/* ---- Tablets ----
+   Bootstrap caps `.container` at 720px (md) and 960px (lg), so an iPad spends
+   100-220px of its screen on empty margins while the eleven-column list
+   scrolls sideways inside its card. Below the xxl breakpoint the page uses the
+   width it actually has; a desktop window of 1400px and up is untouched. */
+@media (min-width: 768px) and (max-width: 1399.98px) {
+    .navbar > .container,
+    main.container,
+    footer > .container {
+        max-width: none;
+    }
+}
+
+/* An iPad in either orientation. The list table gives up its fixed pixel
+   columns, tightens its padding and wraps what it can, so all the columns fit
+   the viewport instead of hiding half of themselves behind a scrollbar. */
+@media (min-width: 768px) and (max-width: 1199.98px) {
+    .properties-list-table {
+        font-size: 0.8125rem;
+    }
+
+    .properties-list-table th,
+    .properties-list-table td {
+        padding: 0.4rem 0.35rem;
+    }
+
+    /* Uppercase headers with letter-spacing were setting the width of the
+       narrow columns all by themselves. */
+    .properties-list-table thead th {
+        font-size: 0.7rem;
+        letter-spacing: 0;
+    }
+
+    .properties-list-table .col-price,
+    .properties-list-table .col-area,
+    .properties-list-table .col-added,
+    .properties-list-table .col-inv,
+    .properties-list-table .col-coords,
+    .properties-list-table .col-travel,
+    .properties-list-table .col-actions {
+        min-width: 0;
+        width: auto;
+        white-space: normal;
+    }
+
+    /* "1,300 m²" split over two lines reads as a rendering fault, so the
+       area keeps its value and unit together. */
+    .properties-list-table .col-area {
+        white-space: nowrap;
+    }
+
+    .properties-list-table .col-fav {
+        width: 30px;
+    }
+
+    /* The title is what the eye lands on first: it claims the width the other
+       columns give up instead of leaving it to the auto layout. */
+    .properties-list-table .lands-title-col {
+        width: 30%;
+        min-width: 130px;
+    }
+
+    .properties-list-table .property-table-title {
+        font-size: 0.875rem;
+    }
+
+    .properties-list-table .properties-travel-badges {
+        max-width: none;
+    }
+
+    .properties-list-table .properties-travel-times,
+    .properties-list-table .inv-metr-badge,
+    .properties-list-table .property-subscription-badge,
+    .properties-list-table .properties-type-badges .badge {
+        font-size: 0.7rem;
+    }
+
+    .properties-list-table .compact-text {
+        max-width: 90px;
+    }
+
+    /* Three 2rem buttons plus their gaps no longer fit a narrowed column, so
+       they wrap onto a second line rather than forcing the table wider. Two
+       per line is what the sizes below are chosen for; three lines of one
+       button would stretch every row. */
+    .properties-list-table .properties-actions {
+        flex-wrap: wrap;
+        gap: 0.1rem !important;
+    }
+
+    .properties-list-table .properties-actions .btn {
+        width: 1.5rem;
+        height: 1.5rem;
+        font-size: 0.7rem;
+    }
+}
+
+/* Portrait tablet. Roughly 790px of usable width cannot hold the coordinate
+   pair as well, so that column steps aside and the municipality it carried
+   moves under the title. The map button in Actions still opens the exact
+   position, and the column returns in landscape. */
+@media (min-width: 768px) and (max-width: 991.98px) {
+    .properties-list-table .col-coords {
+        display: none;
+    }
+
+    .properties-list-table .property-row-municipality {
+        display: block;
+    }
+
+    /* At 768px the column minimums add up to the viewport exactly, and the
+       last fraction of a pixel is still a scrollbar. */
+    .properties-list-table .lands-title-col {
+        min-width: 120px;
+    }
+}
+
+/* Landscape tablet. There is room for the three action buttons side by side,
+   and a row that is one button tall beats a row that is two. */
+@media (min-width: 992px) and (max-width: 1199.98px) {
+    .properties-list-table .properties-actions {
+        flex-wrap: nowrap;
+    }
+
+    .properties-list-table .properties-actions .btn {
+        width: 1.6rem;
+        height: 1.6rem;
     }
 }
 
