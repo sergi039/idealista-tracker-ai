@@ -55,8 +55,14 @@ required_checks() {
         done
         return 0
     fi
+    # Read both shapes and take their union. GitHub returns the same list twice
+    # today - `contexts` (deprecated) and `checks[].context`, which also carries
+    # the app_id that may report it - but a branch configured through the newer
+    # API can populate `checks` while leaving `contexts` empty. Reading only
+    # `contexts` would then see nothing required, which since the empty-list
+    # guard below means refusing every PR on a correctly protected branch.
     gh api "repos/${REPO_SLUG}/branches/${BASE_BRANCH}/protection/required_status_checks" \
-        --jq '.contexts[]' 2>/dev/null || true
+        --jq '[(.contexts // [])[], ((.checks // [])[] | .context)] | unique[]' 2>/dev/null || true
 }
 
 # The bot no longer re-checks the base before merging, because `strict` makes
