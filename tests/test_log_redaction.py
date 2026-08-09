@@ -631,6 +631,20 @@ class TestAFourthReviewRound:
         assert "TOPSECRET" not in redacted
         assert redacted == f'password="{REDACTED}"'
 
+    def test_an_escaped_quote_does_not_end_the_value(self):
+        """JSON escapes its quotes, and the credential continues past them.
+
+        `{"api_key": "abc\\"…"}` stopped the value at the escaped quote and left
+        the tail in the log — the same half-redaction as the apostrophe case,
+        reached through the shape a JSON body actually has.
+        """
+        line = '{"api_key": "abc\\"' + "TOPSECRET" + '"}'
+
+        redacted = redact(line)
+
+        assert "TOPSECRET" not in redacted
+        assert REDACTED in redacted
+
     def test_a_formatter_that_raises_a_credential_does_not_print_it(self):
         """`handleError` prints the exception and its traceback.
 

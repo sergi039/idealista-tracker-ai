@@ -73,9 +73,13 @@ _BEARER_RE: Final = re.compile(r"(?i)(bearer\s+)([^\s\"'<>,;]+)")
 #: the value at the apostrophe and yields `password="REDACTED'TOPSECRET"` —
 #: a leak that looks handled, which is the whole reason the Bearer pattern
 #: stopped matching by character class.
+#: A backslash escape is consumed as a pair, so the quote it escapes cannot end
+#: the value: JSON says `{"api_key": "abc\"…"}` and the credential continues
+#: past it. Stopping there would leave the tail in the log, which is the same
+#: half-redaction seen twice already.
 _STRUCTURED_SECRET_RE: Final = re.compile(
     r"(?i)([\"']?(?:api_?key|access_token|auth_token|token|password|secret)[\"']?"
-    r"\s*[:=]\s*([\"']))((?:(?!\2).)*)(\2)"
+    r"\s*[:=]\s*([\"']))((?:\\.|(?!\2).)*)(\2)"
 )
 
 #: The same names with an *unquoted* value: `token=abc`, `api_key: abc`. A log
