@@ -505,7 +505,11 @@ class TestLandEnrichmentRefusal:
         ):
             with patch("services.enrichment_service.time.sleep", return_value=None):
                 with patch(
-                    "services.enrichment_service.EnrichmentService._enrich_with_osm_data"
+                    "services.enrichment_service.EnrichmentService._enrich_with_osm_data",
+                    # None is "Overpass answered": this test is about Google
+                    # refusing, and since #153 the OSM return value decides
+                    # whether the run is `degraded` on top of that.
+                    return_value=None,
                 ):
                     with patch("services.enrichment_service.ScoringService"):
                         with patch(
