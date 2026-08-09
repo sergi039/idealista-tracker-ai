@@ -245,6 +245,117 @@ class TestTheLocationPanelIsGone:
         assert "execCommand" in body
 
 
+def _with_address(address, municipality="Cudillero", key="addr"):
+    """A listing whose enrichment pass resolved an address, as 188 real ones did."""
+    prop = Property(
+        source_email_id=f"property_page_address_{key}",
+        title=f"AddressFixture-{key}",
+        listing_status="active",
+        municipality=municipality,
+        location_lat=43.56,
+        location_lon=-6.15,
+        location_accuracy="approximate",
+        enrichment={
+            "geocoding": {
+                "query": "whatever the email said",
+                "accuracy": "approximate",
+                "formatted_address": address,
+            }
+        },
+    )
+    db.session.add(prop)
+    db.session.commit()
+    return prop.id
+
+
+class TestTheGeocodedAddressIsShown:
+    """The header knew the coordinate and not the place.
+
+    `enrichment.geocoding.formatted_address` is written by the enrichment pass
+    for every listing the geocoder resolves -- 188 of the owner's 356 -- and
+    was read by nothing. The page showed `43.529796, -5.665516 (approximate)`
+    and a municipality, so the one line naming where the listing actually is
+    ("El Llano, Gijón, Asturias, Spain") never reached the screen.
+    """
+
+    def test_the_address_reads_in_the_header(self, app, client):
+        listing = _with_address("El Llano, Gijón, Asturias, Spain", "Gijón")
+
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+
+        assert "El Llano, Gijón, Asturias, Spain" in body
+        assert body.index("El Llano") < body.index("Overview"), "header, not a panel"
+
+    def test_the_municipality_is_not_repeated_when_the_address_carries_it(
+        self, app, client
+    ):
+        listing = _with_address(
+            "El Llano, Gijón, Asturias, Spain", "Gijón", key="dedupe"
+        )
+
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        header = body[: body.index("Overview")]
+
+        assert header.count("fa-city") == 0, (
+            "the address already says Gijón; a second badge is the duplication "
+            "the header refactor set out to remove"
+        )
+
+    def test_a_differently_named_municipality_still_shows(self, app, client):
+        """Google answers in the local language: two names, one place.
+
+        60 of the owner's 188 geocoded listings are like this -- the filters
+        and the profile rules use `municipality`, so it cannot silently vanish
+        behind a Catalan or Asturian rendering of the same town.
+        """
+        listing = _with_address(
+            "Carrer l'Ordana, 03550 Sant Joan d'Alacant, Alicante, Spain",
+            "San Juan de Alicante",
+            key="localname",
+        )
+
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+
+        assert "Sant Joan d&#39;Alacant" in body or "Sant Joan d'Alacant" in body
+        assert "San Juan de Alicante" in body
+
+    def test_no_geocoding_means_no_address_line_and_no_invention(self, client, listing):
+        """The other 168: a coordinate, and nothing a person would recognise."""
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        header = body[: body.index("Overview")]
+
+        assert "fa-map-pin" not in header, (
+            "an unresolved address is absent, never reconstructed from the coordinate"
+        )
+        assert "Cudillero" in header, "the municipality is all there is, so it stays"
+
+
+class TestGeocodedAddressAccessor:
+    def test_it_reads_the_enrichment_the_pass_writes(self, app):
+        prop = Property(source_email_id="addr-accessor-1")
+        prop.enrichment = {"geocoding": {"formatted_address": " Bergondo, Spain "}}
+
+        assert prop.geocoded_address == "Bergondo, Spain"
+
+    @pytest.mark.parametrize(
+        "enrichment",
+        [
+            None,
+            {},
+            {"geocoding": {}},
+            {"geocoding": {"formatted_address": None}},
+            {"geocoding": {"formatted_address": "   "}},
+            {"geocoding": {"formatted_address": {"not": "a string"}}},
+            {"geocoding": "not a dict"},
+        ],
+    )
+    def test_anything_but_a_usable_string_is_none(self, app, enrichment):
+        prop = Property(source_email_id="addr-accessor-2")
+        prop.enrichment = enrichment
+
+        assert prop.geocoded_address is None
+
+
 class TestTheManualStatusOverrideIsGone:
     """ "Check status" asks Idealista. The dropdown next to it set the status by
     hand, which the scraper then could not correct."""
