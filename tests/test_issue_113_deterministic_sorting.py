@@ -128,13 +128,9 @@ def _csv_ids(client, endpoint, direction):
             r'data-property-id="(\d+)"',
             id="properties",
         ),
-        pytest.param(
-            Land,
-            "/lands",
-            "/export.csv",
-            r'<tr class="land-row[^"]*" data-land-id="(\d+)"',
-            id="lands",
-        ),
+        # The `lands` page went away on 2026-08-09 (one surface). Its CSV
+        # export still reads the legacy table, and its ordering is covered by
+        # `test_legacy_csv_export_keeps_a_total_order` below.
     ],
 )
 def test_ties_do_not_repeat_or_disappear_and_csv_matches_page(
@@ -168,3 +164,26 @@ def test_ties_do_not_repeat_or_disappear_and_csv_matches_page(
     assert set(page_ids) == set(expected_ids), "pagination omitted tied rows"
     assert page_ids == expected_ids
     assert _csv_ids(client, export_endpoint, direction) == page_ids
+
+
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+def test_legacy_csv_export_keeps_a_total_order(app, client, direction):
+    """`/export.csv` is what is left reading the archived `lands` table.
+
+    Its page went away with the one-surface change on 2026-08-09, so the
+    pagination half of #113 no longer applies here -- but the export still
+    has to order tied rows completely, or two downloads of the same data
+    disagree the moment the database picks another legal tie order.
+    """
+    with app.app_context():
+        expected_ids = _seed_tied_rows(Land)
+        descending_ties = _install_plan_index(Land, direction, "desc")
+
+    assert _csv_ids(client, "/export.csv", direction) == expected_ids
+
+    # A second legal tie order: an explicit ID tiebreaker makes it unobservable.
+    with app.app_context():
+        descending_ties.drop(bind=db.engine)
+        _install_plan_index(Land, direction, "asc")
+
+    assert _csv_ids(client, "/export.csv", direction) == expected_ids

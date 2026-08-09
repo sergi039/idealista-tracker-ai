@@ -181,17 +181,20 @@ class TestPropertiesPageProfileSelector:
         map_href = _extract_href(body, "View properties on map")
         assert "profile_id=all" in map_href
 
-    def test_no_profile_id_param_preserves_prior_auto_select_behavior(
+    def test_no_profile_id_param_shows_every_live_subscription(
         self, client, two_profiles_with_properties
     ):
-        """A bare /properties request (no profile_id at all, e.g. an old
-        bookmarked link) must keep resolving to a single concrete profile,
-        not silently become "all"."""
+        """Amended 2026-08-09: a bare /properties request (no profile_id at
+        all, e.g. an old bookmarked link) shows every live subscription.
+
+        It used to resolve to one concrete profile, which meant the one
+        surface opened on a single saved search and silently hid the rest.
+        """
         resp = client.get("/properties")
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
-        # Exactly one of the two listings shows up, never both.
-        assert ("AlphaListingUniqueTitle" in body) != ("BetaListingUniqueTitle" in body)
+        assert "AlphaListingUniqueTitle" in body
+        assert "BetaListingUniqueTitle" in body
 
 
 class TestExportCsvProfileSelector:
