@@ -37,7 +37,7 @@ import requests
 
 from config import Config
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
-from utils.http import request_with_retries
+from utils.http import HTTP_USER_AGENT, request_with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -93,11 +93,9 @@ PROFILE_SAMPLE_SPACING_M = 150
 COASTLINE_CACHE_TIMEOUT_S = 60 * 60 * 24 * 30
 GEOMETRY_CACHE_TIMEOUT_S = 60 * 60 * 24 * 7
 
-# overpass-api.de answers `406 Not Acceptable` to the default `python-requests`
-# User-Agent, and also to any UA carrying a parenthetical comment -- measured,
-# not guessed: `IdealistaRank/1.0 (personal property tracker)` is refused while
-# the bare product token is served. Keep this a plain token.
-HTTP_USER_AGENT = "IdealistaRank/1.0"
+# `HTTP_USER_AGENT` lives in utils.http, imported above: overpass-api.de
+# refuses the default `python-requests` User-Agent, and the OSM amenity call in
+# services/enrichment_service.py needs the same token for the same reason.
 
 # --- text signals -----------------------------------------------------------
 
