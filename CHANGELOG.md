@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🛟 Fixed: listing pagination has a deterministic order (2026-08-09, #113)
+- **What**: `/properties`, `/lands`, and their CSV exports now use the model ID
+  as the final sort key after every nullable user-selected ordering.
+- **Why**: rows tied on price, area, score, date, title, or a NULL run could
+  move between query executions, causing pagination to repeat or omit rows and
+  making the page disagree with its CSV export.
+
 ### 🔑 Changed: a saved search is identified by its URL, not its label (2026-08-08, #102)
 - **What**: alert emails link to the saved-search page, and that link encodes
   the subscription's filters. `services/search_subscription_identity.py`
