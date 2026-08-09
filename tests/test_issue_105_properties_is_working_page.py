@@ -156,14 +156,17 @@ class TestNavbar:
         nav = body.split("</nav>", 1)[0]
         assert 'href="/properties"' in nav
 
-    def test_navbar_links_lands_and_labels_it_an_archive(
-        self, client, scored_properties
-    ):
+    def test_navbar_offers_no_second_listing_page(self, client, scored_properties):
+        """Superseded on 2026-08-09: one surface, not two.
+
+        `/lands` used to hang in the navbar as "Lands (archive)". The archived
+        rows are mirrored into `properties` under their own subscription, so
+        the archive is a filter on the working page now -- a second link would
+        put the owner back on the page they asked to have removed.
+        """
         body = client.get("/properties").get_data(as_text=True)
         nav = body.split("</nav>", 1)[0]
-        match = re.search(r'href="/lands"[^>]*>(.*?)</a>', nav, re.S)
-        assert match, "the navbar must still reach /lands"
-        assert "archive" in match.group(1).lower()
+        assert 'href="/lands"' not in nav
 
 
 class TestViewTypeToggle:
@@ -439,18 +442,19 @@ class TestSubscriptionContextSurvivesMapNavigation:
         for params in links:
             assert params.get("profile_id") == ["all"]
 
-    def test_card_map_link_carries_the_auto_resolved_profile(
+    def test_card_map_link_carries_the_auto_resolved_selection(
         self, client, mappable_properties
     ):
-        """No profile_id in the URL still means the list resolved one, and
-        the map must be told which -- otherwise it resolves its own (here:
-        the other profile) and the focused listing is not even loaded."""
+        """No profile_id in the URL means every live subscription since
+        2026-08-09, and the map must be told that -- left to itself it
+        resolves a single profile of its own, and the focused listing may not
+        even be loaded there."""
         links = self._map_links(client, "view_type=cards")
-        assert links, "the auto-selected profile has a mappable row"
+        assert links, "both subscriptions have mappable rows"
         for params in links:
-            assert params.get("profile_id") == [
-                str(mappable_properties["listed_profile_id"])
-            ], "the map link dropped the profile the list auto-selected"
+            assert params.get("profile_id") == ["all"], (
+                "the map link dropped the selection the list resolved"
+            )
 
     def test_map_list_link_keeps_a_specific_profile(self, client, mappable_properties):
         profile_id = mappable_properties["mapped_profile_id"]
@@ -641,8 +645,17 @@ class TestPropertiesPageSurvivesAFailure:
         assert resp.status_code == 200
 
 
-class TestLandsStaysReachableAsArchive:
-    def test_lands_page_still_renders(self, client, app):
+class TestLandsFoldsIntoTheOneSurface:
+    """Superseded on 2026-08-09: `/lands` is no longer a page of its own.
+
+    It rendered the frozen `lands` table behind an archive banner the owner
+    never asked for. Those rows are mirrored into `properties` under the
+    "Legacy Lands" subscription, so the working page already holds them and
+    the route only has to stop being a second surface -- without breaking the
+    bookmarks and the legacy detail links that still point at it.
+    """
+
+    def test_lands_redirects_to_the_one_surface(self, client, app):
         with app.app_context():
             db.session.add(
                 Land(
@@ -656,18 +669,18 @@ class TestLandsStaysReachableAsArchive:
             db.session.commit()
 
         resp = client.get("/lands")
+        assert resp.status_code in (301, 302, 308)
+        assert resp.headers["Location"].endswith("/properties")
+
+    def test_lands_query_string_still_lands_on_a_working_page(self, client):
+        resp = client.get("/lands?inv_metr=EXCELLENT", follow_redirects=True)
         assert resp.status_code == 200
-        body = resp.get_data(as_text=True)
-        assert "ArchivedLandUniqueTitle" in body
+        assert 'id="filters-card"' in resp.get_data(as_text=True)
 
-    def test_lands_page_declares_itself_an_archive(self, client):
-        body = client.get("/lands").get_data(as_text=True)
-        assert "archive" in body.lower()
-
-    def test_lands_investment_rating_filter_and_sort_still_work(self, client, app):
-        """The investment-rating filter and sort now share one expression
-        with /properties. The archived page must keep behaving exactly as it
-        did before that deduplication."""
+    def test_legacy_csv_export_keeps_filtering(self, client, app):
+        """The archived rows still have their own CSV export, and the
+        investment-rating filter it shares with /properties has to keep
+        working there -- the export is the only thing left reading `lands`."""
         with app.app_context():
             db.session.add_all(
                 [
@@ -696,18 +709,6 @@ class TestLandsStaysReachableAsArchive:
                 ]
             )
             db.session.commit()
-
-        filtered = client.get("/lands?inv_metr=EXCELLENT").get_data(as_text=True)
-        assert "ExcellentLandUniqueTitle" in filtered
-        assert "ModerateLandUniqueTitle" not in filtered
-
-        # Sorted by rating, the EXCELLENT row leads despite its lower score.
-        sorted_body = client.get(
-            "/lands?sort=investment_metrics&order=desc&view_type=list"
-        ).get_data(as_text=True)
-        assert _order(
-            sorted_body, "ExcellentLandUniqueTitle", "ModerateLandUniqueTitle"
-        )
 
         csv_body = client.get("/export.csv?inv_metr=EXCELLENT").get_data(as_text=True)
         assert "ExcellentLandUniqueTitle" in csv_body

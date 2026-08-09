@@ -11,6 +11,11 @@ TRANSLATIONS = {
         "properties": "Properties",
         "scoring_criteria": "Scoring Criteria",
         "manual_sync": "Manual Sync",
+        # Saved searches ("subscriptions" in the owner's words)
+        "subscription": "Subscription",
+        "subscriptions": "Subscriptions",
+        "all_subscriptions": "All subscriptions",
+        "archive": "Archive",
         # Property list
         "property_overview": "Property Overview",
         "total_properties": "Total Properties",
@@ -113,6 +118,10 @@ TRANSLATIONS = {
         "properties": "Propiedades",
         "scoring_criteria": "Criterios de Puntuación",
         "manual_sync": "Sincronización Manual",
+        "subscription": "Suscripción",
+        "subscriptions": "Suscripciones",
+        "all_subscriptions": "Todas las suscripciones",
+        "archive": "Archivo",
         # Property list
         "property_overview": "Resumen de Propiedades",
         "total_properties": "Total de Propiedades",

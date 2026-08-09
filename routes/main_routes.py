@@ -19,6 +19,8 @@ from models import Land, Property, SearchProfile
 from app import db
 from services.profile_selection import (
     MAX_SELECTED_PROFILE_IDS,
+    ProfileSelection,
+    ProfileSelectionState,
     apply_profile_filter,
     empty_profile_selection,
     parse_profile_selection,
@@ -133,43 +135,162 @@ def _map_auto_profile_id(default_profile, profiles):
 
 
 def _profile_dropdown_options(profiles, resolved):
-    """Rows for the subscription dropdown: active profiles, plus whatever is
-    selected but not among them.
+    """Rows for the subscription filter: the live subscriptions first, the
+    retired ones after them, each with how many listings it holds.
 
-    The dropdown offers active profiles, but a selection can legitimately name
-    one that is not there -- an inactive profile reached by id, or an id that
-    no longer exists. Leaving those out is not merely cosmetic: the page's own
-    script recomputes the state from the checkboxes, so a selection with no
-    checkbox reads as "nothing ticked", and the next Apply would silently
-    widen the view to every active profile.
+    The owner has exactly two saved searches on idealista.com; everything else
+    in `search_profiles` is a subscription that stopped (the Alicante ones), a
+    mirror of the frozen `lands` table, or the unnamed catch-all. Listing all
+    of them side by side as if they were equals is what made the old dropdown
+    unreadable, so an inactive profile is still offered -- its listings are
+    real and have to stay reachable -- but as an archive row, labelled and
+    sorted below the live ones.
+
+    A profile that holds nothing *and* is not selected is left out entirely:
+    the catch-all `Default` exists for routing, not for filtering, and an
+    option that can only ever return an empty page is noise.
+
+    Whatever the selection names is always included, active or not, empty or
+    not. That is not cosmetic: the page's own script recomputes the state from
+    the checkboxes, so a selected id with no checkbox reads as "nothing
+    ticked", and the next Apply would silently widen the view.
     """
-    options = [
-        {"id": profile.id, "name": profile.name, "is_active": True}
-        for profile in profiles
-    ]
-
-    missing = [
-        profile_id
-        for profile_id in resolved.checked_ids
-        if profile_id not in {profile.id for profile in profiles}
-    ]
-    if not missing:
-        return options
-
-    # One query, not one per id: `missing` is bounded by the parser's id cap.
-    named = {
-        profile.id: profile.name
-        for profile in SearchProfile.query.filter(SearchProfile.id.in_(missing)).all()
+    counts = {
+        profile_id: count
+        for profile_id, count in db.session.query(
+            Property.search_profile_id, func.count(Property.id)
+        ).group_by(Property.search_profile_id)
     }
-    for profile_id in missing:
+
+    active_ids = {profile.id for profile in profiles}
+    selected = set(resolved.checked_ids)
+
+    # One query for the archive too -- inactive profiles are not in `profiles`,
+    # which `SearchProfileService.list_profiles(active_only=True)` filtered.
+    known = {profile.id: profile for profile in profiles}
+    for profile in SearchProfile.query.filter(
+        SearchProfile.is_active.isnot(True)
+    ).all():
+        known.setdefault(profile.id, profile)
+    for profile in SearchProfile.query.filter(
+        SearchProfile.id.in_(selected - set(known))
+    ).all():
+        known.setdefault(profile.id, profile)
+
+    options = []
+    for profile_id, profile in known.items():
+        count = counts.get(profile_id, 0)
+        if not count and profile_id not in selected:
+            continue
         options.append(
             {
                 "id": profile_id,
-                "name": named.get(profile_id) or f"Unknown profile #{profile_id}",
-                "is_active": False,
+                "name": profile.name,
+                "is_active": profile_id in active_ids,
+                "count": count,
             }
         )
+
+    # An id the selection names that no longer exists at all: it still needs a
+    # checkbox, or the selection silently widens on the next Apply.
+    for profile_id in selected - set(known):
+        options.append(
+            {
+                "id": profile_id,
+                "name": f"Unknown profile #{profile_id}",
+                "is_active": False,
+                "count": counts.get(profile_id, 0),
+            }
+        )
+
+    # Live subscriptions first, then the archive; alphabetical inside each
+    # group so the order does not shuffle when a listing arrives.
+    options.sort(key=lambda option: (not option["is_active"], option["name"].lower()))
     return options
+
+
+def _travel_display_targets(profile_ids, include_custom=False):
+    """Travel columns to render for the profiles currently on screen.
+
+    A single profile shows everything it is configured for, presets and its
+    own custom destinations. Anything wider shows the presets only, and
+    `include_custom` is the caller's answer to "is this really one
+    subscription?" -- one profile *plus the unassigned listings* is not, and
+    a custom target id belongs to one profile, so a union would label a
+    column with a destination most rows were never measured against. Presets
+    are global keys with fixed labels ("nearest airport"), so they mean the
+    same thing in every profile and survive the union.
+    """
+    from services.search_profile_service import SearchProfileService
+
+    icon_map = {
+        "airport": "fa-plane",
+        "train_station": "fa-train",
+        "hospital": "fa-hospital",
+        "police": "fa-shield-halved",
+        "supermarket": "fa-cart-shopping",
+        "school": "fa-school",
+    }
+
+    profiles = []
+    for profile_id in profile_ids:
+        try:
+            profile = db.session.get(SearchProfile, profile_id)
+        except SQLAlchemyError:
+            logger.warning("Could not load profile %s for travel targets", profile_id)
+            profile = None
+        if profile is not None:
+            profiles.append(profile)
+    if not profiles:
+        return []
+
+    configs = [
+        SearchProfileService.get_travel_targets_config(profile) for profile in profiles
+    ]
+
+    targets = []
+    for preset in SearchProfileService.get_travel_preset_defs():
+        key = preset.get("key")
+        if not key:
+            continue
+        enabled = False
+        for config in configs:
+            presets_cfg = config.get("presets") if isinstance(config, dict) else {}
+            entry = (presets_cfg or {}).get(key) or {}
+            if bool(entry.get("enabled", True)):
+                enabled = True
+                break
+        if not enabled:
+            continue
+        targets.append(
+            {
+                "key": key,
+                "label": preset.get("label") or key,
+                "icon": icon_map.get(key) or "fa-route",
+                "kind": "preset",
+            }
+        )
+
+    if not include_custom or len(profiles) != 1:
+        return targets
+
+    config = configs[0]
+    for item in (config.get("custom") or []) if isinstance(config, dict) else []:
+        if not isinstance(item, dict):
+            continue
+        target_id = str(item.get("id") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if not target_id or not name:
+            continue
+        targets.append(
+            {
+                "key": f"custom:{target_id}",
+                "label": name,
+                "icon": "fa-location-dot",
+                "kind": "custom",
+            }
+        )
+    return targets
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -206,26 +327,25 @@ def properties():
 
         # Default first, so a fresh install's auto-created profile is in the
         # dropdown that "all profiles" is defined against.
-        default_profile = SearchProfileService.get_default_profile(create=True)
+        SearchProfileService.get_default_profile(create=True)
         profiles = SearchProfileService.list_profiles(active_only=True)
 
         # `profile_id` is a repeated parameter since #104 -- auto | all |
         # selected(ids); see services/profile_selection.py for what each
         # state means and why "all" is never inferred from an empty tick list.
+        #
+        # A bare /properties means every live subscription (owner decision
+        # 2026-08-09). It used to resolve to the single richest profile, which
+        # made the one surface open on one saved search and hide the other --
+        # the whole point of the page is that all of them share it.
         selection = parse_profile_selection(request.args)
+        if selection.is_auto:
+            selection = ProfileSelection(ProfileSelectionState.ALL)
         profile_selection = resolve_profile_selection(
-            selection,
-            [profile.id for profile in profiles],
-            auto_profile_id=(
-                SearchProfileService.resolve_richest_active_profile_id(
-                    default_profile, profiles
-                )
-                if selection.is_auto
-                else None
-            ),
+            selection, [profile.id for profile in profiles]
         )
-        # Profile-specific data (travel targets, the recalculate actions) is
-        # only meaningful for exactly one profile.
+        # Profile-specific data (custom travel targets, the recalculate
+        # actions) is only meaningful for exactly one profile.
         selected_profile_id = profile_selection.single_id
 
         # Filters
@@ -372,70 +492,25 @@ def properties():
 
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
 
-        # Profile-driven travel targets for consistent UI display.
-        travel_display_targets = []
-        if selected_profile_id is not None:
-            try:
-                selected_profile = db.session.get(SearchProfile, selected_profile_id)
-            except Exception:
-                selected_profile = None
+        # Travel columns for whatever subscriptions are on screen: presets for
+        # all of them, plus the custom destinations when exactly one is shown.
+        shown_profile_ids = (
+            profile_selection.filter_ids
+            if profile_selection.filter_ids is not None
+            else [profile.id for profile in profiles]
+        )
+        travel_display_targets = _travel_display_targets(
+            shown_profile_ids, include_custom=selected_profile_id is not None
+        )
 
-            travel_config = SearchProfileService.get_travel_targets_config(
-                selected_profile
+        # Which subscription a row belongs to, for the badge the list grows
+        # when it is showing more than one of them.
+        profile_names = {
+            profile_id: name
+            for profile_id, name in db.session.query(
+                SearchProfile.id, SearchProfile.name
             )
-            preset_defs = SearchProfileService.get_travel_preset_defs()
-            presets_cfg = (
-                travel_config.get("presets") if isinstance(travel_config, dict) else {}
-            )
-
-            icon_map = {
-                "airport": "fa-plane",
-                "train_station": "fa-train",
-                "hospital": "fa-hospital",
-                "police": "fa-shield-halved",
-                "supermarket": "fa-cart-shopping",
-                "school": "fa-school",
-            }
-
-            for preset in preset_defs:
-                key = preset.get("key")
-                if not key:
-                    continue
-                enabled = (
-                    bool((presets_cfg.get(key) or {}).get("enabled", True))
-                    if isinstance(presets_cfg, dict)
-                    else True
-                )
-                if not enabled:
-                    continue
-                travel_display_targets.append(
-                    {
-                        "key": key,
-                        "label": preset.get("label") or key,
-                        "icon": icon_map.get(key) or "fa-route",
-                        "kind": "preset",
-                    }
-                )
-
-            for item in (
-                (travel_config.get("custom") or [])
-                if isinstance(travel_config, dict)
-                else []
-            ):
-                if not isinstance(item, dict):
-                    continue
-                target_id = str(item.get("id") or "").strip()
-                name = str(item.get("name") or "").strip()
-                if not target_id or not name:
-                    continue
-                travel_display_targets.append(
-                    {
-                        "key": f"custom:{target_id}",
-                        "label": name,
-                        "icon": "fa-location-dot",
-                        "kind": "custom",
-                    }
-                )
+        }
 
         # Distinct lists for dropdowns (small, best-effort)
         categories = [
@@ -474,6 +549,11 @@ def properties():
             pagination=pagination,
             profiles=profiles,
             profile_options=_profile_dropdown_options(profiles, profile_selection),
+            profile_names=profile_names,
+            unassigned_count=db.session.query(func.count(Property.id))
+            .filter(Property.search_profile_id.is_(None))
+            .scalar()
+            or 0,
             max_selected_profiles=MAX_SELECTED_PROFILE_IDS,
             selected_profile_id=selected_profile_id,
             profile_selection=profile_selection,
@@ -510,6 +590,8 @@ def properties():
             pagination=None,
             profiles=[],
             profile_options=[],
+            profile_names={},
+            unassigned_count=0,
             max_selected_profiles=MAX_SELECTED_PROFILE_IDS,
             selected_profile_id=None,
             profile_selection=empty_profile_selection(),
@@ -527,206 +609,19 @@ def properties():
 
 @main_bp.route("/lands")
 def lands():
-    """Main lands listing page with filtering and sorting"""
-    try:
-        from services.settings_service import SettingsService
+    """The archived lands listing folded into `/properties`.
 
-        # Get query parameters
-        mode = request.args.get("mode", "combined")  # combined, investment, lifestyle
+    Owner decision 2026-08-09: one surface, not two. `/lands` used to render
+    its own page over the frozen `lands` table (168 rows, nothing newer than
+    2026-02-18) behind an archive banner nobody asked for. Those rows are
+    mirrored into `properties` under the "Legacy Lands" subscription, so the
+    working page already shows them -- selectable, like any other retired
+    subscription, from the subscription filter.
 
-        # Smart sorting defaults based on mode
-        mode_sort_defaults = {
-            "combined": "score_total",
-            "investment": "score_investment",
-            "lifestyle": "score_lifestyle",
-        }
-        default_sort = mode_sort_defaults.get(mode, "score_total")
-
-        sort_by = request.args.get("sort", default_sort)
-        sort_order = request.args.get("order", "desc")
-        land_type_filter = request.args.get("land_type", "")
-        municipality_filter = request.args.get("municipality", "")
-        search_query = request.args.get("search", "")
-        investment_metrics_filter = request.args.get("inv_metr", "")
-        sea_view_filter = request.args.get("sea_view", "") == "on"
-        favorites_filter = request.args.get("favorites", "") == "on"
-        # Hide removed: ON by default. Checkbox sends 'on' when checked, absent when unchecked.
-        # We need special handling: if 'hide_removed' param is missing AND no other filters applied, default to True
-        # If form was submitted (has any filter param), absence means unchecked (False)
-        hide_removed_param = request.args.get("hide_removed", None)
-        form_submitted = any(
-            request.args.get(p)
-            for p in [
-                "search",
-                "land_type",
-                "municipality",
-                "inv_metr",
-                "sea_view",
-                "favorites",
-                "sort",
-                "hide_removed",
-            ]
-        )
-        if form_submitted:
-            hide_removed_filter = hide_removed_param == "on"
-        else:
-            hide_removed_filter = True  # Default: hide removed
-        view_type = request.args.get("view_type", "cards")  # Default to cards
-
-        # Pagination parameters (clamp to valid ranges)
-        page = max(1, request.args.get("page", 1, type=int))
-        per_page = min(max(request.args.get("per_page", 25, type=int), 10), 100)
-
-        # Build query - defer heavy JSONB columns for listing view performance
-        query = Land.query.options(
-            defer(Land.infrastructure_basic),
-            defer(Land.infrastructure_extended),
-            defer(Land.transport),
-            defer(Land.environment),
-            defer(Land.neighborhood),
-            defer(Land.services_quality),
-            defer(Land.enhanced_description),
-            defer(Land.property_details),
-            defer(Land.description),
-        )
-
-        # Apply filters
-        if land_type_filter:
-            query = query.filter(Land.land_type == land_type_filter)
-
-        if municipality_filter:
-            query = query.filter(Land.municipality.ilike(f"%{municipality_filter}%"))
-
-        if search_query:
-            # Split search query into words for flexible matching
-            # Filter out common words and short terms
-            stop_words = {
-                "for",
-                "in",
-                "the",
-                "a",
-                "an",
-                "of",
-                "to",
-                "and",
-                "or",
-                "sale",
-                "plot",
-            }
-            words = [w.strip(",.;:!?()[]{}") for w in search_query.split()]
-            words = [
-                w for w in words if w and len(w) > 1 and w.lower() not in stop_words
-            ]
-
-            if words:
-                # Each word must match at least one field (title, description, or municipality)
-                for word in words:
-                    word_pattern = f"%{word}%"
-                    query = query.filter(
-                        or_(
-                            Land.title.ilike(word_pattern),
-                            Land.description.ilike(word_pattern),
-                            Land.municipality.ilike(word_pattern),
-                        )
-                    )
-
-        if investment_metrics_filter:
-            query = _filter_by_investment_rating(query, Land, investment_metrics_filter)
-
-        if sea_view_filter:
-            # SQLAlchemy 2.x: .astext removed; use JSON accessors
-            query = query.filter(Land.environment["sea_view"].as_boolean().is_(True))
-
-        if favorites_filter:
-            query = query.filter(Land.is_favorite)
-
-        if hide_removed_filter:
-            query = query.filter(
-                or_(Land.listing_status == "active", Land.listing_status.is_(None))
-            )
-
-        # Apply sorting with NULL values last
-        if sort_by == "investment_metrics":
-            rank = _investment_rating_rank(Land)
-            rank_order = rank.asc() if sort_order == "asc" else rank.desc()
-            query = query.order_by(
-                rank_order.nullslast(), Land.score_total.desc().nullslast()
-            )
-        elif hasattr(Land, sort_by):
-            sort_column = getattr(Land, sort_by)
-            if sort_order == "asc":
-                # For ascending, NULLs go last
-                query = query.order_by(sort_column.asc().nullslast())
-            else:
-                # For descending (default for score), NULLs go last
-                query = query.order_by(sort_column.desc().nullslast())
-
-        # Get paginated results
-        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
-        lands = pagination.items
-
-        # Get unique municipalities for filter dropdown
-        municipalities = (
-            db.session.query(Land.municipality)
-            .distinct()
-            .filter(Land.municipality.isnot(None))
-            .all()
-        )
-        municipalities = [m[0] for m in municipalities if m[0]]
-        municipalities.sort()
-
-        # Derive active_mode from sort_by for reliable UI state synchronization
-        if sort_by in ["score_investment"]:
-            active_mode = "investment"
-        elif sort_by in ["score_lifestyle"]:
-            active_mode = "lifestyle"
-        elif sort_by in ["score_total"]:
-            active_mode = "combined"
-        else:
-            # For non-score sorts (price, area, etc.), use explicit mode
-            active_mode = mode
-
-        # Debug logging (temporary)
-        logger.debug(
-            f"UI params mode={mode!r} sort={sort_by!r} -> active_mode={active_mode}"
-        )
-
-        reference_cities = []
-        try:
-            reference_cities = SettingsService.get_reference_cities()
-        except Exception:
-            reference_cities = []
-
-        return render_template(
-            "lands.html",
-            lands=lands,
-            pagination=pagination,
-            municipalities=municipalities,
-            reference_cities=reference_cities,
-            current_filters={
-                "mode": mode,
-                "sort_by": sort_by,
-                "order": sort_order,
-                "land_type": land_type_filter,
-                "municipality": municipality_filter,
-                "search": search_query,
-                "inv_metr": investment_metrics_filter,
-                "sea_view": sea_view_filter,
-                "favorites": favorites_filter,
-                "hide_removed": hide_removed_filter,
-                "active_mode": active_mode,
-                "view_type": view_type,
-                "page": page,
-                "per_page": per_page,
-            },
-        )
-
-    except Exception:
-        logger.error("Failed to load lands page", exc_info=True)
-        flash("An error occurred while loading lands. Check server logs.", "error")
-        return render_template(
-            "lands.html", lands=[], municipalities=[], current_filters={}
-        )
+    The route stays so old bookmarks and the deep links inside the legacy
+    detail pages keep working; it just lands on the one surface now.
+    """
+    return redirect(url_for("main.properties"))
 
 
 @main_bp.route("/properties/<int:property_id>")

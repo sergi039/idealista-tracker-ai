@@ -11,6 +11,27 @@ def utcnow():
     return datetime.now(timezone.utc)
 
 
+def investment_rating_badge_class(rating):
+    """Bootstrap badge class for an AI investment rating.
+
+    Shared by `Property` and `Land`: both render the same "Inv. Metr." column
+    on the one listing page, and two copies of this mapping would eventually
+    colour the same rating differently depending on which table a row is in.
+    """
+    text = (rating or "").upper()
+    if not text:
+        return None
+    if "EXCELLENT" in text or text == "HIGH":
+        return "bg-success"
+    if "GOOD" in text:
+        return "bg-primary"
+    if "MODERATE" in text or "MEDIUM" in text:
+        return "bg-warning text-dark"
+    if "BELOW" in text or "POOR" in text or "LOW" in text:
+        return "bg-danger"
+    return "bg-secondary"
+
+
 class SearchProfile(db.Model):
     """Represents a saved search / client profile.
 
@@ -494,6 +515,13 @@ class Property(db.Model):
         short = full.split("-", 1)[0].strip()
         return short if short else None
 
+    @property
+    def investment_metrics_badge_class(self):
+        """Bootstrap badge class for the investment rating."""
+        return investment_rating_badge_class(
+            self.investment_metrics_rating_full or self.investment_metrics_rating
+        )
+
 
 class Land(db.Model):
     __tablename__ = "lands"
@@ -775,20 +803,9 @@ class Land(db.Model):
     @property
     def investment_metrics_badge_class(self):
         """Bootstrap badge class for investment rating."""
-        full = (
-            self.investment_metrics_rating_full or self.investment_metrics_rating or ""
-        ).upper()
-        if not full:
-            return None
-        if "EXCELLENT" in full or full == "HIGH":
-            return "bg-success"
-        if "GOOD" in full:
-            return "bg-primary"
-        if "MODERATE" in full or "MEDIUM" in full:
-            return "bg-warning text-dark"
-        if "BELOW" in full or "POOR" in full or "LOW" in full:
-            return "bg-danger"
-        return "bg-secondary"
+        return investment_rating_badge_class(
+            self.investment_metrics_rating_full or self.investment_metrics_rating
+        )
 
 
 class ScoringCriteria(db.Model):

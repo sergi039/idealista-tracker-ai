@@ -51,30 +51,48 @@ pinned version for CI, the hook and you. Rule selection is explicit in
 not stable across releases — do not delete it expecting the default to be
 equivalent.
 
-**Working UI is `/properties`** (owner decision, 2026-08-08, issue #105 —
-this *supersedes* the 2026-08-07 decision that named `/lands`): `/` and the
-navbar point at `/properties`, and that is where new work goes. The reason
-is where the data is. `lands` froze at 168 rows with nothing newer than
-2026-02-18; every ingested listing goes to `properties`
-(`INGESTION_TARGET` defaults to it), and of the 182 rows that arrived after
-the mirror, 77 are houses — which the legacy `Land` model cannot represent
-at all, so switching ingestion back was rejected.
+**There is exactly one listing surface: `/properties`** (owner decision,
+2026-08-09, superseding the 2026-08-08 one that kept `/lands` as a second,
+archived page). `/`, the navbar and `/lands` itself all lead there, and that
+is where new work goes. The reason is where the data is. `lands` froze at 168
+rows with nothing newer than 2026-02-18; every ingested listing goes to
+`properties` (`INGESTION_TARGET` defaults to it), and the legacy `Land` model
+cannot represent the houses that now arrive at all, so switching ingestion
+back was rejected.
 
-`/lands` stays reachable and working, linked in the navbar as "Lands
-(archive)" and carrying an archive banner; do not delete it, and do not
-build new work on it. Both views read the same database: `lands` holds the
-168 legacy rows and `properties` mirrors them under the "Legacy Lands"
-profile alongside everything newer.
+`/lands` is a redirect, `templates/lands.html` is gone, and **the archive
+banner it carried is gone with it** — the owner never asked for it. Do not
+reintroduce a second listing page. The legacy rows are still readable: they
+are mirrored into `properties` under the "Legacy Lands" subscription, which
+is inactive and therefore offered in the subscription filter under *Archive*.
+`Land` itself stays for `/lands/<id>`, `/export.csv` and the migration
+service; nothing else reads it.
 
-`/properties` carries the controls the owner actually used on `/lands`: the
-cards/list toggle (`view_type`), the combined/investment/lifestyle modes
-(`mode`, with `score_total` / `score_investment` / `score_lifestyle`), and
-the investment-rating filter (`inv_metr`). A bare `/properties` still sorts
-by date so the freshest listings stay on top. **Sea View and the "to beach"
-sort are deliberately rendered as unavailable, not implemented**: `Property`
-has no sea-view field and no beach travel target, and per issue #98 not one
-of the 350 rows holds a single travel time (Google billing is off). Do not
-"fix" that by wiring the controls to empty data — they come back when #98
+**Subscriptions are the organising idea of that surface.** They are
+`search_profiles` rows — the owner's saved searches on idealista.com, matched
+to incoming mail by search URL (`source_search_key`, #102) and by label. The
+filter offers them in one dropdown: live ones first, retired ones under
+*Archive*, each with its listing count; a subscription holding nothing (the
+`Default` catch-all) is not offered unless it is selected. A bare
+`/properties` shows **every live subscription at once** — it used to open on
+one profile picked for the owner, which hid the other saved search behind a
+control they had to know about. `profile_id=all` means the active ones only,
+so retiring a subscription (`is_active = false`) is what moves it into the
+archive without touching its listings. When more than one is on screen the
+rows carry a subscription badge, and the travel columns fall back to the
+preset targets — a *custom* target id belongs to one profile, so it would
+label a column with a destination most rows were never measured against.
+
+`/properties` carries the controls the owner actually used on `/lands`, and
+the page is deliberately a copy of that layout: the cards/list toggle
+(`view_type`), the combined/investment/lifestyle modes (`mode`, with
+`score_total` / `score_investment` / `score_lifestyle`), the investment-rating
+filter (`inv_metr`), and the Score / ★ / Title / Price / Area / Coords /
+Travel / Inv. Metr. / Type / Added / Actions table. A bare `/properties`
+still sorts by date so the freshest listings stay on top. **Sea View and the
+"to beach" sort are deliberately rendered as unavailable, not implemented**:
+`Property` has no sea-view field and no beach travel target (issue #98). Do
+not "fix" that by wiring the controls to empty data — they come back when #98
 does.
 
 The dual-build isolation contract

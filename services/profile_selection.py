@@ -93,7 +93,13 @@ MAX_SELECTED_PROFILE_IDS = 50
 
 # Shown wherever a multi-profile view has to withhold profile-specific travel
 # data. Lives here so the two templates and the tests cannot drift apart.
-TRAVEL_NOTICE = "Select one profile to view or recalculate profile-specific travel data"
+#
+# Worded as an offer rather than an apology (2026-08-09): showing every
+# subscription at once is now the default view, so this line is on screen most
+# of the time and must not read like something went wrong.
+TRAVEL_NOTICE = (
+    "Pick a single subscription to see its own travel targets and recalculate them"
+)
 
 LinkValue = Union[int, str]
 
@@ -216,17 +222,18 @@ class ResolvedProfileSelection:
 
     @property
     def label(self) -> str:
-        """Text on the dropdown toggle: `All profiles` or `N selected`.
+        """Text on the dropdown toggle: `All subscriptions` or `N selected`.
 
         Keyed off the state, not off the tick count: a selection of only
         impossible ids ticks nothing but shows nothing either, and labelling
-        that "All profiles" would describe the opposite of what is on screen.
+        that "All subscriptions" would describe the opposite of what is on
+        screen.
         """
         ticked = len(self.checked_ids) + (1 if self.include_unassigned else 0)
         if self.state is ProfileSelectionState.SELECTED:
             return f"{ticked} selected"
         if not ticked:
-            return "All profiles"
+            return "All subscriptions"
         return f"{ticked} selected"
 
 
@@ -327,7 +334,7 @@ def resolve_profile_selection(
     if selection.is_all:
         filter_ids: Optional[Tuple[int, ...]] = active
         link_values: Tuple[LinkValue, ...] = (PROFILE_ALL_SENTINEL,)
-        # "All profiles" is the whole point of the state, so no box is ticked
+        # "All subscriptions" is the whole point of the state, so no box is ticked
         # even though the filter names every active profile.
         checked: Tuple[int, ...] = ()
     elif selection.is_selected:

@@ -449,7 +449,7 @@ class TestPropertiesPageShowsTheUnion:
             r'id="profile-select-dropdown"[^>]*>(.*?)</button>', body, re.S
         )
         assert button
-        assert "All profiles" not in button.group(1)
+        assert "All subscriptions" not in button.group(1)
         assert "0 selected" in button.group(1)
 
 
@@ -626,9 +626,15 @@ class TestFilterBarKeepsOneControl:
         assert body.count('id="profile-select-dropdown"') == 1
         assert '<select name="profile_id"' not in body
 
-    def test_the_dropdown_lists_active_profiles_only(self, client, subscriptions):
-        """With nothing selected outside the active set, the only profile
-        checkboxes on the page are the active profiles."""
+    def test_the_dropdown_lists_the_live_and_the_archived(self, client, subscriptions):
+        """Amended 2026-08-09: a retired subscription is offered as archive.
+
+        It used to be left out of the dropdown unless an id named it, which
+        made its listings unreachable from the one surface that is supposed to
+        hold everything. `all` still means the live subscriptions only -- that
+        is tested elsewhere -- so offering the archived one narrows nothing by
+        itself.
+        """
         body = client.get("/properties?profile_id=all").get_data(as_text=True)
         assert body.count('id="profile-select-menu"') == 1
         checkbox_values = re.findall(
@@ -639,9 +645,17 @@ class TestFilterBarKeepsOneControl:
                 subscriptions["alpha_id"],
                 subscriptions["beta_id"],
                 subscriptions["gamma_id"],
+                subscriptions["zeta_id"],
             ]
         )
-        assert str(subscriptions["zeta_id"]) not in checkbox_values
+        # The archived one is labelled as such rather than sitting among the
+        # live subscriptions unmarked.
+        zeta_label = re.search(
+            rf'for="profile-option-{subscriptions["zeta_id"]}"(.*?)</label>',
+            body,
+            re.S,
+        )
+        assert zeta_label and "Archive" in zeta_label.group(1)
 
     def test_the_form_always_posts_something_explicit(self, client, subscriptions):
         """Unticking every box must not submit an empty selection that the
@@ -659,7 +673,7 @@ class TestFilterBarKeepsOneControl:
             r'id="profile-select-dropdown"[^>]*>(.*?)</button>', body, re.S
         )
         assert button, "the dropdown toggle must be a button"
-        assert "All profiles" in button.group(1)
+        assert "All subscriptions" in button.group(1)
 
     def test_button_counts_the_selected_profiles(self, client, pair):
         body = client.get(f"/properties?{pair['query']}").get_data(as_text=True)
@@ -682,7 +696,7 @@ class TestFilterBarKeepsOneControl:
         )
         assert checkbox, "the selected inactive profile has no checkbox to untick"
         assert "checked" in checkbox.group(0)
-        assert "inactive" in body
+        assert "Archive" in body
 
     def test_an_unrenderable_selection_is_not_lost_on_the_next_submit(
         self, client, subscriptions
@@ -983,7 +997,7 @@ class TestTheTravelNoticeDoesNotDependOnTheActiveList:
         """Fixture strength: if a default profile got auto-created the page
         would have an active profile and the defect could not reproduce."""
         body = client.get("/properties?profile_id=all").get_data(as_text=True)
-        assert "No active profiles yet." in body
+        assert "No active subscriptions yet." in body
 
     def test_the_page_explains_itself(self, client, only_inactive_profiles):
         query = (
@@ -1049,20 +1063,35 @@ class TestOldLinksKeepWorking:
             | set(subscriptions["gamma_props"])
         )
 
-    def test_a_bare_properties_url_still_auto_selects_one_profile(
+    def test_a_bare_properties_url_shows_every_live_subscription(
         self, client, subscriptions
     ):
+        """Amended 2026-08-09: no `profile_id` means all of them.
+
+        It used to resolve to the single richest profile, so the one surface
+        opened on one saved search and hid the other -- the owner had to know
+        the dropdown existed to see their own listings.
+        """
         body = client.get("/properties?per_page=100").get_data(as_text=True)
         shown = set(_listing_ids_in_order(body))
-        assert shown == set(subscriptions["alpha_props"]), (
-            "the default profile has rows, so auto-select must land on it"
+        assert shown == (
+            set(subscriptions["alpha_props"])
+            | set(subscriptions["beta_props"])
+            | set(subscriptions["gamma_props"])
+        )
+        assert not shown & set(subscriptions["zeta_props"]), (
+            "an archived subscription is not part of 'all'"
         )
 
     def test_a_malformed_profile_id_falls_back_to_auto(self, client, subscriptions):
         body = client.get("/properties?profile_id=not-a-number&per_page=100").get_data(
             as_text=True
         )
-        assert set(_listing_ids_in_order(body)) == set(subscriptions["alpha_props"])
+        assert set(_listing_ids_in_order(body)) == (
+            set(subscriptions["alpha_props"])
+            | set(subscriptions["beta_props"])
+            | set(subscriptions["gamma_props"])
+        )
 
     def test_a_malformed_value_next_to_a_real_one_keeps_the_real_one(
         self, client, subscriptions
@@ -1276,13 +1305,13 @@ class TestProfileSelectionModule:
     @pytest.mark.parametrize(
         "query,active,auto,expected",
         [
-            ("profile_id=all", [3, 5], None, "All profiles"),
+            ("profile_id=all", [3, 5], None, "All subscriptions"),
             ("profile_id=3", [3, 5], None, "1 selected"),
             ("profile_id=3&profile_id=5", [3, 5], None, "2 selected"),
             ("", [3, 5], 5, "1 selected"),
-            ("", [], None, "All profiles"),
+            ("", [], None, "All subscriptions"),
             # An explicit selection that matched nothing shows an empty page,
-            # so the toggle must not read "All profiles".
+            # so the toggle must not read "All subscriptions".
             ("profile_id=0", [3, 5], None, "0 selected"),
         ],
     )

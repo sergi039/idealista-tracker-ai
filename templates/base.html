@@ -82,13 +82,9 @@
                             <i class="fas fa-list me-1"></i>{{ t('properties') }}
                         </a>
                     </li>
-                    <li class="nav-item">
-                        {# /lands is the frozen legacy view (issue #105): 168 rows, nothing newer than 2026-02-18. #}
-                        <a class="nav-link text-body-secondary" href="{{ url_for('main.lands') }}"
-                           title="Legacy lands view - frozen, no new listings arrive here">
-                            <i class="fas fa-box-archive me-1"></i>Lands (archive)
-                        </a>
-                    </li>
+                    {# One surface (owner decision 2026-08-09): the archived
+                       `lands` rows are mirrored into `properties` under their own
+                       subscription, so there is no second listing page to link. #}
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.map_view') }}">
                             <i class="fas fa-map me-1"></i>Map
@@ -97,6 +93,16 @@
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.criteria') }}">
                             <i class="fas fa-sliders-h me-1"></i>{{ t('scoring_criteria') }}
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('main.profiles') }}">
+                            <i class="fas fa-envelope-open-text me-1"></i>{{ t('subscriptions') }}
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('main.property_settings') }}">
+                            <i class="fas fa-gear me-1"></i>Settings
                         </a>
                     </li>
                 </ul>
