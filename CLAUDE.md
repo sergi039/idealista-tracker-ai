@@ -153,6 +153,29 @@ What the page has now, top to bottom:
 Keep it that way. Adding a control means deciding which of the three it
 belongs to, not adding a second copy near where it is needed.
 
+**Distance to the sea is a scoring criterion, and it reuses the sea-view
+coastline client.** `services/sea_distance_service.py` scores straight-line
+metres to the OSM coastline, but it does **not** fetch that coastline: it calls
+`fetch_coastline_points()` in `services/sea_view_service.py`, which already owns
+the Overpass side (one query per 0.1° cell, cached a month, throttled, plain
+User-Agent token because Overpass answers 406 to anything else). Do not add a
+second Overpass client — measured the hard way, a per-property or wide-box query
+gets 504s.
+
+The result lands in `Property.enrichment["sea"]` (a JSON column — no migration,
+and a different key from sea view's `enrichment.environment.sea_view`) with one
+of four statuses: `ok`, `no_coastline_within_radius`, `unavailable`,
+`no_coordinates`. Only a measured absence scores 0; a refusal scores `None` and
+is dropped from the weighted average, and a refusal never overwrites a previous
+measurement taken at the same coordinates. That split is the lesson of #98 — do
+not collapse it. The scorer applies logarithmic decay: the shoreline scores 100,
+`near_m` (300) is the decay scale rather than a plateau, and `far_m` (10 000) is
+where the score reaches 0 — overridable per subscription via
+`scoring_config.categories.<cat>.sea_distance`. A `far_m` past the radius the
+lookup actually covers scores `None` rather than 0, because nobody looked there.
+`utils/recalc_sea_distance.py` backfills; it writes a rollback snapshot of the
+score columns first, since rolling the app back does not undo a data rewrite.
+
 The dual-build isolation contract
 from the transition — legacy on 5001 vs universal on 5050, unique Docker
 names, separate IMAP labels and cookie names — lives in docs/DEV_RULES.md

@@ -450,6 +450,30 @@
                 </h6>
             </div>
             <div class="card-body">
+                {# Straight-line distance to the coastline (OSM), a scoring input in its
+                   own right -- shown with the real status so an API refusal never reads
+                   as "there is no sea nearby". #}
+                {% set _enrichment = property.enrichment if property.enrichment is mapping else {} %}
+                {% set sea = _enrichment.get('sea') if _enrichment is mapping else None %}
+                <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
+                    <span class="small fw-bold compact-text" title="{{ t('distance_to_sea') }}">
+                        <i class="fas fa-water me-1 text-primary"></i>{{ t('distance_to_sea') }}
+                    </span>
+                    <div>
+                        {% if sea is mapping and sea.get('status') == 'ok' and sea.get('distance_m') is not none %}
+                            <span class="badge bg-primary">{{ "%.1f"|format(sea.get('distance_m') / 1000) }} km</span>
+                        {% elif sea is mapping and sea.get('status') == 'no_coastline_within_radius' %}
+                            <span class="badge bg-secondary">
+                                {{ t('sea_distance_no_coastline') }} {{ ((sea.get('searched_m') or 0) / 1000)|round|int }} km
+                            </span>
+                        {% elif sea is mapping and sea.get('status') == 'unavailable' %}
+                            <span class="badge bg-warning text-dark">{{ t('sea_distance_unavailable') }}</span>
+                        {% else %}
+                            <span class="badge bg-light text-dark">{{ t('sea_distance_not_measured') }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+
                 {% set travel = property.travel if property.travel is mapping else {} %}
                 {% set travel_targets = travel.get('targets') if travel is mapping else {} %}
                 {% set travel_targets = travel_targets if travel_targets is mapping else {} %}

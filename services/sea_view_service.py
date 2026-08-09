@@ -309,12 +309,28 @@ def fetch_coastline_points(
     except ValueError as exc:
         raise SeaViewSourceError("Overpass returned a non-JSON body") from exc
 
+    # An answer that is present but unusable is not an answer. A coastline way
+    # whose geometry is missing, empty, or unparsable would otherwise be dropped
+    # silently, and the caller would read the shortened list -- or the empty one
+    # -- as the measured fact "no coastline here".
     points: List[Tuple[float, float]] = []
     for element in payload.get("elements", []):
-        for node in element.get("geometry") or []:
+        geometry = element.get("geometry")
+        if not isinstance(geometry, list) or not geometry:
+            raise SeaViewSourceError("Overpass returned a way without geometry")
+        for node in geometry:
             node_lat, node_lon = node.get("lat"), node.get("lon")
-            if node_lat is not None and node_lon is not None:
-                points.append((float(node_lat), float(node_lon)))
+            if node_lat is None or node_lon is None:
+                raise SeaViewSourceError("Overpass returned a node without coordinates")
+            try:
+                lat_value, lon_value = float(node_lat), float(node_lon)
+            except (TypeError, ValueError) as exc:
+                raise SeaViewSourceError(
+                    "Overpass returned an unparsable coordinate"
+                ) from exc
+            if not (-90.0 <= lat_value <= 90.0) or not (-180.0 <= lon_value <= 180.0):
+                raise SeaViewSourceError("Overpass returned a coordinate out of range")
+            points.append((lat_value, lon_value))
 
     _cache_set(
         cell_lat, cell_lon, cache_type, points, timeout=COASTLINE_CACHE_TIMEOUT_S

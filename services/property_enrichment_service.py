@@ -7,6 +7,7 @@ from models import Property
 from services.property_location_service import PropertyLocationService
 from services.property_scoring_service import PropertyScoringService
 from services.property_travel_service import PropertyTravelService, travel_api_state
+from services.sea_distance_service import SeaDistanceService
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +26,12 @@ class PropertyEnrichmentService:
         location_service: Optional[PropertyLocationService] = None,
         travel_service: Optional[PropertyTravelService] = None,
         scoring_service: Optional[PropertyScoringService] = None,
+        sea_distance_service: Optional[SeaDistanceService] = None,
     ):
         self.location_service = location_service or PropertyLocationService()
         self.travel_service = travel_service or PropertyTravelService()
         self.scoring_service = scoring_service or PropertyScoringService()
+        self.sea_distance_service = sea_distance_service or SeaDistanceService()
 
     def enrich_property(
         self,
@@ -50,6 +53,18 @@ class PropertyEnrichmentService:
         # 2026-08-09). It used to refile the property under whichever active
         # profile had the nearest custom target, discarding the saved search
         # its alert email came from. Ingestion owns that column now.
+
+        # Distance to the sea is measured before scoring so the recalculation
+        # below already sees it. It rides on the shared commit at the end.
+        try:
+            self.sea_distance_service.update_property(prop, commit=False)
+        except Exception as e:
+            logger.warning(
+                "Sea distance measurement failed for %s: %s",
+                getattr(prop, "id", None),
+                e,
+            )
+
         ok = self.travel_service.calculate_for_property(prop, commit=False)
         travel_state = travel_api_state(prop)
 
