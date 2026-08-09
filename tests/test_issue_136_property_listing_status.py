@@ -17,7 +17,7 @@ Two contracts are pinned here.
   missing check it replaces.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from unittest.mock import patch
 
 import pytest
@@ -165,6 +165,32 @@ class TestWhatCountsAsEvidence:
             )
         assert status == "active"
 
+    def test_a_longer_id_starting_with_ours_is_a_different_listing(self, app):
+        """Substring matching would accept /inmueble/1092919991/ for ours."""
+        with with_response(
+            FakeResponse(
+                200,
+                "<html><body>Precio</body></html>",
+                url=f"https://www.idealista.com/inmueble/{LISTING_ID}9/",
+            )
+        ):
+            status, _ = ListingStatusService().check_listing_status(LISTING_URL)
+
+        assert status == "error"
+
+    def test_a_page_merely_echoing_our_url_is_not_the_listing(self, app):
+        """An error page that quotes the URL is not the advertiser's page."""
+        with with_response(
+            FakeResponse(
+                200,
+                f"<html><body><p>Could not load /inmueble/{LISTING_ID}/</p></body></html>",
+                url="https://www.idealista.com/error/",
+            )
+        ):
+            status, _ = ListingStatusService().check_listing_status(LISTING_URL)
+
+        assert status == "error", "the body can say anything; the final URL cannot"
+
     def test_404_is_removed(self, app):
         with with_response(FakeResponse(404, "")):
             status, _ = ListingStatusService().check_listing_status(LISTING_URL)
@@ -285,85 +311,6 @@ class TestCheckingOneProperty:
         assert db.session.get(Property, prop.id).listing_last_checked is None
 
 
-class TestTheSweep:
-    def test_never_checked_rows_come_first_and_inactive_ones_are_left_alone(self, app):
-        stale = make_property(
-            key="stale",
-            listing_last_checked=datetime.now(timezone.utc) - timedelta(days=30),
-        )
-        never = make_property(key="never")
-        removed = make_property(key="already-removed", listing_status="removed")
-
-        with (
-            with_response(FakeResponse(200, LIVE_PAGE)),
-            patch("services.listing_status_service.time.sleep"),
-        ):
-            results = ListingStatusService().check_all_active_properties(limit=10)
-
-        assert results["checked"] == 2, "the removed row is not re-checked"
-        assert results["active"] == 2
-
-        for pid in (never.id, stale.id):
-            assert db.session.get(Property, pid).listing_last_checked is not None
-        assert db.session.get(Property, removed.id).listing_last_checked is None
-
-    def test_recently_checked_rows_are_skipped(self, app):
-        make_property(key="fresh", listing_last_checked=datetime.now(timezone.utc))
-
-        with (
-            with_response(FakeResponse(200, LIVE_PAGE)),
-            patch("services.listing_status_service.time.sleep"),
-        ):
-            results = ListingStatusService().check_all_active_properties(
-                limit=10, days_since_check=7
-            )
-
-        assert results["checked"] == 0
-
-    def test_a_blocked_sweep_counts_errors_and_changes_nothing(self, app):
-        make_property(key="sweep-blocked-a")
-        make_property(key="sweep-blocked-b")
-
-        with (
-            with_response(FakeResponse(403, CAPTCHA_PAGE)),
-            patch("services.listing_status_service.time.sleep"),
-        ):
-            results = ListingStatusService().check_all_active_properties(limit=10)
-
-        assert results["checked"] == 2
-        assert results["errors"] == 2
-        assert results["details"] == []
-        assert all(
-            p.listing_status == "active" and p.listing_last_checked is None
-            for p in Property.query.all()
-        )
-
-    def test_the_throttle_is_still_there(self, app):
-        make_property(key="throttle-a")
-        make_property(key="throttle-b")
-
-        with (
-            with_response(FakeResponse(200, LIVE_PAGE)),
-            patch("services.listing_status_service.time.sleep") as sleep,
-        ):
-            ListingStatusService().check_all_active_properties(limit=10)
-
-        assert sleep.call_count == 2, "one deliberate pause per listing fetch"
-        assert all(call.args[0] >= 2 for call in sleep.call_args_list)
-
-    def test_limit_bounds_the_work(self, app):
-        for i in range(5):
-            make_property(key=f"bounded-{i}")
-
-        with (
-            with_response(FakeResponse(200, LIVE_PAGE)),
-            patch("services.listing_status_service.time.sleep"),
-        ):
-            results = ListingStatusService().check_all_active_properties(limit=2)
-
-        assert results["checked"] == 2
-
-
 class TestTheApiAndThePage:
     def test_check_status_endpoint_reports_the_observation(self, app, client):
         prop = make_property(key="api-removed")
@@ -404,6 +351,23 @@ class TestTheApiAndThePage:
                 )
 
         assert 429 in codes, f"no limit kicked in: {codes}"
+
+    def test_the_sync_escape_hatch_is_refused_for_this_endpoint(self, app):
+        """?sync=1 would hold a worker for the full 15s fetch timeout.
+
+        The per-IP rate limit bounds how often a client calls, not how many
+        calls it holds open at once, so the override is off here while the rest
+        of the API keeps it.
+        """
+        from routes.api_routes import _should_run_sync
+
+        with app.test_request_context("/api/property/1/check-status?sync=1"):
+            app.config["TESTING"] = False
+            try:
+                assert _should_run_sync() is True, "other endpoints keep the hatch"
+                assert _should_run_sync(allow_request_override=False) is False
+            finally:
+                app.config["TESTING"] = True
 
     def test_endpoint_refuses_a_property_with_no_url(self, app, client):
         prop = make_property(key="api-nourl", url=None)

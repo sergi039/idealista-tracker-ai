@@ -15,12 +15,22 @@ logger = logging.getLogger(__name__)
 api_bp = Blueprint("api", __name__)
 
 
-def _should_run_sync() -> bool:
+def _should_run_sync(allow_request_override: bool = True) -> bool:
+    """Should this request do the work inline instead of queueing it?
+
+    `allow_request_override=False` drops the `?sync=1` escape hatch for
+    endpoints where holding a worker for the full outbound timeout is a way to
+    exhaust the pool -- the API is unauthenticated, so a handful of concurrent
+    calls is all it takes, and a per-IP rate limit does not stop concurrency
+    (issue #136).
+    """
     try:
         if current_app and current_app.config.get("TESTING"):
             return True
     except Exception:
         pass
+    if not allow_request_override:
+        return False
     return request.args.get("sync") in ("1", "true", "yes", "on")
 
 
@@ -1797,7 +1807,11 @@ def check_property_status(property_id):
     Rate-limited on purpose: this endpoint is unauthenticated and CSRF-exempt
     like the rest of the JSON API, and every call spends one outbound request
     on idealista. Without a cap, a page left in a loop would drive the scraper
-    straight past the throttle the sweep is careful to respect.
+    straight past the throttle the lands sweep is careful to respect.
+
+    It also refuses `?sync=1`. The fetch can hold a worker for its full 15s
+    timeout, and the per-IP limit bounds the rate but not the concurrency: five
+    simultaneous calls would tie up five workers while idealista stalls.
     """
     try:
         from models import Property
@@ -1836,7 +1850,7 @@ def check_property_status(property_id):
                 else None,
             }
 
-        if _should_run_sync():
+        if _should_run_sync(allow_request_override=False):
             return jsonify(_run())
 
         job_id = _enqueue(

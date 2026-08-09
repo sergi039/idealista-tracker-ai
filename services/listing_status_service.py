@@ -130,7 +130,7 @@ class ListingStatusService:
             # somewhere else -- a search page, the home page -- with a perfectly
             # good status code, and calling that "active" would be a false
             # confirmation (issue #136).
-            if not self._looks_like_listing_page(url, response, content):
+            if not self._looks_like_listing_page(url, response):
                 logger.warning(
                     "200 for %s did not come back as the listing page; reporting as error",
                     url,
@@ -152,22 +152,25 @@ class ListingStatusService:
         match = re.search(r"/inmueble/(\d+)", url or "")
         return match.group(1) if match else None
 
-    def _looks_like_listing_page(self, url: str, response, content: str) -> bool:
+    def _looks_like_listing_page(self, url: str, response) -> bool:
         """Did a 200 actually hand us the listing we asked for?
 
-        Anchored on the listing id: it survives in the final URL after a
-        same-listing redirect (language or slug variants) and in the page's own
-        canonical/og:url markup, but not when idealista answers with the home
-        page or a search result. A URL with no id to anchor on falls back to the
-        status code alone rather than refusing every non-standard link.
+        Judged on the **final URL only**, after redirects. That is where the
+        server says what it served; the body is not, because any page can echo
+        or link the URL we asked for -- an error page reading "could not load
+        /inmueble/1234/" would otherwise pass as the listing itself.
+
+        The id needs a boundary after it: plain substring matching accepts
+        /inmueble/12345/ as an answer for /inmueble/1234/, which is a different
+        listing entirely. A URL with no id to anchor on falls back to the status
+        code rather than refusing every non-standard link.
         """
         listing_id = self._listing_id_from_url(url)
         if not listing_id:
             return True
 
         final_url = (getattr(response, "url", "") or "").lower()
-        needle = f"inmueble/{listing_id}"
-        return needle in final_url or needle in content
+        return bool(re.search(rf"inmueble/{listing_id}(?!\d)", final_url))
 
     def _extract_removal_date(self, html_content: str) -> Optional[str]:
         """Try to extract the removal date from the page content"""
@@ -485,127 +488,6 @@ class ListingStatusService:
             f"Checked {results['checked']} listings: "
             f"{results['active']} active, {results['removed']} removed, "
             f"{results['sold']} sold, {results['errors']} errors"
-        )
-
-        return results
-
-    def check_all_active_properties(
-        self, limit: int = 50, days_since_check: int = 7, record_sync: bool = True
-    ) -> Dict:
-        """
-        Check active Property rows that have not been checked in X days.
-
-        Same contract and the same throttle as check_all_active_listings, over
-        the surface that actually receives ingested listings. Rows never checked
-        (listing_last_checked IS NULL) come first, favorites ahead of the rest.
-
-        Nothing schedules this yet: idealista answers 403 + captcha to the
-        scraper, so an unattended sweep would only burn requests against a
-        blocked host. It backs the manual per-listing check and is ready for the
-        day the fetch works again (issue #136).
-
-        Note that a failed fetch leaves listing_last_checked untouched by
-        design, so rows that keep erroring stay at the front of the queue and a
-        later run will pick the same ones again. `limit` is what bounds the
-        work; the ordering does not rotate on its own.
-        """
-        start_time = datetime.now(timezone.utc)
-        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_since_check)
-
-        properties = (
-            Property.query.filter(
-                Property.listing_status == "active",
-                Property.url.isnot(None),
-                db.or_(
-                    Property.listing_last_checked.is_(None),
-                    Property.listing_last_checked < cutoff_date,
-                ),
-            )
-            .order_by(
-                Property.is_favorite.desc(),
-                Property.listing_last_checked.asc().nullsfirst(),
-            )
-            .limit(limit)
-            .all()
-        )
-
-        results = {
-            "checked": 0,
-            "active": 0,
-            "removed": 0,
-            "sold": 0,
-            "errors": 0,
-            "details": [],
-        }
-
-        for prop in properties:
-            # Same deliberate throttle as the lands sweep
-            time.sleep(random.uniform(2, 4))
-
-            result = self.check_property_status(prop)
-            results["checked"] += 1
-
-            if not result.get("success"):
-                results["errors"] += 1
-                continue
-
-            status = result.get("new_status", "error")
-            if status == "active":
-                results["active"] += 1
-            elif status == "removed":
-                results["removed"] += 1
-            elif status == "sold":
-                results["sold"] += 1
-            else:
-                results["errors"] += 1
-
-            if result.get("changed"):
-                results["details"].append(
-                    {
-                        "property_id": prop.id,
-                        "title": prop.title[:50] if prop.title else "Unknown",
-                        "is_favorite": prop.is_favorite,
-                        "old_status": result.get("previous_status"),
-                        "new_status": status,
-                    }
-                )
-
-        if record_sync and (results["removed"] > 0 or results["sold"] > 0):
-            try:
-                sync_history = SyncHistory(
-                    sync_type="status_check",
-                    backend="web_scrape",
-                    total_emails_found=results["checked"],
-                    new_properties_added=0,
-                    price_updated_count=0,
-                    expired_count=results["removed"] + results["sold"],
-                    status="completed",
-                    started_at=start_time,
-                    completed_at=datetime.now(timezone.utc),
-                    sync_duration=int(
-                        (datetime.now(timezone.utc) - start_time).total_seconds()
-                    ),
-                )
-                db.session.add(sync_history)
-                db.session.commit()
-                logger.info(
-                    "Recorded property status check in SyncHistory: %s removed, %s sold",
-                    results["removed"],
-                    results["sold"],
-                )
-            except Exception:
-                logger.error(
-                    "Failed to record property status check in SyncHistory",
-                    exc_info=True,
-                )
-
-        logger.info(
-            "Checked %s properties: %s active, %s removed, %s sold, %s errors",
-            results["checked"],
-            results["active"],
-            results["removed"],
-            results["sold"],
-            results["errors"],
         )
 
         return results
