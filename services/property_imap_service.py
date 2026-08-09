@@ -535,13 +535,13 @@ class PropertyIMAPService:
                                 "idealista_property_id": idealista_id,
                             }
                         )
-                    except Exception as e:
+                    except Exception:
                         failed = True
                         logger.error(
-                            "Failed to process UID %s: %s - holding last_seen_uid "
+                            "Failed to process UID %s - holding last_seen_uid "
                             "behind it so the email is re-read next run",
                             uid,
-                            e,
+                            exc_info=True,
                         )
                     finally:
                         if not emitted and not failed:
