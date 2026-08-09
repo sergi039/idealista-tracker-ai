@@ -368,6 +368,42 @@ class TestNoCoordinatesIsNotNothingNearby:
         assert section[OSM_STATUS_KEY]["reason"] == OSM_REASON_NO_COORDINATES
         assert "osm_amenities" not in section
 
+    @pytest.mark.parametrize(
+        "lat, lon",
+        [
+            (float("nan"), -0.3763),
+            (91.0, -0.3763),
+            (39.4699, 181.0),
+        ],
+    )
+    @patch("services.enrichment_service.request_with_retries")
+    def test_a_coordinate_off_the_globe_is_a_gap_not_a_query(
+        self, mock_request, app, service, lat, lon
+    ):
+        """Bad input is not a location.
+
+        Asking Overpass about latitude 91 comes back with nothing nearby, and
+        that absence would then be filed as the measured fact -- the shape of
+        #98 again. `commit=False` because the column's own constraint would
+        reject these values, which is a second net, not this one.
+        """
+        property_id = _property(app, f"prop_osm_offglobe_{lat}_{lon}")
+
+        with app.app_context():
+            prop = db.session.get(Property, property_id)
+            prop.location_lat = lat
+            prop.location_lon = lon
+            failure = service.enrich_osm_amenities(prop, commit=False)
+
+            section = prop.infrastructure_extended
+            db.session.rollback()
+
+        mock_request.assert_not_called()
+        assert failure is not None
+        assert failure.reason == OSM_REASON_NO_COORDINATES
+        assert section[OSM_STATUS_KEY]["state"] == OSM_STATE_UNAVAILABLE
+        assert "osm_amenities" not in section
+
     @patch("services.enrichment_service.request_with_retries")
     def test_a_listing_that_cannot_be_geocoded_records_the_gap_too(
         self, mock_request, app
@@ -659,6 +695,27 @@ class TestTheBackfillStaysFree:
         # A refusal is retried, an answer is not.
         assert recorder.seen == [refused]
         assert outcome["skipped"] == 1
+
+    def test_a_dry_run_does_not_ask_the_service_to_commit(self, app):
+        """`--dry-run` is a rehearsal of the pacing and the refusals, not of
+        the write; a dry run that commits is worse than no dry run."""
+        from utils import backfill_osm_amenities
+
+        commits = []
+
+        class _Recorder:
+            def enrich_osm_amenities(self, prop, *, commit=True):
+                commits.append(commit)
+                return None
+
+        property_id = _property(app, "prop_osm_dry_run")
+
+        with app.app_context():
+            backfill_osm_amenities.backfill(
+                [db.session.get(Property, property_id)], _Recorder(), dry_run=True
+            )
+
+        assert commits == [False]
 
     def test_it_paces_between_properties(self, app):
         from utils import backfill_osm_amenities
