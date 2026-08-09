@@ -11,4 +11,6 @@ services:
 
   db:
     ports:
-      - "5434:5432"
+      # Same host-port variable as docker-compose.yml, so a worktree that sets
+      # DB_HOST_PORT stays off the production port here too.
+      - "${DB_HOST_PORT:-5434}:5432"
