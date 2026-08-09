@@ -801,6 +801,25 @@ class PropertyIMAPService:
                             )
                             db.session.rollback()
 
+                    # Measured before scoring so the fresh score already accounts
+                    # for it, and committed on its own: neither the travel flag
+                    # above nor the scoring flag below may decide whether this
+                    # result reaches the database.
+                    if getattr(Config, "SEA_DISTANCE_ENABLED", True):
+                        try:
+                            from services.sea_distance_service import (
+                                SeaDistanceService,
+                            )
+
+                            SeaDistanceService().update_property(prop, commit=True)
+                        except Exception as sea_error:
+                            logger.warning(
+                                "Sea distance measurement failed for %s: %s",
+                                prop.id,
+                                sea_error,
+                            )
+                            db.session.rollback()
+
                     if getattr(Config, "AUTO_PROPERTY_SCORING", False):
                         try:
                             from services.property_scoring_service import (

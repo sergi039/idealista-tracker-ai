@@ -283,7 +283,12 @@
                           placeholder="Leave empty to use defaults...">{{ scoring_config_json or '' }}</textarea>
                 <div class="form-text">
                     Expected shape (example):<br>
-                    <code>{"categories":{"housing":{"investment":{"value_score":0.7,"travel_score":0.3},"lifestyle":{"travel_score":0.6,"size_score":0.4},"travel_minutes":{"best":10,"worst":60}}}}</code>
+                    <code>{"categories":{"housing":{"investment":{"value_score":0.6,"travel_score":0.25,"sea_score":0.15},"lifestyle":{"travel_score":0.45,"size_score":0.3,"sea_score":0.25},"travel_minutes":{"best":10,"worst":60},"sea_distance":{"near_m":300,"far_m":10000}}}}</code>
+                    <br>
+                    <span class="text-body-secondary">
+                        <code>sea_distance</code>: straight-line metres to the coastline scoring
+                        100 (<code>near_m</code>) down to 0 (<code>far_m</code>).
+                    </span>
                 </div>
             </div>
             <div class="col-12 d-flex gap-2 align-items-center">

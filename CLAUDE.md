@@ -122,6 +122,22 @@ attributes — an inline `!important` outranks every media query, which is what
 made the table 1344px wide at any viewport. `tests/test_tablet_list_layout.py`
 fails if those widths move back into the markup.
 
+**Distance to the sea is a scoring criterion, and it does not go through
+Google.** `services/sea_distance_service.py` measures the straight-line
+distance to the OSM `natural=coastline` geometry over Overpass — free, and
+therefore alive, unlike the Distance Matrix targets whose billing is off. The
+Overpass answer is cached *per 0.5° grid cell*, not per listing, so every
+property in a region reuses one request and a full backfill costs a handful of
+them. The result lands in `Property.enrichment["sea"]` (a JSON column — no
+migration) with one of four statuses: `ok`, `no_coastline_within_radius`,
+`unavailable`, `no_coordinates`. Only a measured absence scores 0; a refusal
+scores `None` and is dropped from the weighted average, and a refusal never
+overwrites a previous measurement taken at the same coordinates. That split is
+the lesson of #98 — do not collapse it. The scorer applies logarithmic decay
+(`near_m` 300 → 100 points, `far_m` 10 000 → 0), overridable per subscription
+via `scoring_config.categories.<cat>.sea_distance`. Sea-view detection is still
+a separate, unimplemented thing.
+
 The dual-build isolation contract
 from the transition — legacy on 5001 vs universal on 5050, unique Docker
 names, separate IMAP labels and cookie names — lives in docs/DEV_RULES.md

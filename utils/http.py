@@ -60,6 +60,10 @@ def request_with_retries(
                     attempt,
                     max_attempts,
                 )
+            # A discarded response has to release its connection. Buffered bodies
+            # are already read, so this is a no-op for them, but a stream=True
+            # caller would otherwise leak the socket on every retry.
+            response.close()
             time.sleep(_compute_backoff(attempt, backoff_base, backoff_max))
             continue
 

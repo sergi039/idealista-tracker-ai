@@ -1,4 +1,5 @@
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -7,6 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 from app import db
 from config import Config
 from models import Property, SearchProfile
+from services.sea_distance_service import STATUS_NO_COASTLINE, STATUS_OK
 from services.search_profile_service import SearchProfileService
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,54 @@ def _percentile_score_lower_is_better(
     return _clamp(score)
 
 
+def _sea_distance_score(
+    distance_m: Optional[float], near_m: float, far_m: float
+) -> Optional[float]:
+    """Return 0-100 for straight-line distance to the coastline.
+
+    Logarithmic decay, which is what the hedonic literature on coastal premiums
+    uses: the effect is steep over the first few hundred metres and flattens out
+    as it fades, rather than falling off in a straight line.
+    """
+    if distance_m is None:
+        return None
+    if distance_m <= 0:
+        return 100.0
+    if distance_m >= far_m:
+        return 0.0
+    ratio = math.log1p(distance_m / near_m) / math.log1p(far_m / near_m)
+    return _clamp((1.0 - ratio) * 100.0)
+
+
+def _resolve_sea_distance_config(
+    raw: Any, defaults: Dict[str, float]
+) -> Tuple[Dict[str, float], Optional[str]]:
+    """Validate a per-profile sea_distance override.
+
+    The override comes from free-form profile JSON, so a bad value must fall back
+    to the defaults instead of reaching the logarithm as a zero or a NaN.
+    """
+    if raw is None:
+        return dict(defaults), None
+    if not isinstance(raw, dict):
+        return dict(defaults), "sea_distance override is not an object"
+
+    resolved = dict(defaults)
+    for key in ("near_m", "far_m"):
+        if raw.get(key) is None:
+            continue
+        value = _safe_float(raw.get(key))
+        if value is None:
+            return dict(defaults), f"{key} is not a finite number"
+        resolved[key] = value
+
+    if resolved["near_m"] <= 0:
+        return dict(defaults), "near_m must be greater than 0"
+    if resolved["far_m"] <= resolved["near_m"]:
+        return dict(defaults), "far_m must be greater than near_m"
+    return resolved, None
+
+
 def _linear_minutes_score(
     minutes: Optional[float], best: float, worst: float
 ) -> Optional[float]:
@@ -100,16 +150,21 @@ class HousingPropertyScorer(BasePropertyScorer):
     category = "housing"
 
     DEFAULT_INVESTMENT_WEIGHTS = {
-        "value_score": 0.7,
-        "travel_score": 0.3,
+        "value_score": 0.6,
+        "travel_score": 0.25,
+        "sea_score": 0.15,
         "size_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
-        "travel_score": 0.6,
-        "size_score": 0.4,
+        "travel_score": 0.45,
+        "size_score": 0.3,
+        "sea_score": 0.25,
         "value_score": 0.0,
     }
     DEFAULT_TRAVEL_MINUTES = {"best": 10.0, "worst": 60.0}
+    # Straight-line metres to the coastline. 300 m is where the coastal premium
+    # is still near its peak; past 10 km the literature no longer finds one.
+    DEFAULT_SEA_DISTANCE = {"near_m": 300.0, "far_m": 10000.0}
 
     def calculate(
         self, prop: Property, profile: Optional[SearchProfile]
@@ -128,6 +183,16 @@ class HousingPropertyScorer(BasePropertyScorer):
         investment_weights = dict(self.DEFAULT_INVESTMENT_WEIGHTS)
         lifestyle_weights = dict(self.DEFAULT_LIFESTYLE_WEIGHTS)
         travel_minutes_cfg = dict(self.DEFAULT_TRAVEL_MINUTES)
+        sea_distance_cfg, sea_cfg_error = _resolve_sea_distance_config(
+            cat_cfg.get("sea_distance") if isinstance(cat_cfg, dict) else None,
+            self.DEFAULT_SEA_DISTANCE,
+        )
+        if sea_cfg_error:
+            logger.warning(
+                "Ignoring sea_distance override for category %s: %s",
+                self.category,
+                sea_cfg_error,
+            )
 
         if isinstance(cat_cfg, dict):
             inv = cat_cfg.get("investment")
@@ -167,6 +232,13 @@ class HousingPropertyScorer(BasePropertyScorer):
             best=travel_minutes_cfg["best"],
             worst=travel_minutes_cfg["worst"],
         )
+        sea_score, sea_meta = self._sea_score(
+            prop,
+            near_m=sea_distance_cfg["near_m"],
+            far_m=sea_distance_cfg["far_m"],
+        )
+        if sea_cfg_error:
+            sea_meta = {**sea_meta, "config_override_ignored": sea_cfg_error}
 
         investment = _weighted_average(
             {
@@ -178,6 +250,7 @@ class HousingPropertyScorer(BasePropertyScorer):
                     travel_score,
                     investment_weights.get("travel_score", 0.0),
                 ),
+                "sea_score": (sea_score, investment_weights.get("sea_score", 0.0)),
                 "size_score": (size_score, investment_weights.get("size_score", 0.0)),
             }
         )
@@ -188,6 +261,7 @@ class HousingPropertyScorer(BasePropertyScorer):
                     lifestyle_weights.get("travel_score", 0.0),
                 ),
                 "size_score": (size_score, lifestyle_weights.get("size_score", 0.0)),
+                "sea_score": (sea_score, lifestyle_weights.get("sea_score", 0.0)),
                 "value_score": (value_score, lifestyle_weights.get("value_score", 0.0)),
             }
         )
@@ -215,6 +289,7 @@ class HousingPropertyScorer(BasePropertyScorer):
                     "components": {
                         "value_score": value_score,
                         "travel_score": travel_score,
+                        "sea_score": sea_score,
                         "size_score": size_score,
                     },
                 },
@@ -224,6 +299,7 @@ class HousingPropertyScorer(BasePropertyScorer):
                     "components": {
                         "travel_score": travel_score,
                         "size_score": size_score,
+                        "sea_score": sea_score,
                         "value_score": value_score,
                     },
                 },
@@ -234,6 +310,7 @@ class HousingPropertyScorer(BasePropertyScorer):
                 "value": value_meta,
                 "size": size_meta,
                 "travel": travel_meta,
+                "sea": sea_meta,
             },
         }
 
@@ -378,6 +455,36 @@ class HousingPropertyScorer(BasePropertyScorer):
 
         return best_values, best_meta
 
+    def _sea_score(
+        self, prop: Property, near_m: float, far_m: float
+    ) -> Tuple[Optional[float], Dict[str, Any]]:
+        """Score straight-line proximity to the coastline.
+
+        A refused measurement scores None so `_weighted_average` drops it and
+        renormalises; only a measured "no coastline nearby" scores zero. Issue
+        #98 is the reason those two are not allowed to look the same.
+        """
+        bounds = {"near_m": near_m, "far_m": far_m}
+        enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
+        sea = enrichment.get("sea")
+        if not isinstance(sea, dict):
+            return None, {**bounds, "status": "missing_sea_distance"}
+
+        status = sea.get("status")
+        if status == STATUS_NO_COASTLINE:
+            return 0.0, {**bounds, "status": STATUS_NO_COASTLINE, "distance_m": None}
+
+        if status != STATUS_OK:
+            # unavailable / no_coordinates: no measurement to score.
+            return None, {**bounds, "status": status or "unknown"}
+
+        distance = _safe_float(sea.get("distance_m"))
+        if distance is None:
+            return None, {**bounds, "status": "missing_distance"}
+
+        score = _sea_distance_score(distance, near_m=near_m, far_m=far_m)
+        return score, {**bounds, "status": "ok", "distance_m": distance}
+
     def _travel_score(
         self,
         prop: Property,
@@ -440,13 +547,15 @@ class LandPropertyScorer(HousingPropertyScorer):
     category = "land"
 
     DEFAULT_INVESTMENT_WEIGHTS = {
-        "value_score": 0.8,
-        "travel_score": 0.2,
+        "value_score": 0.7,
+        "travel_score": 0.15,
+        "sea_score": 0.15,
         "size_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
-        "travel_score": 0.5,
-        "size_score": 0.5,
+        "travel_score": 0.4,
+        "size_score": 0.35,
+        "sea_score": 0.25,
         "value_score": 0.0,
     }
 
@@ -454,14 +563,19 @@ class LandPropertyScorer(HousingPropertyScorer):
 class GaragePropertyScorer(HousingPropertyScorer):
     category = "garage"
 
+    # A garage is bought for where you park, not for the view: the sea is
+    # deliberately weightless here rather than absent, so the component still
+    # shows up in the breakdown.
     DEFAULT_INVESTMENT_WEIGHTS = {
         "value_score": 0.9,
         "travel_score": 0.1,
+        "sea_score": 0.0,
         "size_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
         "travel_score": 0.7,
         "size_score": 0.3,
+        "sea_score": 0.0,
         "value_score": 0.0,
     }
 
@@ -470,13 +584,15 @@ class CommercialPropertyScorer(HousingPropertyScorer):
     category = "commercial"
 
     DEFAULT_INVESTMENT_WEIGHTS = {
-        "value_score": 0.85,
+        "value_score": 0.8,
         "travel_score": 0.15,
+        "sea_score": 0.05,
         "size_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
-        "travel_score": 0.6,
-        "size_score": 0.4,
+        "travel_score": 0.55,
+        "size_score": 0.35,
+        "sea_score": 0.1,
         "value_score": 0.0,
     }
 
@@ -485,13 +601,15 @@ class BuildingPropertyScorer(HousingPropertyScorer):
     category = "building"
 
     DEFAULT_INVESTMENT_WEIGHTS = {
-        "value_score": 0.85,
+        "value_score": 0.8,
         "travel_score": 0.15,
+        "sea_score": 0.05,
         "size_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
-        "travel_score": 0.6,
-        "size_score": 0.4,
+        "travel_score": 0.55,
+        "size_score": 0.35,
+        "sea_score": 0.1,
         "value_score": 0.0,
     }
 
@@ -500,13 +618,15 @@ class NewDevelopmentPropertyScorer(HousingPropertyScorer):
     category = "new_development"
 
     DEFAULT_INVESTMENT_WEIGHTS = {
-        "value_score": 0.7,
-        "travel_score": 0.3,
+        "value_score": 0.6,
+        "travel_score": 0.25,
+        "sea_score": 0.15,
         "size_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
-        "travel_score": 0.6,
-        "size_score": 0.4,
+        "travel_score": 0.45,
+        "size_score": 0.3,
+        "sea_score": 0.25,
         "value_score": 0.0,
     }
 

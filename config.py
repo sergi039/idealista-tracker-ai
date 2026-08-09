@@ -97,6 +97,12 @@ class Config:
     AUTO_PROPERTY_SCORING = (
         os.environ.get("AUTO_PROPERTY_SCORING", "true").lower() == "true"
     )
+    # Distance to the sea is measured against OSM coastline geometry via Overpass,
+    # which is free -- unlike the Google APIs, whose billing is off (issue #98).
+    # The flag exists so offline runs and tests never reach for the network.
+    SEA_DISTANCE_ENABLED = (
+        os.environ.get("SEA_DISTANCE_ENABLED", "true").lower() == "true"
+    )
 
     # Universal build is sale-first; rentals are excluded unless explicitly enabled.
     SALE_ONLY = os.environ.get("SALE_ONLY", "true").lower() == "true"
