@@ -960,17 +960,43 @@ def update_environment(land_id):
         ), 500
 
 
+def _manual_sea_view_state(raw):
+    """Read the sea-view value a human submitted.
+
+    The property form sends one of the four states; the older boolean form (and
+    any caller still posting `true`/`false`) is mapped onto the two states a
+    person can actually assert by looking at the listing.
+    """
+    from services import sea_view_service
+
+    if isinstance(raw, str) and raw.strip().lower() in sea_view_service.VALID_STATES:
+        return raw.strip().lower()
+    if isinstance(raw, bool):
+        return sea_view_service.YES if raw else sea_view_service.NO
+    return sea_view_service.UNKNOWN
+
+
 @api_bp.route("/property/<int:property_id>/environment", methods=["POST"])
 def update_property_environment(property_id):
     """Update environment data for a universal property."""
     try:
+        from datetime import datetime, timezone
+
         from models import Property
 
         prop = db.get_or_404(Property, property_id)
         data = request.get_json() or {}
 
+        sea_view_state = _manual_sea_view_state(data.get("sea_view"))
         environment = {
-            "sea_view": bool(data.get("sea_view", False)),
+            "sea_view": sea_view_state,
+            # A hand-set verdict outranks both models, and saying so is what
+            # stops the next backfill from quietly overwriting it.
+            "sea_view_detail": {
+                "source": "manual",
+                "reason": "set by hand",
+                "set_at": datetime.now(timezone.utc).isoformat(),
+            },
             "mountain_view": bool(data.get("mountain_view", False)),
             "forest_view": bool(data.get("forest_view", False)),
             "orientation": data.get("orientation", ""),
@@ -980,6 +1006,7 @@ def update_property_environment(property_id):
         }
 
         enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
+        enrichment = dict(enrichment)
         enrichment["environment"] = environment
         prop.enrichment = enrichment
         db.session.commit()

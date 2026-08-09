@@ -17,6 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
 from app import db
+from services import sea_view_service
 from services.profile_selection import (
     MAX_SELECTED_PROFILE_IDS,
     ProfileSelection,
@@ -82,6 +83,50 @@ def _investment_rating_rank(model):
         ],
         else_=None,
     )
+
+
+# Sea view is a four-state verdict, not a flag -- see services/sea_view_service
+# for why. The filter offers two useful cuts of it: the corroborated rows, and
+# everything geometry or the listing text says is plausible.
+SEA_VIEW_FILTER_VALUES = {
+    "yes": ("yes",),
+    "likely": ("yes", "likely"),
+    # A bookmark from the retired /lands page says sea_view=on and means the
+    # old boolean. Reading it as "yes or likely" is the closest honest
+    # translation of what it used to select.
+    "on": ("yes", "likely"),
+}
+
+
+def _sea_view_state_expr(model):
+    """Effective sea-view state, with the mirrored `Land` boolean folded in.
+
+    Legacy rows keep their flag at enrichment.legacy_land.environment.sea_view.
+    It came from the same weak keyword pass the new verdict replaces, so a
+    legacy `true` reads as `likely` and never as `yes`; a legacy `false` is not
+    evidence of anything and stays absent.
+
+    Only the four known states are recognised at the computed path. Anything
+    else there -- a boolean the pre-verdict environment endpoint might have
+    left behind -- falls through to NULL, which reads as `unknown`: the
+    conservative answer, and the only one both dialects agree on, since a JSON
+    boolean casts to `true` on PostgreSQL and `1` on SQLite.
+    """
+    computed = model.enrichment["environment"]["sea_view"].as_string()
+    legacy = model.enrichment["legacy_land"]["environment"]["sea_view"].as_boolean()
+    return case(
+        (computed.in_(sea_view_service.VALID_STATES), computed),
+        (legacy.is_(True), "likely"),
+        else_=None,
+    )
+
+
+def _filter_by_sea_view(query, model, raw_value):
+    """Keep only rows whose sea-view verdict is in the requested bucket."""
+    wanted = SEA_VIEW_FILTER_VALUES.get((raw_value or "").strip().lower())
+    if not wanted:
+        return query
+    return query.filter(_sea_view_state_expr(model).in_(wanted))
 
 
 def _map_auto_profile_id(default_profile, profiles):
@@ -355,6 +400,7 @@ def properties():
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
+        sea_view_filter = request.args.get("sea_view", "")
 
         # Hide removed: ON by default (similar to /lands)
         hide_removed_param = request.args.get("hide_removed", None)
@@ -367,6 +413,7 @@ def properties():
                 "municipality",
                 "search",
                 "inv_metr",
+                "sea_view",
                 "sort",
                 "order",
                 "favorites",
@@ -443,6 +490,9 @@ def properties():
             query = _filter_by_investment_rating(
                 query, Property, investment_metrics_filter
             )
+
+        if sea_view_filter:
+            query = _filter_by_sea_view(query, Property, sea_view_filter)
 
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
@@ -574,6 +624,7 @@ def properties():
                 "municipality": municipality_filter,
                 "search": search_query,
                 "inv_metr": investment_metrics_filter,
+                "sea_view": sea_view_filter,
                 "favorites": favorites_filter,
                 "hide_removed": hide_removed_filter,
                 "sort_by": sort_by,
@@ -716,6 +767,7 @@ def property_detail(property_id):
             openai_analysis=(openai_variant.analysis if openai_variant else None),
             openai_model=(openai_variant.model if openai_variant else None),
             travel_display_targets=travel_display_targets,
+            sea_view_verdict=sea_view_service.read_verdict(prop),
             profiles=SearchProfileService.list_profiles(active_only=False),
         )
     except Exception:
@@ -1566,6 +1618,7 @@ def map_view():
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
+        sea_view_filter = request.args.get("sea_view", "")
 
         if category_filter:
             if category_filter == "__none__":
@@ -1604,6 +1657,9 @@ def map_view():
             query = _filter_by_investment_rating(
                 query, Property, investment_metrics_filter
             )
+        if sea_view_filter:
+            query = _filter_by_sea_view(query, Property, sea_view_filter)
+
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
 
@@ -2548,6 +2604,7 @@ def export_properties_csv():
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
+        sea_view_filter = request.args.get("sea_view", "")
 
         hide_removed_param = request.args.get("hide_removed", None)
         form_submitted = any(
@@ -2559,6 +2616,7 @@ def export_properties_csv():
                 "municipality",
                 "search",
                 "inv_metr",
+                "sea_view",
                 "sort",
                 "order",
                 "favorites",
@@ -2621,6 +2679,9 @@ def export_properties_csv():
             query = _filter_by_investment_rating(
                 query, Property, investment_metrics_filter
             )
+
+        if sea_view_filter:
+            query = _filter_by_sea_view(query, Property, sea_view_filter)
 
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
@@ -2728,6 +2789,8 @@ def export_properties_csv():
             "Subtype",
             "Status",
             "Favorite",
+            "Sea View",
+            "Sea View Source",
             "Latitude",
             "Longitude",
             "Created At",
@@ -2756,6 +2819,7 @@ def export_properties_csv():
             attrs = prop.attributes if isinstance(prop.attributes, dict) else {}
             bedrooms = attrs.get("bedrooms") if isinstance(attrs, dict) else None
             bathrooms = attrs.get("bathrooms") if isinstance(attrs, dict) else None
+            sea_view_verdict = sea_view_service.read_verdict(prop)
 
             row = [
                 prop.id,
@@ -2773,6 +2837,8 @@ def export_properties_csv():
                 prop.property_subtype,
                 prop.listing_status,
                 bool(prop.is_favorite),
+                sea_view_verdict["state"],
+                sea_view_verdict["source"],
                 float(prop.location_lat) if prop.location_lat else None,
                 float(prop.location_lon) if prop.location_lon else None,
                 prop.created_at.isoformat() if prop.created_at else "",

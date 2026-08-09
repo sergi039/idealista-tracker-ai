@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🌊 Added: sea view is computed again, as four states instead of a flag (2026-08-09)
+- **What**: `services/sea_view_service.py` estimates a sea view from two
+  independent signals and stores the verdict at
+  `enrichment.environment.sea_view`. Geometry: nearest OpenStreetMap coastline
+  (`natural=coastline`) plus a terrain profile sampled from Copernicus EU-DEM
+  25 m, with earth curvature and standard refraction, deciding whether the line
+  of sight to the water clears the ground between. Text: the listing wording,
+  with the subscription bridge asked to separate "vistas al mar" from "cerca
+  del mar" — its only job is to demote the false positives that made the old
+  flag untrustworthy. The states are `yes` (both agree), `likely` (one source
+  unopposed), `no` (computed and negative) and `unknown` (not computable). The
+  `/properties` control is a working select again — *Any* / *Confirmed* /
+  *Confirmed or likely* — carried through every in-page link, the map and the
+  CSV export, which gains `Sea View` and `Sea View Source` columns. The
+  property page shows the verdict with its provenance, and its Environment card
+  now renders even when there is no data yet, which is what makes the hand-set
+  override reachable; a hand-set verdict outranks both models and survives
+  recalculation. `python -m utils.backfill_sea_view` fills it.
+- **Why**: the control was rendered dead because `Property` had no field behind
+  it. But the underlying question needs no paid API — Google billing (#98) is
+  irrelevant to it — and the old `Land` boolean it replaced was `true` on
+  exactly one of 168 rows, built by matching keywords against the
+  ~300-character fragment an alert email carries. Four states exist so that
+  "we could not compute this" stops being written as "no", which is the same
+  confusion #98 documented for travel times. Geometry alone never reaches
+  `yes`: EU-DEM is bare earth, so it cannot see trees or buildings. The
+  mirrored `Land` boolean reads as `likely`, never `yes`, for the same reason.
+- **Notes**: overpass-api.de refuses the default `python-requests` User-Agent
+  with a 406 (and any UA carrying a parenthetical comment), and grants two
+  query slots per IP. Coastline is therefore fetched once per 0.1° grid cell —
+  67 queries for 351 rows instead of one per property — behind a bare product
+  token. The "to beach" sort stays unavailable: that one really does need
+  Google Distance Matrix.
+
 ### 🧭 Changed: one listing surface, with the saved searches on it (2026-08-09, #125)
 - **What**: `/lands` redirects to `/properties`; `templates/lands.html` and its
   archive banner are gone. `/properties` is rebuilt in the layout the owner

@@ -5,7 +5,7 @@
 {% block nav_primary_action %}
 <li class="nav-item me-2">
     <a class="btn btn-outline-success btn-sm"
-       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort=current_filters.sort_by, order=current_filters.order) }}"
+       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort=current_filters.sort_by, order=current_filters.order) }}"
        title="Download filtered data as CSV">
         <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
     </a>
@@ -23,6 +23,7 @@
     'municipality': current_filters.municipality or None,
     'search': current_filters.search or None,
     'inv_metr': current_filters.inv_metr or None,
+    'sea_view': current_filters.sea_view or None,
     'favorites': 'on' if current_filters.favorites else None,
     'hide_removed': 'on' if current_filters.hide_removed else None,
     'mode': current_filters.mode,
@@ -66,6 +67,19 @@
     <span class="badge bg-body-tertiary text-body-secondary border fw-normal property-subscription-badge">
         <i class="fas fa-envelope-open-text me-1"></i>{{ name or 'No subscription' }}
     </span>
+{%- endmacro %}
+
+{# Only the two positive states get a badge in a list: `no` and `unknown`
+   describe most rows and would be noise on every one of them. The detail page
+   shows all four, with the provenance behind them. #}
+{% macro sea_view_badge(p) -%}
+    {% set verdict = sea_view_verdict_for(p) %}
+    {% if verdict.state in ('yes', 'likely') %}
+        <span class="badge {{ 'bg-success' if verdict.state == 'yes' else 'bg-info text-dark' }} fw-normal"
+              title="{{ verdict.source }}{% if verdict.reason %} — {{ verdict.reason }}{% endif %}">
+            <i class="fas fa-water me-1"></i>{{ t('sea_view_state_' ~ verdict.state) }}
+        </span>
+    {% endif %}
 {%- endmacro %}
 
 {# Short label under a travel time, the way /lands captioned its OV | GJ
@@ -150,7 +164,7 @@
                 {# The map has to be reachable *with the current selection* --
                    left to itself it resolves a subscription of its own. #}
                 <a class="btn btn-outline-secondary"
-                   href="{{ url_for('main.map_view', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, favorites='on' if current_filters.favorites else None) }}"
+                   href="{{ url_for('main.map_view', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None) }}"
                    title="View properties on map">
                     <i class="fas fa-map me-1"></i>Map
                 </a>
@@ -380,24 +394,28 @@
                                         <i class="fas fa-eye-slash me-1 text-muted"></i>Hide removed
                                     </label>
                                 </div>
-                                {# Rendered dead on purpose: `Property` has no sea-view
-                                   field and no beach target, so a working-looking control
-                                   would filter on nothing. It comes back with #98. #}
-                                <div class="form-check form-check-inline m-0">
-                                    <input class="form-check-input" type="checkbox" id="sea_view" name="sea_view" disabled
-                                           aria-describedby="sea-view-unavailable">
-                                    <label class="form-check-label small text-body-secondary" for="sea_view">
-                                        <i class="fas fa-water me-1"></i>{{ t('sea_view_only') }}
-                                    </label>
-                                    <a id="sea-view-unavailable"
-                                       href="https://github.com/sergi039/idealista-tracker-ai/issues/98"
-                                       target="_blank" rel="noopener"
-                                       class="text-body-secondary ms-1"
-                                       title="Sea view and beach distance only ever existed on the archived lands rows - see issue #98">
-                                        <i class="fas fa-circle-info"></i>
-                                    </a>
-                                </div>
                             </div>
+                        </div>
+
+                        {# Sea view is a four-state verdict, not a flag: `yes` needs the
+                           listing text and the terrain to agree, `likely` is one source
+                           unopposed, and `unknown` -- an approximate coordinate, or a
+                           source that refused -- is never quietly counted as a match.
+                           See services/sea_view_service.py.
+
+                           Beach distance is still missing and for a different reason:
+                           it needs Google Distance Matrix, and per #98 not one row holds
+                           a travel time. Sea view needs no paid API, which is why it
+                           came back on its own. #}
+                        <div class="col-6 col-lg-3">
+                            <label for="sea_view" class="form-label small text-body-secondary mb-1">
+                                <i class="fas fa-water me-1"></i>{{ t('sea_view') }}
+                            </label>
+                            <select class="form-select form-select-sm" id="sea_view" name="sea_view">
+                                <option value="" {{ 'selected' if not current_filters.sea_view }}>{{ t('sea_view_any') }}</option>
+                                <option value="yes" {{ 'selected' if current_filters.sea_view == 'yes' }}>{{ t('sea_view_confirmed') }}</option>
+                                <option value="likely" {{ 'selected' if current_filters.sea_view in ('likely', 'on') }}>{{ t('sea_view_yes_or_likely') }}</option>
+                            </select>
                         </div>
 
                         <div class="col-6 col-lg-2">
@@ -527,7 +545,7 @@
                         </a>
                     </div>
                     <a class="btn btn-success btn-sm"
-                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort=current_filters.sort_by, order=current_filters.order) }}"
+                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort=current_filters.sort_by, order=current_filters.order) }}"
                        title="Export the filtered rows to CSV">
                         <i class="fas fa-download me-1"></i>Export CSV
                     </a>
@@ -609,9 +627,10 @@
                                                         {{ p.title or ('Property #' ~ p.id) }}
                                                     </a>
                                                 </div>
-                                                {% if show_subscription %}
-                                                    <div class="mt-1">{{ subscription_badge(p, profile_names) }}</div>
-                                                {% endif %}
+                                                <div class="mt-1 d-flex flex-wrap gap-1">
+                                                    {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
+                                                    {{ sea_view_badge(p) }}
+                                                </div>
                                             </td>
                                             <td style="min-width: 120px !important; white-space: nowrap !important;">
                                                 {% if p.price %}
@@ -704,7 +723,7 @@
                                                     {% if p.location_lat and p.location_lon %}
                                                         {# Carry the selection: /map auto-selects a different
                                                            profile, and the focused listing may not be in it. #}
-                                                        <a href="{{ url_for('main.map_view', focus=p.id, profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, favorites='on' if current_filters.favorites else None) }}"
+                                                        <a href="{{ url_for('main.map_view', focus=p.id, profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None) }}"
                                                            class="btn btn-info btn-sm" aria-label="Show on map" title="Show on Map">
                                                             <i class="fas fa-map-marker-alt"></i>
                                                         </a>
@@ -778,9 +797,10 @@
                                     </a>
                                 </h6>
 
-                                {% if show_subscription %}
-                                    <div class="mb-2">{{ subscription_badge(p, profile_names) }}</div>
-                                {% endif %}
+                                <div class="mb-2 d-flex flex-wrap gap-1">
+                                    {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
+                                    {{ sea_view_badge(p) }}
+                                </div>
 
                                 <!-- Price and Area -->
                                 <div class="row mb-3">
@@ -846,7 +866,7 @@
                                     {% if p.location_lat and p.location_lon %}
                                         {# Same as the table view: `focus` alone is not enough,
                                            /map would resolve its own profile. #}
-                                        <a href="{{ url_for('main.map_view', focus=p.id, profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, favorites='on' if current_filters.favorites else None) }}"
+                                        <a href="{{ url_for('main.map_view', focus=p.id, profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None) }}"
                                            class="btn btn-outline-info btn-sm" title="Show on Map">
                                             <i class="fas fa-map"></i>
                                         </a>

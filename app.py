@@ -243,6 +243,12 @@ def create_app(testing: bool = False):
     app.jinja_env.globals["t"] = t
     app.jinja_env.globals["get_current_language"] = get_current_language
 
+    # Every list row needs the sea-view verdict, and it is four states plus its
+    # provenance rather than a column, so the templates read it through here.
+    from services.sea_view_service import read_verdict as sea_view_verdict_for
+
+    app.jinja_env.globals["sea_view_verdict_for"] = sea_view_verdict_for
+
     with app.app_context():
         # Import models to ensure metadata is registered
         import models  # noqa: F401
