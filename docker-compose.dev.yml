@@ -1,3 +1,14 @@
+# Overrides only. Anything this file does not mention is inherited from
+# docker-compose.yml as it stands there.
+#
+# The database is deliberately absent. Compose *appends* `ports` across files
+# instead of replacing the list, so republishing it here produced two entries
+# for host port 5434 - the base file's `127.0.0.1:` one and a second with no
+# bind address, meaning every interface. The stack could not start (the port is
+# claimed twice) and the entry that would have survived a careless fix was the
+# one exposing Postgres to the network, against the loopback-only contract in
+# docs/DEV_RULES.md. `DB_HOST_PORT` already reaches the base file; it does not
+# need saying twice.
 services:
   app:
     environment:
@@ -8,9 +19,3 @@ services:
       exec gunicorn --bind 0.0.0.0:5001 --workers 1 --threads 4 --reload main:app"
     volumes:
       - .:/app
-
-  db:
-    ports:
-      # Same host-port variable as docker-compose.yml, so a worktree that sets
-      # DB_HOST_PORT stays off the production port here too.
-      - "${DB_HOST_PORT:-5434}:5432"

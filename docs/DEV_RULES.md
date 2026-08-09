@@ -21,7 +21,7 @@ three values instead of remembering a naming convention:
 | -------------------------- | ------------ | ------------------------------------------------------------ |
 | `COMPOSE_CONTAINER_PREFIX` | `idealista`  | `<prefix>-app`, `<prefix>-db`, `<prefix>-network`, `<prefix>-universal-pgdata` |
 | `APP_HOST_PORT`            | `5001`       | host port for the app                                         |
-| `DB_HOST_PORT`             | `5434`       | host port for postgres (also used by `docker-compose.dev.yml`) |
+| `DB_HOST_PORT`             | `5434`       | host port for postgres (the dev override inherits it)          |
 
 **The main checkout sets none of them.** Unset, the file renders exactly the
 production names and ports it always had, so `deploy_watcher.sh`,
