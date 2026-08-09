@@ -45,10 +45,12 @@ class Config:
     AI_BRIDGE_TOKEN = os.environ.get("AI_BRIDGE_TOKEN")
 
     # Claude (via the claude CLI)
-    ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-4-6"
+    ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-5"
 
-    # OpenAI (via the codex CLI)
-    OPENAI_MODEL = os.environ.get("OPENAI_MODEL") or "gpt-5.6-sol"
+    # OpenAI (via the codex CLI). The id has to be one the codex CLI itself
+    # knows: anything outside its own catalogue is dropped by the bridge and
+    # the call silently runs on the CLI default instead.
+    OPENAI_MODEL = os.environ.get("OPENAI_MODEL") or "gpt-5.6-terra"
 
     # IMAP settings (for Gmail with App Password)
     IMAP_HOST = os.environ.get("IMAP_HOST") or "imap.gmail.com"
