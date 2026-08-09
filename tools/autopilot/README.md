@@ -41,9 +41,16 @@ Every script takes a lock, so a slow run never overlaps the next tick.
 tools/autopilot/autopilot.sh --dry-run      # decide and report, change nothing
 tools/autopilot/autopilot.sh                # one issue, then a merge pass
 tools/autopilot/autopilot.sh --issues 3     # three issues this pass
+tools/autopilot/merge_bot.sh --dry-run      # inspect CI/cache; no review or merge
 tools/autopilot/merge_bot.sh --pr 57        # one specific PR
 tools/autopilot/run_issue.sh 24             # one specific issue
 ```
+
+A normal `merge_bot.sh` pass (including one started by `autopilot.sh`) calls
+`rx` once for each eligible `base..head` without a cached verdict, and that
+call costs a reviewer attempt. `--pr N` has the same cost unless combined with
+`--dry-run`. Dry runs never call `rx`: they read CI and the review journal,
+then report the cached decision or the review they would request.
 
 Logs live in `data/autopilot*.log`. Review verdicts are journalled in
 `data/autopilot-reviews.tsv`, keyed by `base..head` — a re-push or a moved base

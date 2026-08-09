@@ -164,6 +164,11 @@ review_is_pass() {
             return 1 ;;
     esac
 
+    if [ "$DRY_RUN" = "1" ]; then
+        log "  PR #${pr}: would request review of ${base_sha}..${head_sha} (dry run; no cached verdict, so would not merge)"
+        return 1
+    fi
+
     ref="refs/autopilot/pr-${pr}"
     if ! git fetch --quiet --force "https://github.com/${REPO_SLUG}.git" \
         "pull/${pr}/head:${ref}" 2>>"$LOG_FILE"; then
