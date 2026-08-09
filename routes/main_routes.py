@@ -12,6 +12,11 @@ from flask import (
     flash,
     jsonify,
 )
+
+# get_or_404 raises HTTPException, and the blanket `except Exception` handlers
+# below would answer 500 for it: every one of them re-raises it first so an
+# unknown id stays a 404 (issue #136).
+from werkzeug.exceptions import HTTPException
 from sqlalchemy import or_, case, func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
@@ -782,6 +787,8 @@ def property_detail(property_id):
             travel_display_targets=travel_display_targets,
             profiles=SearchProfileService.list_profiles(active_only=False),
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to load property detail %s", property_id, exc_info=True)
         flash(
@@ -1316,6 +1323,8 @@ def recalculate_profile_travel(profile_id: int):
         return redirect(
             safe_referrer_redirect(url_for("main.properties", profile_id=profile_id))
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "Failed to recalculate travel for profile %s", profile_id, exc_info=True
@@ -1370,6 +1379,8 @@ def recalculate_profile_scoring(profile_id: int):
             safe_referrer_redirect(url_for("main.properties", profile_id=profile_id))
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "Failed to recalculate scoring for profile %s", profile_id, exc_info=True
@@ -1457,6 +1468,8 @@ def recalculate_profile_classification(profile_id: int):
             safe_referrer_redirect(url_for("main.edit_profile", profile_id=profile_id))
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to reclassify profile %s", profile_id, exc_info=True)
         flash(
@@ -1492,6 +1505,8 @@ def set_property_status_form(property_id: int):
                 url_for("main.property_detail", property_id=property_id)
             )
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to set property status %s", property_id, exc_info=True)
         db.session.rollback()
@@ -1583,6 +1598,8 @@ def land_detail(land_id):
             openai_model=openai_model,
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to load land detail %s", land_id, exc_info=True)
         flash(
@@ -2330,6 +2347,8 @@ def edit_environment(land_id):
 
         return render_template("edit_environment.html", land=land)
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to edit environment for land %s", land_id, exc_info=True)
         flash(
@@ -2369,6 +2388,8 @@ def update_score(land_id):
 
         return redirect(url_for("main.land_detail", land_id=land_id))
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to update score for land %s", land_id, exc_info=True)
         flash("An error occurred while updating score. Check server logs.", "error")
