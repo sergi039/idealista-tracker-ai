@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔐 Fixed: a log handler can no longer write an API key in plain text (2026-08-09)
+- **What**: `utils/log_redaction.py` adds a logging filter that strips
+  credentials out of a record before any handler formats it — `key=`,
+  `api_key=`, `token=`, `password=` and friends in a query string, bare
+  `AIza…` Google keys wherever they appear, and `Bearer` tokens. `app.py`
+  installs it on the root logger's *handlers*, which is where records
+  propagating up from `urllib3` are actually emitted; a filter on the root
+  logger itself would never see them.
+- **Why**: the Google clients take their API key as a **query parameter**, so
+  it is part of every request URL — and `urllib3` logs the full URL at DEBUG.
+  Running the ingest by hand on 2026-08-09 printed the owner's live key in
+  full. Nothing in this codebase printed it: the HTTP library printed the URL,
+  which amounts to the same thing.
+- **Why not just keep DEBUG off**: that holds only until the next time someone
+  turns it on. `DEV_MODE=true`, a library that configures logging itself, or a
+  one-off `python -c` that never calls `basicConfig` all reach the same place.
+  The level is a preference; the filter is a property.
+- **Proven, not assumed**: `tests/test_log_redaction.py` opens with a baseline
+  test showing the key *is* written without the filter, then pins that the same
+  call with it installed is clean. The format it exercises is copied verbatim
+  from `urllib3.connectionpool` — the same `'%s://%s:%s "%s %s %s" %s %s'` and
+  the same eight arguments — because the secret arrives as an argument, not in
+  the format string, and a filter reading only `record.msg` would pass it
+  straight through.
+- **Not covered**: handlers added *after* `create_app()` runs. Redaction is a
+  net under accidents, not a licence to log secrets deliberately.
+
 ### 🌊 Added: sea view is computed again, as four states instead of a flag (2026-08-09)
 - **What**: `services/sea_view_service.py` estimates a sea view from two
   independent signals and stores the verdict at

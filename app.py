@@ -11,12 +11,21 @@ from sqlalchemy.exc import ArgumentError
 from sqlalchemy.orm import DeclarativeBase
 from werkzeug.middleware.proxy_fix import ProxyFix
 from config import Config
+from utils.log_redaction import install_log_redaction
 
 # Set up logging - use INFO in production, DEBUG only when DEV_MODE is set
 log_level = (
     logging.DEBUG if os.environ.get("DEV_MODE", "").lower() == "true" else logging.INFO
 )
 logging.basicConfig(level=log_level)
+
+# The Google clients pass their API key as a query parameter, so it is part of
+# every request URL - and urllib3 logs the full URL at DEBUG. Setting DEV_MODE,
+# or any library that raises the level itself, is then enough to write the key
+# into a log in plain text. Redact at the handler instead of relying on the
+# level staying low.
+install_log_redaction()
+
 logger = logging.getLogger(__name__)
 
 
