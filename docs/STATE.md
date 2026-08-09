@@ -87,9 +87,9 @@ Default recommendation:
 
 - Idealista web pages often return HTTP 403 for automated requests; ingestion is designed to be **email-driven**.
 - Classification is regex-based and should be refined as new email samples appear.
-- **overpass-api.de refuses more than it admits.** All three behaviours below
-  were measured against the live instance on 2026-08-09, not inferred, and
-  each one silently produced "no amenities nearby" until #144 fixed it.
+- **overpass-api.de refuses more than it admits.** All four behaviours below
+  were measured against the live instance on 2026-08-09, not inferred, and the
+  first three silently produced "no amenities nearby" until #144 fixed it.
   This entry documents shipped behaviour: the handling lives in
   `EnrichmentService._fetch_osm_amenities` and `_osm_refusal`
   (`services/enrichment_service.py`) plus `fetch_coastline_points`
@@ -110,10 +110,24 @@ Default recommendation:
     runs out of memory returns `{"elements": [], "remark": "runtime error:
     Query timed out ..."}`. Reading `elements` off such a body records a
     computed negative for a query that never ran.
+  - It answers `429 Too Many Requests` when the *rate* is too high, which is a
+    different complaint from the `504` above: the slots are not busy, the
+    server is unwilling to open one this soon. It is retried rather than
+    recorded — `_DEFAULT_RETRY_STATUSES` in `utils/http.py` has always carried
+    429 — so it never became a computed negative, which is why it went unnoticed
+    until a run was actually paced and counted.
   - Every Overpass caller in the process shares one pacer,
     `utils/http.py` `OVERPASS_GATE`, because the two slots above are per IP
     rather than per caller (#152). Pacing the coastline query and the amenity
     query separately paced neither.
+  - **The interval is 5 s, and it is measured rather than chosen.** A dry-run
+    amenity backfill over 20 properties at the previous 2 s spent 39 requests
+    on 20 answers: 16 served, 8 refused with `504`, 15 with `429`. More than
+    half the traffic was the server asking for less of it, and the run took
+    ~12 minutes — about two hours had it covered the whole table. Nothing was
+    lost, because both statuses are retried, but a backoff is not a substitute
+    for a rate. An interactive Enrich pays nothing for the wider interval: the
+    gate is idle between presses, so a single lookup never waits.
 - Enrichment writes to `Land.infrastructure_extended`, a plain
   `db.Column(JSON)` with **no `MutableDict`**. Mutating the loaded dict and
   assigning the same object back never marks the attribute dirty, so the flush
