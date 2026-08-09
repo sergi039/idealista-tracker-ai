@@ -47,21 +47,27 @@ def _as_list(value: Any) -> List[Any]:
 
 
 def lock_profiles_statement(profile_ids: Sequence[int]):
-    """``SELECT id FROM search_profiles WHERE id IN (...) FOR UPDATE``.
+    """``SELECT id ... WHERE id IN (...) ORDER BY id FOR UPDATE``.
 
     The one row-lock statement for `search_profiles`: the merge below and
     `services/search_profile_repair_service.py` both take their rows with it,
     so the two cannot drift apart on what "locked" means.
 
-    Always in id order, so two runs cannot deadlock against each other.
+    The ``ORDER BY`` is the part that makes two concurrent runs safe from each
+    other, and it has to be in the SQL: sorting the ``IN`` list decides
+    nothing, because Postgres locks rows in whatever order the scan hands them
+    over. With the sort in the statement the ``LockRows`` node sits above
+    ``Sort``, so the rows really are taken in id order and two runs queue
+    instead of deadlocking.
 
     Postgres semantics. SQLite ignores ``FOR UPDATE`` (and serialises writers
-    anyway), so the test suite can pin that the lock is *requested* but cannot
-    demonstrate it blocking.
+    anyway), so the test suite can pin that the lock is *requested*, in order,
+    but cannot demonstrate it blocking.
     """
     return (
         select(SearchProfile.id)
         .where(SearchProfile.id.in_(sorted(profile_ids)))
+        .order_by(SearchProfile.id.asc())
         .with_for_update()
     )
 
@@ -413,6 +419,18 @@ class SearchProfileService:
         Each group is locked and re-read before that decision is taken, so the
         answer is about the rows as they are now rather than about the snapshot
         the grouping was built from (#116).
+
+        `commit=True` means this call owns the transaction, and it always ends
+        it before returning - including on the runs that write nothing. Those
+        runs are exactly the dangerous ones: a conflicts-only or no-op run
+        still took ``FOR UPDATE`` on every group it looked at, and returning
+        with the transaction open would leave those rows held against every
+        ingestion for as long as the session lives.
+
+        `commit=False` means the caller owns the transaction: nothing is
+        committed *or* rolled back here, and the group locks stay held until
+        the caller ends it. That is what makes a dry run inspectable, and it is
+        the caller's job not to sit on it.
         """
 
         profiles = SearchProfile.query.order_by(SearchProfile.id.asc()).all()
@@ -430,153 +448,171 @@ class SearchProfileService:
         details: List[Dict[str, Any]] = []
         conflicts: List[Dict[str, Any]] = []
 
-        for canonical, group in groups.items():
-            # Every read below - and every write that follows from it - is
-            # about rows this transaction holds, not about the snapshot above.
-            group = SearchProfileService._lock_group_for_decision(group)
-            if not group:
-                continue
+        try:
+            for canonical, group in groups.items():
+                # Every read below - and every write that follows from it - is
+                # about rows this transaction holds, not about the snapshot above.
+                group = SearchProfileService._lock_group_for_decision(group)
+                if not group:
+                    continue
 
-            search_keys = {p.source_search_key for p in group if p.source_search_key}
+                search_keys = {
+                    p.source_search_key for p in group if p.source_search_key
+                }
 
-            # Two reasons to refuse a group outright. Both would destroy an
-            # invariant that cannot be reconstructed afterwards, so they are
-            # reported for a human instead of resolved by guessing.
-            refusal = None
-            if len(search_keys) > 1:
-                refusal = "different saved-search keys"
-            elif search_keys and any(p.is_default for p in group):
-                # The default is the fallback for everything that matches
-                # nothing. Merging here would either pin its key onto the
-                # catch-all (it sorts first, so it becomes the primary) or make
-                # one subscription the recipient of all unmatched mail.
-                refusal = "the default profile and an identified saved search"
+                # Two reasons to refuse a group outright. Both would destroy an
+                # invariant that cannot be reconstructed afterwards, so they are
+                # reported for a human instead of resolved by guessing.
+                refusal = None
+                if len(search_keys) > 1:
+                    refusal = "different saved-search keys"
+                elif search_keys and any(p.is_default for p in group):
+                    # The default is the fallback for everything that matches
+                    # nothing. Merging here would either pin its key onto the
+                    # catch-all (it sorts first, so it becomes the primary) or make
+                    # one subscription the recipient of all unmatched mail.
+                    refusal = "the default profile and an identified saved search"
 
-            if refusal:
-                logger.warning(
-                    "Refusing to merge %d profiles labelled %r: the group holds "
-                    "%s (%s)",
-                    len(group),
-                    canonical,
-                    refusal,
-                    sorted(search_keys),
+                if refusal:
+                    logger.warning(
+                        "Refusing to merge %d profiles labelled %r: the group holds "
+                        "%s (%s)",
+                        len(group),
+                        canonical,
+                        refusal,
+                        sorted(search_keys),
+                    )
+                    conflicts.append(
+                        {
+                            "canonical": canonical,
+                            "profile_ids": [p.id for p in group],
+                            "search_keys": sorted(search_keys),
+                            "reason": refusal,
+                        }
+                    )
+                    continue
+
+                if len(group) <= 1:
+                    primary = group[0]
+                    cleaned_name = _clean_profile_name(primary.name)
+                    if cleaned_name and cleaned_name != primary.name:
+                        primary.name = cleaned_name
+                        renamed += 1
+                    continue
+
+                counts = {
+                    p.id: Property.query.filter_by(search_profile_id=p.id).count()
+                    for p in group
+                }
+                group_sorted = sorted(
+                    group,
+                    key=lambda p: (not p.is_default, -counts.get(p.id, 0), p.id),
                 )
-                conflicts.append(
-                    {
-                        "canonical": canonical,
-                        "profile_ids": [p.id for p in group],
-                        "search_keys": sorted(search_keys),
-                        "reason": refusal,
-                    }
-                )
-                continue
-
-            if len(group) <= 1:
-                primary = group[0]
+                primary = group_sorted[0]
                 cleaned_name = _clean_profile_name(primary.name)
                 if cleaned_name and cleaned_name != primary.name:
                     primary.name = cleaned_name
-                    renamed += 1
-                continue
 
-            counts = {
-                p.id: Property.query.filter_by(search_profile_id=p.id).count()
-                for p in group
-            }
-            group_sorted = sorted(
-                group,
-                key=lambda p: (not p.is_default, -counts.get(p.id, 0), p.id),
-            )
-            primary = group_sorted[0]
-            cleaned_name = _clean_profile_name(primary.name)
-            if cleaned_name and cleaned_name != primary.name:
-                primary.name = cleaned_name
-
-            # The group holds at most one search key (the guard above), and
-            # the primary is picked by property count, so the keyless row
-            # usually wins. Deleting the keyed one would delete the
-            # subscription's identity with it, and nothing records which saved
-            # search a stored row came from, so it could not be recovered.
-            carried_key = next(
-                (p.source_search_key for p in group_sorted if p.source_search_key), None
-            )
-            carried_url = next(
-                (p.source_search_url for p in group_sorted if p.source_search_key), None
-            )
-
-            for dup in group_sorted[1:]:
-                if dup.is_default and not primary.is_default:
-                    primary.is_default = True
-                if dup.is_active and not primary.is_active:
-                    primary.is_active = True
-                if (
-                    not (primary.description or "").strip()
-                    and (dup.description or "").strip()
-                ):
-                    primary.description = dup.description
-
-                primary_targets = normalize_travel_targets_config(
-                    primary.travel_targets
+                # The group holds at most one search key (the guard above), and
+                # the primary is picked by property count, so the keyless row
+                # usually wins. Deleting the keyed one would delete the
+                # subscription's identity with it, and nothing records which saved
+                # search a stored row came from, so it could not be recovered.
+                carried_key = next(
+                    (p.source_search_key for p in group_sorted if p.source_search_key),
+                    None,
                 )
-                dup_targets = normalize_travel_targets_config(dup.travel_targets)
-                primary_custom = list(primary_targets.get("custom") or [])
-                dup_custom = list(dup_targets.get("custom") or [])
-                if dup_custom:
-                    seen = {
-                        (
-                            str(item.get("name") or "").strip().lower(),
-                            item.get("lat"),
-                            item.get("lon"),
+                carried_url = next(
+                    (p.source_search_url for p in group_sorted if p.source_search_key),
+                    None,
+                )
+
+                for dup in group_sorted[1:]:
+                    if dup.is_default and not primary.is_default:
+                        primary.is_default = True
+                    if dup.is_active and not primary.is_active:
+                        primary.is_active = True
+                    if (
+                        not (primary.description or "").strip()
+                        and (dup.description or "").strip()
+                    ):
+                        primary.description = dup.description
+
+                    primary_targets = normalize_travel_targets_config(
+                        primary.travel_targets
+                    )
+                    dup_targets = normalize_travel_targets_config(dup.travel_targets)
+                    primary_custom = list(primary_targets.get("custom") or [])
+                    dup_custom = list(dup_targets.get("custom") or [])
+                    if dup_custom:
+                        seen = {
+                            (
+                                str(item.get("name") or "").strip().lower(),
+                                item.get("lat"),
+                                item.get("lon"),
+                            )
+                            for item in primary_custom
+                        }
+                        for item in dup_custom:
+                            key = (
+                                str(item.get("name") or "").strip().lower(),
+                                item.get("lat"),
+                                item.get("lon"),
+                            )
+                            if key in seen:
+                                continue
+                            primary_custom.append(item)
+                            seen.add(key)
+                        primary_targets["custom"] = primary_custom
+                        primary.travel_targets = normalize_travel_targets_config(
+                            primary_targets
                         )
-                        for item in primary_custom
-                    }
-                    for item in dup_custom:
-                        key = (
-                            str(item.get("name") or "").strip().lower(),
-                            item.get("lat"),
-                            item.get("lon"),
-                        )
-                        if key in seen:
-                            continue
-                        primary_custom.append(item)
-                        seen.add(key)
-                    primary_targets["custom"] = primary_custom
-                    primary.travel_targets = normalize_travel_targets_config(
-                        primary_targets
+
+                    updated = Property.query.filter_by(search_profile_id=dup.id).update(
+                        {"search_profile_id": primary.id}
+                    )
+                    reassigned += updated
+                    db.session.delete(dup)
+                    deleted += 1
+
+                if carried_key and not primary.source_search_key:
+                    # Flush the deletes first: the unique index would reject the
+                    # instant both rows hold the same key.
+                    db.session.flush()
+                    primary.source_search_key = carried_key
+                    primary.source_search_url = carried_url
+                    logger.info(
+                        "Merged group %r kept saved-search key %s on profile %s",
+                        canonical,
+                        carried_key,
+                        primary.id,
                     )
 
-                updated = Property.query.filter_by(search_profile_id=dup.id).update(
-                    {"search_profile_id": primary.id}
-                )
-                reassigned += updated
-                db.session.delete(dup)
-                deleted += 1
-
-            if carried_key and not primary.source_search_key:
-                # Flush the deletes first: the unique index would reject the
-                # instant both rows hold the same key.
-                db.session.flush()
-                primary.source_search_key = carried_key
-                primary.source_search_url = carried_url
-                logger.info(
-                    "Merged group %r kept saved-search key %s on profile %s",
-                    canonical,
-                    carried_key,
-                    primary.id,
+                merged += 1
+                details.append(
+                    {
+                        "canonical": canonical,
+                        "primary_id": primary.id,
+                        "removed_ids": [p.id for p in group_sorted[1:]],
+                        "properties_moved": counts,
+                    }
                 )
 
-            merged += 1
-            details.append(
-                {
-                    "canonical": canonical,
-                    "primary_id": primary.id,
-                    "removed_ids": [p.id for p in group_sorted[1:]],
-                    "properties_moved": counts,
-                }
-            )
-
-        if commit and (merged or renamed):
-            db.session.commit()
+            if commit:
+                if merged or renamed:
+                    db.session.commit()
+                else:
+                    # Nothing was written, but every group this run looked at
+                    # is still held FOR UPDATE. Ending the transaction is the
+                    # only thing that releases those rows, so a conflicts-only
+                    # or no-op run ends it too.
+                    db.session.rollback()
+        except Exception:
+            # Same reason, from the failing side: an exception on the way out
+            # would otherwise carry the locks back to the caller.
+            if commit:
+                db.session.rollback()
+            raise
 
         return {
             "merged_groups": merged,
@@ -895,28 +931,53 @@ class SearchProfileService:
 
         # 2) The saved search name embedded in the email.
         #
-        # This is the silent half of the split in #116. The profile this path
-        # finds or creates carries no `source_search_key`, so `UNIQUE
-        # (source_search_key)` cannot see it and `UNIQUE (name) WHERE
-        # source_search_key IS NULL` cannot see a keyed row - two subscriptions
-        # may genuinely share a label, and that exclusion is what allows it. An
-        # alert for this same label that *does* carry its URL therefore inserts
-        # a second profile, and one subscription's listings end up split across
-        # both. Nothing can be constrained away here without forbidding the
-        # supported case, so the precondition is at least made observable
-        # before the damage: the label and the profile it landed on are named
-        # every time an email resolves without a search URL.
+        # This is the silent half of the split in #116, so it is reported -
+        # once per URL-less email, and by what actually happened rather than by
+        # what usually happens. `get_or_create_profile_by_name()` has three
+        # outcomes and they are not the same event: a keyless profile is the
+        # half that later splits, a keyed profile means this email was handed
+        # to an identified subscription on the strength of a label alone, and
+        # nothing at all means the label was ambiguous. Claiming the first of
+        # those for all three would put a false mechanism in the log, which is
+        # worse than the silence it replaced.
         if search_name:
             profile = SearchProfileService.get_or_create_profile_by_name(search_name)
-            logger.warning(
-                "Alert email carries no saved-search URL: matched by label %r "
-                "alone, onto keyless profile %s (%r). A later alert for this "
-                "label that does carry its URL creates a second profile and "
-                "splits the subscription (#116)",
-                search_name,
-                profile.id if profile is not None else None,
-                profile.name if profile is not None else None,
-            )
+            if profile is None:
+                logger.warning(
+                    "Alert email carries no saved-search URL and its label %r "
+                    "resolves to no single profile; falling through to the "
+                    "matchers and the catch-all (#116)",
+                    search_name,
+                )
+            elif profile.source_search_key:
+                # Nothing verified that this email belongs to that
+                # subscription: the label was the only evidence, and labels
+                # stopped identifying a saved search in #102.
+                logger.warning(
+                    "Alert email carries no saved-search URL: matched by label "
+                    "%r alone onto profile %s (%r), which already carries "
+                    "saved-search key %s - the label is the only thing tying "
+                    "this listing to that subscription (#116)",
+                    search_name,
+                    profile.id,
+                    profile.name,
+                    profile.source_search_key,
+                )
+            else:
+                # The keyless half of the split. `UNIQUE (source_search_key)`
+                # cannot see this row and `UNIQUE (name) WHERE
+                # source_search_key IS NULL` cannot see a keyed one - two
+                # subscriptions may genuinely share a label, and that exclusion
+                # is what allows it - so neither index can stop the twin.
+                logger.warning(
+                    "Alert email carries no saved-search URL: matched by label "
+                    "%r alone, onto keyless profile %s (%r). A later alert for "
+                    "this label that does carry its URL creates a second "
+                    "profile and splits the subscription (#116)",
+                    search_name,
+                    profile.id,
+                    profile.name,
+                )
             if profile:
                 return profile
 

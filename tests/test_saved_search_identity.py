@@ -438,6 +438,26 @@ def test_an_email_without_a_search_url_keeps_the_old_resolution(app):
         assert by_name.is_auto_created is True
 
 
+def _in_transaction() -> bool:
+    """Whether the session is holding a transaction - and therefore its locks.
+
+    `db.session` is a `scoped_session`, which does not proxy `in_transaction()`
+    in SQLAlchemy 2.0; calling it returns the `Session` itself and starts
+    nothing, so this reads the state without changing it.
+    """
+    return db.session().in_transaction()
+
+
+def _url_less_warnings(caplog) -> list:
+    """The warnings `resolve_profile()` raises for an email with no search URL."""
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno >= logging.WARNING
+        and "no saved-search URL" in record.getMessage()
+    ]
+
+
 def test_an_email_without_a_search_url_says_so_instead_of_matching_silently(
     app, caplog
 ):
@@ -462,25 +482,96 @@ def test_an_email_without_a_search_url_says_so_instead_of_matching_silently(
         assert resolved is not None
         assert resolved.source_search_key is None
 
-        warnings = [
-            record.getMessage()
-            for record in caplog.records
-            if record.levelno >= logging.WARNING
-        ]
-        matched_by_label = [
-            message
-            for message in warnings
-            if "no saved-search URL" in message and "#116" in message
-        ]
-        assert matched_by_label, (
-            "an email resolved by its label alone left no trace in the log"
+        warnings = _url_less_warnings(caplog)
+        assert len(warnings) == 1, (
+            "one URL-less email must produce exactly one warning about it"
         )
-        assert any("Junio" in message for message in matched_by_label), (
-            "the warning does not name the label it matched on"
-        )
-        assert any(str(resolved.id) in message for message in matched_by_label), (
+        message = warnings[0]
+        assert "#116" in message
+        assert "keyless" in message, "the keyless half of the split is not named as one"
+        assert "splits the subscription" in message
+        assert "Junio" in message, "the warning does not name the label it matched on"
+        assert str(resolved.id) in message, (
             "the warning does not name the profile the email landed in"
         )
+
+
+def test_a_url_less_email_matched_onto_a_keyed_profile_says_that_instead(app, caplog):
+    """The warning must describe what happened, not what usually happens.
+
+    `get_or_create_profile_by_name()` honours a single canonical match, and
+    that match may already carry a search key. Calling it "keyless" and
+    predicting a split would be a false mechanism in the log: the real event is
+    that a label - which stopped identifying a subscription in #102 - was the
+    only evidence tying this listing to an identified saved search.
+    """
+    with app.app_context():
+        keyed = SearchProfile(
+            name=SEARCH_NAME,
+            is_active=True,
+            is_auto_created=True,
+            source_search_key=TERRENOS_KEY,
+            source_search_url=TERRENOS_URL,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(keyed)
+        db.session.commit()
+        keyed_id = keyed.id
+
+        with caplog.at_level(logging.WARNING):
+            resolved = SearchProfileService.resolve_profile(SUBJECT_FULL, "no links")
+
+        assert resolved is not None
+        assert resolved.id == keyed_id
+
+        warnings = _url_less_warnings(caplog)
+        assert len(warnings) == 1
+        message = warnings[0]
+        assert "keyless" not in message, (
+            "a profile that carries a search key was reported as keyless"
+        )
+        assert "splits the subscription" not in message, (
+            "the split mechanism was claimed for a case it does not describe"
+        )
+        assert TERRENOS_KEY in message, "the warning does not name the key it matched"
+        assert str(keyed_id) in message
+        assert "#116" in message
+
+
+def test_a_url_less_email_whose_label_resolves_to_nothing_says_that(app, caplog):
+    """Two subscriptions share the label: no profile is returned at all.
+
+    Naming a profile here - keyless or otherwise - would name one that does not
+    exist, so the third outcome gets its own wording.
+    """
+    with app.app_context():
+        for key in (TERRENOS_KEY, search_key_for_url(VIVIENDAS_URL)):
+            db.session.add(
+                SearchProfile(
+                    name=SEARCH_NAME,
+                    is_active=True,
+                    is_auto_created=True,
+                    source_search_key=key,
+                    travel_targets={"presets": {}, "custom": []},
+                )
+            )
+        db.session.commit()
+
+        with caplog.at_level(logging.WARNING):
+            resolved = SearchProfileService.resolve_profile(SUBJECT_FULL, "no links")
+
+        # It falls through to the catch-all rather than picking one of them.
+        assert resolved is not None
+        assert resolved.source_search_key is None
+        assert resolved.is_default is True
+
+        warnings = _url_less_warnings(caplog)
+        assert len(warnings) == 1
+        message = warnings[0]
+        assert "resolves to no single profile" in message
+        assert "keyless" not in message
+        assert SEARCH_NAME in message
+        assert "#116" in message
 
 
 def test_an_email_that_carries_its_search_url_stays_quiet(app, caplog):
@@ -1153,10 +1244,15 @@ def test_merging_onto_a_keyless_primary_keeps_the_only_search_key(app):
 
 
 def test_the_merge_asks_the_database_to_hold_the_group_it_decides_on():
-    """Pin that the lock is actually requested.
+    """Pin that the lock is requested, and requested in id order.
+
+    Sorting the `IN` list decides nothing: Postgres locks rows in whatever
+    order the scan produces them, so two concurrent runs over overlapping
+    groups could still deadlock. The `ORDER BY` has to be in the SQL - the
+    `LockRows` node then sits above `Sort` - which is what this asserts.
 
     SQLite ignores `FOR UPDATE`, so this suite cannot demonstrate the locking
-    itself - only that the statement asks for it. The semantics come from
+    itself, only that the statement asks for it. The semantics come from
     Postgres, the same honest limitation as the repair service's lock.
     """
     from sqlalchemy.dialects import postgresql
@@ -1167,6 +1263,99 @@ def test_the_merge_asks_the_database_to_hold_the_group_it_decides_on():
 
     assert "FOR UPDATE" in sql
     assert "search_profiles" in sql
+    assert "ORDER BY search_profiles.id" in sql, (
+        "the lock order is left to the scan plan, so two runs can deadlock"
+    )
+    assert sql.index("ORDER BY") < sql.index("FOR UPDATE")
+
+
+def test_a_merge_that_writes_nothing_still_lets_go_of_the_rows_it_locked(app):
+    """A conflicts-only run must not walk away holding every group FOR UPDATE.
+
+    `commit=True` means this call owns the transaction. It used to commit only
+    when something was written, so a run that refused every group returned with
+    the transaction still open and its locks still held - against every
+    ingestion, for as long as the session lives.
+    """
+    with app.app_context():
+        for key in (TERRENOS_KEY, search_key_for_url(VIVIENDAS_URL)):
+            db.session.add(
+                SearchProfile(
+                    name="Same label",
+                    is_active=True,
+                    is_auto_created=True,
+                    source_search_key=key,
+                    travel_targets={"presets": {}, "custom": []},
+                )
+            )
+        db.session.commit()
+
+        assert _in_transaction() is False, "the seed left one open"
+
+        report = SearchProfileService.merge_duplicate_profiles(commit=True)
+
+        assert len(report["conflicts"]) == 1
+        assert report["merged_groups"] == 0
+        assert _in_transaction() is False, (
+            "the merge returned still holding its row locks"
+        )
+        assert SearchProfile.query.count() == 2
+
+
+def test_a_merge_that_fails_does_not_carry_its_locks_back_to_the_caller(
+    app, monkeypatch
+):
+    """The same guarantee from the failing side."""
+    with app.app_context():
+        db.session.add(
+            SearchProfile(
+                name="Same label!",
+                is_active=True,
+                travel_targets={"presets": {}, "custom": []},
+            )
+        )
+        db.session.add(
+            SearchProfile(
+                name="Same label",
+                is_active=True,
+                travel_targets={"presets": {}, "custom": []},
+            )
+        )
+        db.session.commit()
+
+        def explode(*args, **kwargs):
+            raise RuntimeError("merge blew up")
+
+        monkeypatch.setattr(
+            search_profile_service, "normalize_travel_targets_config", explode
+        )
+
+        with pytest.raises(RuntimeError):
+            SearchProfileService.merge_duplicate_profiles(commit=True)
+
+        assert _in_transaction() is False, (
+            "the failed merge left the transaction - and its locks - open"
+        )
+
+
+def test_a_dry_run_leaves_the_transaction_to_its_caller(app):
+    """`commit=False` means the caller owns it, locks included."""
+    with app.app_context():
+        db.session.add(
+            SearchProfile(
+                name="Same label",
+                is_active=True,
+                travel_targets={"presets": {}, "custom": []},
+            )
+        )
+        db.session.commit()
+
+        SearchProfileService.merge_duplicate_profiles(commit=False)
+
+        assert _in_transaction() is True, (
+            "a dry run ended a transaction it does not own"
+        )
+        db.session.rollback()
 
 
 def test_merge_decides_on_the_rows_it_locked_not_on_the_snapshot(app, monkeypatch):
@@ -1184,6 +1373,12 @@ def test_merge_decides_on_the_rows_it_locked_not_on_the_snapshot(app, monkeypatc
     snapshot's objects on its way past - the merge can only see it by reading
     the rows again under the lock, which is the fix. SQLite cannot show the
     lock blocking a second connection; that half is Postgres semantics.
+
+    The refusal *report* is what proves the re-read, and deliberately so. On
+    one connection the simulated competitor shares this transaction, so the
+    rollback that releases the group's locks discards its write too; the row
+    state afterwards says nothing either way, and asserting on it would be
+    asserting on the simulation.
     """
     with app.app_context():
         keyless = SearchProfile(
@@ -1236,14 +1431,17 @@ def test_merge_decides_on_the_rows_it_locked_not_on_the_snapshot(app, monkeypatc
         assert report["conflicts"], (
             "a group holding two search keys must be reported, not merged"
         )
+        assert sorted(report["conflicts"][0]["search_keys"]) == sorted(
+            [TERRENOS_KEY, other_key]
+        ), "the refusal was decided from the snapshot, not from the locked rows"
+        assert sorted(report["conflicts"][0]["profile_ids"]) == sorted(
+            [keyless_id, keyed_id]
+        )
 
         db.session.expire_all()
         assert db.session.get(SearchProfile, keyed_id) is not None, (
             "the merge deleted a profile that still carried its own identity"
         )
-        assert (
-            db.session.get(SearchProfile, keyless_id).source_search_key == other_key
-        ), "the identity claimed mid-merge was overwritten"
 
 
 # --------------------------------------------------------------------------
