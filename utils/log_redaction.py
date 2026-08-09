@@ -50,7 +50,27 @@ _QUERY_PARAM_RE: Final = re.compile(
 _GOOGLE_KEY_RE: Final = re.compile(r"AIza[0-9A-Za-z_\-]{35}")
 
 #: Bearer tokens in an Authorization header that got logged.
-_BEARER_RE: Final = re.compile(r"(?i)(bearer\s+)([A-Za-z0-9._\-]{8,})")
+#:
+#: The value is matched as "everything up to whitespace or a quote" rather than
+#: as an allow-list of characters. An allow-list is the wrong shape here: base64
+#: carries `+`, `/` and `=`, and a token stops at the first character the list
+#: forgot, leaving the rest in the log. `Bearer abcdefgh+TOPSECRET` redacted
+#: with `[A-Za-z0-9._-]+` yields `Bearer REDACTED+TOPSECRET` — worse than not
+#: matching at all, because it looks handled.
+_BEARER_RE: Final = re.compile(r"(?i)(bearer\s+)([^\s\"'<>,;]+)")
+
+#: Credentials in structured output — a config dict logged at startup, a JSON
+#: body echoed on error: `"api_key": "…"`, `token='…'`.
+#:
+#: Deliberately excludes a bare `key`, unlike the query-parameter pattern. This
+#: codebase stores `{"key": "airport"}` in its travel presets and `{"key":
+#: "police"}` in enrichment data; redacting those would blind the diagnostics
+#: this filter exists to keep readable. In a query string `key=` is Google's
+#: credential parameter, so there the bare name stays.
+_STRUCTURED_SECRET_RE: Final = re.compile(
+    r"(?i)([\"']?(?:api_?key|access_token|auth_token|token|password|secret)[\"']?"
+    r"\s*[:=]\s*[\"'])([^\"']+)([\"'])"
+)
 
 
 def redact(text: str) -> str:
@@ -58,6 +78,7 @@ def redact(text: str) -> str:
     text = _QUERY_PARAM_RE.sub(r"\1" + REDACTED, text)
     text = _GOOGLE_KEY_RE.sub(REDACTED, text)
     text = _BEARER_RE.sub(r"\1" + REDACTED, text)
+    text = _STRUCTURED_SECRET_RE.sub(r"\1" + REDACTED + r"\3", text)
     return text
 
 

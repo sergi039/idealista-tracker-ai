@@ -147,6 +147,74 @@ class TestWhatCountsAsASecret:
         assert "abcdef1234567890xyz" not in redacted
         assert REDACTED in redacted
 
+    @pytest.mark.parametrize(
+        "token",
+        [
+            "abcdefgh+TOPSECRET",  # base64 '+'
+            "AAAA/BBBB+CCCC==",  # base64 '/' and padding
+            "eyJhbGci.eyJzdWIi.SflKxwRJSMeKKF2QT4f",  # JWT
+            "sk-live-TOPSECRET",
+        ],
+    )
+    def test_a_bearer_token_is_stripped_whole(self, token):
+        """Reported as a BLOCKER on PR #148: an allow-list of characters stops
+        at the first one it forgot and leaves the rest in the log.
+
+        `Bearer abcdefgh+TOPSECRET` under `[A-Za-z0-9._-]+` became
+        `Bearer REDACTED+TOPSECRET` — a leak that looks handled, which is worse
+        than no match at all.
+        """
+        redacted = redact(f"Authorization: Bearer {token}")
+
+        assert token not in redacted
+        assert "TOPSECRET" not in redacted
+        assert "SflKxwRJ" not in redacted
+        assert redacted == f"Authorization: Bearer {REDACTED}"
+
+    @pytest.mark.parametrize(
+        "value", ["abc+def/ghi==", "a%20b", "x=y=z", "sk-live-TOPSECRET"]
+    )
+    def test_a_query_value_is_stripped_whole(self, value):
+        redacted = redact(f"https://x/y?key={value}&z=1")
+
+        assert value not in redacted
+        assert redacted == f"https://x/y?key={REDACTED}&z=1"
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            'config: {"api_key": "sk-live-TOPSECRET"}',
+            "token='sk-live-TOPSECRET'",
+            '{"access_token": "sk-live-TOPSECRET"}',
+            'password = "sk-live-TOPSECRET"',
+        ],
+    )
+    def test_a_credential_in_structured_output_is_stripped(self, line):
+        """A config dict logged at startup, or a JSON body echoed on error."""
+        redacted = redact(line)
+
+        assert "TOPSECRET" not in redacted
+        assert REDACTED in redacted
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            '{"key": "airport", "mode": "driving"}',
+            '{"key": "police", "status": "ok"}',
+            '{"key": "supermarket"}',
+        ],
+    )
+    def test_the_travel_preset_key_is_not_a_credential(self, line):
+        """`key` means a preset name in this codebase's own data.
+
+        `services/property_travel_service.py` stores `{"key": "airport"}` and
+        enrichment stores `{"key": "police"}`. Redacting those would blind the
+        diagnostics this filter exists to keep readable. In a *query string*
+        `key=` is Google's credential parameter, so there the bare name is
+        still treated as one — the distinction is deliberate.
+        """
+        assert redact(line) == line
+
     def test_an_ordinary_word_ending_in_key_is_left_alone(self):
         """`monkey=1` is not a credential, and neither is a `sort_key` column."""
         text = "sorting by sort_key=price, monkey=1, donkey=2"

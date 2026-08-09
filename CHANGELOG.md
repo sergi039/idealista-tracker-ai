@@ -43,6 +43,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   called the filter directly, which passes against code that leaks. The
   replacement raises a real exception and reads what the handler actually
   wrote.
+- **Values are matched as "up to the delimiter", not as an allow-list of
+  characters** — the second thing review caught. `Bearer` under
+  `[A-Za-z0-9._-]+` stopped at the first character the list forgot:
+  `Bearer abcdefgh+TOPSECRET` became `Bearer REDACTED+TOPSECRET`, a leak that
+  looks handled. base64 carries `+`, `/` and `=`; JWTs carry `.`.
+- **`key` is a credential in a query string and a preset name in a dict.**
+  `?key=` is Google's API-key parameter, but this codebase stores
+  `{"key": "airport"}` in travel presets and `{"key": "police"}` in enrichment.
+  The structured-output pattern therefore covers `api_key`, `token`,
+  `password`, `secret` and friends but deliberately not a bare `key`, so
+  redaction does not blind the diagnostics it exists to keep readable.
 - **Not covered**: handlers added *after* `create_app()` runs. Redaction is a
   net under accidents, not a licence to log secrets deliberately.
 
