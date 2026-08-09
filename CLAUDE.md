@@ -83,8 +83,8 @@ rows carry a subscription badge, and the travel columns fall back to the
 preset targets — a *custom* target id belongs to one profile, so it would
 label a column with a destination most rows were never measured against.
 
-`/properties` carries the controls the owner actually used on `/lands`, and
-the page is deliberately a copy of that layout: the cards/list toggle
+`/properties` carries the controls the owner actually used on `/lands`: the
+cards/list toggle
 (`view_type`), the combined/investment/lifestyle modes (`mode`, with
 `score_total` / `score_investment` / `score_lifestyle`), the investment-rating
 filter (`inv_metr`), and the Score / ★ / Title / Price / Area / Coords /
@@ -121,6 +121,32 @@ in `.col-*` classes rather than inline `style="min-width: … !important"`
 attributes — an inline `!important` outranks every media query, which is what
 made the table 1344px wide at any viewport. `tests/test_tablet_list_layout.py`
 fails if those widths move back into the markup.
+
+**Every one of those controls exists exactly once** (owner decision,
+2026-08-09, superseding "the page is a copy of the /lands layout"). The page
+had grown a duplicate of nearly everything: a subscription dropdown in the
+filter panel repeating the chips above it, an Archive dropdown repeating the
+archive section inside that dropdown, Export CSV in the navbar *and* over the
+list, Manual Sync in the header *and* in the navbar slot the page had taken.
+What the page has now, top to bottom:
+
+1. **Toolbar** (`#subscription-switcher`) — the subscription chips, one
+   `More` menu holding what a chip cannot say (several at once, the archive,
+   `unassigned`, an empty selection), and the Favorites / Hide removed
+   switches. Those two are links, not form fields: they apply on click, and
+   the filter form re-posts their state as hidden inputs so Apply cannot
+   switch them off. The menu's checkboxes belong to the filter form through
+   `form="filter-form"`, so a no-JavaScript Apply still carries them; with
+   JavaScript they apply when the menu closes.
+2. **Filter bar** (`#filters-card`) — one wrapping row, no captions above the
+   controls. Each names itself in its first option (`All Types`, `All
+   Municipalities`, `Inv. metr: all`); search leads it. Anything that changes
+   *which* rows are shown lives here, and nothing else does.
+3. **Result row** — the count, the modes, the cards/list toggle and Export
+   CSV: the controls that change how the same rows are drawn.
+
+Keep it that way. Adding a control means deciding which of the three it
+belongs to, not adding a second copy near where it is needed.
 
 The dual-build isolation contract
 from the transition — legacy on 5001 vs universal on 5050, unique Docker
