@@ -25,6 +25,7 @@ environment variables, so a missing server there is a failure rather than a
 silent skip.
 """
 
+import json
 import os
 import re
 import subprocess
@@ -47,6 +48,7 @@ SERVER_URL_ENV = "TEST_DATABASE_URL_POSTGRES"
 REQUIRE_ENV = "REQUIRE_POSTGRES_TESTS"
 
 IDENTITY_MIGRATION = "013_add_search_profile_search_identity"
+ASSIGNMENT_CLEANUP_MIGRATION = "014_clear_profile_assignment_metadata"
 IDENTITY_COLUMNS = ("source_search_key", "source_search_url", "is_auto_created")
 IDENTITY_INDEX = "ux_search_profiles_source_search_key"
 LABEL_INDEX = "ux_search_profiles_name_without_key"
@@ -221,7 +223,10 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
             with engine.begin() as connection:
                 _insert_profile(connection, name="Terrenos norte")
 
-        assert run_migrations(engine) == [IDENTITY_MIGRATION]
+        assert run_migrations(engine) == [
+            IDENTITY_MIGRATION,
+            ASSIGNMENT_CLEANUP_MIGRATION,
+        ]
 
         # Two *identified* subscriptions may now share the label...
         with engine.begin() as connection:
@@ -288,3 +293,193 @@ def test_the_deploy_entrypoint_migrates_and_boots(postgres_url):
     )
 
     assert entrypoint.returncode == 0, entrypoint.stderr
+
+
+def test_014_clears_profile_assignment_and_frees_a_pinned_listing(postgres_url):
+    """The metadata is gone, and only that key is gone.
+
+    `search_profile_repair_service` refuses to move a row whose
+    `enrichment.profile_assignment.manual_override` is set. Nothing can clear
+    that flag through the UI any more -- the form and its route were removed --
+    so a stale pin would freeze a listing in a fragmented profile forever. This
+    migration is what unfreezes it, and it must not take the rest of the
+    enrichment payload with it.
+    """
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        with engine.begin() as connection:
+            _insert_profile(connection, name="Land at Norte", is_active=True)
+            profile_id = connection.execute(
+                text("SELECT id FROM search_profiles WHERE name = 'Land at Norte'")
+            ).scalar_one()
+
+            rows = {
+                "pinned": {
+                    "google": {"travel_state": "refused"},
+                    "profile_assignment": {
+                        "method": "manual_override",
+                        "manual_override": True,
+                    },
+                },
+                "geo_filed": {
+                    "profile_assignment": {
+                        "method": "nearest_custom_target",
+                        "distance_km": 1.2,
+                    }
+                },
+                "untouched": {"google": {"travel_state": "ok"}},
+                "null_enrichment": None,
+                # A `json`-only document: PostgreSQL stores the column as text
+                # and accepts this literal, while `jsonb` parses numbers into
+                # `numeric` and raises "value overflow" on it. The shorter
+                # `enrichment::jsonb - 'key'` form of this migration would abort
+                # here and clear nothing at all -- taking the deploy with it.
+                "json_only_number": (
+                    '{"profile_assignment": {"manual_override": true},'
+                    ' "score": 1e1000000}'
+                ),
+                "not_an_object": "[1, 2, 3]",
+                # `json` accepts an escaped NUL; `json_each` decodes keys into
+                # `text`, which cannot hold one. This row can only be skipped --
+                # what matters is that it is skipped rather than aborting the
+                # migration and leaving every other row uncleaned.
+                "nul_in_key": (
+                    '{"profile_assignment": {"manual_override": true}, "\\u0000": 1}'
+                ),
+            }
+            for source_email_id, enrichment in rows.items():
+                if enrichment is None:
+                    payload = None
+                elif isinstance(enrichment, str):
+                    payload = enrichment
+                else:
+                    payload = json.dumps(enrichment)
+                connection.execute(
+                    text(
+                        "INSERT INTO properties "
+                        "(source_email_id, title, search_profile_id, enrichment) "
+                        "VALUES (:sid, :title, :pid, CAST(:enrichment AS json))"
+                    ),
+                    {
+                        "sid": source_email_id,
+                        "title": source_email_id,
+                        "pid": profile_id,
+                        "enrichment": payload,
+                    },
+                )
+
+        # Re-running the file is what the deploy does on an already-migrated
+        # database; the runner records it, so this asserts the effect directly.
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                (MIGRATIONS_DIR / f"{ASSIGNMENT_CLEANUP_MIGRATION}.sql").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        with engine.begin() as connection:
+            stored = dict(
+                connection.execute(
+                    text("SELECT source_email_id, enrichment FROM properties")
+                ).all()
+            )
+
+        assert stored["pinned"] == {"google": {"travel_state": "refused"}}, (
+            "the pin was cleared but the rest of the enrichment payload was not kept"
+        )
+        assert stored["geo_filed"] == {}
+        assert stored["untouched"] == {"google": {"travel_state": "ok"}}
+        assert stored["null_enrichment"] is None
+        assert stored["json_only_number"] == {"score": float("inf")}, (
+            "a json-only numeric literal aborted the migration or lost its payload"
+        )
+        assert stored["not_an_object"] == [1, 2, 3]
+        # Skipped, not lost, and above all: it did not stop the rest.
+        assert "profile_assignment" in stored["nul_in_key"], (
+            "an undecodable row was silently emptied instead of being left alone"
+        )
+
+        # Idempotent: the deploy re-runs nothing, but a hand re-run must not
+        # turn a now-empty object into SQL NULL or otherwise drift.
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                (MIGRATIONS_DIR / f"{ASSIGNMENT_CLEANUP_MIGRATION}.sql").read_text(
+                    encoding="utf-8"
+                )
+            )
+        with engine.begin() as connection:
+            assert (
+                dict(
+                    connection.execute(
+                        text("SELECT source_email_id, enrichment FROM properties")
+                    ).all()
+                )
+                == stored
+            )
+    finally:
+        engine.dispose()
+
+
+def test_014_re_raises_anything_that_is_not_a_json_decoding_failure(postgres_url):
+    """A swallowed lock timeout would record the migration over untouched rows.
+
+    The two SQLSTATEs this migration tolerates are properties of the stored
+    document. Everything else -- a lock timeout, a deadlock, a disk error --
+    means the row was not processed for an operational reason, and recording
+    the migration as applied would make it permanent. A trigger raising a
+    different SQLSTATE stands in for all of them.
+    """
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        with engine.begin() as connection:
+            _insert_profile(connection, name="Land at Norte", is_active=True)
+            profile_id = connection.execute(
+                text("SELECT id FROM search_profiles WHERE name = 'Land at Norte'")
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "INSERT INTO properties "
+                    "(source_email_id, title, search_profile_id, enrichment) "
+                    "VALUES ('pinned', 'pinned', :pid, CAST(:enrichment AS json))"
+                ),
+                {
+                    "pid": profile_id,
+                    "enrichment": json.dumps(
+                        {"profile_assignment": {"manual_override": True}}
+                    ),
+                },
+            )
+            connection.exec_driver_sql(
+                "CREATE FUNCTION refuse_update() RETURNS trigger AS $refuse$ "
+                "BEGIN RAISE EXCEPTION 'simulated operational failure' "
+                "USING ERRCODE = 'lock_not_available'; END $refuse$ LANGUAGE plpgsql"
+            )
+            connection.exec_driver_sql(
+                "CREATE TRIGGER properties_refuse_update BEFORE UPDATE ON properties "
+                "FOR EACH ROW EXECUTE FUNCTION refuse_update()"
+            )
+
+        sql = (MIGRATIONS_DIR / f"{ASSIGNMENT_CLEANUP_MIGRATION}.sql").read_text(
+            encoding="utf-8"
+        )
+        with pytest.raises(SQLAlchemyError) as failure:
+            with engine.begin() as connection:
+                connection.exec_driver_sql(sql)
+        assert "simulated operational failure" in str(failure.value)
+
+        # And the row is untouched, not half-cleaned.
+        with engine.begin() as connection:
+            stored = connection.execute(
+                text("SELECT enrichment FROM properties WHERE source_email_id='pinned'")
+            ).scalar_one()
+        assert stored == {"profile_assignment": {"manual_override": True}}
+    finally:
+        engine.dispose()

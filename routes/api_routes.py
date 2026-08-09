@@ -1,6 +1,11 @@
 import logging
 from datetime import datetime, timezone
 from flask import Blueprint, current_app, jsonify, request
+
+# get_or_404 raises HTTPException, and the blanket `except Exception` handlers
+# below would answer 500 for it: every one of them re-raises it first so an
+# unknown id stays a 404 (issue #136).
+from werkzeug.exceptions import HTTPException
 from models import Land, LandHistory, SyncHistory, AiAnalysisVariant
 from app import db
 from app import limiter
@@ -166,6 +171,8 @@ def manual_enrichment(land_id):
             }
         ), 202
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Manual enrichment failed for land %s", land_id, exc_info=True)
         return jsonify(
@@ -455,6 +462,8 @@ def analyze_property_structured(land_id):
             }
         ), 202
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "Structured AI analysis failed for land %s", land_id, exc_info=True
@@ -579,6 +588,8 @@ def analyze_universal_property_structured(property_id: int):
             }
         ), 202
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "Structured AI analysis failed for property %s", property_id, exc_info=True
@@ -681,6 +692,8 @@ def generate_openai_structured(land_id):
             }
         ), 202
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "OpenAI structured analysis failed for land %s", land_id, exc_info=True
@@ -734,6 +747,8 @@ def compare_ai_analyses(land_id):
                 "comparison": comparison,
             }
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.error("AI comparison failed for land %s", land_id, exc_info=True)
         return jsonify(
@@ -820,6 +835,8 @@ def compare_property_ai_analyses(property_id: int):
                 "comparison": comparison,
             }
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.error("AI comparison failed for property %s", property_id, exc_info=True)
         return jsonify(
@@ -880,6 +897,8 @@ def enhance_description(land_id):
                 }
             ), 500
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "Description enhancement failed for land %s", land_id, exc_info=True
@@ -950,6 +969,8 @@ def update_environment(land_id):
             }
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to update environment for land %s", land_id, exc_info=True)
         return jsonify(
@@ -1020,6 +1041,8 @@ def update_property_environment(property_id):
                 "environment": environment,
             }
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "Failed to update environment for property %s", property_id, exc_info=True
@@ -1076,6 +1099,8 @@ def analyze_property_ai(land_id):
                 error_msg = result.get("error", "Analysis failed")
             return jsonify({"success": False, "error": error_msg}), 500
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("AI analysis failed for land %s", land_id, exc_info=True)
         return jsonify(
@@ -1468,6 +1493,8 @@ def toggle_favorite(land_id):
             }
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to toggle favorite for land %s", land_id, exc_info=True)
         return jsonify(
@@ -1497,6 +1524,8 @@ def toggle_property_favorite(property_id):
                 "message": f"Property {'added to' if prop.is_favorite else 'removed from'} favorites",
             }
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "Failed to toggle favorite for property %s", property_id, exc_info=True
@@ -1578,6 +1607,8 @@ def manual_property_enrichment(property_id: int):
                 "message": "Enrichment queued",
             }
         ), 202
+    except HTTPException:
+        raise
     except Exception:
         logger.error(
             "Manual property enrichment failed for property %s",
@@ -1636,6 +1667,8 @@ def set_land_status(land_id):
             }
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to set status for land %s", land_id, exc_info=True)
         return jsonify(
@@ -1684,6 +1717,8 @@ def set_property_status(property_id):
             }
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to set status for property %s", property_id, exc_info=True)
         return jsonify(
@@ -1742,6 +1777,8 @@ def check_land_status(land_id):
             }
         ), 202
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to check status for land %s", land_id, exc_info=True)
         return jsonify(
@@ -1856,6 +1893,8 @@ def get_land_history(land_id):
             }
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to get history for land %s", land_id, exc_info=True)
         return jsonify(

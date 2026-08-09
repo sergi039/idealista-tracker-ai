@@ -50,17 +50,20 @@
                 </div>
             </div>
             <div class="d-flex align-items-center gap-2">
-                {# One action, not three: `enrich_property()` geocodes, then
-                   recalculates travel and scoring in the same pass -- running
-                   them as separate buttons billed Google twice for the same
-                   answer. #}
+                {# One action, not five: `enrich_property()` geocodes, then
+                   recalculates travel and scoring in the same pass, and the
+                   two AI analyses follow it -- Claude and ChatGPT read the
+                   scores and travel times this pass just produced, so running
+                   them from their own buttons meant paying Google twice and
+                   analysing stale numbers. HTMX cannot express "wait for the
+                   queued job, then run two more calls", so this one posts by
+                   hand; the URL stays on the element for the page tests. #}
                 <button class="btn btn-success btn-sm" id="enrich-property-btn"
-                        hx-post="{{ url_for('api.manual_property_enrichment', property_id=property.id) }}"
-                        hx-trigger="click"
-                        hx-indicator="#enrichment-spinner"
-                        hx-swap="none"
+                        type="button"
+                        data-enrich-url="{{ url_for('api.manual_property_enrichment', property_id=property.id) }}"
                         data-enrich-label="Enrich"
-                        title="Google enrichment + travel times + scoring, in one pass">
+                        onclick="runEnrichAndAnalyze({{ property.id }})"
+                        title="Google enrichment + travel times + scoring, then Claude and ChatGPT, in one pass">
                     <i class="fas fa-wand-magic-sparkles me-1"></i>Enrich
                     {% if has_enrichment %}<span class="badge bg-light text-dark ms-1">&check;</span>{% endif %}
                 </button>
@@ -312,12 +315,6 @@
                                 <div class="small text-body-secondary" id="ai-claude-model-label">
                                     Powered by Claude
                                 </div>
-                                <button type="button"
-                                        class="btn btn-sm btn-outline-primary"
-                                        id="ai-claude-run-btn"
-                                        onclick="runClaudeAnalysis({{ property.id }})">
-                                    <i class="fas fa-wand-magic-sparkles me-1"></i>Run Claude
-                                </button>
                             </div>
                             <div id="ai-claude-alerts"></div>
                             <div class="analysis-content" id="ai-claude-analysis">
@@ -327,7 +324,7 @@
                                      style="{{ 'display: none;' if property.ai_analysis else '' }}">
                                     <i class="fas fa-brain fa-3x mb-3 opacity-50"></i>
                                     <p class="mb-0">No analysis yet</p>
-                                    <small class="d-block text-body-secondary mt-1">Click “Run Claude” to generate it.</small>
+                                    <small class="d-block text-body-secondary mt-1">Press “Enrich” at the top of the page to generate it.</small>
                                 </div>
                             </div>
                         </div>
@@ -341,13 +338,6 @@
                                 <div class="small text-body-secondary" id="ai-chatgpt-model-label">
                                     Powered by ChatGPT{% if openai_model %} ({{ openai_model }}){% endif %}
                                 </div>
-                                <button type="button"
-                                        class="btn btn-sm btn-outline-primary"
-                                        id="ai-chatgpt-run-btn"
-                                        onclick="generateChatGPTAnalysis({{ property.id }})"
-                                        {% if not openai_configured %}disabled{% endif %}>
-                                    <i class="fas fa-wand-magic-sparkles me-1"></i>Run ChatGPT
-                                </button>
                             </div>
                             <div id="ai-chatgpt-alerts"></div>
                             <div class="analysis-content" id="ai-chatgpt-analysis">
@@ -357,7 +347,7 @@
                                      style="{{ 'display: none;' if openai_analysis else '' }}">
                                     <i class="fas fa-robot fa-3x mb-3 opacity-50"></i>
                                     <p class="mb-0">No analysis yet</p>
-                                    <small class="d-block text-body-secondary mt-1">Click “Run ChatGPT” to generate it.</small>
+                                    <small class="d-block text-body-secondary mt-1">Press “Enrich” at the top of the page to generate it.</small>
                                     <small class="d-block text-body-secondary mt-1" id="ai-chatgpt-config-hint"></small>
                                 </div>
                             </div>
@@ -1357,9 +1347,115 @@ function openAiSection(tabName) {
     }
 }
 
-function analyzeWithClaude(propertyId) {
-    openAiSection('claude');
-    runClaudeAnalysis(propertyId);
+function _notify(message, type) {
+    if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
+        window.IdealistaApp.showNotification(message, type);
+    }
+}
+
+/* A queued job reports through callbacks; the Enrich pass has to wait for it
+   before it can spend money on the AI calls, so wrap it in a promise. A failed
+   job resolves rather than rejects -- the caller decides what to do next. */
+function _pollJobPromise(jobId) {
+    return new Promise((resolve) => {
+        if (!(window.IdealistaApp && typeof IdealistaApp.pollJob === 'function')) {
+            resolve({ ok: false, result: {}, error: 'Job polling is unavailable' });
+            return;
+        }
+        IdealistaApp.pollJob(jobId, {
+            onSuccess: (job) => {
+                const result = (job && job.result) ? job.result : {};
+                resolve({ ok: result.success !== false, result });
+            },
+            onError: (job) => resolve({
+                ok: false,
+                result: {},
+                error: (job && job.error) ? job.error : null
+            })
+        });
+    });
+}
+
+async function runGoogleEnrichment(propertyId) {
+    const button = document.getElementById('enrich-property-btn');
+    const url = (button && button.getAttribute('data-enrich-url'))
+        || `/api/property/${propertyId}/enrich`;
+
+    try {
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}'
+        });
+        const data = await resp.json().catch(() => null);
+
+        if (resp.status === 202 && data && data.job_id) {
+            _notify(data.message || 'Enrichment queued', 'info');
+            const outcome = await _pollJobPromise(data.job_id);
+            const result = outcome.result || {};
+            return {
+                ok: outcome.ok,
+                status: resp.status,
+                message: result.message || result.error || outcome.error || 'Enrichment finished'
+            };
+        }
+
+        const ok = !!(data && data.success === true);
+        return {
+            ok,
+            status: resp.status,
+            message: (data && (data.message || data.error))
+                || (ok ? 'Property enriched successfully' : 'Enrichment failed')
+        };
+    } catch {
+        return { ok: false, status: 0, message: 'Enrichment request failed.' };
+    }
+}
+
+/* The single action the page offers: Google enrichment, then both AI
+   providers on the numbers it just wrote. ChatGPT is skipped -- not failed --
+   when OPENAI_API_KEY is missing, and its tab says so. */
+async function runEnrichAndAnalyze(propertyId) {
+    const button = document.getElementById('enrich-property-btn');
+    const originalHtml = button ? button.innerHTML : '';
+
+    const setBusy = (text) => {
+        if (button) {
+            button.disabled = true;
+            button.innerHTML = `<i class="fas fa-spinner fa-spin me-1"></i>${text}`;
+        }
+    };
+
+    setBusy('Enriching…');
+    const enrichment = await runGoogleEnrichment(propertyId);
+    _notify(enrichment.message, enrichment.ok ? 'success' : 'error');
+
+    setBusy(window.__OPENAI_CONFIGURED__ ? 'Analyzing (Claude + ChatGPT)…' : 'Analyzing (Claude)…');
+    const analyses = [runClaudeAnalysis(propertyId)];
+    if (window.__OPENAI_CONFIGURED__) {
+        analyses.push(generateChatGPTAnalysis(propertyId));
+    }
+    const outcomes = await Promise.all(analyses);
+
+    refreshAiComparison();
+
+    if (button) {
+        button.disabled = false;
+        button.innerHTML = originalHtml;
+        if (enrichment.ok) {
+            button.classList.remove('btn-outline-warning');
+            button.classList.add('btn-success');
+            if (!button.querySelector('.badge')) {
+                const check = document.createElement('span');
+                check.className = 'badge bg-light text-dark ms-1';
+                check.textContent = '✓';
+                button.appendChild(check);
+            }
+        }
+        if (outcomes.some((outcome) => outcome && outcome.status === 429)) {
+            cooldownButton(button, 20);
+        }
+    }
 }
 
 function _normalizeAnalysisData(raw) {
@@ -1408,6 +1504,10 @@ window.propertyData = {{ property.to_dict() | tojson }};
 // Existing analyses (if present)
 window.__EXISTING_CLAUDE_ANALYSIS__ = {% if property.ai_analysis %}{{ property.ai_analysis|tojson|safe }}{% else %}null{% endif %};
 window.__EXISTING_OPENAI_ANALYSIS__ = {% if openai_analysis %}{{ openai_analysis|tojson|safe }}{% else %}null{% endif %};
+/* Seeded from the server so a click that lands before the comparison request
+   returns still knows whether ChatGPT is worth calling; refreshAiComparison()
+   keeps it current afterwards. */
+window.__OPENAI_CONFIGURED__ = {{ 'true' if openai_configured else 'false' }};
 
 // Initialize structured AI analysis on page load
 document.addEventListener('DOMContentLoaded', function() {
@@ -1416,31 +1516,15 @@ document.addEventListener('DOMContentLoaded', function() {
     renderAnalysisInto('ai-chatgpt-structured-analysis', window.__EXISTING_OPENAI_ANALYSIS__, 'ai-chatgpt-placeholder');
 });
 
-function runClaudeAnalysis(propertyId) {
-    setActiveAiTab('claude');
-
-    const button = document.getElementById('ai-claude-run-btn');
-    const originalContent = button ? button.innerHTML : '';
+/* Runs one provider and reports the outcome to the Enrich pass; the button
+   state belongs to that pass now, so nothing here touches it. */
+async function runClaudeAnalysis(propertyId) {
     const targetId = 'ai-claude-structured-analysis';
     const placeholderId = 'ai-claude-placeholder';
     const alertsId = 'ai-claude-alerts';
 
     const target = document.getElementById(targetId);
     const previousHtml = target ? target.innerHTML : '';
-
-    let queued = false;
-
-    const restoreButton = () => {
-        if (button && !button.innerHTML.includes('Try again in')) {
-            button.disabled = false;
-            button.innerHTML = originalContent;
-        }
-    };
-
-    if (button) {
-        button.disabled = true;
-        button.innerHTML = `<i class="fas fa-spinner fa-spin me-2"></i>Analyzing…`;
-    }
 
     const placeholder = document.getElementById(placeholderId);
     if (placeholder) placeholder.style.display = 'none';
@@ -1472,66 +1556,48 @@ function runClaudeAnalysis(propertyId) {
         if (target) target.innerHTML = previousHtml;
         if (statusCode === 429) {
             showTransientAlert(alertsId, 'warning', `Rate limit reached. Try again in 20 seconds.`, 4500);
-            cooldownButton(button, 20);
         } else {
             showTransientAlert(alertsId, 'warning', message || 'Claude request failed.', 4500);
         }
     };
 
-    fetch(`/api/property/${propertyId}/analyze/structured`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: 'claude' })
-    })
-    .then(r => r.json().then(data => ({ ok: r.ok, status: r.status, data })))
-    .then(({ ok, status, data }) => {
-        if (status === 202 && data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
-            queued = true;
-            if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
-                window.IdealistaApp.showNotification(data.message || 'Claude analysis queued', 'info', 3000);
+    try {
+        const resp = await fetch(`/api/property/${propertyId}/analyze/structured`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider: 'claude' })
+        });
+        const data = await resp.json().catch(() => null);
+
+        if (resp.status === 202 && data && data.job_id) {
+            _notify(data.message || 'Claude analysis queued', 'info');
+            const outcome = await _pollJobPromise(data.job_id);
+            const result = outcome.result || {};
+            if (result.success) {
+                applyAnalysis(result.analysis);
+                return { ok: true, status: resp.status };
             }
-            IdealistaApp.pollJob(data.job_id, {
-                onSuccess: (job) => {
-                    const result = job && job.result ? job.result : {};
-                    if (result.success) {
-                        applyAnalysis(result.analysis);
-                    } else {
-                        handleFailure(result.error || 'Claude analysis failed');
-                    }
-                    queued = false;
-                    restoreButton();
-                },
-                onError: (job) => {
-                    handleFailure((job && job.error) ? job.error : 'Claude analysis failed');
-                    queued = false;
-                    restoreButton();
-                }
-            });
-            return;
+            handleFailure(result.error || outcome.error || 'Claude analysis failed');
+            return { ok: false, status: resp.status };
         }
 
-        if (!ok || !data || data.success !== true) {
-            handleFailure((data && data.error) ? data.error : 'Claude request failed.', status);
-            return;
+        if (!resp.ok || !data || data.success !== true) {
+            handleFailure((data && data.error) ? data.error : 'Claude request failed.', resp.status);
+            return { ok: false, status: resp.status };
         }
 
         applyAnalysis(data.analysis);
-    })
-    .catch(() => {
+        return { ok: true, status: resp.status };
+    } catch {
         handleFailure('Claude request failed.');
-    })
-    .finally(() => {
-        if (!queued) {
-            restoreButton();
-        }
-    });
+        return { ok: false, status: 0 };
+    }
 }
 
 async function refreshAiComparison() {
     const statusEl = document.getElementById('ai-compare-status');
     const tableEl = document.getElementById('ai-compare-table');
     const tbody = document.getElementById('ai-compare-tbody');
-    const generateBtn = document.getElementById('ai-chatgpt-run-btn');
     const chatgptHint = document.getElementById('ai-chatgpt-config-hint');
 
     const claudeModelLabel = document.getElementById('ai-claude-model-label');
@@ -1552,10 +1618,9 @@ async function refreshAiComparison() {
         }
 
         const openaiConfigured = data.openai_configured === true;
-        if (generateBtn) {
-            generateBtn.disabled = !openaiConfigured;
-            generateBtn.title = openaiConfigured ? 'Run ChatGPT analysis' : 'Set OPENAI_API_KEY in .env and restart app';
-        }
+        /* The Enrich pass reads this: an unconfigured ChatGPT is skipped, not
+           attempted and failed. */
+        window.__OPENAI_CONFIGURED__ = openaiConfigured;
         if (chatgptHint) {
             chatgptHint.textContent = openaiConfigured ? '' : 'ChatGPT is not configured: set OPENAI_API_KEY in .env and restart the app.';
         }
@@ -1677,7 +1742,7 @@ async function refreshAiComparison() {
         } else if (data.has_chatgpt) {
             statusParts.push(`ChatGPT: ${data.chatgpt_model || 'unknown'}`);
         } else {
-            statusParts.push('ChatGPT: not generated (open the ChatGPT tab and click “Run ChatGPT”).');
+            statusParts.push('ChatGPT: not generated (press “Enrich”).');
         }
 
         statusEl.textContent = statusParts.join(' • ');
@@ -1687,10 +1752,10 @@ async function refreshAiComparison() {
     }
 }
 
+/* Same contract as runClaudeAnalysis: render into its own tab, report the
+   outcome, leave the Enrich button alone. */
 async function generateChatGPTAnalysis(propertyId) {
     try {
-        setActiveAiTab('chatgpt');
-        const btn = document.getElementById('ai-chatgpt-run-btn');
         const targetId = 'ai-chatgpt-structured-analysis';
         const placeholderId = 'ai-chatgpt-placeholder';
         const alertsId = 'ai-chatgpt-alerts';
@@ -1709,11 +1774,6 @@ async function generateChatGPTAnalysis(propertyId) {
                     <small class="text-body-secondary">This may take 10-30 seconds</small>
                 </div>
             `;
-        }
-
-        if (btn) {
-            btn.disabled = true;
-            btn.innerHTML = `<i class="fas fa-spinner fa-spin me-2"></i>Analyzing…`;
         }
 
         const resp = await fetch(`/api/property/${propertyId}/analyze/structured`, {
@@ -1738,51 +1798,33 @@ async function generateChatGPTAnalysis(propertyId) {
             if (target) target.innerHTML = previousHtml;
             if (statusCode === 429) {
                 showTransientAlert(alertsId, 'warning', `Rate limit reached. Try again in 20 seconds.`, 4500);
-                cooldownButton(btn, 20);
             } else {
                 showTransientAlert(alertsId, 'warning', message || 'ChatGPT request failed.', 4500);
             }
         };
 
-        if (resp.status === 202 && data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
-            if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
-                window.IdealistaApp.showNotification(data.message || 'ChatGPT analysis queued', 'info');
+        if (resp.status === 202 && data && data.job_id) {
+            _notify(data.message || 'ChatGPT analysis queued', 'info');
+            const outcome = await _pollJobPromise(data.job_id);
+            const result = outcome.result || {};
+            if (result.success) {
+                applyAnalysis(result.analysis);
+                return { ok: true, status: resp.status };
             }
-            await new Promise((resolve, reject) => {
-                IdealistaApp.pollJob(data.job_id, {
-                    onSuccess: (job) => {
-                        const result = job && job.result ? job.result : {};
-                        if (result.success) {
-                            applyAnalysis(result.analysis);
-                            resolve();
-                        } else {
-                            handleFailure(result.error || 'ChatGPT analysis failed');
-                            resolve();
-                        }
-                    },
-                    onError: (job) => {
-                        handleFailure((job && job.error) ? job.error : 'ChatGPT analysis failed');
-                        resolve();
-                    }
-                });
-            });
-            return;
+            handleFailure(result.error || outcome.error || 'ChatGPT analysis failed');
+            return { ok: false, status: resp.status };
         }
 
         if (!data || data.success !== true) {
             handleFailure((data && data.error) ? data.error : 'ChatGPT request failed.', resp.status);
-            return;
+            return { ok: false, status: resp.status };
         }
 
         applyAnalysis(data.analysis);
-    } catch (e) {
+        return { ok: true, status: resp.status };
+    } catch {
         showTransientAlert('ai-chatgpt-alerts', 'warning', `ChatGPT request failed. Try again in 20 seconds.`, 4500);
-    } finally {
-        const btn = document.getElementById('ai-chatgpt-run-btn');
-        if (btn && !btn.innerHTML.includes('Try again in')) {
-            btn.disabled = false;
-            btn.innerHTML = `<i class="fas fa-wand-magic-sparkles me-1"></i>Run ChatGPT`;
-        }
+        return { ok: false, status: 0 };
     }
 }
 </script>

@@ -126,6 +126,17 @@ def test_property_classification_service_skips_locked_properties(app):
         ("Finca rústica en venta en Granada", "land", "plot"),
         ("Solar urbano en venta en Sevilla", "land", "plot"),
         ("Suelo urbanizable en venta en Cádiz", "land", "plot"),
+        # The address must never decide the type. These are real titles from
+        # the owner's land subscriptions that used to be filed as houses,
+        # because "Caserio Casa de Anes" and "Camín de Casa Pelayo" contain
+        # "Casa" and the house rule outranks the land one.
+        (
+            "Land plot in Caserio Casa de Anes, 267, Parroquias Norte, Siero",
+            "land",
+            "plot",
+        ),
+        ("Land in Camín de Casa Pelayo, n/a, Deva, Gijón 135,000 €", "land", "plot"),
+        ("Piso en venta en Calle Casa Blanca, Alicante", "housing", "apartment"),
     ],
 )
 def test_property_classification_service_covers_common_sale_types(

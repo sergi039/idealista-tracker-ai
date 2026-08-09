@@ -344,16 +344,25 @@
                         <div class="col-6 col-lg-3">
                             <label for="category" class="form-label small text-body-secondary mb-1">{{ t('type')|title }}</label>
                             <div class="input-group input-group-sm">
+                                {# The choices come from the subscriptions on screen, not from
+                                   the whole table, so a saved search for land stops offering
+                                   `apartment`. "Unclassified" follows the "No subscription"
+                                   rule above: offered only when such rows exist here, or when
+                                   the filter is already on it. #}
                                 <select class="form-select" id="category" name="category" aria-label="Category">
                                     <option value="">{{ t('land_type_all') }}</option>
-                                    <option value="__none__" {{ 'selected' if current_filters.category == '__none__' }}>Unclassified</option>
+                                    {% if has_unclassified_category or current_filters.category == '__none__' %}
+                                        <option value="__none__" {{ 'selected' if current_filters.category == '__none__' }}>Unclassified</option>
+                                    {% endif %}
                                     {% for c in categories %}
                                         <option value="{{ c }}" {{ 'selected' if current_filters.category == c }}>{{ c }}</option>
                                     {% endfor %}
                                 </select>
                                 <select class="form-select" id="subtype" name="subtype" aria-label="Subtype">
                                     <option value="">All subtypes</option>
-                                    <option value="__none__" {{ 'selected' if current_filters.subtype == '__none__' }}>Unclassified</option>
+                                    {% if has_unclassified_subtype or current_filters.subtype == '__none__' %}
+                                        <option value="__none__" {{ 'selected' if current_filters.subtype == '__none__' }}>Unclassified</option>
+                                    {% endif %}
                                     {% for s in subtypes %}
                                         <option value="{{ s }}" {{ 'selected' if current_filters.subtype == s }}>{{ s }}</option>
                                     {% endfor %}

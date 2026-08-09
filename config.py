@@ -97,9 +97,6 @@ class Config:
     AUTO_PROPERTY_SCORING = (
         os.environ.get("AUTO_PROPERTY_SCORING", "true").lower() == "true"
     )
-    AUTO_PROFILE_ASSIGNMENT = (
-        os.environ.get("AUTO_PROFILE_ASSIGNMENT", "true").lower() == "true"
-    )
 
     # Universal build is sale-first; rentals are excluded unless explicitly enabled.
     SALE_ONLY = os.environ.get("SALE_ONLY", "true").lower() == "true"

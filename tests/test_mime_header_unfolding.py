@@ -123,7 +123,6 @@ def test_folded_subject_does_not_fragment_the_saved_search_profile(app, monkeypa
     with app.app_context():
         Config.AUTO_TRAVEL_ENRICHMENT = False
         Config.AUTO_PROPERTY_SCORING = False
-        Config.AUTO_PROFILE_ASSIGNMENT = False
 
         with patch("services.property_imap_service.IMAPClient", _FakeIMAPClient):
             service = PropertyIMAPService()

@@ -46,21 +46,10 @@ class PropertyEnrichmentService:
         if not (prop.location_lat and prop.location_lon):
             return False
 
-        # Auto-assign profile by nearest custom target (optional).
-        try:
-            from config import Config
-
-            if getattr(Config, "AUTO_PROFILE_ASSIGNMENT", False):
-                from services.profile_assignment_service import ProfileAssignmentService
-
-                ProfileAssignmentService().assign_nearest_profile(prop, commit=False)
-        except Exception as e:
-            logger.warning(
-                "Auto profile assignment failed for %s: %s",
-                getattr(prop, "id", None),
-                e,
-            )
-
+        # Enrichment does not touch `search_profile_id` (owner decision,
+        # 2026-08-09). It used to refile the property under whichever active
+        # profile had the nearest custom target, discarding the saved search
+        # its alert email came from. Ingestion owns that column now.
         ok = self.travel_service.calculate_for_property(prop, commit=False)
         travel_state = travel_api_state(prop)
 
