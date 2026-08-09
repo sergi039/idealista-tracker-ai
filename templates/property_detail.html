@@ -576,7 +576,21 @@
                 </div>
                 <div class="card-body">
                     {% for key, value in property.infrastructure_extended.items() %}
-                        {% if key == 'osm_amenities' and value is mapping %}
+                        {% if key == 'osm_amenities_status' %}
+                            {# A refused Overpass call is shown as unavailable, never as
+                               an empty amenity list (#98). #}
+                            {% if value is mapping and value.get('state') == 'unavailable' %}
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <span class="small text-muted">
+                                        <i class="fas fa-exclamation-triangle me-1 text-warning"></i>
+                                        Nearby Amenities
+                                    </span>
+                                    <span class="badge bg-secondary" title="{{ value.get('reason', '') }}{% if value.get('http_status') %} (HTTP {{ value.get('http_status') }}){% endif %}">
+                                        Unavailable
+                                    </span>
+                                </div>
+                            {% endif %}
+                        {% elif key == 'osm_amenities' and value is mapping %}
                             <div class="mb-3">
                                 <span class="small fw-bold">Nearby Amenities:</span>
                                 <div class="mt-2">

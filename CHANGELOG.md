@@ -93,6 +93,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matched **zero** of the 351 stored listings because every one of them is
   classified.
 
+### 🧹 Fixed: Overpass was refusing every OSM enrichment call (2026-08-09)
+- **What**: `EnrichmentService._enrich_with_osm_data` sends
+  `User-Agent: IdealistaRank/1.0` (a bare product token — `utils/http.py`
+  `HTTP_USER_AGENT`), and a refused call is now recorded as
+  `infrastructure_extended["osm_amenities_status"] = {"state": "unavailable",
+  "reason": …, "http_status": …}` instead of leaving no amenity list behind.
+  The refusal is logged at ERROR, never cached, and returned to `enrich_land`,
+  which now names the source that refused rather than always saying "Google".
+  An answered-but-empty run stays a success (`state: "ok"` with an empty
+  `osm_amenities`), so "nothing within 2km" and "we never got to look" are
+  finally distinguishable. Retries widened to 8/16/32s because
+  overpass-api.de answers 504 while both of its two per-IP query slots are
+  busy, and the old half-second backoff gave up long before a slot freed.
+- **Why**: the call sent no `User-Agent`, so `requests` sent its default
+  `python-requests/x.y.z` — measured against the live instance, that is
+  answered with `406 Not Acceptable`, as is any UA carrying a parenthetical
+  comment. Every OSM enrichment had therefore been failing, and since the only
+  check was `if response.status_code == 200`, the 406 never even reached the
+  `except` block: no log line, no stored marker, just a property that looked
+  like it had no amenities nearby. Same class of defect as #98 — a refused API
+  written out as a computed negative. The same live coordinates now return
+  `{'fuel': 12, 'restaurant': 232, 'cafe': 221, 'school': 67, 'hospital': 7}`.
+  Overpass is a fallback source that the score does not read, so its refusal is
+  reported and stamped but does not by itself fail an enrichment run.
+
 ### 🧹 Fixed: an address no longer decides a listing's type (2026-08-09)
 - **What**: classification reads the head of a title (the part before ` in ` /
   ` en `) before falling back to the full text, so the type comes from what
