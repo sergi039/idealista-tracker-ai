@@ -139,11 +139,23 @@ def _withhold_args(args):
     because they are what a broken-formatting diagnostic is actually for —
     seeing that three arguments arrived for two placeholders — and a type name
     is not a credential.
+
+    One consequence is deliberate and worth stating. Substituting a type name
+    can make a record that failed to render succeed on the retry: an argument
+    whose ``__str__`` raises becomes ``'<Thing>'``, which formats fine, so the
+    handler emits ``<Thing>`` instead of `handleError` reporting the broken
+    argument. The failure is reported less loudly than it would have been, and
+    that is the trade taken knowingly — the alternative is a diagnostic path
+    that prints values nothing has been able to inspect.
     """
     if not args:
         return args
     if isinstance(args, dict):
-        return {k: f"<{type(v).__name__}>" for k, v in args.items()}
+        # The *keys* are text the caller chose and `handleError` prints them
+        # with the rest — `logger.error("%(a)s", {"api_key=…": 1})` put a
+        # credential in the key. Values become type names; keys get the same
+        # pattern pass as any other text.
+        return {redact(str(k)): f"<{type(v).__name__}>" for k, v in args.items()}
     return tuple(f"<{type(a).__name__}>" for a in args)
 
 
@@ -280,13 +292,18 @@ class RedactingFormatter(logging.Formatter):
             record.__dict__.pop("message", None)
             raise
 
+        # Everything `Formatter.format` caches on the record has to be redacted
+        # in place, not only returned redacted: a handler that formats after
+        # this one reads the cache instead of rendering again. `exc_text` and
+        # `stack_info` are the ones that carry real text; `asctime` only ever
+        # holds a credential if someone put one in a `datefmt`, and is covered
+        # for the same reason rather than because it is likely.
         if record.exc_text:
             record.exc_text = redact(record.exc_text)
-        # `stack_info` is cached on the record exactly like `exc_text`, and a
-        # handler that formats after this one would otherwise render the
-        # original text from it.
         if record.stack_info:
             record.stack_info = redact(record.stack_info)
+        if getattr(record, "asctime", None):
+            record.asctime = redact(record.asctime)
         return redact(formatted)
 
 

@@ -575,6 +575,42 @@ class TestAThirdReviewRound:
         assert record is not None, "the record was dropped instead of handled"
         assert record.args == (), "the unnameable arguments were not withheld"
 
+    def test_a_credential_in_a_mapping_key_is_not_printed(self):
+        """`handleError` prints the mapping whole, keys included.
+
+        The values become type names, but a key is text the caller chose and
+        went out verbatim.
+        """
+        err, _ = self._emit(
+            "test_mapping_key", "%(a)s %(b)s", {"api_key=" + "TOPSECRET": 1}
+        )
+
+        assert err.strip(), "the diagnostic did not fire"
+        assert "TOPSECRET" not in err
+
+    def test_a_credential_cached_in_asctime_is_redacted(self):
+        """Everything `Formatter.format` caches is redacted in place.
+
+        `asctime` only carries one if a `datefmt` does, which is far-fetched —
+        it is covered because "redact what is returned but leave the cache" is
+        the mistake `exc_text` already made once.
+        """
+        record = logging.LogRecord(
+            name="t",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg="done",
+            args=(),
+            exc_info=None,
+        )
+        inner = logging.Formatter("%(asctime)s %(message)s", datefmt="token=" + "SEC")
+
+        RedactingFormatter(inner).format(record)
+
+        assert "SEC" not in record.asctime
+        assert REDACTED in record.asctime
+
 
 class TestInstallation:
     def test_installing_twice_does_not_stack_filters(self, captured):
