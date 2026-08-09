@@ -25,7 +25,6 @@ def app(_setup_env):
     test and died on the APScheduler thread, where no context exists.
     """
     app = create_app(testing=True)
-    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
     with app.app_context():
         db.create_all()
     yield app

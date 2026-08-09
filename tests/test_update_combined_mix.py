@@ -12,7 +12,6 @@ database, so a re-introduced shadowing import (or a re-broadened `except`)
 fails the suite instead of failing silently in production.
 """
 
-import os
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -29,26 +28,19 @@ ENDPOINT = "/criteria/update_combined_mix"
 def app():
     """App bound to a private in-memory DB before db.init_app() runs.
 
-    DATABASE_URL is overridden *before* create_app() for the same reason as
-    the `isolated_app` fixture in test_security_and_scoring.py: the shared
-    sqlite:///test.db file accumulates connections across test modules.
+    setup_test_environment() puts an in-memory DATABASE_URL in the environment,
+    which is the only override create_app() reads: Flask-SQLAlchemy binds the
+    engine inside init_app(), so assigning SQLALCHEMY_DATABASE_URI afterwards
+    would do nothing.
     """
     setup_test_environment()
-    orig_db_url = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = "sqlite:///:memory:"
-    try:
-        app = create_app()
-        app.config["TESTING"] = True
-        app.config["WTF_CSRF_ENABLED"] = False
-        with app.app_context():
-            db.create_all()
-            yield app
-            db.drop_all()
-    finally:
-        if orig_db_url is not None:
-            os.environ["DATABASE_URL"] = orig_db_url
-        else:
-            os.environ.pop("DATABASE_URL", None)
+    app = create_app()
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    with app.app_context():
+        db.create_all()
+        yield app
+        db.drop_all()
 
 
 @pytest.fixture

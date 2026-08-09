@@ -6,6 +6,8 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_sqlalchemy import SQLAlchemy
 from flask_wtf.csrf import CSRFProtect
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 from sqlalchemy.orm import DeclarativeBase
 from werkzeug.middleware.proxy_fix import ProxyFix
 from config import Config
@@ -93,6 +95,21 @@ def _validate_config(app_config):
         raise ValueError(msg)
 
 
+def _is_in_memory_sqlite(database_uri):
+    """True for `sqlite://` / `sqlite:///:memory:`, i.e. a DB with no file.
+
+    Used to keep pool settings that only make sense for a networked database
+    away from a StaticPool whose single connection *is* the database.
+    """
+    if not database_uri:
+        return False
+    try:
+        url = make_url(database_uri)
+    except ArgumentError:
+        return False
+    return url.get_backend_name() == "sqlite" and url.database in (None, "", ":memory:")
+
+
 def create_app(testing: bool = False):
     """Application factory.
 
@@ -172,12 +189,25 @@ def create_app(testing: bool = False):
     app.permanent_session_lifetime = timedelta(days=30)
     app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
-    # Configure the database
-    app.config["SQLALCHEMY_DATABASE_URI"] = app.config.get("DATABASE_URL")
-    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
-        "pool_recycle": 300,
-        "pool_pre_ping": True,
-    }
+    # Configure the database.
+    #
+    # Note for anyone changing this: Flask-SQLAlchemy builds the engine inside
+    # init_app() below, so SQLALCHEMY_DATABASE_URI has to be right *here*.
+    # Reassigning it on a returned app does nothing.
+    database_uri = app.config.get("DATABASE_URL")
+    app.config["SQLALCHEMY_DATABASE_URI"] = database_uri
+    # Recycling exists for the production Postgres pool. Against an in-memory
+    # SQLite database Flask-SQLAlchemy uses a StaticPool holding one
+    # connection, and recycling that connection discards the database with it:
+    # every table would silently vanish once an app outlived pool_recycle.
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = (
+        {}
+        if _is_in_memory_sqlite(database_uri)
+        else {
+            "pool_recycle": 300,
+            "pool_pre_ping": True,
+        }
+    )
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
     # Initialize the app with the extension
