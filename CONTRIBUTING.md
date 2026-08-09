@@ -150,6 +150,27 @@ pytest tests/test_scoring_service.py -v
 pytest tests/ --cov=app --cov-report=html
 ```
 
+### Testing a migration
+
+`migrations/*.sql` is PostgreSQL-only and multi-statement, so SQLite cannot
+execute it and `db.create_all()` says nothing about whether it works.
+`tests/test_postgres_migrations.py` applies the real files to a real server and
+skips unless `TEST_DATABASE_URL_POSTGRES` is set. Point it at a **throwaway**
+database — never at the running `idealista-db`:
+
+```bash
+docker run -d --rm --name pg-migtest -e POSTGRES_PASSWORD=migtest \
+  -e POSTGRES_USER=migtest -e POSTGRES_DB=migtest \
+  -p 127.0.0.1:55432:5432 postgres:15-alpine
+TEST_DATABASE_URL_POSTGRES=postgresql://migtest:migtest@127.0.0.1:55432/migtest \
+  uv run pytest tests/test_postgres_migrations.py -v
+docker stop pg-migtest
+```
+
+CI runs the same tests against a service container with
+`REQUIRE_POSTGRES_TESTS=1`, so a missing server fails the job rather than
+turning the only coverage of migration SQL into a silent skip.
+
 ### Local CI gate
 
 Before pushing, run the same checks CI runs on GitHub — locally, in seconds:

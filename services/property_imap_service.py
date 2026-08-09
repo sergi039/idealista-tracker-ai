@@ -3,7 +3,6 @@ import os
 import re
 from datetime import datetime, timezone
 from email import message_from_bytes
-from email.header import decode_header
 from typing import Any, Dict, List, Optional, Tuple
 
 from imapclient import IMAPClient
@@ -11,6 +10,7 @@ from imapclient import IMAPClient
 from app import db
 from config import Config
 from models import Property, SyncHistory
+from utils.email_headers import decode_header_value
 from services.settings_service import SettingsService
 from services.search_profile_service import SearchProfileService
 from services.property_classification_service import PropertyClassificationService
@@ -136,20 +136,7 @@ class PropertyIMAPService:
                 self.last_seen_uid = cursor.watermark
 
     def _decode_header_value(self, value: str) -> str:
-        try:
-            decoded_parts = decode_header(value)
-            result = []
-            for part, encoding in decoded_parts:
-                if isinstance(part, bytes):
-                    if encoding:
-                        result.append(part.decode(encoding, errors="ignore"))
-                    else:
-                        result.append(part.decode("utf-8", errors="ignore"))
-                else:
-                    result.append(part)
-            return " ".join(result)
-        except Exception:
-            return value
+        return decode_header_value(value)
 
     def _extract_html_parts(self, msg) -> List[str]:
         html_parts: List[str] = []
@@ -392,7 +379,7 @@ class PropertyIMAPService:
 
                         internal_date = fetched.get(b"INTERNALDATE")
                         email_source_id = f"imap_{uid}"
-                        email_sender = msg.get("From")
+                        email_sender = self._decode_header_value(msg.get("From", ""))
 
                         is_price_change = any(
                             p in subject_low for p in price_change_subjects

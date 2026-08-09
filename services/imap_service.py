@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Optional, Any
 from imapclient import IMAPClient
 from email import message_from_bytes
-from email.header import decode_header
+from utils.email_headers import decode_header_value
 from utils.email_parser import EmailParser
 from utils.uid_cursor import UidBatchCursor, read_uid_file, write_uid_file
 from models import Land, LandHistory, SyncHistory
@@ -142,20 +142,7 @@ class IMAPService:
 
     def _decode_header_value(self, value: str) -> str:
         """Decode email header value"""
-        try:
-            decoded_parts = decode_header(value)
-            result = []
-            for part, encoding in decoded_parts:
-                if isinstance(part, bytes):
-                    if encoding:
-                        result.append(part.decode(encoding, errors="ignore"))
-                    else:
-                        result.append(part.decode("utf-8", errors="ignore"))
-                else:
-                    result.append(part)
-            return " ".join(result)
-        except Exception:
-            return value
+        return decode_header_value(value)
 
     def _extract_html_parts(self, msg) -> List[str]:
         """Extract HTML parts from email message"""
@@ -299,7 +286,7 @@ class IMAPService:
                             continue
 
                         subject = self._decode_header_value(msg.get("Subject", ""))
-                        email_sender = msg.get("From")
+                        email_sender = self._decode_header_value(msg.get("From", ""))
                         logger.info(f"Processing email UID {uid}: {subject[:50]}...")
 
                         # Skip non-property emails (explicit blacklist)
