@@ -1,11 +1,31 @@
+# Container names, host ports, the network and the data volume are all GLOBAL
+# Docker resources: unlike everything Compose scopes by project name, a
+# hard-coded `container_name` is claimed process-wide. A second checkout (a git
+# worktree, a branch build) running `docker compose up` therefore steals the
+# production container's name and blocks the deploy watcher with
+# "Conflict. The container name /idealista-app is already in use", and it would
+# have written into the production database volume on the way there.
+#
+# So every global name is derived from one variable. Leave it unset - as the
+# main checkout does - and this file renders exactly the production names and
+# ports below. In a worktree, set them in that worktree's .env:
+#
+#   COMPOSE_CONTAINER_PREFIX=wt1
+#   APP_HOST_PORT=5101
+#   DB_HOST_PORT=5534
+#
+# See docs/DEV_RULES.md. APP_HOST_PORT is the HOST side only; the app always
+# listens on 5001 inside the container (Dockerfile CMD), which is why the
+# container port stays literal.
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: idealista-app
+    container_name: ${COMPOSE_CONTAINER_PREFIX:-idealista}-app
     ports:
-      - "127.0.0.1:5001:5001"
+      # Loopback-only by contract (there is no authentication) - never widen it.
+      - "127.0.0.1:${APP_HOST_PORT:-5001}:5001"
     depends_on:
       db:
         condition: service_healthy
@@ -28,9 +48,9 @@ services:
 
   db:
     image: postgres:15-alpine
-    container_name: idealista-db
+    container_name: ${COMPOSE_CONTAINER_PREFIX:-idealista}-db
     ports:
-      - "127.0.0.1:5434:5432"
+      - "127.0.0.1:${DB_HOST_PORT:-5434}:5432"
     environment:
       POSTGRES_DB: ${DB_NAME:-idealista_universal}
       POSTGRES_USER: ${DB_USER:-idealista}
@@ -48,8 +68,10 @@ services:
 
 volumes:
   pgdata_universal:
-    name: idealista-universal-pgdata
+    # Prefixed for the same reason as the containers: an unscoped volume name
+    # means a branch build runs its migrations against the production data.
+    name: ${COMPOSE_CONTAINER_PREFIX:-idealista}-universal-pgdata
 
 networks:
   idealista-network:
-    name: idealista-network
+    name: ${COMPOSE_CONTAINER_PREFIX:-idealista}-network
