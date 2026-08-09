@@ -3,6 +3,7 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app import db
 from models import Property, SearchProfile
@@ -377,9 +378,33 @@ class SearchProfileService:
             # back the *unidentified* winner: a plain lookup by name could
             # return a keyed profile that appeared alongside it, handing this
             # email to somebody else's subscription.
-            logger.warning("Failed to create SearchProfile %r: %s", cleaned, e)
             db.session.rollback()
-            return SearchProfileService.find_unidentified_by_name(cleaned)
+            winner = SearchProfileService.find_unidentified_by_name(cleaned)
+            if isinstance(e, IntegrityError) and winner is not None:
+                # The expected shape, and the only one that gets demoted:
+                # `ux_search_profiles_name_without_key` refused a second
+                # keyless row for this label, and the row it refused us is the
+                # one just read back. Nothing was lost and nothing needs
+                # attention, so it is not a warning - two overlapping
+                # ingestions are routine here, and a warning would make the
+                # ordinary URL-less race raise two of them where
+                # `resolve_profile()` promises exactly one (#116). The
+                # diagnostics stay: what was being created, what won, and the
+                # constraint that said so.
+                logger.info(
+                    "Lost the insert race for SearchProfile %r to a concurrent "
+                    "ingestion; using profile %s, which won it (%s)",
+                    cleaned,
+                    winner.id,
+                    e,
+                )
+                return winner
+            # Every other shape keeps its visibility. A different constraint, a
+            # dead connection, or a name collision whose winner was gone by the
+            # re-read are not the routine race, and filing them under it would
+            # hide a real failure behind an expected one.
+            logger.warning("Failed to create SearchProfile %r: %s", cleaned, e)
+            return winner
 
     @staticmethod
     def _lock_and_regroup(

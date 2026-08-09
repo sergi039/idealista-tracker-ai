@@ -616,6 +616,81 @@ def test_a_url_less_email_whose_label_resolves_to_nothing_says_that(app, caplog)
         assert "#116" in message
 
 
+def test_a_url_less_email_that_loses_the_insert_race_still_warns_once(
+    app, monkeypatch, caplog
+):
+    """The expected race is not a second event, so it must not be a second warning.
+
+    Two URL-less ingestions creating the same keyless profile is routine - the
+    scheduled run and a manual one, across four gunicorn threads - and
+    `ux_search_profiles_name_without_key` is what makes the loser recover
+    instead of duplicating. The loser recovering is the constraint working, not
+    a failure, and logging it at WARNING beside the per-state warning made the
+    ordinary lost race the one path where a single URL-less email raised two.
+
+    The interleaving is real, not simulated: the competing keyless row is
+    committed at the seam between this call's lookups and its own INSERT, so
+    the INSERT genuinely fails on the unique constraint and the recovery read
+    genuinely runs.
+    """
+    with app.app_context():
+        original = search_profile_service.default_travel_targets_config
+        won_by = {}
+
+        def commit_the_winner():
+            # "The other ingestion" lands its row first - after this call has
+            # looked and found nothing, before it inserts.
+            monkeypatch.setattr(
+                search_profile_service, "default_travel_targets_config", original
+            )
+            db.session.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active, is_default, "
+                    "created_at, updated_at) VALUES (:name, 1, 0, :now, :now)"
+                ),
+                {
+                    "name": SEARCH_NAME,
+                    "now": datetime(2026, 8, 8, tzinfo=timezone.utc),
+                },
+            )
+            db.session.commit()
+            won_by["id"] = SearchProfile.query.filter_by(name=SEARCH_NAME).one().id
+            return original()
+
+        monkeypatch.setattr(
+            search_profile_service,
+            "default_travel_targets_config",
+            commit_the_winner,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            resolved = SearchProfileService.resolve_profile(SUBJECT_FULL, "no links")
+
+        assert won_by, "the competing insert never landed; the seam moved"
+        assert SearchProfile.query.count() == 1, (
+            "the losing insert was not refused, so this test no longer covers "
+            "the recovery path"
+        )
+        assert resolved is not None
+        assert resolved.id == won_by["id"], (
+            "the losing ingestion did not recover the row that won the race"
+        )
+
+        warnings = _service_warnings(caplog)
+        assert len(warnings) == 1, (
+            "a lost insert race is expected and recovered; it must not add a "
+            f"second warning. Got {len(warnings)}: {warnings}"
+        )
+        message = warnings[0]
+        assert "Failed to create SearchProfile" not in message, (
+            "the recovered race is still reported as a failure"
+        )
+        assert "keyless" in message
+        assert "#116" in message
+        assert SEARCH_NAME in message
+        assert str(won_by["id"]) in message
+
+
 def test_an_email_that_carries_its_search_url_stays_quiet(app, caplog):
     """The warning must mean something: an identified email must not raise it."""
     with app.app_context():
