@@ -1390,9 +1390,17 @@ function saveEnvironment(event, resourceId, resourceType = 'land') {
     const form = document.getElementById('environment-form');
     const formData = new FormData(form);
     
+    // Sea view is a four-state verdict on a property and still a boolean flag
+    // on the archived lands page, so the control decides what gets sent: a
+    // select carries its state, a checkbox its presence.
+    const seaViewControl = form.elements['sea_view'];
+    const seaView = (seaViewControl && seaViewControl.tagName === 'SELECT')
+        ? seaViewControl.value
+        : formData.has('sea_view');
+
     // Build environment object
     const environment = {
-        sea_view: formData.has('sea_view'),
+        sea_view: seaView,
         mountain_view: formData.has('mountain_view'),
         forest_view: formData.has('forest_view'),
         orientation: formData.get('orientation') || '',
