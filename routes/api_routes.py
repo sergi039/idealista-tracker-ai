@@ -1789,6 +1789,77 @@ def check_land_status(land_id):
         ), 500
 
 
+@api_bp.route("/property/<int:property_id>/check-status", methods=["POST"])
+def check_property_status(property_id):
+    """Check whether a universal Property listing is still live on Idealista."""
+    try:
+        from models import Property
+        from services.listing_status_service import ListingStatusService
+
+        prop = db.get_or_404(Property, property_id)
+
+        if not prop.url:
+            return jsonify(
+                {"success": False, "error": "No URL available for this listing"}
+            ), 400
+
+        def _run():
+            prop_local = db.session.get(Property, property_id)
+            if not prop_local or not prop_local.url:
+                return {"success": False, "error": "No URL available for this listing"}
+
+            service = ListingStatusService()
+            result = service.check_property_status(prop_local)
+
+            return {
+                "success": True,
+                "property_id": property_id,
+                "status": prop_local.listing_status,
+                # The observed answer, which is not the stored status when the
+                # fetch was blocked or failed: that case reports "error" here
+                # while `status` keeps whatever we already knew.
+                "observed": result.get("new_status"),
+                "previous_status": result.get("previous_status"),
+                "changed": result.get("changed", False),
+                "last_checked": prop_local.listing_last_checked.isoformat()
+                if prop_local.listing_last_checked
+                else None,
+                "removed_date": prop_local.listing_removed_date.isoformat()
+                if prop_local.listing_removed_date
+                else None,
+            }
+
+        if _should_run_sync():
+            return jsonify(_run())
+
+        job_id = _enqueue(
+            _run, job_type="property_check_status", meta={"property_id": prop.id}
+        )
+        return jsonify(
+            {
+                "success": True,
+                "status": "queued",
+                "job_id": job_id,
+                "message": "Listing status check queued",
+            }
+        ), 202
+
+    except HTTPException:
+        # get_or_404 on an unknown id is an answer, not a server fault; the
+        # blanket handler below would turn it into a 500.
+        raise
+    except Exception:
+        logger.error(
+            "Failed to check status for property %s", property_id, exc_info=True
+        )
+        return jsonify(
+            {
+                "success": False,
+                "error": "An internal error occurred. Check server logs for details.",
+            }
+        ), 500
+
+
 @api_bp.route("/listings/check-favorites", methods=["POST"])
 def check_favorites_status():
     """Check status of all favorite listings"""

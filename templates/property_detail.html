@@ -43,7 +43,13 @@
                         <span class="me-2">ID: {{ property.id }}</span>
                         {% if property.idealista_property_id %}<span class="me-2">Idealista: {{ property.idealista_property_id }}</span>{% endif %}
                         {% if property.listing_status %}<span class="me-2">Status: {{ property.listing_status }}</span>{% endif %}
-                        {% if property.listing_last_checked %}<span class="me-2">Checked: {{ property.listing_last_checked.strftime('%Y-%m-%d') }}</span>{% endif %}
+                        {# "active" is the ingest default, not an observation, so say
+                           plainly when nobody ever verified it (issue #136). #}
+                        {% if property.listing_last_checked %}
+                            <span class="me-2">Checked: {{ property.listing_last_checked.strftime('%Y-%m-%d') }}</span>
+                        {% else %}
+                            <span class="me-2 fst-italic" title="Nobody has checked this listing on Idealista yet — the status above is the default it was ingested with">Checked: never</span>
+                        {% endif %}
                         {% if property.listing_removed_date %}<span class="me-2">Removed: {{ property.listing_removed_date.strftime('%Y-%m-%d') }}</span>{% endif %}
                         {% if property.search_profile %}<span class="me-2">Profile: {{ property.search_profile.name }}</span>{% endif %}
                     </div>
@@ -242,7 +248,12 @@
                     </button>
                 </div>
 
-                    <div class="d-flex flex-wrap gap-2 mt-3">
+                    <div class="d-flex flex-wrap gap-2 mt-3 align-items-center">
+                        <button type="button" class="btn btn-outline-primary btn-sm" id="check-listing-status-btn"
+                                onclick="checkPropertyListingStatus({{ property.id }})"
+                                title="Fetch the listing from Idealista and record what it says">
+                            <i class="fas fa-rotate me-1"></i>Check status
+                        </button>
                         <form method="POST" action="{{ url_for('main.set_property_status_form', property_id=property.id) }}" class="d-inline-flex align-items-center gap-2">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                             <select name="status" class="form-select form-select-sm" style="width: 140px;" aria-label="Set listing status">
@@ -1000,6 +1011,63 @@
 
 {% block scripts %}
 <script>
+// Ask Idealista whether this listing is still up and record the answer.
+// A blocked or failed fetch reports "error" and deliberately leaves the stored
+// status alone, so the button must not claim "no change" -- say we could not
+// verify it (issue #136).
+async function checkPropertyListingStatus(propertyId) {
+    const btn = document.getElementById('check-listing-status-btn');
+    const originalContent = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Checking...';
+
+    const restore = () => setTimeout(() => {
+        btn.innerHTML = originalContent;
+        btn.disabled = false;
+    }, 2500);
+
+    const settle = (result) => {
+        if (!result || !result.success) {
+            btn.innerHTML = '<i class="fas fa-triangle-exclamation me-1"></i>Error';
+            restore();
+            return;
+        }
+        if (result.changed) {
+            window.location.reload();
+            return;
+        }
+        if (result.observed === 'error') {
+            btn.innerHTML = '<i class="fas fa-ban me-1"></i>Could not verify';
+            btn.title = 'Idealista did not answer with the listing page (bot protection or a server error). Status left unchanged.';
+        } else {
+            btn.innerHTML = '<i class="fas fa-check me-1"></i>No change';
+        }
+        restore();
+    };
+
+    try {
+        const response = await fetch(`/api/property/${propertyId}/check-status`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+        const data = await response.json().catch(() => null);
+
+        if (response.status === 202 && data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
+            btn.innerHTML = '<i class="fas fa-clock me-1"></i>Queued';
+            IdealistaApp.pollJob(data.job_id, {
+                onSuccess: (job) => settle(job && job.result ? job.result : null),
+                onError: () => settle(null)
+            });
+            return;
+        }
+
+        settle(data);
+    } catch (error) {
+        console.error('Error checking listing status:', error);
+        settle(null);
+    }
+}
+
 // Formatting functions for AI analysis (ported from legacy land detail)
 
 // Issue #23: listing descriptions/titles are untrusted third-party text (any
