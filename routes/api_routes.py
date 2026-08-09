@@ -4,6 +4,7 @@ from flask import Blueprint, current_app, jsonify, request
 from models import Land, LandHistory, SyncHistory, AiAnalysisVariant
 from app import db
 from app import limiter
+from utils.sorting import sortable_columns, stable_order
 
 logger = logging.getLogger(__name__)
 
@@ -1078,12 +1079,18 @@ def get_lands():
             query = query.filter(Land.land_type == land_type_filter)
 
         # Apply sorting
-        if hasattr(Land, sort_by):
+        if sort_by in sortable_columns(Land):
             sort_column = getattr(Land, sort_by)
             if sort_order == "asc":
-                query = query.order_by(sort_column.asc())
+                query = query.order_by(*stable_order(Land, sort_column.asc()))
             else:
-                query = query.order_by(sort_column.desc())
+                query = query.order_by(*stable_order(Land, sort_column.desc()))
+        else:
+            # An unknown sort used to leave the query unordered, so two
+            # offset windows could overlap or skip rows (issue #113). The
+            # tiebreaker alone settles that without inventing a sort column
+            # the caller never asked for.
+            query = query.order_by(*stable_order(Land))
 
         # Apply pagination
         lands = query.offset(offset).limit(limit).all()
@@ -1222,9 +1229,13 @@ def get_properties():
         }
         sort_column = sort_columns.get(sort_by, Property.created_at)
         if sort_order == "asc":
-            query = query.order_by(sort_column.asc().nullslast())
+            query = query.order_by(
+                *stable_order(Property, sort_column.asc().nullslast())
+            )
         else:
-            query = query.order_by(sort_column.desc().nullslast())
+            query = query.order_by(
+                *stable_order(Property, sort_column.desc().nullslast())
+            )
 
         props = query.offset(offset).limit(limit).all()
 

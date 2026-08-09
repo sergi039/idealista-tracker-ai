@@ -18,6 +18,7 @@ from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
 from app import db
 from utils.redirects import safe_referrer_redirect
+from utils.sorting import sortable_columns, stable_order
 
 logger = logging.getLogger(__name__)
 
@@ -272,14 +273,22 @@ def properties():
             rank = _investment_rating_rank(Property)
             rank_order = rank.asc() if sort_order == "asc" else rank.desc()
             query = query.order_by(
-                rank_order.nullslast(), Property.score_total.desc().nullslast()
+                *stable_order(
+                    Property,
+                    rank_order.nullslast(),
+                    Property.score_total.desc().nullslast(),
+                )
             )
         else:
             sort_column = sort_columns[sort_by]
             if sort_order == "asc":
-                query = query.order_by(sort_column.asc().nullslast())
+                query = query.order_by(
+                    *stable_order(Property, sort_column.asc().nullslast())
+                )
             else:
-                query = query.order_by(sort_column.desc().nullslast())
+                query = query.order_by(
+                    *stable_order(Property, sort_column.desc().nullslast())
+                )
 
         # Derive the highlighted mode from the sort actually applied, the same
         # way /lands does, so the buttons cannot disagree with the ordering.
@@ -567,16 +576,35 @@ def lands():
             rank = _investment_rating_rank(Land)
             rank_order = rank.asc() if sort_order == "asc" else rank.desc()
             query = query.order_by(
-                rank_order.nullslast(), Land.score_total.desc().nullslast()
+                *stable_order(
+                    Land, rank_order.nullslast(), Land.score_total.desc().nullslast()
+                )
             )
-        elif hasattr(Land, sort_by):
+        elif sort_by in sortable_columns(Land):
             sort_column = getattr(Land, sort_by)
             if sort_order == "asc":
                 # For ascending, NULLs go last
-                query = query.order_by(sort_column.asc().nullslast())
+                query = query.order_by(
+                    *stable_order(Land, sort_column.asc().nullslast())
+                )
             else:
                 # For descending (default for score), NULLs go last
-                query = query.order_by(sort_column.desc().nullslast())
+                query = query.order_by(
+                    *stable_order(Land, sort_column.desc().nullslast())
+                )
+        else:
+            # Fallback to mode default if invalid sort field -- the same
+            # branch /export.csv has always had. Without it the page ran an
+            # unordered SELECT while its own export sorted by score_total.
+            fallback_column = getattr(Land, default_sort)
+            if sort_order == "asc":
+                query = query.order_by(
+                    *stable_order(Land, fallback_column.asc().nullslast())
+                )
+            else:
+                query = query.order_by(
+                    *stable_order(Land, fallback_column.desc().nullslast())
+                )
 
         # Get paginated results
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
@@ -2699,23 +2727,33 @@ def export_csv():
             rank = _investment_rating_rank(Land)
             rank_order = rank.asc() if sort_order == "asc" else rank.desc()
             lands = query.order_by(
-                rank_order.nullslast(), Land.score_total.desc().nullslast()
+                *stable_order(
+                    Land, rank_order.nullslast(), Land.score_total.desc().nullslast()
+                )
             ).all()
-        elif hasattr(Land, sort_by):
+        elif sort_by in sortable_columns(Land):
             sort_column = getattr(Land, sort_by)
             if sort_order == "asc":
                 # For ascending, NULLs go last
-                lands = query.order_by(sort_column.asc().nullslast()).all()
+                lands = query.order_by(
+                    *stable_order(Land, sort_column.asc().nullslast())
+                ).all()
             else:
                 # For descending (default for scores), NULLs go last
-                lands = query.order_by(sort_column.desc().nullslast()).all()
+                lands = query.order_by(
+                    *stable_order(Land, sort_column.desc().nullslast())
+                ).all()
         else:
             # Fallback to mode default if invalid sort field
             fallback_column = getattr(Land, default_sort)
             if sort_order == "asc":
-                lands = query.order_by(fallback_column.asc().nullslast()).all()
+                lands = query.order_by(
+                    *stable_order(Land, fallback_column.asc().nullslast())
+                ).all()
             else:
-                lands = query.order_by(fallback_column.desc().nullslast()).all()
+                lands = query.order_by(
+                    *stable_order(Land, fallback_column.desc().nullslast())
+                ).all()
 
         # Create CSV
         output = io.StringIO()
@@ -2840,7 +2878,21 @@ def export_properties_csv():
         else:
             hide_removed_filter = True
 
-        sort_by = request.args.get("sort", "created_at")
+        # Resolve the default sort exactly the way /properties does: the mode
+        # picks it, a bare export keeps the date order. The export link only
+        # ever forwards the sort the page already resolved, but a URL carrying
+        # `mode` (or a stale `sort` this allow-list does not know) reaches this
+        # route too, and answering it with `created_at` while the page answers
+        # it with the mode's score is the same screen-vs-file disagreement
+        # issue #113 is about.
+        mode = request.args.get("mode", "combined")
+        if mode not in PROPERTY_MODE_SORT_DEFAULTS:
+            mode = "combined"
+        if request.args.get("mode"):
+            default_sort = PROPERTY_MODE_SORT_DEFAULTS[mode]
+        else:
+            default_sort = DEFAULT_PROPERTY_SORT
+        sort_by = request.args.get("sort") or default_sort
         sort_order = request.args.get("order", "desc")
 
         query = Property.query.options(
@@ -2880,9 +2932,11 @@ def export_properties_csv():
         if hide_removed_filter:
             query = query.filter(Property.listing_status.notin_(["removed", "sold"]))
 
-        # Same ordering as /properties, tiebreaker included: the export link
-        # forwards whatever the page is sorted by, so an allow-list that does
-        # not know a value would hand back the same rows in another order.
+        # Same ordering as /properties, down to the shared stable_order()
+        # tiebreaker (issue #113): the export link forwards whatever the page
+        # is sorted by, so an allow-list that does not know a value -- or a
+        # tie the sort column cannot break -- would hand back the same rows in
+        # another order.
         sort_columns = {
             "title": Property.title,
             "created_at": Property.created_at,
@@ -2892,18 +2946,29 @@ def export_properties_csv():
             "score_investment": Property.score_investment,
             "score_lifestyle": Property.score_lifestyle,
         }
+        if sort_by not in sort_columns and sort_by != "investment_metrics":
+            sort_by = default_sort
+
         if sort_by == "investment_metrics":
             rank = _investment_rating_rank(Property)
             rank_order = rank.asc() if sort_order == "asc" else rank.desc()
             props = query.order_by(
-                rank_order.nullslast(), Property.score_total.desc().nullslast()
+                *stable_order(
+                    Property,
+                    rank_order.nullslast(),
+                    Property.score_total.desc().nullslast(),
+                )
             ).all()
         else:
-            sort_column = sort_columns.get(sort_by, Property.created_at)
+            sort_column = sort_columns[sort_by]
             if sort_order == "asc":
-                props = query.order_by(sort_column.asc().nullslast()).all()
+                props = query.order_by(
+                    *stable_order(Property, sort_column.asc().nullslast())
+                ).all()
             else:
-                props = query.order_by(sort_column.desc().nullslast()).all()
+                props = query.order_by(
+                    *stable_order(Property, sort_column.desc().nullslast())
+                ).all()
 
         travel_display_targets = []
         if selected_profile_id is not None:
