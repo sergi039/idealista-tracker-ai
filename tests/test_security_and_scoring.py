@@ -17,7 +17,7 @@ from decimal import Decimal
 from unittest.mock import patch
 from app import create_app, db
 from config import Config
-from models import Land, Property, ScoringCriteria
+from models import Land, Property, ScoringCriteria, SearchProfile
 from services.scoring_service import ScoringService
 from tests import setup_test_environment
 
@@ -445,49 +445,51 @@ class TestOpenRedirectGuard:
 
     The sibling guard on the login page's `next` parameter went away with the
     login itself (2026-08-08); `safe_referrer_redirect` moved to
-    utils/redirects.py and still applies to every POST handler here."""
+    utils/redirects.py and still applies to every POST handler here.
 
-    def _make_property(self, non_testing_app, source_email_id):
+    These two used to drive the guard through `/properties/<id>/set-status`,
+    which went away with the property page's manual status form (2026-08-09).
+    They now drive it through the profile scoring recalculation, which is one
+    of the handlers that still bounces off the Referer -- and which costs
+    nothing on an empty profile, since scoring is computed locally."""
+
+    def _make_profile(self, non_testing_app, name):
         with non_testing_app.app_context():
-            prop = Property(
-                source_email_id=source_email_id,
-                title="Redirect Guard Property",
-                municipality="Valencia",
-                property_category="housing",
-                property_subtype="apartment",
-                price=Decimal("100000.00"),
-                area=Decimal("80.00"),
+            profile = SearchProfile(
+                name=name,
+                is_active=True,
+                travel_targets={"presets": {}, "custom": []},
             )
-            db.session.add(prop)
+            db.session.add(profile)
             db.session.commit()
-            return prop.id
+            return profile.id
 
     def test_referer_redirect_rejects_cross_origin(
         self, non_testing_app, non_testing_client
     ):
         """A cross-origin Referer on a POST action must not be honored."""
-        prop_id = self._make_property(non_testing_app, "redirect_guard_cross_origin_1")
+        profile_id = self._make_profile(non_testing_app, "Redirect Guard Cross Origin")
 
         resp = non_testing_client.post(
-            f"/properties/{prop_id}/set-status",
-            data={"status": "removed"},
+            f"/profiles/{profile_id}/score/recalculate",
+            data={"mode": "missing"},
             headers={"Referer": "https://evil.example/steal-session"},
         )
         assert resp.status_code == 302
         location = resp.headers.get("Location", "")
         assert "evil.example" not in location
-        assert location == f"/properties/{prop_id}"
+        assert location == f"/properties?profile_id={profile_id}"
 
     def test_referer_redirect_honors_same_origin(
         self, non_testing_app, non_testing_client
     ):
         """A genuine same-origin Referer is still honored after the fix."""
-        prop_id = self._make_property(non_testing_app, "redirect_guard_same_origin_1")
+        profile_id = self._make_profile(non_testing_app, "Redirect Guard Same Origin")
 
-        referer = f"http://localhost/properties/{prop_id}?tab=notes"
+        referer = f"http://localhost/properties?profile_id={profile_id}&view_type=list"
         resp = non_testing_client.post(
-            f"/properties/{prop_id}/set-status",
-            data={"status": "removed"},
+            f"/profiles/{profile_id}/score/recalculate",
+            data={"mode": "missing"},
             headers={"Referer": referer},
         )
         assert resp.status_code == 302
