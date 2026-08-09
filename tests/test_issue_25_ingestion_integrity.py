@@ -41,7 +41,6 @@ def app():
     setup_test_environment()
     app = create_app()
     app.config["TESTING"] = True
-    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
 
     with app.app_context():
         Config.AUTO_TRAVEL_ENRICHMENT = False

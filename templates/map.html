@@ -11,7 +11,12 @@
                 Properties Map
                 <span class="badge bg-secondary">{{ markers|length }}</span>
             </h1>
-            <a href="{{ url_for('main.lands') }}" class="btn btn-outline-secondary">
+            {# The markers come from `properties`, so the list view is /properties --
+               and it has to inherit this map's subscription selection, or it would
+               auto-select its own and show a different set of listings. #}
+            <a id="map-list-view-link"
+               href="{{ url_for('main.properties', profile_id=list_view_profile_id) }}"
+               class="btn btn-outline-secondary">
                 <i class="fas fa-list me-1"></i>List View
             </a>
         </div>

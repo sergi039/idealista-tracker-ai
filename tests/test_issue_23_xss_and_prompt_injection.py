@@ -430,7 +430,6 @@ class TestPropertyAIServiceDelimitsDescription:
         from tests import setup_test_environment
 
         setup_test_environment()
-        os.environ["DATABASE_URL"] = "sqlite:///:memory:"
         from app import create_app, db
 
         app = create_app()

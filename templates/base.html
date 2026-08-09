@@ -78,8 +78,15 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('main.lands') }}">
+                        <a class="nav-link" href="{{ url_for('main.properties') }}">
                             <i class="fas fa-list me-1"></i>{{ t('properties') }}
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        {# /lands is the frozen legacy view (issue #105): 168 rows, nothing newer than 2026-02-18. #}
+                        <a class="nav-link text-body-secondary" href="{{ url_for('main.lands') }}"
+                           title="Legacy lands view - frozen, no new listings arrive here">
+                            <i class="fas fa-box-archive me-1"></i>Lands (archive)
                         </a>
                     </li>
                     <li class="nav-item">

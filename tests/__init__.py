@@ -18,10 +18,25 @@ logging.basicConfig(
 )
 
 # Test configuration
-TEST_DATABASE_URL = "sqlite:///test.db"
+#
+# The database URL must be in-memory, and it must reach create_app() through
+# the environment. Flask-SQLAlchemy 3.x builds the engine inside init_app(),
+# which create_app() calls, so a fixture that assigns
+# app.config["SQLALCHEMY_DATABASE_URI"] afterwards changes nothing: the engine
+# is already bound. That is how this suite spent its life sharing one on-disk
+# sqlite file (instance/test.db) across every module, with isolation resting
+# entirely on db.drop_all() in fixture teardown.
+# tests/test_db_engine_isolation.py guards both halves of that.
+TEST_DATABASE_URL = "sqlite:///:memory:"
 TEST_GMAIL_API_KEY = "test_gmail_key"
 TEST_GOOGLE_MAPS_API_KEY = "test_maps_key"
 TEST_GOOGLE_PLACES_API_KEY = "test_places_key"
+
+# Applied at package import, i.e. before pytest imports conftest.py or any test
+# module. setup_test_environment() is called by most fixtures but not all, and
+# a module that forgets it would otherwise inherit whatever DATABASE_URL the
+# developer's shell exports -- possibly a real database.
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 
 def setup_test_environment():

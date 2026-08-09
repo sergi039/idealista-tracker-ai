@@ -1,7 +1,6 @@
 """Regression coverage for criteria writes used by dual-profile scoring (#27)."""
 
 import json
-import os
 from decimal import Decimal
 
 import pytest
@@ -24,21 +23,13 @@ UPDATED_WEIGHTS = {
 def app():
     """Create an app with an isolated in-memory database."""
     setup_test_environment()
-    original_db_url = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = "sqlite:///:memory:"
-    try:
-        app = create_app()
-        app.config["TESTING"] = True
-        app.config["WTF_CSRF_ENABLED"] = False
-        with app.app_context():
-            db.create_all()
-            yield app
-            db.drop_all()
-    finally:
-        if original_db_url is not None:
-            os.environ["DATABASE_URL"] = original_db_url
-        else:
-            os.environ.pop("DATABASE_URL", None)
+    app = create_app()
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    with app.app_context():
+        db.create_all()
+        yield app
+        db.drop_all()
 
 
 @pytest.fixture
