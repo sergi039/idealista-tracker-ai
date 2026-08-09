@@ -15,14 +15,15 @@ open issue ──▶ run_issue.sh ──▶ PR ──▶ CI (GitHub Actions)
                                   unhealthy? ──▶ rollback
 ```
 
-Nothing here bypasses a gate. A PR merges only with **green CI and a PASS from
-an independent reviewer**; a deploy survives only if `/api/healthz` answers
-`"ok":true` afterwards.
+Branch protection on `main` requires the status checks named in the protection
+itself and refuses any branch behind `main` — GitHub enforces both atomically at
+merge time. The bot does not re-implement them. It adds the gate GitHub has no
+concept of: **an independent reviewer must return PASS**.
 
-What counts as green is spelled out rather than inferred: every check in
-`AUTOPILOT_REQUIRED_CHECKS` (default `pytest no-source-bundles`) must report
-`SUCCESS`. A run where the required checks are absent, skipped or neutral
-verifies exactly as much as a run with no CI at all, and is refused.
+| Enforced by | What |
+|---|---|
+| GitHub branch protection | required checks green, branch up to date, PR required, no force-push |
+| `merge_bot.sh` | independent review, verdict bound to the exact diff, BLOCKER posted on the PR |
 
 ## Scripts
 
@@ -105,35 +106,17 @@ separately. A deploy that leaves the scheduler `not_initialized` gets a warning
 in the log even when the page loads — that combination is precisely what
 "working app, no new data" looked like.
 
+**A verdict covers a diff, not a branch.** The journal key is `base..head`, so a
+PASS stops applying the moment either end moves, and `--match-head-commit`
+guarantees the merged commit is the reviewed one.
+
 **UNAVAILABLE is not PASS.** A reviewer that cannot run leaves the PR open.
 
-**A verdict covers a diff, not a branch.** The journal key is `base..head`, so
-a PASS stops applying the moment main moves — and the merge step re-checks the
-base one last time, because a review takes minutes and `--match-head-commit`
-only guards the head.
-
-**The branch must be up to date.** A PR that is behind main is refused before
-review, not merged and hoped for. `base..head` on a stale branch shows what the
-branch changes, which is not what will land: main tightens a helper, the branch
-adds a caller written against the old one, both sides review clean, and the
-merge combines them into something nobody saw. Requiring the branch to contain
-the current base makes the reviewed diff and the merged code the same thing.
-
-### Known residual risk: the base can move during the merge itself
-
-GitHub has no "merge only if the base is still X". Between the last base check
-and the `gh pr merge` call — a second or two — main can advance, and the squash
-lands on a base nobody reviewed. This cannot be closed from a script.
-
-The bot does two things about it rather than one: it re-checks the base as late
-as possible, and after every merge it reads the first parent of the squash
-commit and compares it to the reviewed base. A mismatch is logged as `ALERT`
-with the commit to inspect. Silent is not the same as safe.
-
-The actual fix is a repository setting the owner has to make — branch
-protection → **"Require branches to be up to date before merging"**. With it,
-GitHub itself refuses the merge when the base has moved. Worth turning on
-before letting this run unattended over a busy main.
+**The bot still checks CI and up-to-dateness before reviewing** — not as a gate,
+but to avoid spending a minutes-long review on a PR that protection will refuse,
+and to keep the reviewer looking at the diff that will actually land. The list
+of required checks is read from branch protection, so there is no second copy to
+drift.
 
 ## The lock
 
@@ -149,9 +132,42 @@ That test runs in CI via `tests/test_autopilot_lock.py`.
 bash tools/autopilot/lib/lock_race_test.sh
 ```
 
-Note that children inherit the lock along with fd 9 — fine for these scripts,
-whose subprocesses all exit before the script does, but worth knowing before
-adding a background job to one of them.
+Children inherit the lock along with fd 9, and that has a consequence worth
+stating plainly: **killing the script does not release the lock**. The kernel
+drops it when the *last* descriptor closes, so an orphaned `rx` or `codex exec`
+keeps the lock held long after its parent is gone, and the next tick reports
+"another run is in progress" with no such run in `ps`.
+
+Observed in practice on 2026-08-08, when another session killed a bot run to
+unblock a merge and had to hunt the orphans separately.
+
+Ask the lock file who is holding it, rather than pattern-matching command lines.
+`pkill -f "codex exec"` is the wrong instrument on a machine that runs more than
+one project: it would reach into an unrelated repository's review and kill it
+mid-write. `lsof` names the actual holders and nothing else.
+
+```bash
+lsof -t /tmp/idealista-autopilot-merge.lock.d
+```
+
+(The `.d` suffix is a leftover from the `mkdir` design; the path is a plain
+file that `flock(2)` is taken on, not a directory.)
+
+Inspect them before signalling — confirm they are this bot's family — then end
+them, escalating only if they ignore the first request:
+
+```bash
+lsof -t /tmp/idealista-autopilot-merge.lock.d | xargs -r ps -o pid,ppid,command -p
+```
+
+```bash
+lsof -t /tmp/idealista-autopilot-merge.lock.d | xargs -r kill
+```
+
+The deploy watcher's lock is `/tmp/idealista-autopilot-deploy.lock.d`; the
+same three commands apply. The lock is released when the last of those
+descriptors closes, so re-run `lsof` afterwards to confirm nothing is left
+holding it.
 
 ## Requirements
 

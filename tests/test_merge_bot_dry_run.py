@@ -79,7 +79,25 @@ def _run_merge_bot(tmp_path: Path, *args: str, journal: str = ""):
                 printf '%s\n' "$TEST_MERGE_SHA"
                 ;;
             api:*)
-                printf '%s\n' "$TEST_BASE_SHA"
+                # Branch protection is what the bot trusts instead of
+                # re-implementing the rules, so the stub has to answer as a
+                # correctly protected branch: strict on, binding admins, with
+                # the same required checks `pr:checks` reports green above.
+                # Anything else still gets the base SHA, as before.
+                case "$*" in
+                    *protection/enforce_admins*)
+                        printf 'true\n'
+                        ;;
+                    *protection/required_status_checks*)
+                        case "$*" in
+                            *.strict*) printf 'true\n' ;;
+                            *) printf 'pytest\nno-source-bundles\n' ;;
+                        esac
+                        ;;
+                    *)
+                        printf '%s\n' "$TEST_BASE_SHA"
+                        ;;
+                esac
                 ;;
             *) exit 93 ;;
         esac
