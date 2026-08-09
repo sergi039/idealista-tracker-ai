@@ -143,6 +143,193 @@ git worktree remove /Users/ss/IdealistaRank-properties-universal
 git branch -d feature/properties-universal
 ```
 
+## Repairing search profiles fragmented by folded subjects (#103)
+
+One-off data repair, not part of the cutover. A long `Subject` header arrives
+folded (RFC 5322 2.2.3) and the saved-search extractor used to stop at the
+line break, so a single Idealista subscription accumulated four
+`search_profiles` rows with progressively truncated names. #101 fixed the
+cause; `services/search_profile_repair_service.py` merges the rows already in
+the database. It recomputes each listing's saved-search name from its own
+stored `properties.email_subject` — same unfolding, same extractor as
+ingestion — and never guesses from name similarity.
+
+### What counts as a fold fragment
+
+Only a fold fragment is ever emptied or renamed, and a profile qualifies by
+**replaying the bug** rather than by resembling its victims. For a saved search
+N, profile P qualifies when:
+
+1. P's name is not N; **and**
+2. running the pre-#101 extractor over every listing of N inside P — the same
+   extraction, on the stored subject, *without* unfolding, so it truncates at
+   the CR exactly as it used to — returns precisely the name P carries, for all
+   of them.
+
+That is cause and effect: P's name was produced by this bug, on these rows.
+Weaker signals are not enough. Two profiles holding one saved search prove
+nothing — `ProfileAssignmentService` files listings by location, so "Coast" and
+"City" legitimately split one subscription. A line break in the subject proves
+nothing either: it can sit past the end of the name, where it truncated nothing.
+
+There is deliberately no extra "name must be a word-boundary prefix" rule: it
+approximated the replay and, kept alongside it, would only reject genuine
+fragments whose fold landed on punctuation.
+
+**One consequence, and it is the right one:** since #101 stores subjects
+unfolded, this repair can only ever act on rows written **before** that fix.
+Those rows are precisely the damage; anything ingested afterwards is untouchable
+by construction.
+
+### What it will never do
+
+Anything that is not a fold fragment is a decision somebody made, and it is left
+alone:
+
+- **It never moves a listing you reassigned by hand.** A listing pinned through
+  the profile-change form (`manual_override`, which `ProfileAssignmentService`
+  already refuses to override) stays exactly where you put it — and because it
+  stays, the profile holding it is not empty, so that profile is not deleted
+  either. Pinned listings still count towards what a profile holds, so they can
+  stop a rename. Pinning is re-read inside the transaction as well: a listing
+  pinned or moved *after* planning aborts the repair instead of being dragged
+  back.
+- **It never renames a profile that is not a fold fragment**, and never renames
+  one holding a second saved search, whether it already did or the plan moved
+  one in.
+- **It never moves listings out of a profile that is not a fold fragment** —
+  they stay, and the report lists them under "left alone".
+- **It never gives one profile to two saved searches.**
+- **It never deletes a profile that still holds a listing**, for any reason.
+- **It never deletes the default profile and never makes another profile the
+  default.** One default goes in and the same one comes out, even if the repair
+  empties it.
+- **It never deletes a profile carrying a saved-search identity key** (#110),
+  and never moves a key between profiles — `merge_duplicate_profiles()` owns
+  that. An emptied profile that still holds a key is kept and reported.
+- **It never resolves a label that two saved searches share.** Since #102 a
+  label no longer identifies a subscription, so an ambiguous one is reported
+  `BLOCKED:` instead of being handed to whichever profile sorts first.
+- **It never creates a profile**, and **never adopts an already-orphaned
+  listing** — both are reported, neither is acted on.
+- **It never touches a listing whose saved-search name cannot be recomputed.**
+
+One thing it *does* do, so it is not mistaken for a promise: it moves listings
+into the profile that already carries their name even when that profile also
+holds a stray listing of another saved search. Ingestion routes those listings
+to that same profile anyway, so the repair reaches no state the system would
+not reach on its own — and the stray's own group is reported `BLOCKED:` rather
+than hidden. What is protected is that a profile is never *renamed* out from
+under what it holds.
+
+A `BLOCKED:` group means nothing about it was changed. Read the report; the
+exit code does not change for it.
+
+One run does the whole job: planning re-examines groups until nothing more can
+be repaired, so the result never depends on alphabetical order and re-running
+only picks up what genuinely changed in the database since.
+
+### Stop ingestion before applying — but know what that buys you
+
+`properties.search_profile_id` is `ON DELETE SET NULL`, so a listing written
+into a fragment while it is being removed would be silently left with a NULL
+profile. The code defends against that on its own: the whole repair is one
+transaction, each profile is re-counted immediately before its `DELETE`, the
+deletes are flushed *inside* the transaction, and every touched profile plus
+the total number of NULL-profile listings is re-counted again afterwards. A
+listing that slipped in is caught there and the entire repair is rolled back.
+After that flush the database closes the window itself: the pending `DELETE`
+holds the profile row, so a concurrent insert referencing it waits for this
+transaction and then fails its foreign key instead of being orphaned.
+
+Every profile the plan touches is also locked and re-checked before any of it
+is applied. The rows are taken `FOR UPDATE` in id order and held to the end of
+the transaction, so nothing can change them between the check and the write.
+Each is then re-read — by column, so a stale object from planning cannot
+answer — and every field a decision came from is compared with what the plan
+read: the name, the default flag, and each setting that went into the planned
+updates. Each reassignment names the profile the row is expected to be in, and
+every planned row's pinned state is read again after the moves. A profile
+renamed, made default or reconfigured, a listing moved or pinned by hand in
+between: each of those aborts the repair before `COMMIT`.
+
+The row lock is Postgres semantics; SQLite ignores `FOR UPDATE` and serialises
+writers anyway, so the tests pin that the lock is requested but cannot
+demonstrate it — the same limitation as the foreign-key lock above.
+
+So stopping ingestion is not what makes the repair safe — it is what makes it
+**succeed**. A concurrent write turns the run into a clean abort (exit 1, no
+changes) that has to be repeated, and it would make the ingestion itself fail
+on a foreign key. The scheduler runs inside the app process, so stopping the
+app container is what stops ingestion; the repair command refuses to start a
+scheduler of its own but cannot stop yours.
+
+```bash
+# 1. Back up first (the repair deletes profile rows).
+docker exec idealista-db pg_dump -U idealista -d idealista > ~/backups/idealista_pre_repair_$(date +%Y%m%d).sql
+
+# 2. Stop ingestion. This stops the in-process scheduler with the app.
+docker compose stop app
+
+# 3. Dry run. Writes nothing; prints the plan and the per-profile counts.
+docker compose run --rm app python -m services.search_profile_repair_service
+
+# 4. Read the report. Expect one saved search, one survivor, the fragments
+#    listed for deletion, and "listings to move" matching the fragment totals.
+#    Anything under "listings whose saved-search name could not be recomputed"
+#    stays where it is and keeps its fragment alive - that is intended.
+
+# 5. Apply.
+docker compose run --rm app python -m services.search_profile_repair_service --apply
+
+# 6. Restart the app.
+docker compose up -d app
+```
+
+The exit code says exactly what is **known** about the database:
+
+| code | status | what it means |
+|------|--------|---------------|
+| 0 | `clean` / `pending` / `applied` | nothing needed doing, or the repair committed and verified. A second `--apply` is a clean no-op. |
+| 1 | `mismatch` | it failed **before COMMIT**. Nothing was committed, the database is untouched. |
+| 2 | `applied_report_unavailable` | **the repair was committed** and only the after-report could not be read back. |
+| 3 | `commit_outcome_unknown` | COMMIT itself did not complete cleanly. **The outcome is unknown** — it may or may not have been applied. |
+
+Only **1** means the database is untouched. On 1, read the `ERROR:` lines,
+confirm ingestion is really stopped, and re-run the dry run.
+
+On **2** the destructive part is already durable — inspect the database with
+the verification query below before doing anything else.
+
+On **3** assume nothing. The server may have applied the commit and lost the
+connection before acknowledging, so treat the state as unverified: run the
+verification query, and only then decide. The report prints a best-effort
+read-back under "read back afterwards" — that is an observation, not a
+verdict. The repair is idempotent, so once you have established the actual
+state a dry run followed by a re-run is safe.
+
+A saved search reported as `BLOCKED:` was **not** repaired and nothing about it
+was touched: its listings live in a profile that also holds a different saved
+search, so renaming that profile would mislabel the others. This does not
+change the exit code. It means something other than the fold put those rows
+together — `ProfileAssignmentService` reassigns by location, and profiles can
+be edited by hand — and untangling it is an owner decision. Blocking accounts
+for the plan's own effects too: a profile that acquires a second saved search
+part-way through the plan blocks as well, and one the plan empties out stops
+blocking within the same run.
+
+Verify afterwards:
+
+```bash
+docker exec idealista-db psql -U idealista -d idealista -c \
+  "select search_profile_id, count(*) from properties group by 1 order by 1;"
+# No new NULL bucket, and the fragment ids are gone.
+
+curl -s http://localhost:5001/api/healthz
+```
+
+Rollback is the backup from step 1.
+
 ## Rollback Plan
 
 If issues arise after cutover:
