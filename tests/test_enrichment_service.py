@@ -117,9 +117,13 @@ class TestEnrichmentService:
             mock_scoring.return_value = mock_scoring_instance
 
             # The Google steps report their failure by returning a
-            # GoogleApiFailure; None means "Google answered" (#98).
+            # GoogleApiFailure; None means "Google answered" (#98). The OSM step
+            # reports itself the same way, and its return value is load-bearing
+            # since #153: a bare Mock here would read as an Overpass refusal and
+            # make this a `degraded` run.
             mock_places.return_value = None
             mock_maps.return_value = None
+            mock_osm.return_value = None
 
             result = enrichment_service.enrich_land(test_land)
 
