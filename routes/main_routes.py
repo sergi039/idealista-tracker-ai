@@ -758,6 +758,20 @@ def edit_profile(profile_id):
 
             profile.description = description[:2000] if description else None
 
+            if requested_default and profile.source_search_key:
+                # The catch-all receives everything that matches nothing, so it
+                # must not also be one specific saved search (#102). The
+                # database rejects this too; refusing here turns a 500 into an
+                # explanation.
+                flash(
+                    "This profile is tied to a specific Idealista saved search, "
+                    "so it cannot be the default. The default profile is the "
+                    "fallback for emails that match nothing else.",
+                    "error",
+                )
+                requested_default = False
+                requested_active = True
+
             if requested_default:
                 # Keep defaults visible in active-only UIs.
                 profile.is_active = True

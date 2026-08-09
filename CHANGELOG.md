@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔑 Changed: a saved search is identified by its URL, not its label (2026-08-08, #102)
+- **What**: alert emails link to the saved-search page, and that link encodes
+  the subscription's filters. `services/search_subscription_identity.py`
+  canonicalizes it and fingerprints it as `idealista:v1:<sha256>`, stored in
+  the new `search_profiles.source_search_key` (unique) with the raw link kept
+  in `source_search_url` for diagnostics. `resolve_profile()` now resolves by
+  search key first, then adopts a same-named profile that has no key yet, then
+  creates one; emails with no recognizable search URL keep the old
+  name/matcher/default path. Migration `013`.
+- **Why**: the name parsed out of the subject is a *label*. It gets folded by
+  the mail server (#101), reworded by Idealista, or renamed by the owner, and
+  each variant used to create another `SearchProfile`.
+- **What counts as a search URL**: only `/areas/` links that carry a non-empty
+  `shape`. The polygon is what tells two custom-area subscriptions apart, so a
+  link that lost its query — wrapped mid-line in a text/plain part, or
+  truncated — yields no identity rather than a key minted from the path.
+- **Consequence to keep in mind**: `search_profiles.name` is no longer UNIQUE —
+  two subscriptions may legitimately share a label with a different `shape`, so
+  `merge_duplicate_profiles()` now refuses to merge a group holding different
+  search keys (and carries the single key onto the survivor when it merges one
+  that has it). Only labels the ingester invented (`is_auto_created`) are ever
+  rewritten. Keys are **not** backfilled: existing profiles stay NULL until the
+  next email for that subscription arrives. Identity conflicts (URL points at
+  one profile, label at another) are logged and left alone, never merged
+  automatically. An email linking to **several different** searches resolves to
+  no profile at all — the listing is stored unassigned rather than guessed into
+  a same-named subscription, and so does an email whose search URL *was* read
+  but could not be resolved (contested retries exhausted, or the insert
+  failed). Unassigned listings are not yet surfaced in the UI.
+- **The catch-all stays a catch-all**, enforced by the schema: `013` adds
+  `CHECK (source_search_key IS NULL OR is_default IS NOT TRUE)`, so a profile
+  tied to one saved search cannot be the fallback for everything else — through
+  the profile editor, the create form, the merge, or any route written later.
+  On top of that, `get_default_profile()` only considers profiles with no search
+  key, the merge refuses any group pairing the default with an identified
+  search, a label claimed by two different subscriptions resolves to neither,
+  and the "Make default" checkbox is disabled for an identified profile.
+- **Every by-name profile lookup** now goes through
+  `SearchProfileService.find_unidentified_by_name()`, which ignores rows that
+  hold a search key. That includes the legacy-land migration, which would
+  otherwise have poured the 168-row archive into a live subscription labelled
+  "Legacy Lands". The only by-name scans that still see identified profiles are
+  the deliberate conflict detectors.
+- **Concurrency**: the dropped UNIQUE was also what protected check-then-insert
+  in `get_or_create_profile_by_name()` / `get_default_profile()` from two
+  overlapping ingestions, so `013` adds a partial unique index on `name` for
+  rows with no search key — the old invariant, minus the case it wrongly
+  blocked. Binding a key to an existing profile is a conditional UPDATE that
+  fails and retries rather than re-pointing a row another ingestion just
+  claimed.
+- **CI**: the `pytest` job now runs a PostgreSQL service, because the migration
+  SQL is PostgreSQL-only and cannot be executed by SQLite —
+  `tests/test_postgres_migrations.py` applies the real files to a real server.
+  That test caught a percent-sign collision in `013` that would otherwise have
+  failed at deploy time, after the container had already been replaced.
+
 ### 🛟 Fixed: a refused Google API is no longer stored as a search result (2026-08-08, #98)
 - **What**: `PropertyTravelService.calculate_for_property()` wrote
   `status: "not_found"` and returned `True` whether Google had answered "there
