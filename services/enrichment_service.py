@@ -36,6 +36,11 @@ OSM_STATE_UNAVAILABLE = "unavailable"
 # a JSON column and matched by tests: keep it stable.
 OSM_REASON_QUERY_ERROR = "overpass_query_error"
 
+# Bumped from v1: the entry now carries the time its counts were measured, so a
+# cache hit can report their real age instead of the age of the read. A v1
+# entry is a bare counts dict, which this key simply never looks at.
+OSM_CACHE_KEY = "osm_amenities_v2"
+
 
 class EnrichmentService:
     def __init__(self):
@@ -908,19 +913,27 @@ class EnrichmentService:
         land.infrastructure_extended = merged
 
     def _record_osm_status(
-        self, land, state: str, failure: Optional[GoogleApiFailure] = None
+        self,
+        land,
+        state: str,
+        failure: Optional[GoogleApiFailure] = None,
+        measured_at: Optional[str] = None,
     ) -> None:
         """Stamp the outcome of the last Overpass call onto the land.
 
         Written on every run so an absent `osm_amenities` can be read back as
         either "Overpass answered, nothing nearby" or "we never got to look".
+        `measured_at` says when the counts now on the record were actually
+        measured, which is not the same as when they were last fetched.
         """
         now = datetime.now(timezone.utc).isoformat()
         status: Dict = {"state": state, "checked_at": now}
 
         if failure is None:
-            # The counts on the record were measured by this very call.
-            status["measured_at"] = now
+            # Counts read back from the cache were measured when the cache
+            # entry was written, up to a week ago - stamping "now" on them
+            # would refresh an age the page then reports as fact.
+            status["measured_at"] = measured_at or now
         else:
             status["reason"] = failure.reason
             if failure.http_status is not None:
@@ -956,10 +969,14 @@ class EnrichmentService:
         try:
             lat, lon = float(land.location_lat), float(land.location_lon)
 
-            cached = get_cached_enrichment_data(lat, lon, "osm_amenities_v1")
-            if isinstance(cached, dict):
-                self._write_infrastructure_extended(land, osm_amenities=cached)
-                self._record_osm_status(land, OSM_STATE_OK)
+            cached = get_cached_enrichment_data(lat, lon, OSM_CACHE_KEY)
+            if isinstance(cached, dict) and isinstance(cached.get("counts"), dict):
+                self._write_infrastructure_extended(
+                    land, osm_amenities=cached["counts"]
+                )
+                self._record_osm_status(
+                    land, OSM_STATE_OK, measured_at=cached.get("measured_at")
+                )
                 logger.debug("OSM amenities cache hit for land %s", land.id)
                 return None
 
@@ -1068,16 +1085,26 @@ class EnrichmentService:
 
             # Store OSM fallback data. An empty dict here is a real answer:
             # Overpass looked and there is nothing within 2km.
+            measured_at = datetime.now(timezone.utc).isoformat()
             self._write_infrastructure_extended(land, osm_amenities=amenity_counts)
-            self._record_osm_status(land, OSM_STATE_OK)
+            self._record_osm_status(land, OSM_STATE_OK, measured_at=measured_at)
 
-            cache_enrichment_data(
-                lat,
-                lon,
-                "osm_amenities_v1",
-                amenity_counts,
-                timeout=60 * 60 * 24 * 7,
-            )
+            # Best effort, and deliberately last. Overpass answered and the
+            # counts are on the record; a cache that refuses the write is a
+            # slower next run, not a failed enrichment, so it must not fall
+            # through to the handler below and relabel this call "unavailable".
+            try:
+                cache_enrichment_data(
+                    lat,
+                    lon,
+                    OSM_CACHE_KEY,
+                    {"counts": amenity_counts, "measured_at": measured_at},
+                    timeout=60 * 60 * 24 * 7,
+                )
+            except Exception:
+                logger.warning(
+                    "Could not cache OSM amenities for land %s", land.id, exc_info=True
+                )
             return None
 
         except Exception as exc:

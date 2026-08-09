@@ -485,6 +485,79 @@ class TestStaleCountsAreLabelled:
         assert "Overpass was unavailable" not in body
 
 
+class TestAnAnsweredCallIsNotRelabelled:
+    """Nothing after the answer may turn a success into a refusal."""
+
+    @patch("services.enrichment_service.cache_enrichment_data")
+    @patch("services.enrichment_service.request_with_retries")
+    def test_a_failing_cache_write_does_not_make_it_unavailable(
+        self, mock_request, mock_cache, app, service, land
+    ):
+        """The cache is an optimisation, not the source of the verdict."""
+        with app.app_context():
+            mock_request.return_value = _response(
+                payload={"elements": [{"tags": {"amenity": "school"}}]}
+            )
+            mock_cache.side_effect = RuntimeError("redis is down")
+
+            row = db.session.get(Land, land)
+            failure = service._enrich_with_osm_data(row)
+
+            assert failure is None
+            infrastructure = row.infrastructure_extended or {}
+            assert infrastructure["osm_amenities"] == {"school": 1}
+            assert infrastructure[OSM_STATUS_KEY]["state"] == OSM_STATE_OK
+            assert "reason" not in infrastructure[OSM_STATUS_KEY]
+
+    @patch("services.enrichment_service.get_cached_enrichment_data")
+    @patch("services.enrichment_service.request_with_retries")
+    def test_a_cache_hit_keeps_the_age_of_the_cached_counts(
+        self, mock_request, mock_cached, app, service, land
+    ):
+        """A week-old cache entry must not be reported as measured today.
+
+        The staleness label on the property page is built from `measured_at`,
+        so refreshing it on every cache read would make six-day-old counts
+        claim to be current.
+        """
+        with app.app_context():
+            mock_cached.return_value = {
+                "counts": {"school": 1},
+                "measured_at": "2026-08-01T10:00:00+00:00",
+            }
+
+            row = db.session.get(Land, land)
+            failure = service._enrich_with_osm_data(row)
+
+            assert failure is None
+            mock_request.assert_not_called()
+            status = row.infrastructure_extended[OSM_STATUS_KEY]
+            assert status["state"] == OSM_STATE_OK
+            assert status["measured_at"] == "2026-08-01T10:00:00+00:00"
+            # checked_at is now; measured_at is when the data was produced.
+            assert status["checked_at"] > status["measured_at"]
+
+    @patch("services.enrichment_service.cache_enrichment_data")
+    @patch("services.enrichment_service.request_with_retries")
+    def test_a_fresh_answer_caches_its_measurement_time(
+        self, mock_request, mock_cache, app, service, land
+    ):
+        with app.app_context():
+            mock_request.return_value = _response(
+                payload={"elements": [{"tags": {"amenity": "school"}}]}
+            )
+
+            row = db.session.get(Land, land)
+            service._enrich_with_osm_data(row)
+
+            payload = mock_cache.call_args.args[3]
+            assert payload["counts"] == {"school": 1}
+            assert (
+                payload["measured_at"]
+                == row.infrastructure_extended[OSM_STATUS_KEY]["measured_at"]
+            )
+
+
 class TestAnsweredRuns:
     """An answer stays an answer, including an empty one."""
 
