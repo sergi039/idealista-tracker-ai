@@ -31,6 +31,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same eight arguments — because the secret arrives as an argument, not in
   the format string, and a filter reading only `record.msg` would pass it
   straight through.
+- **A filter alone was not enough, and review caught it.** The first version
+  redacted only in a `logging.Filter`. That covers the message and nothing
+  else: `logging` renders `exc_info` inside `Formatter.format`, and a handler
+  filters *before* it formats, so every raised exception carrying a credential
+  went out untouched — confirmed against a live logger. `RedactingFormatter`
+  wraps whatever formatter a handler already has and redacts the rendered
+  result, including the cached `exc_text` so a second handler cannot re-emit
+  the original from the cache.
+- **The test that missed it is gone.** It pre-populated `record.exc_text` and
+  called the filter directly, which passes against code that leaks. The
+  replacement raises a real exception and reads what the handler actually
+  wrote.
 - **Not covered**: handlers added *after* `create_app()` runs. Redaction is a
   net under accidents, not a licence to log secrets deliberately.
 

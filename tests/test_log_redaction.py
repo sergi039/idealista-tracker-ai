@@ -12,11 +12,13 @@ raises the level again. These tests pin the filter, not the level.
 
 import io
 import logging
+import sys
 
 import pytest
 
 from utils.log_redaction import (
     REDACTED,
+    RedactingFormatter,
     SecretRedactingFilter,
     install_log_redaction,
     redact,
@@ -158,23 +160,79 @@ class TestWhatCountsAsASecret:
 
 
 class TestTracebacks:
-    def test_a_cached_traceback_is_redacted_too(self, captured):
-        """`exc_text` can quote the request URL from the frame that raised."""
+    """A traceback is text only inside the formatter, never at filter time.
+
+    The first version of these tests pre-populated `record.exc_text` and called
+    the filter directly. That passed against code which leaked every real
+    exception, and was caught in review on PR #148: `logging` renders
+    `exc_info` in `Formatter.format`, and a handler filters *before* it
+    formats, so no filter ever sees a traceback. These tests go through a real
+    logger with a real raised exception instead.
+    """
+
+    def test_without_redaction_an_exception_leaks_the_key(self):
+        """Baseline — this is the hole the review found."""
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+
+        logger = logging.getLogger("test_log_redaction_exc_baseline")
+        logger.handlers = [handler]
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+
+        try:
+            raise RuntimeError(
+                f"GET https://maps.googleapis.com/x?key={FAKE_GOOGLE_KEY}"
+            )
+        except RuntimeError:
+            logger.exception("request failed")
+        logger.handlers = []
+
+        assert FAKE_GOOGLE_KEY in stream.getvalue()
+
+    def test_a_raised_exception_carrying_a_key_is_redacted(self, captured):
+        """The real path: raise, `logger.exception`, read the handler output."""
         logger, stream = captured
 
-        record = logging.LogRecord(
-            name="test",
-            level=logging.ERROR,
-            pathname=__file__,
-            lineno=1,
-            msg="request failed",
-            args=(),
-            exc_info=None,
-        )
-        record.exc_text = f"  requests.get('https://x/y?key={FAKE_GOOGLE_KEY}')"
+        try:
+            raise RuntimeError(
+                f"GET https://maps.googleapis.com/x?key={FAKE_GOOGLE_KEY}"
+            )
+        except RuntimeError:
+            logger.exception("request failed")
 
-        SecretRedactingFilter().filter(record)
+        output = stream.getvalue()
+        assert FAKE_GOOGLE_KEY not in output, "the traceback carried the key out"
+        assert "AIza" not in output
+        assert REDACTED in output
+        # Still a usable traceback.
+        assert "RuntimeError" in output
+        assert "Traceback" in output
+        assert "request failed" in output
 
+    def test_the_cached_traceback_is_redacted_in_place(self):
+        """A second handler must not re-emit the original from `exc_text`.
+
+        `logging` caches the rendered traceback on the record, so a formatter
+        that redacted only its own return value would leave the raw text behind
+        for whoever formats next.
+        """
+        try:
+            raise RuntimeError(f"boom key={FAKE_GOOGLE_KEY}")
+        except RuntimeError:
+            record = logging.LogRecord(
+                name="t",
+                level=logging.ERROR,
+                pathname=__file__,
+                lineno=1,
+                msg="request failed",
+                args=(),
+                exc_info=sys.exc_info(),
+            )
+
+        RedactingFormatter(logging.Formatter("%(message)s")).format(record)
+
+        assert record.exc_text is not None, "the formatter did not render the traceback"
         assert FAKE_GOOGLE_KEY not in record.exc_text
         assert REDACTED in record.exc_text
 
@@ -198,6 +256,26 @@ class TestInstallation:
                 f for f in handler.filters if isinstance(f, SecretRedactingFilter)
             ]
             assert len(installed) == 1, f"{handler!r} carries {len(installed)} filters"
+            assert isinstance(handler.formatter, RedactingFormatter)
+            # And the wrapper must not have wrapped itself.
+            assert not isinstance(handler.formatter.inner, RedactingFormatter)
+
+    def test_both_halves_are_installed(self, captured):
+        """Filter for the message, formatter for the traceback — both or neither.
+
+        Pinned separately because installing only the filter is exactly the
+        state PR #148 was blocked in: it looks covered and leaks every
+        exception.
+        """
+        logger, _ = captured
+
+        for handler in logger.handlers:
+            assert any(isinstance(f, SecretRedactingFilter) for f in handler.filters), (
+                "message redaction missing"
+            )
+            assert isinstance(handler.formatter, RedactingFormatter), (
+                "traceback redaction missing"
+            )
 
     def test_it_reports_when_there_is_nothing_to_cover(self):
         """Zero handlers means the call achieved nothing - the caller can tell."""
