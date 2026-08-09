@@ -17,6 +17,7 @@ What is pinned here:
   entirely, which read as "no travel data" rather than "several profiles").
 """
 
+import html
 import re
 
 import pytest
@@ -143,6 +144,14 @@ def _dropdown(body):
         r'id="profile-select-menu"(.*?)</div>\s*</div>\s*</div>', body, re.S
     )
     assert match, "the subscription dropdown is missing"
+    return match.group(1)
+
+
+def _switcher(body):
+    """The subscription switcher block, so an assertion cannot match some
+    other link on the page that happens to carry the same profile_id."""
+    match = re.search(r'id="subscription-switcher"(.*?)<!-- Filters -->', body, re.S)
+    assert match, "the subscription switcher is missing"
     return match.group(1)
 
 
@@ -306,3 +315,63 @@ class TestTravelSurvivesTheUnion:
             f"/properties?profile_id={subscriptions['land_id']}"
         ).get_data(as_text=True)
         assert "NorteOfficeTarget" in single
+
+
+class TestTheSavedSearchesAreVisibleOnThePage:
+    """The owner's two saved searches have to be readable without opening
+    anything.
+
+    They are listed on idealista.com as "Your searches (2)", by name. A
+    filter control reading "All subscriptions" says nothing about what the
+    owner is actually subscribed to, and the first build hid both names
+    inside a closed dropdown -- which read as "my subscriptions are missing".
+    """
+
+    def test_both_live_subscriptions_are_named_on_the_page(self, client, subscriptions):
+        markup = _switcher(client.get("/properties").get_data(as_text=True))
+        assert "Land at Norte" in markup
+        assert "houses at your custom search area norte" in markup
+
+    def test_each_one_carries_its_listing_count(self, client, subscriptions):
+        markup = _switcher(client.get("/properties").get_data(as_text=True))
+        link = re.search(
+            rf'href="[^"]*profile_id={subscriptions["land_id"]}[^"]*"(.*?)</a>',
+            markup,
+            re.S,
+        )
+        assert link and ">1<" in link.group(1)
+
+    def test_one_click_narrows_to_that_subscription(self, client, subscriptions):
+        body = client.get("/properties").get_data(as_text=True)
+        hrefs = re.findall(r'href="([^"]*profile_id=[^"]*)"', html.unescape(body))
+        target = f"profile_id={subscriptions['houses_id']}"
+        assert any(target in href for href in hrefs)
+
+        narrowed = client.get(
+            f"/properties?profile_id={subscriptions['houses_id']}"
+        ).get_data(as_text=True)
+        assert "HouseListingUniqueTitle" in narrowed
+        assert "LandListingUniqueTitle" not in narrowed
+
+    def test_the_archive_is_not_among_the_live_ones(self, client, subscriptions):
+        markup = _switcher(client.get("/properties").get_data(as_text=True))
+        # Reachable, but behind the Archive dropdown rather than beside the
+        # two searches that still send mail.
+        archive_menu = re.search(r'id="archived-subscriptions".*?</ul>', markup, re.S)
+        assert archive_menu, "archived subscriptions need their own dropdown"
+        assert "Legacy Lands" in archive_menu.group(0)
+        assert (
+            "Legacy Lands" not in markup[: markup.index('id="archived-subscriptions"')]
+        )
+
+    def test_the_selected_one_is_marked_as_selected(self, client, subscriptions):
+        markup = _switcher(
+            client.get(f"/properties?profile_id={subscriptions['land_id']}").get_data(
+                as_text=True
+            )
+        )
+        link = re.search(
+            rf'<a[^>]*href="[^"]*profile_id={subscriptions["land_id"]}[^"]*"[^>]*>',
+            markup,
+        )
+        assert link and "btn-primary" in link.group(0)

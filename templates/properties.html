@@ -163,6 +163,51 @@
             </div>
         </div>
 
+        {# The saved searches themselves, on the page rather than inside a
+           closed dropdown. The owner has two of them on idealista.com and
+           expects to see both named, with their counts, the way the site
+           lists them -- a control reading "All subscriptions" tells them
+           nothing about what they are subscribed to. The dropdown in the
+           filter bar stays for combinations and for the archive. #}
+        {% set live_subscriptions = profile_options|selectattr('is_active')|list %}
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-3" id="subscription-switcher">
+            <span class="text-body-secondary small me-1">
+                <i class="fas fa-envelope-open-text me-1"></i>{{ t('subscriptions') }} ({{ live_subscriptions|length }})
+            </span>
+            <a class="btn btn-sm {{ 'btn-secondary' if profile_selection.state == 'all' else 'btn-outline-secondary' }}"
+               href="{{ url_for('main.properties', **dict(base_args, profile_id='all', page=1)) }}">
+                {{ t('all_subscriptions') }}
+            </a>
+            {% for option in live_subscriptions %}
+                <a class="btn btn-sm {{ 'btn-primary' if profile_selection.single_id == option.id else 'btn-outline-secondary' }}"
+                   href="{{ url_for('main.properties', **dict(base_args, profile_id=option.id, page=1)) }}"
+                   title="Show only this subscription">
+                    {{ option.name }}
+                    <span class="badge bg-body-tertiary text-body-secondary border ms-1">{{ option.count }}</span>
+                </a>
+            {% endfor %}
+            {% set archived_subscriptions = profile_options|rejectattr('is_active')|list %}
+            {% if archived_subscriptions %}
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle"
+                            type="button" id="archived-subscriptions" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-box-archive me-1"></i>{{ t('archive') }}
+                    </button>
+                    <ul class="dropdown-menu" aria-labelledby="archived-subscriptions">
+                        {% for option in archived_subscriptions %}
+                            <li>
+                                <a class="dropdown-item small {{ 'active' if profile_selection.single_id == option.id else '' }}"
+                                   href="{{ url_for('main.properties', **dict(base_args, profile_id=option.id, page=1)) }}">
+                                    {{ option.name }}
+                                    <span class="text-body-secondary">({{ option.count }})</span>
+                                </a>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% endif %}
+        </div>
+
         <!-- Filters -->
         <div class="card mb-3 filters-card" id="filters-card">
             <div class="card-header py-2">
