@@ -17,9 +17,19 @@ _DEFAULT_RETRY_STATUSES = (429, 500, 502, 503, 504)
 # product token is served. Keep this a plain token.
 HTTP_USER_AGENT = "IdealistaRank/1.0"
 
-# overpass-api.de grants two query slots per IP and answers 504 while both are
-# busy. Two seconds between calls keeps a bulk run inside that budget.
-OVERPASS_MIN_INTERVAL_S = 2.0
+# overpass-api.de grants two query slots per IP, answers 504 while both are
+# busy, and answers 429 when the *rate* is too high for the slots it is willing
+# to hand out.
+#
+# Two seconds was a guess at the slot count. Measured on 2026-08-09 by pacing
+# 20 amenity lookups at that interval: 39 requests for 20 answers -- 16 served,
+# 8 refused with 504, and 15 with 429. Nothing was mis-recorded, because
+# `_DEFAULT_RETRY_STATUSES` above already retries both, but more than half the
+# traffic was the server telling us to slow down, and a run over the whole
+# table would have spent hours doing it. Five seconds is what that measurement
+# supports, and it costs an interactive Enrich nothing: the gate is idle
+# between presses, so a single lookup never waits at all.
+OVERPASS_MIN_INTERVAL_S = 5.0
 
 
 class RateGate:

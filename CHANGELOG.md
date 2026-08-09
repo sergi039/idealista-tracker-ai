@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🐢 Changed: Overpass is paced at 5 s, because 2 s was a guess (2026-08-09, #152 follow-up)
+- **What**: `OVERPASS_MIN_INTERVAL_S` goes from 2 s to 5 s, and `429 Too Many
+  Requests` joins the three refusal shapes recorded in `docs/STATE.md`.
+- **Why**: a dry-run amenity backfill over 20 properties — the first time this
+  path was paced and counted against the live instance — spent **39 requests on
+  20 answers**: 16 served, 8 refused with `504`, and **15 with `429`**. More
+  than half the traffic was the server asking for less of it, and the run took
+  ~12 minutes, which extrapolates to about two hours over the whole table.
+- **Nothing was recorded wrongly**: `_DEFAULT_RETRY_STATUSES` in `utils/http.py`
+  has always carried 429, so every one of those was waited out and answered on
+  retry, and the run finished `measured 20, refused 0`. That is also why it
+  went unnoticed until someone counted — a backoff hides a bad rate rather
+  than reporting it.
+- **A backoff is not a rate.** The retry loop makes a too-fast caller correct;
+  it does not make it welcome. `tests/test_issue_152_property_osm_amenities.py`
+  now pins both halves: a `429` followed by a `200` stores the counts (it fails
+  if a caller narrows `retryable_statuses` and files "too many requests" as a
+  measured absence), and the interval does not quietly go back down.
+- **An interactive Enrich pays nothing** for the wider interval: the gate is
+  idle between presses, so a single lookup never waits. Only a run that
+  actually issues calls back to back is slowed, which is the run that was
+  drawing the 429s.
+
 ### 🗺️ Fixed: nearby amenities are measured for the listings that exist (2026-08-09, #152)
 - **What**: `PropertyEnrichmentService.enrich_property` — the Enrich button on
   `/properties/<id>` — now runs the OpenStreetMap amenity lookup and writes it

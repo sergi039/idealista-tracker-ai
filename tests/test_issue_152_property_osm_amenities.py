@@ -50,7 +50,12 @@ from services.enrichment_service import (
 from tests import setup_test_environment
 from utils.cache import cache
 from utils.google_api import REASON_HTTP_ERROR
-from utils.http import HTTP_USER_AGENT, OVERPASS_GATE, RateGate
+from utils.http import (
+    HTTP_USER_AGENT,
+    OVERPASS_GATE,
+    OVERPASS_MIN_INTERVAL_S,
+    RateGate,
+)
 
 
 @pytest.fixture
@@ -474,6 +479,41 @@ class TestNoCoordinatesIsNotNothingNearby:
 
 class TestPacing:
     """overpass-api.de grants two query slots per IP, for the whole process."""
+
+    def test_a_429_is_waited_out_rather_than_recorded(self, app, service):
+        """Measured on 2026-08-09: a paced 20-property dry run drew 15 `429`s
+        and 8 `504`s for 20 answers. "Too many requests" is not an answer about
+        what is nearby -- the server wants a slower rate, and the real answer
+        arrives on retry. The real transport runs here, only its sleep is
+        patched: a caller that narrowed `retryable_statuses` to the 504 case
+        would file the 429 as a measured absence, which is #98 again.
+        """
+        property_id = _property(app, "prop_osm_429")
+
+        with app.app_context():
+            with (
+                patch("utils.http.time.sleep", return_value=None),
+                patch(
+                    "services.enrichment_service.requests.post",
+                    side_effect=[_response(status_code=429), _amenities("bank")],
+                ) as mock_post,
+            ):
+                prop = db.session.get(Property, property_id)
+                failure = service.enrich_osm_amenities(prop)
+
+            section = db.session.get(Property, property_id).infrastructure_extended
+
+        assert mock_post.call_count == 2
+        assert failure is None
+        assert section["osm_amenities"] == {"bank": 1}
+        assert section[OSM_STATUS_KEY]["state"] == OSM_STATE_OK
+
+    def test_the_interval_is_the_measured_one(self):
+        """A guessed 2 s drew more refusals than answers; do not walk it back
+        without measuring again -- see docs/STATE.md. The gate object itself
+        carries 0 here, because tests/__init__.py disables pacing for a suite
+        that never reaches the live instance."""
+        assert OVERPASS_MIN_INTERVAL_S >= 5.0
 
     def test_both_overpass_callers_share_one_gate(self):
         from services import enrichment_service, sea_view_service

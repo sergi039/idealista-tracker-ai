@@ -223,6 +223,13 @@ and TODO.md; respect it if you ever run both side by side.
   `EnrichmentService.enrich_osm_amenities` **directly and never
   `PropertyEnrichmentService.enrich_property`**, which would fire the paid
   Google travel and Places calls once per row.
+- **Overpass is paced at 5 s, and that number is measured** (#152 follow-up).
+  A 20-property dry run at the previous 2 s spent 39 requests on 20 answers —
+  15 of them refused with `429 Too Many Requests`, more than the 8 refused with
+  `504`. Both are retried, so nothing was recorded wrongly, but a backoff is
+  not a rate: keep `OVERPASS_MIN_INTERVAL_S` where the measurement put it, and
+  re-measure before lowering it. It costs an interactive Enrich nothing,
+  because the gate is idle between presses.
 - **Every Overpass caller reads three refusals, not one** (#144, all measured
   against the live instance): the `406` above, which also fires for a UA
   carrying a parenthetical comment; the `504` above, which needs a backoff in
