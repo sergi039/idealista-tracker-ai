@@ -10,6 +10,7 @@ that decides which flag is passed.
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -85,7 +86,16 @@ def test_default_anthropic_model_is_passed_to_the_claude_cli(bridge, monkeypatch
     assert cmd[cmd.index("--model") + 1] == Config.ANTHROPIC_MODEL
 
 
+@pytest.mark.skipif(
+    bool(os.environ.get("ANTHROPIC_MODEL") or os.environ.get("OPENAI_MODEL")),
+    reason="the environment overrides the defaults this test is about",
+)
 def test_configured_defaults_are_the_current_models():
-    """A model id is a deployment fact, so a change to it is a deliberate one."""
+    """A model id is a deployment fact, so a change to it is a deliberate one.
+
+    Skipped rather than reloaded when the environment overrides them: other
+    modules hold `from config import Config`, so reimporting the module hands
+    them a second Config object and quietly breaks tests that patch the first.
+    """
     assert Config.ANTHROPIC_MODEL == "claude-sonnet-5"
     assert Config.OPENAI_MODEL == "gpt-5.6-terra"
