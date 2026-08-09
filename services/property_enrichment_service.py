@@ -2,8 +2,11 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy.orm.attributes import flag_modified
+
 from app import db
 from models import Property
+from services.enrichment_service import EnrichmentService
 from services.property_location_service import PropertyLocationService
 from services.property_scoring_service import PropertyScoringService
 from services.property_travel_service import PropertyTravelService, travel_api_state
@@ -13,10 +16,12 @@ logger = logging.getLogger(__name__)
 
 
 class PropertyEnrichmentService:
-    """Google-enrichment orchestration for universal Property.
+    """Enrichment orchestration for universal Property.
 
     Mirrors the legacy "Enrich with Google APIs" flow:
     - ensure coordinates (Geocoding)
+    - measure distance to the sea (OpenStreetMap, free)
+    - count nearby amenities (OpenStreetMap, free)
     - compute travel targets (Places + Distance Matrix, with fallback)
     - recompute scoring (local)
     """
@@ -27,11 +32,15 @@ class PropertyEnrichmentService:
         travel_service: Optional[PropertyTravelService] = None,
         scoring_service: Optional[PropertyScoringService] = None,
         sea_distance_service: Optional[SeaDistanceService] = None,
+        enrichment_service: Optional[EnrichmentService] = None,
     ):
         self.location_service = location_service or PropertyLocationService()
         self.travel_service = travel_service or PropertyTravelService()
         self.scoring_service = scoring_service or PropertyScoringService()
         self.sea_distance_service = sea_distance_service or SeaDistanceService()
+        # Only its OSM amenity half is used here; the Google half of this class
+        # is the property services above.
+        self.enrichment_service = enrichment_service or EnrichmentService()
 
     def enrich_property(
         self,
@@ -46,7 +55,22 @@ class PropertyEnrichmentService:
         # Coordinates first (needed for travel).
         self.location_service.ensure_coordinates(prop, refresh=refresh_coords)
 
-        if not (prop.location_lat and prop.location_lon):
+        # `is None`, not truthiness: a coordinate of exactly 0 is a location,
+        # and the amenity lookup below already treats it as one.
+        if prop.location_lat is None or prop.location_lon is None:
+            # Geocoding could not place this listing, so nothing below can run.
+            # Record that the amenity lookup was never asked rather than
+            # leaving the section absent, which reads as "nothing nearby"
+            # (#152). This path has no shared commit to ride, so it takes its
+            # own.
+            try:
+                self.enrichment_service.enrich_osm_amenities(prop, commit=True)
+            except Exception as e:
+                logger.warning(
+                    "Could not record the amenity gap for %s: %s",
+                    getattr(prop, "id", None),
+                    e,
+                )
             return False
 
         # Enrichment does not touch `search_profile_id` (owner decision,
@@ -65,6 +89,22 @@ class PropertyEnrichmentService:
                 e,
             )
 
+        # Nearby amenities, from OpenStreetMap. Free and keyless, which is why
+        # this pass has no billing argument for leaving it out - and until #152
+        # it was left out anyway: the lookup existed only on the legacy `Land`
+        # endpoints, so most listings showed no Extended Infrastructure card at
+        # all. A refusal is recorded as a refusal and never fails the run:
+        # Overpass is a supplementary feed that answers 504 whenever both of
+        # its two per-IP slots are busy, and no score reads its counts.
+        try:
+            self.enrichment_service.enrich_osm_amenities(prop, commit=False)
+        except Exception as e:
+            logger.warning(
+                "OSM amenity lookup failed for %s: %s",
+                getattr(prop, "id", None),
+                e,
+            )
+
         ok = self.travel_service.calculate_for_property(prop, commit=False)
         travel_state = travel_api_state(prop)
 
@@ -76,11 +116,14 @@ class PropertyEnrichmentService:
                     "Property scoring failed during enrichment for %s: %s", prop.id, e
                 )
 
-        enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
-        if not isinstance(enrichment, dict):
-            enrichment = {}
+        # `enrichment` is a plain JSON column, not a MutableDict: reading the
+        # loaded dict, mutating it and assigning the *same object* back leaves
+        # the attribute clean and the flush emits no UPDATE. It happened to
+        # reach the database only because a step above had already replaced the
+        # blob; on a run where every one of them failed, this marker was lost.
+        enrichment = dict(prop.enrichment) if isinstance(prop.enrichment, dict) else {}
         google_meta = (
-            enrichment.get("google")
+            dict(enrichment["google"])
             if isinstance(enrichment.get("google"), dict)
             else {}
         )
@@ -90,6 +133,7 @@ class PropertyEnrichmentService:
         google_meta["travel_state"] = travel_state
         enrichment["google"] = google_meta
         prop.enrichment = enrichment
+        flag_modified(prop, "enrichment")
 
         db.session.commit()
         return ok

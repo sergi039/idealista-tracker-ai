@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🗺️ Fixed: nearby amenities are measured for the listings that exist (2026-08-09, #152)
+- **What**: `PropertyEnrichmentService.enrich_property` — the Enrich button on
+  `/properties/<id>` — now runs the OpenStreetMap amenity lookup and writes it
+  to `Property.enrichment["infrastructure_extended"]`, in the same
+  `osm_amenities` / `osm_amenities_status` shape the page already renders. It
+  reuses the existing Overpass client rather than adding a second one: the
+  transport, the cache and the three refusal shapes now live in
+  `EnrichmentService._fetch_osm_amenities`, with `_enrich_with_osm_data`
+  (legacy `Land`) and `enrich_osm_amenities` (universal `Property`) as the two
+  thin writers over it. `utils/backfill_osm_amenities.py` backfills stored
+  rows; it calls the amenity lookup directly, never `enrich_property`.
+- **Why**: the lookup was reachable only from the legacy `Land` endpoints, so
+  213 of 352 listings could not show amenities however often Enrich was
+  pressed — the 139 that did were legacy rows mirrored in, measured before
+  `lands` froze. An absent Extended Infrastructure card reads as "nothing
+  nearby" rather than "never asked", which is #98 and #144 one level up: not a
+  refusal recorded as a negative, but a question never asked, presented as an
+  answer. Overpass is free and keyless, so no billing argument applied.
+- **Notes**: a refusal is recorded as `state: "unavailable"` with its reason
+  and never as empty counts, and it does not fail the enrichment run — no
+  score reads these counts, and `504` is routine on an endpoint that grants
+  two slots per IP. That pacing is now one process-wide gate,
+  `utils/http.py` `OVERPASS_GATE`, shared with the coastline query in
+  `services/sea_view_service.py`; pacing them separately paced neither. A
+  property with no usable coordinates is recorded as not asked rather than
+  geocoded, because geocoding is a paid Google call — including the listing
+  geocoding *failed* to place, where `enrich_property` gives up before
+  anything else can run. The gate reserves each caller's slot under its lock
+  and sleeps outside it, so a finishing request never blocks for a whole
+  interval behind somebody else's wait; it paces when a call may start, which
+  on an endpoint granting two concurrent slots is the design rather than a
+  hole in it. On a row mirrored from
+  `lands` the first write seeds the section from the legacy one, since
+  `Property.infrastructure_extended` stops falling back the moment a top-level
+  section exists — without that, the first measurement would have hidden every
+  Google-derived key the page was showing. Re-running **Google** enrichment
+  stays out of scope, and running the backfill is a separate owner decision.
+
 ### 🔐 Fixed: a log handler can no longer write an API key in plain text (2026-08-09)
 - **What**: `utils/log_redaction.py` adds a logging filter that strips
   credentials out of a record before any handler formats it — `key=`,
@@ -68,6 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   diagnostic exists to answer, and a type name is not a credential.
 - **Not covered**: handlers added *after* `create_app()` runs. Redaction is a
   net under accidents, not a licence to log secrets deliberately.
+
 ### 🛟 Fixed: the two saved-search identity races are observable and locked (2026-08-09, #116)
 - **What**: an alert email that carries no saved-search URL now says so.
   `SearchProfileService.resolve_profile()` logs one warning per such email,

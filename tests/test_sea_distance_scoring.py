@@ -243,7 +243,7 @@ def test_unusable_geometry_from_the_source_is_unavailable(app, monkeypatch):
         def json(self):
             return {"elements": [{"type": "way", "geometry": []}]}
 
-    monkeypatch.setattr(svs, "OVERPASS_MIN_INTERVAL_S", 0)
+    monkeypatch.setattr(svs.OVERPASS_GATE, "min_interval_s", 0)
     monkeypatch.setattr(svs, "_cache_get", lambda *a, **k: None)
     monkeypatch.setattr(svs, "_cache_set", lambda *a, **k: None)
     monkeypatch.setattr(_requests, "post", lambda *a, **k: _Resp())
@@ -581,6 +581,15 @@ def test_manual_enrichment_measures_before_it_scores(app, monkeypatch):
             prop.enrichment = enrichment
             return enrichment["sea"]
 
+    class StubAmenities:
+        """The OSM amenity half of the pass; its own wiring is tested in
+        tests/test_issue_152_property_osm_amenities.py. Stubbed here so this
+        test stays offline."""
+
+        def enrich_osm_amenities(self, prop, *, commit=False):
+            order.append(("amenities", commit))
+            return None
+
     with app.app_context():
         prop = _property()
         db.session.add(prop)
@@ -591,6 +600,7 @@ def test_manual_enrichment_measures_before_it_scores(app, monkeypatch):
             travel_service=StubTravel(),
             scoring_service=StubScoring(),
             sea_distance_service=StubSea(),
+            enrichment_service=StubAmenities(),
         ).enrich_property(prop)
 
         property_id = prop.id
@@ -598,7 +608,8 @@ def test_manual_enrichment_measures_before_it_scores(app, monkeypatch):
         reloaded = db.session.get(Property, property_id)
 
     # Measured first, on the shared commit, and the score saw the result.
-    assert order == [("sea", False), ("scoring", STATUS_OK)]
+    # The free amenity lookup rides between them, also on the shared commit.
+    assert order == [("sea", False), ("amenities", False), ("scoring", STATUS_OK)]
     assert reloaded.enrichment["sea"]["distance_m"] == 700.0
 
 
