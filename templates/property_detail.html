@@ -71,7 +71,25 @@
                                 <i class="fas fa-check-circle me-1"></i>SOLD
                             </span>
                         {% endif %}
-                        {% if property.municipality %}
+                        {# The geocoded address, which the enrichment pass has been
+                           storing all along and nothing ever read: the header
+                           showed a raw coordinate and no place name a person
+                           would recognise. It is shown when the geocoder
+                           resolved one and simply absent otherwise -- never
+                           reconstructed from the coordinate. #}
+                        {% set _address = property.geocoded_address %}
+                        {% if _address %}
+                            <span class="text-body-secondary small">
+                                <i class="fas fa-map-pin me-1"></i>{{ _address }}
+                            </span>
+                        {% endif %}
+                        {# The municipality stays beside it only when the address
+                           does not already carry it. Google answers in the local
+                           language, so "San Juan de Alicante" against "Sant Joan
+                           d'Alacant" is two different names for one place, not a
+                           duplicate -- and the municipality is the one the
+                           filters and the profile rules use. #}
+                        {% if property.municipality and not (_address and property.municipality|lower in _address|lower) %}
                             <span class="text-body-secondary small">
                                 <i class="fas fa-city me-1"></i>{{ property.municipality }}
                             </span>

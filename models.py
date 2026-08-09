@@ -376,6 +376,23 @@ class Property(db.Model):
         return round(float(distance_km), 1)
 
     @property
+    def geocoded_address(self):
+        """The address the geocoder resolved, or `None` if it never resolved one.
+
+        A listing carries no street of its own -- the columns stop at
+        `municipality` -- so `enrichment.geocoding.formatted_address` is the
+        only human-readable location this app ever holds. It was written by
+        the enrichment pass and then read by nothing, which is why the page
+        could show a coordinate and no address at all. Absent means the
+        geocoder did not run or refused; nothing is reconstructed from the
+        coordinate to fill the gap.
+        """
+        address = self._get_enrichment_section("geocoding").get("formatted_address")
+        if not isinstance(address, str):
+            return None
+        return address.strip() or None
+
+    @property
     def infrastructure_basic(self):
         return self._get_enrichment_section("infrastructure_basic")
 
