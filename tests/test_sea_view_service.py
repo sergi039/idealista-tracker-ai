@@ -235,7 +235,8 @@ class TestCoastlineIsFetchedPerCell:
             return _Response()
 
         monkeypatch.setattr(svc.requests, "post", _post)
-        monkeypatch.setattr(svc, "OVERPASS_MIN_INTERVAL_S", 0.0)
+        # Pacing moved to the gate shared with the amenity query (#152).
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
         svc.fetch_coastline_points(43.3635, -5.7082)
         centre_lat, centre_lon = svc.coastline_cell(43.3635, -5.7082)
         assert f"{centre_lat:.4f},{centre_lon:.4f}" in captured["query"]

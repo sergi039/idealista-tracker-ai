@@ -37,7 +37,7 @@ import requests
 
 from config import Config
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
-from utils.http import HTTP_USER_AGENT, request_with_retries
+from utils.http import HTTP_USER_AGENT, OVERPASS_GATE, request_with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,9 @@ COASTLINE_CELL_HALF_DIAGONAL_M = 8_000
 COASTLINE_QUERY_RADIUS_M = (
     MAX_SEA_DISTANCE_M + APPROXIMATE_COORD_SLACK_M + COASTLINE_CELL_HALF_DIAGONAL_M
 )
-OVERPASS_MIN_INTERVAL_S = 2.0
+# Pacing lives in `utils.http.OVERPASS_GATE`, shared with the amenity query in
+# services/enrichment_service.py: both spend the same two per-IP slots, so a
+# private interval here would only pace half of the traffic (#152).
 
 MIN_PROFILE_SAMPLES = 12
 MAX_PROFILE_SAMPLES = 60
@@ -235,9 +237,6 @@ class SeaViewSourceError(RuntimeError):
     """
 
 
-_last_overpass_call_at = 0.0
-
-
 def coastline_cell(lat: float, lon: float) -> Tuple[float, float]:
     """The grid cell a point belongs to, as (centre_lat, centre_lon)."""
     return (
@@ -273,10 +272,7 @@ def fetch_coastline_points(
     )
     http = session or requests
 
-    global _last_overpass_call_at
-    wait = OVERPASS_MIN_INTERVAL_S - (time.monotonic() - _last_overpass_call_at)
-    if wait > 0:
-        time.sleep(wait)
+    OVERPASS_GATE.wait()
 
     try:
         response = request_with_retries(
@@ -298,7 +294,7 @@ def fetch_coastline_points(
     except requests.RequestException as exc:
         raise SeaViewSourceError(f"Overpass request failed: {exc}") from exc
     finally:
-        _last_overpass_call_at = time.monotonic()
+        OVERPASS_GATE.mark()
 
     if response.status_code != 200:
         raise SeaViewSourceError(f"Overpass returned HTTP {response.status_code}")

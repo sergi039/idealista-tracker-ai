@@ -19,11 +19,68 @@
                     <i class="fas fa-star {{ 'text-warning' if property.is_favorite else 'text-muted' }}"></i>
                 </button>
                 <div>
-                    <h1 class="h3 mb-1">
-                        <i class="fas fa-map-marker-alt me-2"></i>
-                        {{ property.title or ('Property #' ~ property.id) }}
+                    {# One Google Maps link for both cases: the coordinate when we
+                       have one, the municipality when we do not. The link used to
+                       live in a Location panel further down that carried the same
+                       two branches; the panel is gone, the fallback is not. #}
+                    {% if property.location_lat and property.location_lon %}
+                        {% set _maps_url = 'https://www.google.com/maps/search/?api=1&query=' ~ property.location_lat ~ ',' ~ property.location_lon %}
+                    {% elif property.municipality %}
+                        {% set _maps_url = 'https://www.google.com/maps/search/' ~ property.municipality|urlencode ~ ',+Spain' %}
+                    {% else %}
+                        {% set _maps_url = none %}
+                    {% endif %}
+                    <h1 class="h3 mb-1 d-flex flex-wrap align-items-center gap-2">
+                        <span>
+                            <i class="fas fa-map-marker-alt me-2"></i>{{ property.title or ('Property #' ~ property.id) }}
+                        </span>
+                        {# The three destinations are icons next to the title instead
+                           of a labelled button group in a panel of its own: same
+                           links, none of the vertical space (owner decision,
+                           2026-08-09). Each one still says what it is to a screen
+                           reader and on hover. #}
+                        <span class="detail-link-icons d-inline-flex align-items-center gap-1">
+                            {% if _maps_url %}
+                            <a href="{{ _maps_url }}" target="_blank" rel="noopener"
+                               class="btn btn-sm btn-outline-primary detail-link-icon"
+                               title="Google Maps" aria-label="Google Maps">
+                                <i class="fas fa-map"></i>
+                            </a>
+                            {% endif %}
+                            {% if property.url %}
+                            <a href="{{ property.url }}" target="_blank" rel="noopener"
+                               class="btn btn-sm btn-outline-success detail-link-icon"
+                               title="Idealista" aria-label="Idealista">
+                                <i class="fas fa-home"></i>
+                            </a>
+                            {% endif %}
+                            <a href="{{ url_for('main.map_view', focus=property.id) }}"
+                               class="btn btn-sm btn-outline-secondary detail-link-icon"
+                               title="{{ t('view_on_app_map') }}" aria-label="{{ t('view_on_app_map') }}">
+                                <i class="fas fa-map-marked-alt"></i>
+                            </a>
+                            {# Check status sits with them (owner decision,
+                               2026-08-09): it was a labelled button in a row of
+                               its own inside the Overview card. Icon-sized, it
+                               cannot carry its outcome as a label, so the icon
+                               changes and the answer arrives as a toast. #}
+                            <button type="button" id="check-listing-status-btn"
+                                    class="btn btn-sm btn-outline-primary detail-link-icon"
+                                    onclick="checkPropertyListingStatus({{ property.id }})"
+                                    title="Check status on Idealista"
+                                    aria-label="Check status on Idealista">
+                                <i class="fas fa-rotate"></i>
+                            </button>
+                        </span>
                     </h1>
-                    <div class="d-flex flex-wrap align-items-center gap-2">
+                    {# One line, not three (owner decision, 2026-08-09): the place
+                       and the coordinate. ID reads in the URL, the Idealista id
+                       is what the Idealista icon links to, and "Status: active /
+                       Checked: never" went together -- with no status text left
+                       to mistake for an observation, the qualifier #136 added to
+                       it has nothing to qualify. A removed or sold listing still
+                       says so, in the badge here and in the banner below. #}
+                    <div class="d-flex flex-wrap align-items-center gap-2 text-body-secondary small">
                         {% if property.listing_status == 'removed' %}
                             <span class="badge bg-danger">
                                 <i class="fas fa-times-circle me-1"></i>REMOVED
@@ -33,25 +90,44 @@
                                 <i class="fas fa-check-circle me-1"></i>SOLD
                             </span>
                         {% endif %}
-                        {% if property.municipality %}
+                        {# The geocoded address, which the enrichment pass has been
+                           storing all along and nothing ever read: the header
+                           showed a raw coordinate and no place name a person
+                           would recognise. It is shown when the geocoder
+                           resolved one and simply absent otherwise -- never
+                           reconstructed from the coordinate. #}
+                        {% set _address = property.geocoded_address %}
+                        {% if _address %}
+                            <span class="text-body-secondary small">
+                                <i class="fas fa-map-pin me-1"></i>{{ _address }}
+                            </span>
+                        {% endif %}
+                        {# The municipality stays beside it only when the address
+                           does not already carry it. Google answers in the local
+                           language, so "San Juan de Alicante" against "Sant Joan
+                           d'Alacant" is two different names for one place, not a
+                           duplicate -- and the municipality is the one the
+                           filters and the profile rules use. #}
+                        {% if property.municipality and not (_address and property.municipality|lower in _address|lower) %}
                             <span class="text-body-secondary small">
                                 <i class="fas fa-city me-1"></i>{{ property.municipality }}
                             </span>
                         {% endif %}
-                    </div>
-                    <div class="text-body-secondary small mt-1">
-                        <span class="me-2">ID: {{ property.id }}</span>
-                        {% if property.idealista_property_id %}<span class="me-2">Idealista: {{ property.idealista_property_id }}</span>{% endif %}
-                        {% if property.listing_status %}<span class="me-2">Status: {{ property.listing_status }}</span>{% endif %}
-                        {# "active" is the ingest default, not an observation, so say
-                           plainly when nobody ever verified it (issue #136). #}
-                        {% if property.listing_last_checked %}
-                            <span class="me-2">Checked: {{ property.listing_last_checked.strftime('%Y-%m-%d') }}</span>
-                        {% else %}
-                            <span class="me-2 fst-italic" title="Nobody has checked this listing on Idealista yet — the status above is the default it was ingested with">Checked: never</span>
+                        {# Accuracy stays with the coordinate: an "approximate" one
+                           is why a sea view can come back `unknown`, so it is not
+                           decoration. #}
+                        {% if property.location_lat and property.location_lon %}
+                            {% set _coords = "%.6f, %.6f"|format(property.location_lat, property.location_lon) %}
+                            <span class="text-nowrap">
+                                <span class="font-monospace">{{ _coords }}</span>
+                                <span class="ms-1">({{ property.location_accuracy or 'unknown' }})</span>
+                                <button type="button" class="btn btn-link p-0 ms-1 align-baseline copy-coords-btn"
+                                        data-copy-text="{{ _coords }}"
+                                        title="Copy coordinates" aria-label="Copy coordinates">
+                                    <i class="fas fa-copy"></i>
+                                </button>
+                            </span>
                         {% endif %}
-                        {% if property.listing_removed_date %}<span class="me-2">Removed: {{ property.listing_removed_date.strftime('%Y-%m-%d') }}</span>{% endif %}
-                        {% if property.search_profile %}<span class="me-2">Profile: {{ property.search_profile.name }}</span>{% endif %}
                     </div>
                 </div>
             </div>
@@ -176,96 +252,11 @@
                     </div>
                 </div>
 
-                {% set _travel = property.travel if property.travel is mapping else {} %}
-                {% set _targets = _travel.get('targets') if _travel is mapping else {} %}
-
-                {% if property.location_lat and property.location_lon %}
-                    <div class="overview-location bg-body-tertiary border rounded p-3">
-                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-                            <div>
-                                <div class="overview-label text-body-secondary">
-                                    <i class="fas fa-location-dot me-1"></i>Location
-                                </div>
-                                <div class="overview-value font-monospace">
-                                    {{ "%.6f"|format(property.location_lat) }}, {{ "%.6f"|format(property.location_lon) }}
-                                </div>
-                                <div class="small text-body-secondary">{{ property.location_accuracy or 'unknown' }}</div>
-                            </div>
-                            <div class="btn-group btn-group-sm" role="group" aria-label="Location links">
-                                <a href="https://www.google.com/maps/search/?api=1&query={{ property.location_lat }},{{ property.location_lon }}"
-                                   target="_blank" class="btn btn-outline-primary" rel="noopener">
-                                    <i class="fas fa-map me-1"></i>Google Maps
-                                </a>
-                                {% if property.url %}
-                                <a href="{{ property.url }}"
-                                   target="_blank" class="btn btn-outline-success" rel="noopener">
-                                    <i class="fas fa-home me-1"></i>Idealista
-                                </a>
-                                {% endif %}
-                                <a href="{{ url_for('main.map_view', focus=property.id) }}"
-                                   class="btn btn-outline-secondary"
-                                   title="{{ t('view_on_app_map') }}">
-                                    <i class="fas fa-map-marked-alt me-1"></i>Our Maps
-                                </a>
-                            </div>
-                        </div>
-                    </div>
-                {% elif property.municipality %}
-                    <div class="overview-location bg-body-tertiary border rounded p-3">
-                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-                            <div>
-                                <div class="overview-label text-body-secondary">
-                                    <i class="fas fa-location-dot me-1"></i>Location
-                                </div>
-                                <div class="overview-value">
-                                    {{ property.municipality }}
-                                </div>
-                            </div>
-                            <div class="btn-group btn-group-sm" role="group" aria-label="Location links">
-                                <a href="https://www.google.com/maps/search/{{ property.municipality|urlencode }},+Spain"
-                                   target="_blank" class="btn btn-outline-primary" rel="noopener">
-                                    <i class="fas fa-map me-1"></i>Google Maps
-                                </a>
-                                {% if property.url %}
-                                <a href="{{ property.url }}"
-                                   target="_blank" class="btn btn-outline-success" rel="noopener">
-                                    <i class="fas fa-home me-1"></i>Idealista
-                                </a>
-                                {% endif %}
-                                <a href="{{ url_for('main.map_view', focus=property.id) }}"
-                                   class="btn btn-outline-secondary"
-                                   title="{{ t('view_on_app_map') }}">
-                                    <i class="fas fa-map-marked-alt me-1"></i>Our Maps
-                                </a>
-                            </div>
-                        </div>
-                    </div>
-                {% endif %}
-
-                <div class="d-flex flex-wrap gap-2 mt-3">
-                    <button type="button" class="btn btn-outline-info btn-sm" onclick="openAiSection('claude')">
-                        <i class="fas fa-brain me-1"></i>AI Analyses
-                    </button>
-                </div>
-
-                    <div class="d-flex flex-wrap gap-2 mt-3 align-items-center">
-                        <button type="button" class="btn btn-outline-primary btn-sm" id="check-listing-status-btn"
-                                onclick="checkPropertyListingStatus({{ property.id }})"
-                                title="Fetch the listing from Idealista and record what it says">
-                            <i class="fas fa-rotate me-1"></i>Check status
-                        </button>
-                        <form method="POST" action="{{ url_for('main.set_property_status_form', property_id=property.id) }}" class="d-inline-flex align-items-center gap-2">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                            <select name="status" class="form-select form-select-sm" style="width: 140px;" aria-label="Set listing status">
-                                <option value="active" {% if (property.listing_status or 'active') == 'active' %}selected{% endif %}>active</option>
-                                <option value="removed" {% if property.listing_status == 'removed' %}selected{% endif %}>removed</option>
-                                <option value="sold" {% if property.listing_status == 'sold' %}selected{% endif %}>sold</option>
-                            </select>
-                            <button class="btn btn-outline-secondary btn-sm" type="submit" title="Set listing status">
-                                <i class="fas fa-tag me-1"></i>Set status
-                            </button>
-                        </form>
-                    </div>
+                {# Nothing else belongs at the bottom of this card (owner decision,
+                   2026-08-09). The Location panel went first, then the two
+                   buttons under it: "Check status" is an icon next to the title
+                   now, and "AI Analyses" only scrolled to a section that already
+                   sits directly below, with its own tabs and its own heading. #}
             </div>
         </div>
 
@@ -390,7 +381,7 @@
                                     <th style="min-width: 190px;">Metric</th>
                                     <th style="min-width: 160px;">Claude</th>
                                     <th style="min-width: 160px;">ChatGPT</th>
-                                    <th style="min-width: 160px;">Baseline</th>
+                                    <th style="min-width: 160px;" id="ai-compare-baseline-head">Baseline</th>
                                 </tr>
                             </thead>
                             <tbody id="ai-compare-tbody"></tbody>
@@ -503,27 +494,38 @@
                         <hr class="my-2">
                     {% endif %}
 
-                    {% for hub_key in ['airport', 'train_station', 'hospital'] %}
+                    {# Every preset the enrichment pass actually measured, not
+                       three of them. School and supermarket were resolved for
+                       330-354 of the owner's listings and appeared nowhere:
+                       Claude cites "Alimerka supermarket (0 min)" in its
+                       analysis of a plot whose page never mentioned it. #}
+                    {% set hub_defs = [
+                        ('airport', t('nearest_airport'), 'fa-plane'),
+                        ('train_station', t('train_station'), 'fa-train'),
+                        ('hospital', t('hospital'), 'fa-hospital'),
+                        ('school', 'School', 'fa-graduation-cap'),
+                        ('supermarket', 'Supermarket', 'fa-basket-shopping'),
+                    ] %}
+                    {% for hub_key, hub_label, hub_icon in hub_defs %}
                         {% set tdata = travel_targets.get(hub_key) if travel_targets is mapping else {} %}
                         {% if tdata and not (tdata.kind == 'preset' and (tdata.enabled is defined) and (tdata.enabled == false)) %}
                             {% set distance_km = tdata.distance_km if tdata.distance_km is not none else (tdata.distance_m / 1000) if tdata.distance_m else None %}
-                            {% if hub_key == 'airport' %}
-                                {% set hub_label = t('nearest_airport') %}
-                                {% set hub_icon = 'fa-plane' %}
-                            {% elif hub_key == 'train_station' %}
-                                {% set hub_label = t('train_station') %}
-                                {% set hub_icon = 'fa-train' %}
-                            {% else %}
-                                {% set hub_label = t('hospital') %}
-                                {% set hub_icon = 'fa-hospital' %}
-                            {% endif %}
-                            {% if tdata.duration_min or distance_km is not none %}
-                                <div class="d-flex justify-content-between align-items-center mb-2">
+                            {% if tdata.duration_min is not none or distance_km is not none %}
+                                {% set place_name = (tdata.place or {}).get('name') %}
+                                <div class="d-flex justify-content-between align-items-start mb-2">
                                     <span class="small fw-bold compact-text" title="{{ hub_label }}">
                                         <i class="fas {{ hub_icon }} me-1 text-primary"></i>{{ hub_label }}
+                                        {# What was actually measured. Google's `airport`
+                                           type covers helipads and businesses that merely
+                                           carry the tag, so naming the place is the only
+                                           way an owner can tell "10 min to the airport"
+                                           from "10 min to a contractor". #}
+                                        {% if place_name %}
+                                            <span class="d-block fw-normal text-body-secondary">{{ place_name }}</span>
+                                        {% endif %}
                                     </span>
-                                    <div>
-                                        {% if tdata.duration_min %}
+                                    <div class="text-nowrap">
+                                        {% if tdata.duration_min is not none %}
                                             <span class="badge bg-info me-1">{{ tdata.duration_min }}min</span>
                                         {% endif %}
                                         {% if distance_km is not none %}
@@ -680,12 +682,6 @@
                                                     <span class="badge bg-info me-1">
                                                         <i class="fas fa-car me-1"></i>{{ travel_time_value }}min
                                                     </span>
-                                                    {% set walking_time = (travel_time_value * 4)|int %}
-                                                    {% if walking_time <= 15 %}
-                                                        <span class="badge bg-success me-1">
-                                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
-                                                        </span>
-                                                    {% endif %}
                                                 {% endif %}
                                                 <span class="badge bg-secondary">{{ "%.1f"|format(distance_km) }}km</span>
                                             </div>
@@ -695,12 +691,6 @@
                                                 <span class="badge bg-info me-1">
                                                     <i class="fas fa-car me-1"></i>{{ value }}min
                                                 </span>
-                                                {% set walking_time = (value * 4)|int %}
-                                                {% if walking_time <= 15 %}
-                                                    <span class="badge bg-success me-1">
-                                                        <i class="fas fa-walking me-1"></i>{{ walking_time }}min
-                                                    </span>
-                                                {% endif %}
                                                 {% if distance_value %}
                                                     <span class="badge bg-secondary">{{ "%.1f"|format(distance_value/1000) }}km</span>
                                                 {% endif %}
@@ -755,12 +745,6 @@
                                     <i class="fas fa-car me-1"></i>{{ property.travel_time_airport }}min
                                 </span>
                                 {% if property.distance_airport %}
-                                    {% set walking_time = (property.travel_time_airport * 4)|int %}
-                                    {% if walking_time <= 15 %}
-                                        <span class="badge bg-success me-1">
-                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
-                                        </span>
-                                    {% endif %}
                                     <span class="badge bg-secondary">{{ property.distance_airport }}km</span>
                                 {% endif %}
                             </div>
@@ -774,12 +758,6 @@
                                     <i class="fas fa-car me-1"></i>{{ property.travel_time_train_station }}min
                                 </span>
                                 {% if property.distance_train_station %}
-                                    {% set walking_time = (property.travel_time_train_station * 4)|int %}
-                                    {% if walking_time <= 15 %}
-                                        <span class="badge bg-success me-1">
-                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
-                                        </span>
-                                    {% endif %}
                                     <span class="badge bg-secondary">{{ property.distance_train_station }}km</span>
                                 {% endif %}
                             </div>
@@ -793,12 +771,6 @@
                                     <i class="fas fa-car me-1"></i>{{ property.travel_time_hospital }}min
                                 </span>
                                 {% if property.distance_hospital %}
-                                    {% set walking_time = (property.travel_time_hospital * 4)|int %}
-                                    {% if walking_time <= 15 %}
-                                        <span class="badge bg-success me-1">
-                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
-                                        </span>
-                                    {% endif %}
                                     <span class="badge bg-secondary">{{ property.distance_hospital }}km</span>
                                 {% endif %}
                             </div>
@@ -812,12 +784,6 @@
                                     <i class="fas fa-car me-1"></i>{{ property.travel_time_police }}min
                                 </span>
                                 {% if property.distance_police %}
-                                    {% set walking_time = (property.travel_time_police * 4)|int %}
-                                    {% if walking_time <= 15 %}
-                                        <span class="badge bg-success me-1">
-                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
-                                        </span>
-                                    {% endif %}
                                     <span class="badge bg-secondary">{{ property.distance_police }}km</span>
                                 {% endif %}
                             </div>
@@ -869,12 +835,6 @@
                                                 <span class="badge bg-info me-1">
                                                     <i class="fas fa-car me-1"></i>{{ property.transport[transport_type + '_travel_time'] }}min
                                                 </span>
-                                                {% set walking_time = (property.transport[transport_type + '_travel_time'] * 4)|int %}
-                                                {% if walking_time <= 15 %}
-                                                    <span class="badge bg-success me-1">
-                                                        <i class="fas fa-walking me-1"></i>{{ walking_time }}min
-                                                    </span>
-                                                {% endif %}
                                             {% endif %}
                                             {% if value < 1000 %}
                                                 <span class="badge bg-secondary">
@@ -1065,23 +1025,36 @@
 <script>
 // Ask Idealista whether this listing is still up and record the answer.
 // A blocked or failed fetch reports "error" and deliberately leaves the stored
-// status alone, so the button must not claim "no change" -- say we could not
-// verify it (issue #136).
+// status alone, so this must not claim "no change" -- say we could not verify
+// it (issue #136). Since 2026-08-09 the control is an icon next to the title
+// and has no room for that sentence, so the icon carries the state and the
+// sentence arrives as a toast; the title attribute keeps it readable on hover
+// after the toast is gone.
 async function checkPropertyListingStatus(propertyId) {
     const btn = document.getElementById('check-listing-status-btn');
-    const originalContent = btn.innerHTML;
+    if (!btn) return;
+    const icon = btn.querySelector('i');
+    const originalIconClass = icon ? icon.className : null;
+    const originalTitle = btn.title;
     btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Checking...';
+    if (icon) icon.className = 'fas fa-spinner fa-spin';
 
     const restore = () => setTimeout(() => {
-        btn.innerHTML = originalContent;
+        if (icon && originalIconClass) icon.className = originalIconClass;
+        btn.title = originalTitle;
         btn.disabled = false;
     }, 2500);
 
+    const report = (iconClass, message, type) => {
+        if (icon) icon.className = iconClass;
+        btn.title = message;
+        _notify(message, type);
+        restore();
+    };
+
     const settle = (result) => {
         if (!result || !result.success) {
-            btn.innerHTML = '<i class="fas fa-triangle-exclamation me-1"></i>Error';
-            restore();
+            report('fas fa-triangle-exclamation', 'Status check failed — see the server logs.', 'error');
             return;
         }
         if (result.changed) {
@@ -1089,12 +1062,14 @@ async function checkPropertyListingStatus(propertyId) {
             return;
         }
         if (result.observed === 'error') {
-            btn.innerHTML = '<i class="fas fa-ban me-1"></i>Could not verify';
-            btn.title = 'Idealista did not answer with the listing page (bot protection or a server error). Status left unchanged.';
+            report(
+                'fas fa-ban',
+                'Could not verify: Idealista did not answer with the listing page (bot protection or a server error). Status left unchanged.',
+                'error'
+            );
         } else {
-            btn.innerHTML = '<i class="fas fa-check me-1"></i>No change';
+            report('fas fa-check', 'Checked on Idealista: no change.', 'success');
         }
-        restore();
     };
 
     try {
@@ -1108,15 +1083,18 @@ async function checkPropertyListingStatus(propertyId) {
             // Queued is not an answer. Without a poller we cannot learn the
             // outcome, so say it is still running rather than let settle()
             // read the envelope's success:true as "no change".
-            btn.innerHTML = '<i class="fas fa-clock me-1"></i>Queued';
             if (data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
+                if (icon) icon.className = 'fas fa-clock';
                 IdealistaApp.pollJob(data.job_id, {
                     onSuccess: (job) => settle(job && job.result ? job.result : null),
                     onError: () => settle(null)
                 });
             } else {
-                btn.title = 'The check is running in the background. Reload the page to see the result.';
-                restore();
+                report(
+                    'fas fa-clock',
+                    'The check is running in the background. Reload the page to see the result.',
+                    'info'
+                );
             }
             return;
         }
@@ -1301,6 +1279,20 @@ function humanizeEnumLabel(value) {
     return humanTail ? `${humanHead} - ${humanTail}` : humanHead;
 }
 
+// One renderer for every AI metric, because a model is allowed to answer "I
+// cannot tell". A missing figure has to read as missing: `value || 'N/A'` plus
+// a literal unit produced "N/Ay", and it also swallowed a real 0.
+function formatMetricValue(value, suffix = '') {
+    if (value === null || value === undefined || value === '') return '—';
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return `${value}${suffix}`;
+    }
+    if (typeof value === 'string') {
+        return humanizeEnumLabel(value) || '—';
+    }
+    return String(value);
+}
+
 // Render structured AI analysis (legacy schema; tolerant to missing keys)
 function renderStructuredAIAnalysis(analysis) {
     if (!analysis || typeof analysis !== 'object') {
@@ -1364,8 +1356,8 @@ function renderStructuredAIAnalysis(analysis) {
                         <div class="d-flex justify-content-between align-items-start mb-2">
                             <h6 class="mb-0"><i class="fas fa-chart-line me-2"></i>Investment Potential</h6>
                             <div class="d-flex gap-1">
-                                <span class="badge bg-primary">${humanizeEnumLabel(investmentRating)}</span>
-                                <span class="badge bg-warning text-dark">${humanizeEnumLabel(riskLevel)}</span>
+                                <span class="badge bg-primary">Potential: ${humanizeEnumLabel(investmentRating)}</span>
+                                <span class="badge bg-warning text-dark">Risk: ${humanizeEnumLabel(riskLevel)}</span>
                             </div>
                         </div>
                         <p class="mb-0 small">${investment.summary || investment.forecast || 'No investment potential analysis available'}</p>
@@ -1382,22 +1374,22 @@ function renderStructuredAIAnalysis(analysis) {
                         <div class="row g-2 text-center mb-2">
                             <div class="col-6 col-md-3">
                                 <div class="small text-muted">Yield</div>
-                                <div class="fw-semibold">${rental.rental_yield || 'N/A'}%</div>
+                                <div class="fw-semibold">${formatMetricValue(rental.rental_yield, '%')}</div>
                             </div>
                             <div class="col-6 col-md-3">
                                 <div class="small text-muted">Cap Rate</div>
-                                <div class="fw-semibold">${rental.cap_rate || 'N/A'}%</div>
+                                <div class="fw-semibold">${formatMetricValue(rental.cap_rate, '%')}</div>
                             </div>
                             <div class="col-6 col-md-3">
                                 <div class="small text-muted">Price/Rent</div>
-                                <div class="fw-semibold">${rental.price_to_rent_ratio || 'N/A'}</div>
+                                <div class="fw-semibold">${formatMetricValue(rental.price_to_rent_ratio)}</div>
                             </div>
                             <div class="col-6 col-md-3">
                                 <div class="small text-muted">Payback</div>
-                                <div class="fw-semibold">${rental.payback_period_years || 'N/A'}y</div>
+                                <div class="fw-semibold">${formatMetricValue(rental.payback_period_years, 'y')}</div>
                             </div>
                         </div>
-                        <p class="mb-0 small">${rental.summary || rental.investment_rating || 'No rental analysis available'}</p>
+                        <p class="mb-0 small">${rental.summary || humanizeEnumLabel(rental.investment_rating) || 'No rental analysis available'}</p>
                     </div>
                 </div>
             </div>
@@ -1459,21 +1451,9 @@ function cooldownButton(buttonEl, seconds) {
     const timer = setInterval(tick, 1000);
 }
 
-function setActiveAiTab(tabName) {
-    const tabId = tabName === 'chatgpt' ? 'ai-chatgpt-tab' : 'ai-claude-tab';
-    const trigger = document.getElementById(tabId);
-    if (!trigger) return;
-    const tab = bootstrap.Tab.getOrCreateInstance(trigger);
-    tab.show();
-}
-
-function openAiSection(tabName) {
-    setActiveAiTab(tabName || 'claude');
-    const section = document.getElementById('ai-analysis-section');
-    if (section && typeof section.scrollIntoView === 'function') {
-        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-}
+// setActiveAiTab()/openAiSection() went with the "AI Analyses" button that was
+// their only caller: it scrolled to a section that already sits directly below
+// this card, under its own heading.
 
 function _notify(message, type) {
     if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
@@ -1642,7 +1622,58 @@ document.addEventListener('DOMContentLoaded', function() {
     refreshAiComparison();
     renderAnalysisInto('ai-claude-structured-analysis', window.__EXISTING_CLAUDE_ANALYSIS__, 'ai-claude-placeholder');
     renderAnalysisInto('ai-chatgpt-structured-analysis', window.__EXISTING_OPENAI_ANALYSIS__, 'ai-chatgpt-placeholder');
+    wireCopyButtons();
 });
+
+/* Copy the coordinate pair. navigator.clipboard needs a secure context --
+   http://localhost:5001 counts as one, but the same container reached over a
+   LAN address does not -- so fall back to the hidden-textarea path, and when
+   neither works say so on the button instead of flashing a tick for a
+   clipboard that never changed. */
+async function copyTextToClipboard(text) {
+    if (!text) throw new Error('nothing to copy');
+    if (window.isSecureContext && navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+        return;
+    }
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.top = '-1000px';
+    document.body.appendChild(area);
+    area.select();
+    let copied = false;
+    try {
+        copied = document.execCommand('copy');
+    } finally {
+        document.body.removeChild(area);
+    }
+    if (!copied) throw new Error('execCommand("copy") was refused');
+}
+
+function wireCopyButtons() {
+    document.querySelectorAll('.copy-coords-btn').forEach((btn) => {
+        const icon = btn.querySelector('i');
+        const originalIconClass = icon ? icon.className : null;
+        const originalTitle = btn.title;
+        btn.addEventListener('click', async () => {
+            try {
+                await copyTextToClipboard(btn.dataset.copyText);
+                if (icon) icon.className = 'fas fa-check text-success';
+                btn.title = 'Copied';
+            } catch (error) {
+                console.error('Copy failed', error);
+                if (icon) icon.className = 'fas fa-triangle-exclamation text-danger';
+                btn.title = 'Could not copy — select the coordinates and copy them by hand';
+            }
+            setTimeout(() => {
+                if (icon && originalIconClass) icon.className = originalIconClass;
+                btn.title = originalTitle;
+            }, 1800);
+        });
+    });
+}
 
 /* Runs one provider and reports the outcome to the Enrich pass; the button
    state belongs to that pass now, so nothing here touches it. */
@@ -1730,6 +1761,7 @@ async function refreshAiComparison() {
 
     const claudeModelLabel = document.getElementById('ai-claude-model-label');
     const chatgptModelLabel = document.getElementById('ai-chatgpt-model-label');
+    const baselineHead = document.getElementById('ai-compare-baseline-head');
 
     if (!statusEl || !tableEl || !tbody) return;
 
@@ -1756,24 +1788,20 @@ async function refreshAiComparison() {
         const claude = data.comparison?.claude;
         const gpt = data.comparison?.chatgpt;
         const expected = data.comparison?.expected || {};
+        /* Without a baseline the fourth column is nothing but em dashes, so it
+           is dropped rather than drawn empty. */
+        const baselineAvailable = data.comparison?.baseline?.available === true;
+        if (baselineHead) baselineHead.style.display = baselineAvailable ? '' : 'none';
 
         const MISSING = '—';
-        const claudeGenerated = !!(window.__EXISTING_CLAUDE_ANALYSIS__ && claude);
-        const gptGenerated = !!(window.__EXISTING_OPENAI_ANALYSIS__ && gpt);
+        const claudeGenerated = !!(data.has_claude && claude);
+        const gptGenerated = !!(data.has_chatgpt && gpt);
 
         const c = claude?.metrics || {};
         const g = gpt?.metrics || {};
 
-        const _formatMetricValue = (value, suffix='') => {
-            if (value === null || value === undefined || value === '') return '—';
-            if (typeof value === 'number' && Number.isFinite(value)) {
-                return `${value}${suffix}`;
-            }
-            if (typeof value === 'string') {
-                return humanizeEnumLabel(value) || '—';
-            }
-            return String(value);
-        };
+        // Same rule as the panels above; one implementation, not two.
+        const _formatMetricValue = formatMetricValue;
 
         const _appendRow = (tbodyEl, label, claudeVal, gptVal, baselineVal) => {
             const tr = document.createElement('tr');
@@ -1784,16 +1812,63 @@ async function refreshAiComparison() {
             td1.textContent = claudeVal;
             const td2 = document.createElement('td');
             td2.textContent = gptVal;
-            const td3 = document.createElement('td');
-            td3.className = 'text-body-secondary';
-            td3.textContent = baselineVal;
             tr.appendChild(td0);
             tr.appendChild(td1);
             tr.appendChild(td2);
-            tr.appendChild(td3);
+            if (baselineAvailable) {
+                const td3 = document.createElement('td');
+                td3.className = 'text-body-secondary';
+                td3.textContent = baselineVal;
+                tr.appendChild(td3);
+            }
             tbodyEl.appendChild(tr);
         };
 
+        const _appendSection = (tbodyEl, title) => {
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.colSpan = baselineAvailable ? 4 : 3;
+            td.className = 'text-body-secondary small fw-semibold pt-3';
+            td.textContent = title;
+            tr.appendChild(td);
+            tbodyEl.appendChild(tr);
+        };
+
+        const ch = claude?.highlights || {};
+        const gh = gpt?.highlights || {};
+
+        /* The verdicts come first: they are what both providers always answer,
+           and on a listing where neither model would price the rent they are
+           the whole of the comparison. */
+        _appendSection(tbody, 'Verdicts');
+        _appendRow(
+            tbody,
+            'Price verdict',
+            claudeGenerated ? _formatMetricValue(ch.price_verdict) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.price_verdict) : MISSING,
+            MISSING
+        );
+        _appendRow(
+            tbody,
+            'Investment potential',
+            claudeGenerated ? _formatMetricValue(ch.investment_potential_rating) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.investment_potential_rating) : MISSING,
+            MISSING
+        );
+        _appendRow(
+            tbody,
+            'Risk level',
+            claudeGenerated ? _formatMetricValue(ch.risk_level) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.risk_level) : MISSING,
+            MISSING
+        );
+        _appendRow(
+            tbody,
+            'Market trend',
+            claudeGenerated ? _formatMetricValue(ch.market_trend) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.market_trend) : MISSING,
+            MISSING
+        );
         _appendRow(
             tbody,
             'Investment rating',
@@ -1801,6 +1876,8 @@ async function refreshAiComparison() {
             gptGenerated ? _formatMetricValue(g.investment_rating) : MISSING,
             _formatMetricValue(expected.investment_rating)
         );
+
+        _appendSection(tbody, 'Rental figures');
         _appendRow(
             tbody,
             'Rental yield',
@@ -1830,6 +1907,30 @@ async function refreshAiComparison() {
             _formatMetricValue(expected.payback_period_years)
         );
 
+        _appendSection(tbody, 'Qualitative highlights (often differ)');
+        _appendRow(
+            tbody,
+            'Price summary',
+            claudeGenerated ? _formatMetricValue(ch.price_summary) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.price_summary) : MISSING,
+            MISSING
+        );
+        _appendRow(
+            tbody,
+            'Key drivers',
+            claudeGenerated ? _formatMetricValue(ch.key_drivers) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.key_drivers) : MISSING,
+            MISSING
+        );
+        _appendRow(
+            tbody,
+            'Best use',
+            claudeGenerated ? _formatMetricValue(ch.best_use) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.best_use) : MISSING,
+            MISSING
+        );
+
+        _appendSection(tbody, baselineAvailable ? 'Schema + baseline match' : 'Schema + coverage');
         _appendRow(
             tbody,
             'Schema completeness',
@@ -1837,16 +1938,29 @@ async function refreshAiComparison() {
             gptGenerated ? `${gpt?.schema?.found || 0}/${gpt?.schema?.total || 0}` : MISSING,
             MISSING
         );
+        /* Which figures the provider was willing to put a number on. It is the
+           measurable half of "the table looks empty": a model that answered
+           null four times scores 0/4 here, and that is about the answer, not
+           about the page. */
         _appendRow(
             tbody,
-            'Numeric fidelity (vs baseline)',
-            claudeGenerated ? _formatMetricValue(claude?.fidelity_score, '/100') : MISSING,
-            gptGenerated ? _formatMetricValue(gpt?.fidelity_score, '/100') : MISSING,
+            'Rental figures given',
+            claudeGenerated ? `${claude?.numeric_coverage?.found ?? 0}/${claude?.numeric_coverage?.total ?? 0}` : MISSING,
+            gptGenerated ? `${gpt?.numeric_coverage?.found ?? 0}/${gpt?.numeric_coverage?.total ?? 0}` : MISSING,
             MISSING
         );
+        if (baselineAvailable) {
+            _appendRow(
+                tbody,
+                'Numeric fidelity (vs baseline)',
+                claudeGenerated ? _formatMetricValue(claude?.fidelity_score, '/100') : MISSING,
+                gptGenerated ? _formatMetricValue(gpt?.fidelity_score, '/100') : MISSING,
+                MISSING
+            );
+        }
         _appendRow(
             tbody,
-            'Overall score (baseline)',
+            baselineAvailable ? 'Overall score (baseline)' : 'Overall score (schema + coverage)',
             claudeGenerated ? _formatMetricValue(claude?.overall_score, '/100') : MISSING,
             gptGenerated ? _formatMetricValue(gpt?.overall_score, '/100') : MISSING,
             MISSING
@@ -1871,6 +1985,21 @@ async function refreshAiComparison() {
             statusParts.push(`ChatGPT: ${data.chatgpt_model || 'unknown'}`);
         } else {
             statusParts.push('ChatGPT: not generated (press “Enrich”).');
+        }
+
+        if (!baselineAvailable && data.comparison?.baseline?.reason) {
+            statusParts.push(`Baseline: ${data.comparison.baseline.reason}`);
+        }
+
+        /* A provider that answered every rental figure with null is not a
+           failed request; saying so keeps the em dashes from reading like a
+           broken page. */
+        const _noFigures = (side) => (side?.numeric_coverage?.found ?? 0) === 0;
+        const silent = [];
+        if (claudeGenerated && _noFigures(claude)) silent.push('Claude');
+        if (gptGenerated && _noFigures(gpt)) silent.push('ChatGPT');
+        if (silent.length) {
+            statusParts.push(`${silent.join(' and ')} gave no rental figures for this listing.`);
         }
 
         statusEl.textContent = statusParts.join(' • ');

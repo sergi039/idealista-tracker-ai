@@ -106,6 +106,24 @@ class _NoopScoringService:
         return True
 
 
+class _NoopSeaDistanceService:
+    def update_property(self, prop, *, commit=False):
+        return None
+
+
+class _NoopEnrichmentService:
+    """Stands in for the OSM amenity half of `EnrichmentService`.
+
+    Both this and the sea-distance stub above are injected so the test stays
+    offline: the real collaborators query overpass-api.de, and a suite that
+    reaches a live third-party endpoint fails for reasons that have nothing to
+    do with what it asserts.
+    """
+
+    def enrich_osm_amenities(self, prop, *, commit=False):
+        return None
+
+
 def test_the_geo_heuristic_is_gone_entirely():
     """Not merely disabled: the module, the flag and the route do not exist.
 
@@ -148,6 +166,8 @@ def test_enrichment_keeps_the_subscription_the_email_assigned(
             location_service=_NoopLocationService(),
             travel_service=_NoopTravelService(),
             scoring_service=_NoopScoringService(),
+            sea_distance_service=_NoopSeaDistanceService(),
+            enrichment_service=_NoopEnrichmentService(),
         ).enrich_property(prop, recalc_scoring=False)
 
         refreshed = db.session.get(Property, property_id)

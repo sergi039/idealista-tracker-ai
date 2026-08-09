@@ -789,13 +789,7 @@ def compare_property_ai_analyses(property_id: int):
     try:
         from config import Config
         from models import Property, PropertyAiAnalysisVariant
-        from utils.analysis_compare import (
-            extract_highlights,
-            extract_metrics,
-            numeric_fidelity_score,
-            overall_score,
-            schema_completeness,
-        )
+        from utils.analysis_compare import build_evaluation
 
         prop = db.get_or_404(Property, property_id)
         claude_analysis = prop.ai_analysis
@@ -816,38 +810,37 @@ def compare_property_ai_analyses(property_id: int):
             .first()
         )
 
-        # Universal baseline is intentionally light-weight for now (no market model for all property types yet).
-        expected = {
-            "investment_rating": "BELOW AVERAGE - Consider other options",
-            "rental_yield": 0,
-            "cap_rate": 0,
-            "price_to_rent_ratio": 0,
-            "payback_period_years": 0,
+        # There is no market model for universal properties yet, so there is no
+        # baseline to score against. Say so instead of standing in a row of
+        # zeroes: the placeholder baseline scored every provider "0/100 numeric
+        # fidelity" and "60/100 overall" on every listing, which told the owner
+        # nothing and read as a verdict on the model.
+        baseline = {
+            "available": False,
+            "reason": (
+                "No market baseline for universal properties yet: "
+                "the rental model only covers land."
+            ),
         }
 
         def _evaluate(analysis):
-            metrics = extract_metrics(analysis)
-            completeness = schema_completeness(analysis)
-            fidelity = numeric_fidelity_score(metrics, expected)
-            return {
-                "metrics": metrics,
-                "highlights": extract_highlights(analysis),
-                "schema": {"found": completeness[0], "total": completeness[1]},
-                "expected": expected,
-                "fidelity_score": fidelity,
-                "overall_score": overall_score(completeness, fidelity),
-            }
+            return build_evaluation(
+                analysis, expected=None, category=prop.property_category
+            )
 
         comparison = {
             "claude": _evaluate(claude_analysis),
             "chatgpt": _evaluate(openai_variant.analysis) if openai_variant else None,
-            "expected": expected,
+            "expected": None,
+            "baseline": baseline,
         }
 
         return jsonify(
             {
                 "success": True,
                 "property_id": property_id,
+                "property_category": prop.property_category,
+                "has_claude": bool(claude_analysis),
                 "has_chatgpt": bool(openai_variant),
                 "chatgpt_model": openai_variant.model if openai_variant else None,
                 "openai_configured": bool(getattr(Config, "AI_BRIDGE_TOKEN", None)),
@@ -1778,6 +1771,13 @@ def check_land_status(land_id):
                 "success": True,
                 "land_id": land_id,
                 "status": land_local.listing_status,
+                # The observed answer, which is not the stored status when the
+                # fetch was blocked or failed: that case reports "error" here
+                # while `status` keeps whatever we already knew. Same contract
+                # as the property endpoint (issue #136) -- without it the page
+                # reads success:true and says "no change" for a check that
+                # never reached the listing.
+                "observed": result.get("new_status"),
                 "previous_status": result.get("previous_status"),
                 "changed": result.get("changed", False),
                 "last_checked": land_local.listing_last_checked.isoformat()
