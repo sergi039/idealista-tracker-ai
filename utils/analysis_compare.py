@@ -1,9 +1,14 @@
 import json
 import hashlib
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
-REQUIRED_TOP_KEYS = [
+# `PropertyAIService` asks for a different top-level schema per category, so
+# completeness has to be counted against the schema the analysis was actually
+# generated from. Counting a house against the land schema deducted two keys
+# (`development_ideas`, `construction_value_estimation`) the prompt never asked
+# for, capping every housing analysis at 7/9.
+LAND_TOP_KEYS = [
     "price_analysis",
     "investment_potential",
     "risks_analysis",
@@ -13,6 +18,54 @@ REQUIRED_TOP_KEYS = [
     "construction_value_estimation",
     "market_price_dynamics",
     "rental_market_analysis",
+]
+
+HOUSING_TOP_KEYS = [
+    "price_analysis",
+    "investment_potential",
+    "risks_analysis",
+    "renovation_ideas",
+    "comparable_analysis",
+    "similar_objects",
+    "market_price_dynamics",
+    "rental_market_analysis",
+]
+
+GENERIC_TOP_KEYS = [
+    "price_analysis",
+    "investment_potential",
+    "risks_analysis",
+    "usage_ideas",
+    "comparable_analysis",
+    "similar_objects",
+    "market_price_dynamics",
+    "rental_market_analysis",
+]
+
+SCHEMA_KEYS_BY_CATEGORY = {
+    "land": LAND_TOP_KEYS,
+    "housing": HOUSING_TOP_KEYS,
+    "new_development": HOUSING_TOP_KEYS,
+    "generic": GENERIC_TOP_KEYS,
+}
+
+# The ideas section is what tells the three schemas apart, so reading it off the
+# stored analysis keeps the count right even when a listing was recategorised
+# after its analysis was generated.
+_IDEAS_KEY_TO_SCHEMA = {
+    "development_ideas": LAND_TOP_KEYS,
+    "renovation_ideas": HOUSING_TOP_KEYS,
+    "usage_ideas": GENERIC_TOP_KEYS,
+}
+
+# Kept for the Land comparison, which only ever sees the land schema.
+REQUIRED_TOP_KEYS = LAND_TOP_KEYS
+
+RENTAL_NUMERIC_KEYS = [
+    "rental_yield",
+    "cap_rate",
+    "price_to_rent_ratio",
+    "payback_period_years",
 ]
 
 
@@ -62,6 +115,21 @@ def _truncate(value: Any, max_len: int = 120) -> Optional[str]:
     return text[: max_len - 1] + "…"
 
 
+def _best_use(a: Dict[str, Any]) -> Optional[str]:
+    """The ideas section is named per schema, so read whichever one is present."""
+    for section in ("development_ideas", "usage_ideas", "renovation_ideas"):
+        value = _pick(a, section, "best_use")
+        if value:
+            return str(value)
+
+    # The housing schema has no `best_use`; its closest field is a list.
+    improvements = _pick(a, "renovation_ideas", "best_improvements")
+    if isinstance(improvements, list):
+        text = " • ".join(str(x) for x in improvements[:3] if x is not None)
+        return text or None
+    return None
+
+
 def extract_highlights(analysis: Any) -> Dict[str, Any]:
     """Compact qualitative fields so the UI can show differences quickly."""
     a = _as_dict(analysis)
@@ -80,7 +148,7 @@ def extract_highlights(analysis: Any) -> Dict[str, Any]:
         "investment_potential_rating": _pick(a, "investment_potential", "rating"),
         "risk_level": _pick(a, "investment_potential", "risk_level"),
         "key_drivers": _truncate(key_drivers_text, 160),
-        "best_use": _truncate(_pick(a, "development_ideas", "best_use"), 140),
+        "best_use": _truncate(_best_use(a), 140),
         "market_trend": _pick(a, "market_price_dynamics", "price_trend"),
     }
 
@@ -104,12 +172,33 @@ def extract_highlights(analysis: Any) -> Dict[str, Any]:
     return highlights
 
 
-def schema_completeness(analysis: Any) -> Tuple[int, int]:
+def schema_keys_for(analysis: Any, category: Optional[str] = None) -> List[str]:
+    a = _as_dict(analysis)
+    for ideas_key, keys in _IDEAS_KEY_TO_SCHEMA.items():
+        if a.get(ideas_key) is not None:
+            return keys
+    return SCHEMA_KEYS_BY_CATEGORY.get((category or "").strip().lower(), LAND_TOP_KEYS)
+
+
+def schema_completeness(
+    analysis: Any, category: Optional[str] = None
+) -> Tuple[int, int]:
+    keys = schema_keys_for(analysis, category)
     a = _as_dict(analysis)
     if not a:
-        return (0, len(REQUIRED_TOP_KEYS))
-    found = sum(1 for k in REQUIRED_TOP_KEYS if k in a and a.get(k) is not None)
-    return (found, len(REQUIRED_TOP_KEYS))
+        return (0, len(keys))
+    found = sum(1 for k in keys if k in a and a.get(k) is not None)
+    return (found, len(keys))
+
+
+def numeric_coverage(metrics: Dict[str, Any]) -> Tuple[int, int]:
+    """How many rental figures the provider actually put a number on.
+
+    A model that answers `null` for every figure is making a statement, and it
+    is the one thing the comparison can measure without a market baseline.
+    """
+    found = sum(1 for k in RENTAL_NUMERIC_KEYS if _to_float(metrics.get(k)) is not None)
+    return (found, len(RENTAL_NUMERIC_KEYS))
 
 
 def _to_float(x: Any) -> Optional[float]:
@@ -121,17 +210,25 @@ def _to_float(x: Any) -> Optional[float]:
         return None
 
 
-def numeric_fidelity_score(metrics: Dict[str, Any], expected: Dict[str, Any]) -> float:
-    keys = ["rental_yield", "cap_rate", "price_to_rent_ratio", "payback_period_years"]
+def numeric_fidelity_score(
+    metrics: Dict[str, Any], expected: Optional[Dict[str, Any]]
+) -> Optional[float]:
+    """Score the provider's figures against a baseline, or `None` if unmeasured.
+
+    Nothing to compare is not a score of zero: returning 0.0 made "the baseline
+    is missing" read exactly like "every figure was wrong", which is what put
+    `0/100` next to both providers on every property page.
+    """
+    expected = expected or {}
     errors = []
-    for k in keys:
+    for k in RENTAL_NUMERIC_KEYS:
         v = _to_float(metrics.get(k))
         e = _to_float(expected.get(k))
         if v is None or e is None or e == 0:
             continue
         errors.append(abs(v - e) / abs(e))
     if not errors:
-        return 0.0
+        return None
 
     mean_pct = sum(errors) / len(errors)
     # Map 0% -> 100, 50% -> 0 (clamped)
@@ -139,10 +236,29 @@ def numeric_fidelity_score(metrics: Dict[str, Any], expected: Dict[str, Any]) ->
     return round(score, 1)
 
 
-def overall_score(completeness: Tuple[int, int], fidelity: float) -> float:
+def overall_score(
+    completeness: Tuple[int, int],
+    fidelity: Optional[float],
+    coverage: Optional[Tuple[int, int]] = None,
+) -> float:
+    """Weight schema completeness against whichever numeric signal exists.
+
+    With a baseline the second term is fidelity to it; without one it is how
+    many figures the provider filled in. Falling back to schema completeness
+    alone would score every complete answer the same, which is what made both
+    providers land on 60/100 regardless of what they actually said.
+    """
     found, total = completeness
     completeness_pct = (found / total) * 100.0 if total else 0.0
-    return round(0.6 * completeness_pct + 0.4 * fidelity, 1)
+
+    numeric_pct: Optional[float] = fidelity
+    if numeric_pct is None and coverage is not None:
+        cov_found, cov_total = coverage
+        numeric_pct = (cov_found / cov_total) * 100.0 if cov_total else None
+    if numeric_pct is None:
+        return round(completeness_pct, 1)
+
+    return round(0.6 * completeness_pct + 0.4 * numeric_pct, 1)
 
 
 def expected_rental_metrics(land) -> Dict[str, Any]:
@@ -163,19 +279,34 @@ def expected_rental_metrics(land) -> Dict[str, Any]:
     }
 
 
-def evaluate(land, analysis: Any) -> Dict[str, Any]:
+def build_evaluation(
+    analysis: Any,
+    expected: Optional[Dict[str, Any]] = None,
+    category: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The one rubric both the Land and the Property comparison report."""
     metrics = extract_metrics(analysis)
-    completeness = schema_completeness(analysis)
-    expected = expected_rental_metrics(land)
+    completeness = schema_completeness(analysis, category)
+    coverage = numeric_coverage(metrics)
     fidelity = numeric_fidelity_score(metrics, expected)
     return {
         "metrics": metrics,
         "highlights": extract_highlights(analysis),
         "schema": {"found": completeness[0], "total": completeness[1]},
+        "numeric_coverage": {"found": coverage[0], "total": coverage[1]},
         "expected": expected,
         "fidelity_score": fidelity,
-        "overall_score": overall_score(completeness, fidelity),
+        "overall_score": overall_score(completeness, fidelity, coverage),
+        "overall_basis": "schema+baseline"
+        if fidelity is not None
+        else "schema+coverage",
     }
+
+
+def evaluate(land, analysis: Any) -> Dict[str, Any]:
+    return build_evaluation(
+        analysis, expected=expected_rental_metrics(land), category="land"
+    )
 
 
 def build_comparison(
@@ -183,9 +314,19 @@ def build_comparison(
 ) -> Dict[str, Any]:
     claude_eval = evaluate(land, claude_analysis)
     openai_eval = evaluate(land, openai_analysis) if openai_analysis else None
+    expected = claude_eval["expected"] or {}
+    baseline_available = any(
+        _to_float(expected.get(k)) not in (None, 0) for k in RENTAL_NUMERIC_KEYS
+    )
 
     return {
         "claude": claude_eval,
         "chatgpt": openai_eval,
         "expected": claude_eval["expected"],
+        "baseline": {
+            "available": baseline_available,
+            "reason": None
+            if baseline_available
+            else "The market model returned no rental figures for this land.",
+        },
     }

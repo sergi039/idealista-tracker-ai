@@ -246,6 +246,21 @@ and TODO.md; respect it if you ever run both side by side.
   Infrastructure card at all — an absence that reads as "nothing nearby". Do
   not add a second amenity client, and do not let a refusal become empty
   counts.
+- **An enrichment run reports how complete it was, not just pass or fail**
+  (#153, owner decision 2026-08-09). `EnrichmentService.enrich_land` reduces
+  its three sources to `ok` / `degraded` / `unavailable`, stamps that on the
+  record as `infrastructure_extended["enrichment_status"]` and returns
+  `state != unavailable` — the same shape, and the same boolean facade, as
+  `Property.travel["api_status"]` in `services/property_travel_service.py`.
+  Google is *decisive*: `_score_infrastructure_extended` reads only the
+  `<amenity>_available` keys Places writes, so Google refusing means the run
+  did not produce what it was asked for. Overpass is *advisory*: it cannot
+  move a score, and it answers 504 whenever both of its two per-IP slots are
+  busy, so failing the whole run on it would report failure for lands whose
+  Google data arrived intact. That asymmetry is why `degraded` exists — do not
+  collapse it into `ok` (a missed source reported as success is #98 again) and
+  do not promote it to `unavailable` (option 2 in #153, which the owner
+  rejected). `tests/test_issue_153_enrichment_run_state.py` fails on either.
 - Preserve the scraping throttle in `services/listing_status_service.py`
   (randomized sleeps between listing fetches). No bulk re-scrape loops.
 - **There is no authentication** (owner decision, 2026-08-08): the admin

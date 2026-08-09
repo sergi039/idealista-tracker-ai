@@ -96,6 +96,40 @@ class OsmAmenityReading:
     failure: Optional[GoogleApiFailure] = None
 
 
+# Verdict for one `enrich_land` run, persisted in
+# `infrastructure_extended["enrichment_status"]["state"]`. It mirrors
+# `Property.travel["api_status"]["state"]` in services/property_travel_service.py
+# so both enrichment paths report completeness in the same shape (#153).
+#
+# `unavailable` means a source the score reads refused, so the run did not
+# produce what it was asked for. `degraded` means only an advisory source
+# refused: the score is unaffected and the record is usable, but a source was
+# still missed, and calling that "ok" is the #98 mistake in miniature. The
+# per-source `osm_amenities_status` above is unaffected - it says what the last
+# Overpass call did, this says what the run as a whole produced.
+# Persisted in a JSON column and matched by tests: keep these stable.
+ENRICHMENT_STATUS_KEY = "enrichment_status"
+ENRICHMENT_STATE_OK = "ok"
+ENRICHMENT_STATE_DEGRADED = "degraded"
+ENRICHMENT_STATE_UNAVAILABLE = "unavailable"
+
+
+def enrichment_run_state(
+    refusals: List[Tuple[str, GoogleApiFailure, bool]],
+) -> str:
+    """Reduce the sources that refused during one run to a single verdict.
+
+    Each entry is `(source, failure, decisive)`. Which refusal is decisive is
+    the #153 decision, and it travels with the source rather than living in a
+    comment on an `if`, so a reader sees the asymmetry in the data.
+    """
+    if not refusals:
+        return ENRICHMENT_STATE_OK
+    if any(decisive for _source, _failure, decisive in refusals):
+        return ENRICHMENT_STATE_UNAVAILABLE
+    return ENRICHMENT_STATE_DEGRADED
+
+
 class EnrichmentService:
     def __init__(self):
         self.google_maps_key = Config.GOOGLE_MAPS_API_KEY
@@ -156,40 +190,51 @@ class EnrichmentService:
             scoring_service = ScoringService()
             scoring_service.calculate_score(land)
 
-            db.session.commit()
-
-            # A refused source is never a successful enrichment, no matter how
-            # much local work ran afterwards (#98). Whatever was computed stays
-            # committed; the report below names which source refused.
+            # A refused source is never a silently successful enrichment, no
+            # matter how much local work ran afterwards (#98). Whatever was
+            # computed stays committed; the verdict says how complete the run
+            # was and the log below names what refused.
+            #
+            # Google is decisive because it is the source the score reads:
+            # `_score_infrastructure_extended` reads only the
+            # `<amenity>_available` keys Places writes, so an Overpass refusal
+            # cannot move a score. Overpass is a supplementary POI feed that
+            # answers 504 whenever both of its two per-IP slots are busy, which
+            # is routine rather than exceptional - failing the whole run on
+            # that would report failure for lands whose Google data arrived
+            # intact, trading a silent false negative for a noisy false one
+            # (#153, owner decision 2026-08-09).
             refusals = [
-                (source, failure)
-                for source, failure in (
-                    ("Google Places", places_failure),
-                    ("Google Maps", maps_failure),
-                    ("OSM Overpass", osm_failure),
+                (source, failure, decisive)
+                for source, failure, decisive in (
+                    ("Google Places", places_failure, True),
+                    ("Google Maps", maps_failure, True),
+                    ("OSM Overpass", osm_failure, False),
                 )
                 if failure is not None
             ]
+            state = enrichment_run_state(refusals)
+            self._record_enrichment_status(land, state, refusals)
+
+            db.session.commit()
+
             if refusals:
                 logger.error(
-                    "Enrichment for land %s is incomplete: %s",
+                    "Enrichment for land %s is %s: %s",
                     land_id,
+                    state,
                     "; ".join(
                         f"{source} unavailable ({failure.describe()})"
-                        for source, failure in refusals
+                        for source, failure, _decisive in refusals
                     ),
                 )
 
-            # Google is the source the score actually reads, so only Google
-            # refusing decides the verdict. Overpass is a supplementary POI
-            # feed and answers 504 whenever both of its two per-IP slots are
-            # busy - failing a whole enrichment run on that would report
-            # failure for lands whose Google data arrived intact. The refusal
-            # is still logged above and stamped on the record either way.
-            if places_failure is not None or maps_failure is not None:
+            if state == ENRICHMENT_STATE_UNAVAILABLE:
                 return False
 
-            logger.info(f"Successfully enriched land {land_id}")
+            # Not "successfully enriched": a degraded run reaches here too, and
+            # the state is what says which of the two this was.
+            logger.info("Enrichment for land %s finished: %s", land_id, state)
             return True
 
         except Exception:
@@ -1055,6 +1100,41 @@ class EnrichmentService:
             prop.infrastructure_extended or {}, state, failure, measured_at
         )
         self._write_property_infrastructure_extended(prop, **{OSM_STATUS_KEY: status})
+
+    def _record_enrichment_status(
+        self,
+        land,
+        state: str,
+        refusals: List[Tuple[str, GoogleApiFailure, bool]],
+    ) -> None:
+        """Stamp the verdict of this enrichment run onto the land.
+
+        Written on every run that got as far as calling the sources, so a
+        reader can tell a complete run from one that only lost an advisory
+        source without re-deriving it from the log. `decisive` is carried per
+        refusal because it is what turned this run's state into `unavailable`
+        rather than `degraded`, and an operator reading the JSON should not have
+        to know the rule to see which refusal mattered.
+        """
+        status: Dict = {
+            "state": state,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        refused = []
+        for source, failure, decisive in refusals:
+            entry: Dict = {
+                "source": source,
+                "reason": failure.reason,
+                "decisive": decisive,
+            }
+            if failure.http_status is not None:
+                entry["http_status"] = failure.http_status
+            refused.append(entry)
+        if refused:
+            status["refused"] = refused
+
+        self._write_infrastructure_extended(land, **{ENRICHMENT_STATUS_KEY: status})
 
     def _osm_refusal(self, land, failure: GoogleApiFailure) -> GoogleApiFailure:
         """Log a refused Overpass call, stamp it on the land, hand it back."""
