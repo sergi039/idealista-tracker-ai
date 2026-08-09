@@ -591,9 +591,23 @@
                                 </div>
                             {% endif %}
                         {% elif key == 'osm_amenities' and value is mapping %}
+                            {# Read the status directly rather than relying on which key
+                               the loop reached first: counts left over from an earlier
+                               run must not read as though this run had just measured
+                               them (#98). #}
+                            {% set osm_status = property.infrastructure_extended.get('osm_amenities_status') %}
+                            {% set osm_stale = osm_status is mapping and osm_status.get('state') == 'unavailable' %}
                             <div class="mb-3">
-                                <span class="small fw-bold">Nearby Amenities:</span>
-                                <div class="mt-2">
+                                {% if osm_stale %}
+                                    <span class="small fw-bold text-muted">Nearby Amenities (last known):</span>
+                                    <div class="small text-muted">
+                                        Not re-checked — Overpass was unavailable{% if osm_status.get('measured_at') %},
+                                        these counts are from {{ osm_status.get('measured_at')[:10] }}{% endif %}.
+                                    </div>
+                                {% else %}
+                                    <span class="small fw-bold">Nearby Amenities:</span>
+                                {% endif %}
+                                <div class="mt-2 {% if osm_stale %}opacity-50{% endif %}">
                                     {% for priority_amenity in ['hospital', 'pharmacy', 'police', 'bank'] %}
                                         {% if priority_amenity in value %}
                                             <div class="d-flex justify-content-between align-items-center mb-1">

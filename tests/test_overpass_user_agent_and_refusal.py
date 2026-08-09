@@ -22,7 +22,16 @@ The behaviour pinned down here:
   with `state == "ok"`;
 * the 504 that Overpass returns while both of its two per-IP slots are busy is
   retried with a backoff measured in tens of seconds, not the half-second
-  default.
+  default;
+* the marker survives `commit()`, and counts left from an earlier run are
+  carried with the age that lets the page label them stale.
+
+The last two come from the independent review of PR #144, which caught that
+the first version of this fix asserted only against the in-memory object:
+`Land.infrastructure_extended` is a plain `db.Column(JSON)` with no
+`MutableDict`, so mutating the loaded dict and assigning it back handed
+SQLAlchemy the same object twice, no UPDATE was emitted, and every marker was
+lost on commit. A test that never reloads cannot see that.
 """
 
 import logging
@@ -33,7 +42,7 @@ import pytest
 import requests
 
 from app import create_app, db
-from models import Land
+from models import Land, Property, SearchProfile
 from services.enrichment_service import (
     OSM_STATE_OK,
     OSM_STATE_UNAVAILABLE,
@@ -81,6 +90,32 @@ def land(app):
         db.session.add(land)
         db.session.commit()
         return land.id
+
+
+def _listing_with_enrichment(app, source_id, infrastructure_extended):
+    """A Property whose enrichment blob carries the OSM section, for the page."""
+    with app.app_context():
+        profile = SearchProfile(
+            name="Land at Norte",
+            is_active=True,
+            is_default=True,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(profile)
+        db.session.commit()
+        prop = Property(
+            source_email_id=source_id,
+            title="OverpassStaleFixture",
+            search_profile_id=profile.id,
+            listing_status="active",
+            municipality="Cudillero",
+            location_lat=43.56,
+            location_lon=-6.15,
+            enrichment={"infrastructure_extended": infrastructure_extended},
+        )
+        db.session.add(prop)
+        db.session.commit()
+        return prop.id
 
 
 def _response(status_code=200, payload=None, raises=None):
@@ -225,6 +260,159 @@ class TestRefusalIsNotAnEmptyResult:
             assert infrastructure[OSM_STATUS_KEY]["state"] == OSM_STATE_UNAVAILABLE
 
         mock_cache.assert_not_called()
+
+
+class TestTheMarkerActuallyPersists:
+    """A marker that only exists in memory records nothing.
+
+    `Land.infrastructure_extended` is a plain `db.Column(JSON)` — no
+    `MutableDict` — so SQLAlchemy decides whether to emit an UPDATE by
+    comparing the old value against the new one. Mutating the loaded dict and
+    assigning it straight back gives it the same object twice, the attribute
+    never goes dirty, and the write is dropped at flush. Every assertion here
+    reloads from the database rather than trusting the instance.
+    """
+
+    @patch("services.enrichment_service.request_with_retries")
+    def test_refusal_survives_a_commit_and_reload(self, mock_request, app, service):
+        with app.app_context():
+            row = Land(
+                source_email_id="test_overpass_persist_1",
+                title="Persisted refusal",
+                municipality="Valencia",
+                land_type="developed",
+                price=Decimal("150000.00"),
+                area=Decimal("1500.00"),
+                location_lat=Decimal("39.4699"),
+                location_lon=Decimal("-0.3763"),
+                # A column that already holds something, as a real row does.
+                infrastructure_extended={"existing": True},
+            )
+            db.session.add(row)
+            db.session.commit()
+            land_id = row.id
+
+            mock_request.return_value = _response(status_code=406)
+            service._enrich_with_osm_data(db.session.get(Land, land_id))
+            db.session.commit()
+            db.session.expire_all()
+
+            reloaded = db.session.get(Land, land_id).infrastructure_extended or {}
+            assert reloaded[OSM_STATUS_KEY]["state"] == OSM_STATE_UNAVAILABLE
+            assert reloaded[OSM_STATUS_KEY]["http_status"] == 406
+            # The merge must not drop what was already in the column.
+            assert reloaded["existing"] is True
+
+    @patch("services.enrichment_service.request_with_retries")
+    def test_counts_survive_a_commit_and_reload(self, mock_request, app, service):
+        with app.app_context():
+            row = Land(
+                source_email_id="test_overpass_persist_2",
+                title="Persisted counts",
+                municipality="Valencia",
+                land_type="developed",
+                price=Decimal("150000.00"),
+                area=Decimal("1500.00"),
+                location_lat=Decimal("39.4699"),
+                location_lon=Decimal("-0.3763"),
+                infrastructure_extended={"existing": True},
+            )
+            db.session.add(row)
+            db.session.commit()
+            land_id = row.id
+
+            mock_request.return_value = _response(
+                payload={"elements": [{"tags": {"amenity": "school"}}]}
+            )
+            service._enrich_with_osm_data(db.session.get(Land, land_id))
+            db.session.commit()
+            db.session.expire_all()
+
+            reloaded = db.session.get(Land, land_id).infrastructure_extended or {}
+            assert reloaded["osm_amenities"] == {"school": 1}
+            assert reloaded[OSM_STATUS_KEY]["state"] == OSM_STATE_OK
+            assert reloaded["existing"] is True
+
+
+class TestStaleCountsAreLabelled:
+    """Counts from an earlier run are kept, but never presented as current."""
+
+    @patch("services.enrichment_service.request_with_retries")
+    def test_a_refusal_carries_the_age_of_the_counts_it_left_behind(
+        self, mock_request, app, service, land
+    ):
+        with app.app_context():
+            row = db.session.get(Land, land)
+
+            # A good run measures the counts...
+            mock_request.return_value = _response(
+                payload={"elements": [{"tags": {"amenity": "school"}}]}
+            )
+            service._enrich_with_osm_data(row)
+            measured_at = row.infrastructure_extended[OSM_STATUS_KEY]["measured_at"]
+            assert measured_at
+
+            # ...then the cache expires and Overpass refuses the next one.
+            # Without clearing it the second call is a cache hit and never
+            # reaches the network - which is the whole point of the cache, and
+            # also why the stale-counts case only shows up once it lapses.
+            cache.clear()
+            mock_request.return_value = _response(status_code=406)
+            service._enrich_with_osm_data(row)
+
+            infrastructure = row.infrastructure_extended
+            status = infrastructure[OSM_STATUS_KEY]
+            assert status["state"] == OSM_STATE_UNAVAILABLE
+            # The real counts are not deleted -- they were true once...
+            assert infrastructure["osm_amenities"] == {"school": 1}
+            # ...but they keep the timestamp of the run that measured them, so
+            # the page can say how old they are instead of showing them as
+            # though this run had just produced them.
+            assert status["measured_at"] == measured_at
+            assert status["checked_at"] > status["measured_at"]
+
+    def test_the_detail_page_marks_stale_counts(self, app):
+        """The real page, rendered: counts under a refusal are not current."""
+        listing = _listing_with_enrichment(
+            app,
+            "overpass_stale_counts",
+            {
+                "osm_amenities": {"school": 2},
+                "osm_amenities_status": {
+                    "state": "unavailable",
+                    "reason": "http_error",
+                    "http_status": 406,
+                    "measured_at": "2026-08-01T10:00:00+00:00",
+                    "checked_at": "2026-08-09T10:00:00+00:00",
+                },
+            },
+        )
+
+        body = app.test_client().get(f"/properties/{listing}").get_data(as_text=True)
+        assert "Nearby Amenities (last known)" in body
+        assert "Overpass was unavailable" in body
+        assert "2026-08-01" in body
+        # The count is still shown -- it was true once -- but never as current.
+        assert "Nearby Amenities:" not in body
+
+    def test_the_detail_page_shows_answered_counts_as_current(self, app):
+        listing = _listing_with_enrichment(
+            app,
+            "overpass_current_counts",
+            {
+                "osm_amenities": {"school": 2},
+                "osm_amenities_status": {
+                    "state": "ok",
+                    "measured_at": "2026-08-09T10:00:00+00:00",
+                    "checked_at": "2026-08-09T10:00:00+00:00",
+                },
+            },
+        )
+
+        body = app.test_client().get(f"/properties/{listing}").get_data(as_text=True)
+        assert "Nearby Amenities:" in body
+        assert "last known" not in body
+        assert "Overpass was unavailable" not in body
 
 
 class TestAnsweredRuns:

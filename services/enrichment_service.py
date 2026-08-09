@@ -886,6 +886,21 @@ class EnrichmentService:
         results, _failure = self._get_distance_matrix_batch(lat, lon, [destination])
         return results[0] if results else None
 
+    @staticmethod
+    def _write_infrastructure_extended(land, **entries) -> None:
+        """Merge `entries` into the land's infrastructure_extended and persist.
+
+        `Land.infrastructure_extended` is a plain `db.Column(JSON)` with no
+        `MutableDict` wrapper, so SQLAlchemy detects a change by comparing the
+        old value with the new one. Mutating the loaded dict in place and
+        assigning it straight back hands it the *same object* twice, the
+        attribute never goes dirty, and the flush emits no UPDATE: the write
+        survives in memory and is lost on commit. Copy first, always.
+        """
+        merged = dict(land.infrastructure_extended or {})
+        merged.update(entries)
+        land.infrastructure_extended = merged
+
     def _record_osm_status(
         self, land, state: str, failure: Optional[GoogleApiFailure] = None
     ) -> None:
@@ -894,18 +909,25 @@ class EnrichmentService:
         Written on every run so an absent `osm_amenities` can be read back as
         either "Overpass answered, nothing nearby" or "we never got to look".
         """
-        status: Dict = {
-            "state": state,
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-        }
-        if failure is not None:
+        now = datetime.now(timezone.utc).isoformat()
+        status: Dict = {"state": state, "checked_at": now}
+
+        if failure is None:
+            # The counts on the record were measured by this very call.
+            status["measured_at"] = now
+        else:
             status["reason"] = failure.reason
             if failure.http_status is not None:
                 status["http_status"] = failure.http_status
+            # Counts from an earlier, successful run stay on the record - they
+            # were true once and deleting them loses real data. Carry their
+            # age forward so the page can label them as stale instead of
+            # rendering them as though this run had just measured them.
+            previous = (land.infrastructure_extended or {}).get(OSM_STATUS_KEY)
+            if isinstance(previous, dict) and previous.get("measured_at"):
+                status["measured_at"] = previous["measured_at"]
 
-        infrastructure_extended = land.infrastructure_extended or {}
-        infrastructure_extended[OSM_STATUS_KEY] = status
-        land.infrastructure_extended = infrastructure_extended
+        self._write_infrastructure_extended(land, **{OSM_STATUS_KEY: status})
 
     def _osm_refusal(self, land, failure: GoogleApiFailure) -> GoogleApiFailure:
         """Log a refused Overpass call, stamp it on the land, hand it back."""
@@ -930,9 +952,7 @@ class EnrichmentService:
 
             cached = get_cached_enrichment_data(lat, lon, "osm_amenities_v1")
             if isinstance(cached, dict):
-                infrastructure_extended = land.infrastructure_extended or {}
-                infrastructure_extended["osm_amenities"] = cached
-                land.infrastructure_extended = infrastructure_extended
+                self._write_infrastructure_extended(land, osm_amenities=cached)
                 self._record_osm_status(land, OSM_STATE_OK)
                 logger.debug("OSM amenities cache hit for land %s", land.id)
                 return None
@@ -1005,8 +1025,6 @@ class EnrichmentService:
                     ),
                 )
 
-            infrastructure_extended = land.infrastructure_extended or {}
-
             # Process OSM amenities as fallback data
             amenity_counts = {}
             for element in osm_data.get("elements", []):
@@ -1016,8 +1034,7 @@ class EnrichmentService:
 
             # Store OSM fallback data. An empty dict here is a real answer:
             # Overpass looked and there is nothing within 2km.
-            infrastructure_extended["osm_amenities"] = amenity_counts
-            land.infrastructure_extended = infrastructure_extended
+            self._write_infrastructure_extended(land, osm_amenities=amenity_counts)
             self._record_osm_status(land, OSM_STATE_OK)
 
             cache_enrichment_data(
