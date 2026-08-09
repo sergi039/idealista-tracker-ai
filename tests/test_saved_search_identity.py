@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.exc import IntegrityError
 
 from app import create_app, db
@@ -436,6 +436,369 @@ def test_an_email_without_a_search_url_keeps_the_old_resolution(app):
         # That label came out of an email too, so a later email carrying the
         # subscription's URL is allowed to correct it.
         assert by_name.is_auto_created is True
+
+
+def _in_transaction() -> bool:
+    """Whether the session is holding a transaction - and therefore its locks.
+
+    `db.session` is a `scoped_session`, which does not proxy `in_transaction()`
+    in SQLAlchemy 2.0; calling it returns the `Session` itself and starts
+    nothing, so this reads the state without changing it.
+    """
+    return db.session().in_transaction()
+
+
+PROFILE_SERVICE_LOGGER = "services.search_profile_service"
+
+
+def _service_warnings(caplog) -> list:
+    """Every WARNING the profile service logged, whatever it happens to say.
+
+    Deliberately unfiltered. Counting only the records that match a phrase
+    counts the messages the test already knows about: a second warning about
+    the same email, written in a different spelling, sits quietly outside the
+    filter while `len(...) == 1` still passes. That is how one URL-less email
+    came to raise two warnings - "no search URL" and "no saved-search URL" -
+    under a test whose stated contract was one.
+    """
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == PROFILE_SERVICE_LOGGER and record.levelno >= logging.WARNING
+    ]
+
+
+def test_an_email_without_a_search_url_says_so_instead_of_matching_silently(
+    app, caplog
+):
+    """The label path is the precondition for the #116 split; make it visible.
+
+    A URL-less alert creates or finds a *keyless* profile, and neither index
+    can stop a twin appearing beside it: `UNIQUE (source_search_key)` cannot
+    see this row and `UNIQUE (name) WHERE source_search_key IS NULL` cannot see
+    a keyed one - deliberately, because two real subscriptions may share a
+    label. So the precondition stops being silent.
+
+    But only the *concurrent* case splits anything, and the warning has to say
+    so. Sequentially the later URL-carrying alert takes the identity path and
+    adopts this very row - the upgrade path from #102 - which the second half
+    of this test runs rather than assumes. A warning that predicted a split
+    there would be teaching the reader something false.
+    """
+    with app.app_context():
+        with caplog.at_level(logging.WARNING):
+            resolved = SearchProfileService.resolve_profile(
+                "New detached house in your search: Search Junio!",
+                "See all listings for 'Search Junio'",
+            )
+
+        assert resolved is not None
+        assert resolved.source_search_key is None
+        keyless_id = resolved.id
+
+        warnings = _service_warnings(caplog)
+        assert len(warnings) == 1, (
+            "one URL-less email must produce exactly one warning from the "
+            f"profile service; it produced {len(warnings)}: {warnings}"
+        )
+        message = warnings[0]
+        assert "#116" in message
+        assert "keyless" in message, "the keyless half of the split is not named as one"
+        assert "concurrently" in message, (
+            "the warning blames the split on something other than the race"
+        )
+        assert "adopts this row" in message, (
+            "the warning does not say what the sequential case actually does"
+        )
+        assert "Junio" in message, "the warning does not name the label it matched on"
+        assert str(keyless_id) in message, (
+            "the warning does not name the profile the email landed in"
+        )
+
+        # ... and the sequential claim is true, not asserted: the next alert
+        # for this label, carrying its URL, adopts this row instead of
+        # splitting off a twin. (Cleared first, so the count above can never
+        # be read as covering two calls.)
+        caplog.clear()
+        adopted = SearchProfileService.resolve_profile(
+            "New detached house in your search: Search Junio!",
+            f'<a href="{TERRENOS_URL}">See all listings</a>',
+        )
+
+        assert adopted is not None
+        assert adopted.id == keyless_id, (
+            "a later URL-carrying alert did not adopt the keyless row, so the "
+            "warning's account of the sequential case is wrong"
+        )
+        assert adopted.source_search_key == TERRENOS_KEY
+        assert SearchProfile.query.count() == 1
+
+
+def test_a_url_less_email_matched_onto_a_keyed_profile_says_that_instead(app, caplog):
+    """The warning must describe what happened, not what usually happens.
+
+    `get_or_create_profile_by_name()` honours a single canonical match, and
+    that match may already carry a search key. Calling it "keyless" and
+    predicting a split would be a false mechanism in the log: the real event is
+    that a label - which stopped identifying a subscription in #102 - was the
+    only evidence tying this listing to an identified saved search.
+    """
+    with app.app_context():
+        keyed = SearchProfile(
+            name=SEARCH_NAME,
+            is_active=True,
+            is_auto_created=True,
+            source_search_key=TERRENOS_KEY,
+            source_search_url=TERRENOS_URL,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(keyed)
+        db.session.commit()
+        keyed_id = keyed.id
+
+        with caplog.at_level(logging.WARNING):
+            resolved = SearchProfileService.resolve_profile(SUBJECT_FULL, "no links")
+
+        assert resolved is not None
+        assert resolved.id == keyed_id
+
+        warnings = _service_warnings(caplog)
+        assert len(warnings) == 1, (
+            f"expected one warning for this email, got {len(warnings)}: {warnings}"
+        )
+        message = warnings[0]
+        assert "keyless" not in message, (
+            "a profile that carries a search key was reported as keyless"
+        )
+        assert "splits the subscription" not in message, (
+            "the split mechanism was claimed for a case it does not describe"
+        )
+        assert TERRENOS_KEY in message, "the warning does not name the key it matched"
+        assert str(keyed_id) in message
+        assert "#116" in message
+
+
+def test_a_url_less_email_whose_label_resolves_to_nothing_says_that(app, caplog):
+    """Two subscriptions share the label: no profile is returned at all.
+
+    Naming a profile here - keyless or otherwise - would name one that does not
+    exist, so the third outcome gets its own wording.
+    """
+    with app.app_context():
+        for key in (TERRENOS_KEY, search_key_for_url(VIVIENDAS_URL)):
+            db.session.add(
+                SearchProfile(
+                    name=SEARCH_NAME,
+                    is_active=True,
+                    is_auto_created=True,
+                    source_search_key=key,
+                    travel_targets={"presets": {}, "custom": []},
+                )
+            )
+        db.session.commit()
+
+        with caplog.at_level(logging.WARNING):
+            resolved = SearchProfileService.resolve_profile(SUBJECT_FULL, "no links")
+
+        # It falls through to the catch-all rather than picking one of them.
+        assert resolved is not None
+        assert resolved.source_search_key is None
+        assert resolved.is_default is True
+
+        warnings = _service_warnings(caplog)
+        assert len(warnings) == 1, (
+            f"expected one warning for this email, got {len(warnings)}: {warnings}"
+        )
+        message = warnings[0]
+        assert "resolves to no single profile" in message
+        assert "keyless" not in message
+        assert SEARCH_NAME in message
+        assert "#116" in message
+
+
+def test_a_url_less_email_that_loses_the_insert_race_still_warns_once(
+    app, monkeypatch, caplog
+):
+    """The expected race is not a second event, so it must not be a second warning.
+
+    Two URL-less ingestions creating the same keyless profile is routine - the
+    scheduled run and a manual one, across four gunicorn threads - and
+    `ux_search_profiles_name_without_key` is what makes the loser recover
+    instead of duplicating. The loser recovering is the constraint working, not
+    a failure, and logging it at WARNING beside the per-state warning made the
+    ordinary lost race the one path where a single URL-less email raised two.
+
+    The interleaving is real, not simulated: the competing keyless row is
+    committed at the seam between this call's lookups and its own INSERT, so
+    the INSERT genuinely fails on the unique constraint and the recovery read
+    genuinely runs.
+    """
+    with app.app_context():
+        original = search_profile_service.default_travel_targets_config
+        won_by = {}
+
+        def commit_the_winner():
+            # "The other ingestion" lands its row first - after this call has
+            # looked and found nothing, before it inserts.
+            monkeypatch.setattr(
+                search_profile_service, "default_travel_targets_config", original
+            )
+            db.session.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active, is_default, "
+                    "created_at, updated_at) VALUES (:name, 1, 0, :now, :now)"
+                ),
+                {
+                    "name": SEARCH_NAME,
+                    "now": datetime(2026, 8, 8, tzinfo=timezone.utc),
+                },
+            )
+            db.session.commit()
+            won_by["id"] = SearchProfile.query.filter_by(name=SEARCH_NAME).one().id
+            return original()
+
+        monkeypatch.setattr(
+            search_profile_service,
+            "default_travel_targets_config",
+            commit_the_winner,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            resolved = SearchProfileService.resolve_profile(SUBJECT_FULL, "no links")
+
+        assert won_by, "the competing insert never landed; the seam moved"
+        assert SearchProfile.query.count() == 1, (
+            "the losing insert was not refused, so this test no longer covers "
+            "the recovery path"
+        )
+        assert resolved is not None
+        assert resolved.id == won_by["id"], (
+            "the losing ingestion did not recover the row that won the race"
+        )
+
+        warnings = _service_warnings(caplog)
+        assert len(warnings) == 1, (
+            "a lost insert race is expected and recovered; it must not add a "
+            f"second warning. Got {len(warnings)}: {warnings}"
+        )
+        message = warnings[0]
+        assert "Failed to create SearchProfile" not in message, (
+            "the recovered race is still reported as a failure"
+        )
+        assert "keyless" in message
+        assert "#116" in message
+        assert SEARCH_NAME in message
+        assert str(won_by["id"]) in message
+
+
+def test_an_integrity_error_that_is_not_the_race_is_still_reported(
+    app, monkeypatch, caplog
+):
+    """ "Recovered a profile" is not evidence that the race is what happened.
+
+    The demotion above is allowed exactly one cause:
+    `ux_search_profiles_name_without_key` refusing a duplicate keyless label.
+    A keyless winner landing at the seam does not make some *other* integrity
+    failure routine - here the row being inserted also violates
+    `ck_search_profiles_default_has_no_search_key`, the constraint that keeps
+    the catch-all from being somebody's saved search. The recovery read still
+    finds the winner, so a classifier that only asks "IntegrityError, and did
+    we recover something?" answers yes and files a foreign constraint failure
+    under an event nobody reads.
+
+    Two warnings here are correct: one genuine failure, one per-state record.
+    The contract is one warning per *expected* path, not silence on broken
+    ones.
+    """
+    with app.app_context():
+        original = search_profile_service.default_travel_targets_config
+        won_by = {}
+
+        def commit_the_winner():
+            monkeypatch.setattr(
+                search_profile_service, "default_travel_targets_config", original
+            )
+            db.session.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active, is_default, "
+                    "created_at, updated_at) VALUES (:name, 1, 0, :now, :now)"
+                ),
+                {
+                    "name": SEARCH_NAME,
+                    "now": datetime(2026, 8, 8, tzinfo=timezone.utc),
+                },
+            )
+            db.session.commit()
+            won_by["id"] = SearchProfile.query.filter_by(name=SEARCH_NAME).one().id
+            return original()
+
+        monkeypatch.setattr(
+            search_profile_service,
+            "default_travel_targets_config",
+            commit_the_winner,
+        )
+
+        tripped = {}
+
+        def trip_the_check_constraint(session, flush_context, instances):
+            # The combination `ck_search_profiles_default_has_no_search_key`
+            # forbids, landed on the row this call is about to INSERT - so the
+            # statement fails on that CHECK and not on the label index, which
+            # covers keyless rows only and no longer applies to this one.
+            for pending in session.new:
+                if isinstance(pending, SearchProfile) and pending.name == SEARCH_NAME:
+                    pending.is_default = True
+                    pending.source_search_key = TERRENOS_KEY
+                    tripped["yes"] = True
+
+        event.listen(db.session, "before_flush", trip_the_check_constraint)
+        try:
+            with caplog.at_level(logging.WARNING):
+                resolved = SearchProfileService.resolve_profile(
+                    SUBJECT_FULL, "no links"
+                )
+        finally:
+            event.remove(db.session, "before_flush", trip_the_check_constraint)
+
+        assert tripped, "the CHECK was never tripped; this test proves nothing"
+
+        # The return behaviour is unchanged: the winner is still recovered.
+        assert resolved is not None
+        assert resolved.id == won_by["id"]
+        assert SearchProfile.query.count() == 1
+
+        warnings = _service_warnings(caplog)
+        failures = [
+            message
+            for message in warnings
+            if "Failed to create SearchProfile" in message
+        ]
+        assert len(failures) == 1, (
+            "a CHECK violation was filed as the routine insert race and "
+            f"disappeared from the log; warnings were: {warnings}"
+        )
+        assert "ck_search_profiles_default_has_no_search_key" in failures[0], (
+            "the report does not name the constraint that actually failed"
+        )
+        assert not [
+            message for message in warnings if "Lost the insert race" in message
+        ]
+
+
+def test_an_email_that_carries_its_search_url_stays_quiet(app, caplog):
+    """The warning must mean something: an identified email must not raise it."""
+    with app.app_context():
+        with caplog.at_level(logging.WARNING):
+            resolved = SearchProfileService.resolve_profile(
+                SUBJECT_FULL, f'<a href="{TERRENOS_URL}">x</a>'
+            )
+
+        assert resolved is not None
+        assert resolved.source_search_key == TERRENOS_KEY
+        # Nothing at all, rather than "nothing matching a phrase": an
+        # identified email is the quiet path, and a warning under any wording
+        # would mean it stopped being one.
+        assert _service_warnings(caplog) == []
 
 
 def test_an_unlabelled_email_with_a_url_never_lands_in_default(app):
@@ -1088,6 +1451,435 @@ def test_merging_onto_a_keyless_primary_keeps_the_only_search_key(app):
             "the merge deleted the subscription's identity"
         )
         assert survivor.source_search_url == TERRENOS_URL
+
+
+def test_the_merge_asks_the_database_to_hold_the_group_it_decides_on():
+    """Pin that the lock is requested, and requested in id order.
+
+    Sorting the `IN` list decides nothing: Postgres locks rows in whatever
+    order the scan produces them, so two concurrent runs over overlapping
+    groups could still deadlock. The `ORDER BY` has to be in the SQL - the
+    `LockRows` node then sits above `Sort` - which is what this asserts.
+
+    SQLite ignores `FOR UPDATE`, so this suite cannot demonstrate the locking
+    itself, only that the statement asks for it. The semantics come from
+    Postgres, the same honest limitation as the repair service's lock.
+    """
+    from sqlalchemy.dialects import postgresql
+
+    from services.search_profile_service import lock_profiles_statement
+
+    sql = str(lock_profiles_statement([9, 7, 8]).compile(dialect=postgresql.dialect()))
+
+    assert "FOR UPDATE" in sql
+    assert "search_profiles" in sql
+    assert "ORDER BY search_profiles.id" in sql, (
+        "the lock order is left to the scan plan, so two runs can deadlock"
+    )
+    assert sql.index("ORDER BY") < sql.index("FOR UPDATE")
+
+
+def test_the_merge_takes_one_globally_ordered_lock_before_it_touches_anything(
+    app, monkeypatch
+):
+    """Per-statement order is not acquisition order across a run.
+
+    The merge used to lock group by group. Every one of those statements
+    carried `ORDER BY id`, and the run as a whole still climbed and descended:
+    with groups [1, 100] and [2] it takes 1 and 100, then asks for 2, while a
+    repair that locked [2, 100] in one ordered statement holds 2 and waits for
+    100. Two well-ordered statements, one deadlock.
+
+    So the assertion is about the *sequence*: one lock statement, carrying
+    every id this run will look at in ascending order, issued before anything
+    is mutated. SQLite erases `FOR UPDATE` from the executed SQL, so the lock
+    is identified here by its shape and pinned as `FOR UPDATE` by the compile
+    test above.
+    """
+    with app.app_context():
+        # Two groups whose ids interleave - the shape that made the old
+        # group-by-group acquisition climb back down. The pairs differ only in
+        # case, so they group together without either name being *cleaned*
+        # into the other's: this test is about lock order, not about renames.
+        db.session.add_all(
+            [
+                SearchProfile(id=1, name="Alpha", is_active=True),
+                SearchProfile(id=2, name="Beta", is_active=True),
+                SearchProfile(id=3, name="beta", is_active=True),
+                SearchProfile(id=100, name="alpha", is_active=True),
+            ]
+        )
+        db.session.commit()
+        db.session.add(
+            Property(
+                source_email_id="imap_lock_1",
+                url="https://www.idealista.com/en/inmueble/5/",
+                search_profile_id=100,
+            )
+        )
+        db.session.commit()
+
+        locked_id_sets = []
+        original = search_profile_service.lock_profiles_statement
+
+        def record_lock(profile_ids):
+            locked_id_sets.append(list(profile_ids))
+            return original(profile_ids)
+
+        monkeypatch.setattr(
+            search_profile_service, "lock_profiles_statement", record_lock
+        )
+
+        executed = []
+
+        def record_statement(conn, cursor, statement, parameters, context, many):
+            executed.append((" ".join(statement.split()), parameters))
+
+        event.listen(db.engine, "before_cursor_execute", record_statement)
+        try:
+            report = SearchProfileService.merge_duplicate_profiles(commit=True)
+        finally:
+            event.remove(db.engine, "before_cursor_execute", record_statement)
+
+        assert report["merged_groups"] == 2, "both groups should have merged"
+
+        assert len(locked_id_sets) == 1, (
+            "the merge issues a lock statement per group, so its acquisition "
+            "order across the run is still unordered"
+        )
+        assert sorted(locked_id_sets[0]) == [1, 2, 3, 100], (
+            "the single lock does not cover every row the run decides on"
+        )
+
+        locks = [
+            (position, params)
+            for position, (statement, params) in enumerate(executed)
+            if "FROM search_profiles" in statement
+            and " IN (" in statement
+            and "ORDER BY search_profiles.id" in statement
+        ]
+        assert len(locks) == 1, f"expected exactly one lock statement, got {len(locks)}"
+        lock_position, lock_params = locks[0]
+        assert list(lock_params) == [1, 2, 3, 100], (
+            "the lock statement does not carry the full sorted id set"
+        )
+
+        mutations = [
+            position
+            for position, (statement, _) in enumerate(executed)
+            if statement.startswith(("UPDATE", "DELETE", "INSERT"))
+        ]
+        assert mutations, "the run mutated nothing, so it proves no ordering"
+        assert lock_position < min(mutations), (
+            "the merge mutated a row before it had taken its lock"
+        )
+
+
+def test_a_profile_renamed_at_the_lock_seam_is_no_longer_a_duplicate(app):
+    """Group membership must be rebuilt after the lock, not carried over it.
+
+    Expiring the locked rows' attributes is not enough while the
+    canonical->members mapping is still the one computed from pre-lock names:
+    what a group *is* comes from those names. `_relabel_if_auto_created()`
+    renames an auto-created profile whenever an alert rewords a saved search,
+    so a row can stop being a duplicate between the snapshot and the lock - and
+    a merge running off the stale mapping deletes it as one and carries its
+    search key onto a profile it no longer shares a label with.
+
+    The rename is landed exactly at the seam: on the lock statement itself,
+    after it executes and before the regroup reads any name. It is written
+    through the DBAPI cursor rather than the session, so it does not re-enter
+    SQLAlchemy's event machinery - and, being on the one connection SQLite
+    gives us, it shares this transaction. That is why a third profile is
+    seeded: its name needs cleaning, so the run writes something and therefore
+    commits, and the simulated competitor's rename survives to be inspected.
+    """
+    with app.app_context():
+        db.session.add_all(
+            [
+                SearchProfile(id=1, name="Alpha", is_active=True),
+                SearchProfile(
+                    id=2,
+                    name="alpha",
+                    is_active=True,
+                    is_auto_created=True,
+                    source_search_key=TERRENOS_KEY,
+                    source_search_url=TERRENOS_URL,
+                ),
+                SearchProfile(id=3, name="Gamma!", is_active=True),
+            ]
+        )
+        db.session.commit()
+        db.session.add(
+            Property(
+                source_email_id="imap_rename_1",
+                url="https://www.idealista.com/en/inmueble/7/",
+                search_profile_id=1,
+            )
+        )
+        db.session.commit()
+
+        renamed_at_the_seam = False
+
+        def rename_on_the_lock(conn, cursor, statement, parameters, context, many):
+            nonlocal renamed_at_the_seam
+            collapsed = " ".join(statement.split())
+            if renamed_at_the_seam:
+                return
+            if (
+                "FROM search_profiles" not in collapsed
+                or " IN (" not in collapsed
+                or "ORDER BY search_profiles.id" not in collapsed
+            ):
+                return
+            renamed_at_the_seam = True
+            # "The other ingestion" follows a reworded saved search, which is
+            # exactly what `_relabel_if_auto_created()` does in production.
+            cursor.connection.execute(
+                "UPDATE search_profiles SET name = 'Beta' WHERE id = 2"
+            )
+
+        event.listen(db.engine, "after_cursor_execute", rename_on_the_lock)
+        try:
+            report = SearchProfileService.merge_duplicate_profiles(commit=True)
+        finally:
+            event.remove(db.engine, "after_cursor_execute", rename_on_the_lock)
+
+        assert renamed_at_the_seam, "the rename never landed; the seam moved"
+
+        assert report["merged_groups"] == 0, (
+            "a profile that had stopped being a duplicate was merged anyway"
+        )
+        assert report["profiles_deleted"] == 0
+
+        db.session.expire_all()
+        survivor = db.session.get(SearchProfile, 2)
+        assert survivor is not None, (
+            "the renamed profile was deleted as a duplicate of a label it no "
+            "longer carries"
+        )
+        assert survivor.name == "Beta"
+        assert survivor.source_search_key == TERRENOS_KEY, (
+            "the surviving subscription lost its identity"
+        )
+
+        untouched = db.session.get(SearchProfile, 1)
+        assert untouched.name == "Alpha"
+        assert untouched.source_search_key is None, (
+            "another subscription's key was carried onto this profile"
+        )
+        assert Property.query.filter_by(search_profile_id=1).count() == 1
+
+
+def test_a_merge_that_writes_nothing_still_lets_go_of_the_rows_it_locked(app):
+    """A conflicts-only run must not walk away holding every group FOR UPDATE.
+
+    `commit=True` means this call owns the transaction. It used to commit only
+    when something was written, so a run that refused every group returned with
+    the transaction still open and its locks still held - against every
+    ingestion, for as long as the session lives.
+    """
+    with app.app_context():
+        for key in (TERRENOS_KEY, search_key_for_url(VIVIENDAS_URL)):
+            db.session.add(
+                SearchProfile(
+                    name="Same label",
+                    is_active=True,
+                    is_auto_created=True,
+                    source_search_key=key,
+                    travel_targets={"presets": {}, "custom": []},
+                )
+            )
+        db.session.commit()
+
+        assert _in_transaction() is False, "the seed left one open"
+
+        report = SearchProfileService.merge_duplicate_profiles(commit=True)
+
+        assert len(report["conflicts"]) == 1
+        assert report["merged_groups"] == 0
+        assert _in_transaction() is False, (
+            "the merge returned still holding its row locks"
+        )
+        assert SearchProfile.query.count() == 2
+
+
+def test_a_merge_that_fails_while_grouping_still_closes_the_transaction(
+    app, monkeypatch
+):
+    """The guard has to start where the transaction does, not where the loop does.
+
+    `SearchProfile.query...all()` is what opens the transaction this call owns,
+    and the grouping that follows normalizes a name per row. A guard that began
+    at the group loop left that whole stretch outside it, so a failure in the
+    normalizer returned with the transaction open - the same leak, moved a few
+    lines up.
+    """
+    with app.app_context():
+        db.session.add(
+            SearchProfile(
+                name="Same label",
+                is_active=True,
+                travel_targets={"presets": {}, "custom": []},
+            )
+        )
+        db.session.commit()
+        assert _in_transaction() is False, "the seed left one open"
+
+        def explode(value):
+            raise RuntimeError("normalization blew up")
+
+        monkeypatch.setattr(search_profile_service, "_canonical_profile_name", explode)
+
+        with pytest.raises(RuntimeError):
+            SearchProfileService.merge_duplicate_profiles(commit=True)
+
+        assert _in_transaction() is False, (
+            "a failure between the first SELECT and the group loop left the "
+            "transaction, and its locks, open"
+        )
+
+
+def test_a_merge_that_fails_does_not_carry_its_locks_back_to_the_caller(
+    app, monkeypatch
+):
+    """The same guarantee from the failing side."""
+    with app.app_context():
+        db.session.add(
+            SearchProfile(
+                name="Same label!",
+                is_active=True,
+                travel_targets={"presets": {}, "custom": []},
+            )
+        )
+        db.session.add(
+            SearchProfile(
+                name="Same label",
+                is_active=True,
+                travel_targets={"presets": {}, "custom": []},
+            )
+        )
+        db.session.commit()
+
+        def explode(*args, **kwargs):
+            raise RuntimeError("merge blew up")
+
+        monkeypatch.setattr(
+            search_profile_service, "normalize_travel_targets_config", explode
+        )
+
+        with pytest.raises(RuntimeError):
+            SearchProfileService.merge_duplicate_profiles(commit=True)
+
+        assert _in_transaction() is False, (
+            "the failed merge left the transaction - and its locks - open"
+        )
+
+
+def test_a_dry_run_leaves_the_transaction_to_its_caller(app):
+    """`commit=False` means the caller owns it, locks included."""
+    with app.app_context():
+        db.session.add(
+            SearchProfile(
+                name="Same label",
+                is_active=True,
+                travel_targets={"presets": {}, "custom": []},
+            )
+        )
+        db.session.commit()
+
+        SearchProfileService.merge_duplicate_profiles(commit=False)
+
+        assert _in_transaction() is True, (
+            "a dry run ended a transaction it does not own"
+        )
+        db.session.rollback()
+
+
+def test_merge_decides_on_the_rows_it_locked_not_on_the_snapshot(app, monkeypatch):
+    """A key acquired after the grouping read must not be merged away (#116).
+
+    `merge_duplicate_profiles()` grouped the profiles with a plain SELECT and
+    computed its refusal from that snapshot. A `_claim_keyless_profile()`
+    landing in between turns a group that looked safe - one key, so mergeable -
+    into one holding two, and the merge then deletes a row that has just
+    acquired an identity. Nothing records which saved search a stored listing
+    came from, so that is unrecoverable.
+
+    The interleaving is forced deterministically at the moment the group is
+    locked: the competing write is *not* committed, so it cannot expire the
+    snapshot's objects on its way past - the merge can only see it by reading
+    the rows again under the lock, which is the fix. SQLite cannot show the
+    lock blocking a second connection; that half is Postgres semantics.
+
+    The refusal *report* is what proves the re-read, and deliberately so. On
+    one connection the simulated competitor shares this transaction, so the
+    rollback that releases the group's locks discards its write too; the row
+    state afterwards says nothing either way, and asserting on it would be
+    asserting on the simulation.
+    """
+    with app.app_context():
+        keyless = SearchProfile(
+            name="Terrenos norte",
+            is_active=True,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        keyed = SearchProfile(
+            name="Terrenos Norte",
+            is_active=True,
+            is_auto_created=True,
+            source_search_key=TERRENOS_KEY,
+            source_search_url=TERRENOS_URL,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add_all([keyless, keyed])
+        db.session.commit()
+        keyless_id, keyed_id = keyless.id, keyed.id
+
+        other_key = search_key_for_url(VIVIENDAS_URL)
+        original = search_profile_service.lock_profiles_statement
+        raced = False
+
+        def claim_the_keyless_row_first(profile_ids):
+            nonlocal raced
+            if not raced:
+                raced = True
+                # "The other ingestion" binds a second subscription to the row
+                # the merge is about to treat as a spare duplicate.
+                db.session.execute(
+                    text(
+                        "UPDATE search_profiles SET source_search_key = :key "
+                        "WHERE id = :id"
+                    ),
+                    {"key": other_key, "id": keyless_id},
+                )
+            return original(profile_ids)
+
+        monkeypatch.setattr(
+            search_profile_service,
+            "lock_profiles_statement",
+            claim_the_keyless_row_first,
+        )
+
+        report = SearchProfileService.merge_duplicate_profiles()
+
+        assert raced, "the seam never fired; the merge does not lock its group"
+        assert report["merged_groups"] == 0
+        assert report["profiles_deleted"] == 0
+        assert report["conflicts"], (
+            "a group holding two search keys must be reported, not merged"
+        )
+        assert sorted(report["conflicts"][0]["search_keys"]) == sorted(
+            [TERRENOS_KEY, other_key]
+        ), "the refusal was decided from the snapshot, not from the locked rows"
+        assert sorted(report["conflicts"][0]["profile_ids"]) == sorted(
+            [keyless_id, keyed_id]
+        )
+
+        db.session.expire_all()
+        assert db.session.get(SearchProfile, keyed_id) is not None, (
+            "the merge deleted a profile that still carried its own identity"
+        )
 
 
 # --------------------------------------------------------------------------

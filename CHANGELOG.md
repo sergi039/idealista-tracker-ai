@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🛟 Fixed: the two saved-search identity races are observable and locked (2026-08-09, #116)
+- **What**: an alert email that carries no saved-search URL now says so.
+  `SearchProfileService.resolve_profile()` logs one warning per such email,
+  naming the label it matched on and describing what actually happened — a
+  keyless profile (the half a *concurrent* URL-carrying alert can split; a
+  later sequential one adopts it instead), a profile that already carries a
+  search key (matched on a label alone, nothing verified), or no single profile
+  at all. And `merge_duplicate_profiles()` takes **one** `FOR UPDATE` over
+  every row it will look at, in ascending id order, before any group's decision
+  or mutation — through the same `lock_profiles_statement()` the repair service
+  uses, now defined once in `services/search_profile_service.py` and carrying
+  the `ORDER BY id` that actually fixes acquisition order — then rebuilds the
+  groups from the names those locked rows carry *now*, discarding the snapshot's
+  grouping, and keeps the rows to the end of the transaction. With
+  `commit=True` it always ends that transaction before returning, from the
+  first query onwards: the conflicts-only and no-op runs that write nothing,
+  and any failure in between, all release the locks. `commit=False` still
+  leaves the transaction to the caller.
+- **Why**: both races are from #110. The first splits one subscription across
+  two profiles when a URL-carrying and a URL-less alert for the same new label
+  arrive together; it cannot be constrained away, because `UNIQUE (name) WHERE
+  source_search_key IS NULL` deliberately ignores keyed rows so that two
+  genuinely different subscriptions may share a label. Nothing marked the
+  URL-less path, so the precondition was invisible until the damage showed up
+  in the listing counts. The second decided from an unlocked snapshot: a
+  `_claim_keyless_profile()` landing in between turned a safe-looking group
+  into one holding two keys, and the merge deleted a row that had just
+  acquired an identity — unrecoverably, since nothing records which saved
+  search a stored listing came from.
+- **Notes**: neither unique index was touched, and no constraint was widened.
+  The lock is Postgres semantics; SQLite ignores `FOR UPDATE`, so the suite
+  pins that the lock is *requested* — one statement, full sorted id set, before
+  any mutation — and that the decision is taken from a re-read, but not that a
+  second connection blocks. Two things that look like ordering and are not:
+  sorting the `IN` list orders nothing without `ORDER BY` in the SQL, and
+  per-statement `ORDER BY` orders nothing across a run that locks group by
+  group — groups `[1, 100]` then `[2]` climb back down and can deadlock against
+  a repair holding `[2, 100]`. One seam stays open by construction: the lock set
+  can only be derived from the snapshot, since a row must be known before it can
+  be locked, so a profile *inserted* under one of these labels mid-run is
+  neither locked nor seen. The regroup closes the rename seam, not that one.
+
 ### 🌊 Added: sea view is computed again, as four states instead of a flag (2026-08-09)
 - **What**: `services/sea_view_service.py` estimates a sea view from two
   independent signals and stores the verdict at

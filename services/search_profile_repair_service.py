@@ -210,7 +210,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import func
 
 from app import db
 from models import Property, SearchProfile
@@ -225,6 +225,12 @@ from services.search_profile_service import (
     _canonical_profile_name,
     extract_search_name,
     normalize_travel_targets_config,
+)
+from services.search_profile_service import (
+    # The row-lock statement now has one definition, shared with the merge
+    # (#116) that locks its groups the same way. Kept under the private name
+    # this module already used it by.
+    lock_profiles_statement as _lock_profiles_statement,
 )
 from utils.email_headers import unfold_header
 
@@ -986,15 +992,6 @@ def _involved_profile_ids(plan: RepairPlan) -> List[int]:
         {group.target_id for group in plan.groups}
         | {fid for group in plan.groups for fid in group.fragment_ids}
         | set(plan.profiles_to_delete)
-    )
-
-
-def _lock_profiles_statement(profile_ids: Sequence[int]):
-    """``SELECT id FROM search_profiles WHERE id IN (...) FOR UPDATE``."""
-    return (
-        select(SearchProfile.id)
-        .where(SearchProfile.id.in_(list(profile_ids)))
-        .with_for_update()
     )
 
 
