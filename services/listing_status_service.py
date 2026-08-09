@@ -4,6 +4,7 @@ Periodically checks if listings are still active or have been removed.
 """
 
 import logging
+import re
 import requests
 import time
 import random
@@ -97,6 +98,19 @@ class ListingStatusService:
                     logger.warning(f"Hit captcha protection for: {url}")
                     return "error", None
 
+            # Everything below reads the body as if it were the listing page,
+            # so refuse anything that is not a plain 200 first. An error page
+            # that happens to carry "no longer published" is not evidence the
+            # advertiser removed anything, and a 403 or 5xx is not evidence the
+            # listing is alive either -- both mean the check did not happen.
+            if response.status_code != 200:
+                logger.warning(
+                    "Unexpected HTTP %s checking listing %s; reporting as error",
+                    response.status_code,
+                    url,
+                )
+                return "error", None
+
             # Check for sold patterns
             for pattern in self.SOLD_PATTERNS:
                 if pattern.lower() in content:
@@ -111,20 +125,19 @@ class ListingStatusService:
                     removed_date = self._extract_removal_date(response.text)
                     return "removed", removed_date
 
-            # Only a real 200 is evidence that the listing is still up. Anything
-            # else -- a 403 from bot protection, a 5xx, a redirect to some
-            # placeholder -- means the check did not happen, and recording it as
-            # "active" would be a false confirmation stamped with a fresh
-            # listing_last_checked (issue #136).
-            if response.status_code == 200:
-                return "active", None
+            # A 200 only proves the listing is up if what came back *is* the
+            # listing page. idealista answers plenty of requests by sending us
+            # somewhere else -- a search page, the home page -- with a perfectly
+            # good status code, and calling that "active" would be a false
+            # confirmation (issue #136).
+            if not self._looks_like_listing_page(url, response, content):
+                logger.warning(
+                    "200 for %s did not come back as the listing page; reporting as error",
+                    url,
+                )
+                return "error", None
 
-            logger.warning(
-                "Unexpected HTTP %s checking listing %s; reporting as error",
-                response.status_code,
-                url,
-            )
-            return "error", None
+            return "active", None
 
         except requests.Timeout:
             logger.warning(f"Timeout checking listing: {url}")
@@ -133,9 +146,31 @@ class ListingStatusService:
             logger.error("Error checking listing %s", url, exc_info=True)
             return "error", None
 
+    @staticmethod
+    def _listing_id_from_url(url: str) -> Optional[str]:
+        """The /inmueble/<id>/ number, which is what identifies a listing page."""
+        match = re.search(r"/inmueble/(\d+)", url or "")
+        return match.group(1) if match else None
+
+    def _looks_like_listing_page(self, url: str, response, content: str) -> bool:
+        """Did a 200 actually hand us the listing we asked for?
+
+        Anchored on the listing id: it survives in the final URL after a
+        same-listing redirect (language or slug variants) and in the page's own
+        canonical/og:url markup, but not when idealista answers with the home
+        page or a search result. A URL with no id to anchor on falls back to the
+        status code alone rather than refusing every non-standard link.
+        """
+        listing_id = self._listing_id_from_url(url)
+        if not listing_id:
+            return True
+
+        final_url = (getattr(response, "url", "") or "").lower()
+        needle = f"inmueble/{listing_id}"
+        return needle in final_url or needle in content
+
     def _extract_removal_date(self, html_content: str) -> Optional[str]:
         """Try to extract the removal date from the page content"""
-        import re
 
         # Pattern: "The advertiser removed it on 01/12/2025"
         patterns = [
@@ -157,10 +192,17 @@ class ListingStatusService:
         """Write a freshly observed status onto a Land or Property row.
 
         Returns (changed, transition), where transition is 'deactivated',
-        'relisted' or None. An 'error' observation only records that we tried:
-        it stamps listing_last_checked and leaves the stored status alone, so a
-        blocked or failing fetch never rewrites what we know.
+        'relisted' or None.
+
+        An 'error' observation writes nothing at all -- not even
+        listing_last_checked. A blocked or failed fetch is not a check, and
+        stamping a date on it would make the page read "Status: active,
+        Checked: today" about a listing nobody ever verified. That is the exact
+        false confirmation this work exists to remove (issue #136).
         """
+        if status == "error":
+            return False, None
+
         record.listing_last_checked = datetime.now(timezone.utc)
         current = record.listing_status or "active"
 
@@ -461,6 +503,11 @@ class ListingStatusService:
         scraper, so an unattended sweep would only burn requests against a
         blocked host. It backs the manual per-listing check and is ready for the
         day the fetch works again (issue #136).
+
+        Note that a failed fetch leaves listing_last_checked untouched by
+        design, so rows that keep erroring stay at the front of the queue and a
+        later run will pick the same ones again. `limit` is what bounds the
+        work; the ordering does not rotate on its own.
         """
         start_time = datetime.now(timezone.utc)
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_since_check)

@@ -1790,8 +1790,15 @@ def check_land_status(land_id):
 
 
 @api_bp.route("/property/<int:property_id>/check-status", methods=["POST"])
+@limiter.limit("5 per minute")
 def check_property_status(property_id):
-    """Check whether a universal Property listing is still live on Idealista."""
+    """Check whether a universal Property listing is still live on Idealista.
+
+    Rate-limited on purpose: this endpoint is unauthenticated and CSRF-exempt
+    like the rest of the JSON API, and every call spends one outbound request
+    on idealista. Without a cap, a page left in a loop would drive the scraper
+    straight past the throttle the sweep is careful to respect.
+    """
     try:
         from models import Property
         from services.listing_status_service import ListingStatusService

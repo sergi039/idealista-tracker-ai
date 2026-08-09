@@ -1052,12 +1052,20 @@ async function checkPropertyListingStatus(propertyId) {
         });
         const data = await response.json().catch(() => null);
 
-        if (response.status === 202 && data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
+        if (response.status === 202) {
+            // Queued is not an answer. Without a poller we cannot learn the
+            // outcome, so say it is still running rather than let settle()
+            // read the envelope's success:true as "no change".
             btn.innerHTML = '<i class="fas fa-clock me-1"></i>Queued';
-            IdealistaApp.pollJob(data.job_id, {
-                onSuccess: (job) => settle(job && job.result ? job.result : null),
-                onError: () => settle(null)
-            });
+            if (data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
+                IdealistaApp.pollJob(data.job_id, {
+                    onSuccess: (job) => settle(job && job.result ? job.result : null),
+                    onError: () => settle(null)
+                });
+            } else {
+                btn.title = 'The check is running in the background. Reload the page to see the result.';
+                restore();
+            }
             return;
         }
 
