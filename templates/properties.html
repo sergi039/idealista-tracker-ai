@@ -68,12 +68,26 @@
     </span>
 {%- endmacro %}
 
+{# Short label under a travel time, the way /lands captioned its OV | GJ
+   column. The full destination stays in the tooltip. #}
+{% set TRAVEL_ABBR = {
+    'airport': 'AIR',
+    'train_station': 'TRN',
+    'hospital': 'HOSP',
+    'police': 'POL',
+    'supermarket': 'SHOP',
+    'school': 'SCH'
+} %}
+
 {% macro travel_badges(p, display_targets) -%}
+    {# Rendered like the /lands travel column -- an icon, the minutes in bold
+       and a short caption -- not as the stack of pills the old /properties
+       used. Same data, a quarter of the row height. #}
     {% set travel = p.travel if p.travel is mapping else {} %}
     {% set travel_targets = travel.get('targets') or {} %}
     {% if display_targets %}
-        {% set visible_travel_targets = display_targets[:4] %}
-        <div class="d-flex flex-wrap gap-1 properties-travel-badges">
+        {% set visible_travel_targets = display_targets[:3] %}
+        <div class="d-flex flex-column small properties-travel-times">
             {% for tt in visible_travel_targets %}
                 {% set tdata = travel_targets.get(tt.key) if travel_targets else None %}
                 {% set minutes = tdata.duration_min if tdata else None %}
@@ -81,33 +95,38 @@
                 {% set place_name = (tdata.place.name if (tdata and tdata.place) else None) %}
                 {% set travel_mode = (tdata.mode if tdata else None) %}
                 {% set status = tdata.status if tdata else None %}
+                {% set caption = TRAVEL_ABBR.get(tt.key) or (tt.label|truncate(8, True, '')) %}
+                {% set tooltip = tt.label ~ (' (' ~ travel_mode ~ ')' if travel_mode else '') ~ (': ' ~ place_name if place_name else '') ~ ((' (%.1f km)'|format(distance_km)) if distance_km else '') %}
                 {% if minutes %}
-                    <span class="badge bg-info"
-                          data-bs-toggle="tooltip"
-                          title="{{ tt.label }}{% if travel_mode %} ({{ travel_mode }}){% endif %}{% if place_name %}: {{ place_name }}{% endif %}{% if distance_km %} ({{ '%.1f'|format(distance_km) }} km){% endif %}">
-                        <i class="fas {{ tt.icon }} me-1"></i>{{ minutes }}m
-                    </span>
-                {% elif status %}
-                    <span class="badge bg-light text-body-secondary border"
-                          data-bs-toggle="tooltip"
-                          title="{{ tt.label }}{% if travel_mode %} ({{ travel_mode }}){% endif %} ({{ status }})">
-                        <i class="fas {{ tt.icon }} me-1"></i>&mdash;
-                    </span>
+                    {% if p.location_lat and p.location_lon %}
+                        <a href="https://www.google.com/maps/dir/{{ p.location_lat }},{{ p.location_lon }}/{{ place_name or tt.label }}"
+                           target="_blank" rel="noopener"
+                           class="text-decoration-none d-inline-flex align-items-center"
+                           title="{{ tooltip }}">
+                            <i class="fas {{ tt.icon }} me-1 text-primary"></i>
+                            <span class="fw-bold">{{ minutes }}min</span>
+                            <small class="text-muted ms-1">{{ caption }}</small>
+                        </a>
+                    {% else %}
+                        <span class="d-inline-flex align-items-center" title="{{ tooltip }}">
+                            <i class="fas {{ tt.icon }} me-1 text-primary"></i>
+                            <span class="fw-bold">{{ minutes }}min</span>
+                            <small class="text-muted ms-1">{{ caption }}</small>
+                        </span>
+                    {% endif %}
                 {% else %}
-                    <span class="badge bg-light text-body-secondary border"
-                          data-bs-toggle="tooltip"
-                          title="{{ tt.label }}{% if travel_mode %} ({{ travel_mode }}){% endif %} (not calculated)">
-                        <i class="fas {{ tt.icon }} me-1"></i>&mdash;
+                    <span class="d-inline-flex align-items-center text-muted"
+                          title="{{ tooltip }}{{ ' (' ~ status ~ ')' if status else ' (not calculated)' }}">
+                        <i class="fas {{ tt.icon }} me-1"></i>-
+                        <small class="ms-1">{{ caption }}</small>
                     </span>
                 {% endif %}
             {% endfor %}
             {% set hidden_travel_count = (display_targets|length) - (visible_travel_targets|length) %}
             {% if hidden_travel_count > 0 %}
-                <span class="badge bg-light text-body-secondary border"
-                      data-bs-toggle="tooltip"
-                      title="{{ hidden_travel_count }} more targets in details view">
-                    +{{ hidden_travel_count }}
-                </span>
+                <small class="text-muted" title="{{ hidden_travel_count }} more targets in the details view">
+                    +{{ hidden_travel_count }} more
+                </small>
             {% endif %}
         </div>
     {% else %}
