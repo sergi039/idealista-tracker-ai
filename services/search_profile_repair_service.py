@@ -35,8 +35,8 @@ profile P is a fold fragment of N when:
 
 That is cause and effect: this profile's name was produced by this bug, on
 these rows. Weaker signals were tried and are not enough. Two profiles
-holding one saved search prove nothing -- `ProfileAssignmentService` files
-listings by location, so "Coast" and "City" legitimately split one
+holding one saved search prove nothing -- the owner runs several saved
+searches over one area, so "Coast" and "City" legitimately split one
 subscription. A line break in the subject proves nothing either: it can sit
 past the end of the name (``"...: Alpha Beta Gamma!\\r\\n extra"``), where it
 truncated nothing at all.
@@ -61,10 +61,12 @@ Anything that is not a fold fragment is somebody's decision, and is left
 alone:
 
 - **It never moves a listing you reassigned by hand.** A listing whose
-  ``enrichment.profile_assignment.manual_override`` is set -- what the
-  profile-change form writes, and what `ProfileAssignmentService` already
-  refuses to override -- stays exactly where you put it, and the profile
-  holding it is therefore never empty and never deleted. Pinned listings
+  ``enrichment.profile_assignment.manual_override`` is set stays exactly where
+  you put it, and the profile holding it is therefore never empty and never
+  deleted. Nothing writes that key any more -- the profile-change form and its
+  route were removed on 2026-08-09, and the existing values were cleared with
+  them -- so this clause now guards only against a future writer. Pinned
+  listings
   still count towards what a profile holds, so they can stop a rename.
   Pinning is re-read inside the transaction too: a listing pinned or moved
   *after* planning aborts the repair rather than being dragged back.
@@ -318,9 +320,11 @@ def _pre_fix_profile_name(subject: Any) -> Optional[str]:
 def _is_manually_pinned(enrichment: Any) -> bool:
     """True when the owner reassigned this listing through the profile form.
 
-    `routes/main_routes.py` writes `manual_override` into
-    `enrichment.profile_assignment`, and `ProfileAssignmentService` already
-    refuses to move such a row. So does this repair.
+    That form, its POST route and the geo heuristic that honoured the flag were
+    all removed on 2026-08-09, and the stored values were cleared with them, so
+    in practice this is False for every row today. It is kept as a guard: any
+    future writer of `enrichment.profile_assignment.manual_override` is still
+    honoured by this repair.
     """
     if not isinstance(enrichment, dict):
         return False
@@ -601,7 +605,7 @@ class _Planner:
         """Is this profile a *fold fragment* of `canonical`, or someone's choice?
 
         Two profiles holding one saved search prove nothing on their own --
-        `ProfileAssignmentService` files listings by location, so "Coast" and
+        the owner runs several saved searches over one area, so "Coast" and
         "City" can legitimately split one subscription between them. Nor does
         a line break somewhere in the subject: it can sit past the end of the
         name, where it truncated nothing.

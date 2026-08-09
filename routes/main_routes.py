@@ -785,7 +785,6 @@ def property_detail(property_id):
             openai_analysis=(openai_variant.analysis if openai_variant else None),
             openai_model=(openai_variant.model if openai_variant else None),
             travel_display_targets=travel_display_targets,
-            profiles=SearchProfileService.list_profiles(active_only=False),
         )
     except HTTPException:
         raise

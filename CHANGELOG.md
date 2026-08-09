@@ -67,6 +67,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   potential analysis available" and "No similar properties found". ChatGPT's
   N/A rental metrics are *not* part of this: those are real nulls, the model
   declined to put numbers on a single-comparable market.
+### 🧹 Removed: the geo heuristic that overwrote a listing's subscription (2026-08-09)
+- **What**: `services/profile_assignment_service.py`, the `AUTO_PROFILE_ASSIGNMENT`
+  flag and the enrichment call behind them are gone, and migration `014` clears
+  the `enrichment.profile_assignment` metadata they left on existing rows.
+  `Property.search_profile_id` now has exactly one writer: ingestion, which reads
+  the saved-search URL out of the alert email
+  (`services/property_imap_service.py`). This finishes the removal the same-day
+  UI change (#131) started by dropping the "Profile assignment" editor.
+- **Why**: the email knows which saved search a listing arrived through.
+  `assign_nearest_profile` then silently refiled it under whichever *active*
+  profile had the geographically nearest custom target — so a listing from
+  "houses norte" could end up filed under a coastal profile, and nothing in the
+  UI said so. The manual editor's real function was to set `manual_override`,
+  which made the heuristic skip the row: the only defence against the automation
+  was to override it by hand, which is backwards. Owner decision, 2026-08-09.
+- **Why the metadata had to go too**: `search_profile_repair_service` refuses to
+  move a row carrying `manual_override`, and with the editor deleted nothing can
+  clear that flag any more. A stale pin would freeze a listing in a fragmented
+  profile permanently. The clause itself stays, as a guard should any future
+  writer set the key again.
 
 ### 🛟 Fixed: listing pagination has a deterministic order (2026-08-09, #113)
 - **What**: `/properties`, `/lands`, and their CSV exports now use the model ID
