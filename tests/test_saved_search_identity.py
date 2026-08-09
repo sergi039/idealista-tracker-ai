@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.exc import IntegrityError
 
 from app import create_app, db
@@ -463,14 +463,17 @@ def test_an_email_without_a_search_url_says_so_instead_of_matching_silently(
 ):
     """The label path is the precondition for the #116 split; make it visible.
 
-    A URL-less alert creates or finds a *keyless* profile. `UNIQUE
-    (source_search_key)` cannot see that row and `UNIQUE (name) WHERE
-    source_search_key IS NULL` cannot see a keyed one - deliberately, because
-    two real subscriptions may share a label - so an alert for the same label
-    that does carry its URL inserts a second profile and the subscription's
-    listings split across both. Neither index may be widened without forbidding
-    the supported case, so the one thing available is that the precondition
-    stops being silent: the label and the profile it landed on are named.
+    A URL-less alert creates or finds a *keyless* profile, and neither index
+    can stop a twin appearing beside it: `UNIQUE (source_search_key)` cannot
+    see this row and `UNIQUE (name) WHERE source_search_key IS NULL` cannot see
+    a keyed one - deliberately, because two real subscriptions may share a
+    label. So the precondition stops being silent.
+
+    But only the *concurrent* case splits anything, and the warning has to say
+    so. Sequentially the later URL-carrying alert takes the identity path and
+    adopts this very row - the upgrade path from #102 - which the second half
+    of this test runs rather than assumes. A warning that predicted a split
+    there would be teaching the reader something false.
     """
     with app.app_context():
         with caplog.at_level(logging.WARNING):
@@ -481,6 +484,7 @@ def test_an_email_without_a_search_url_says_so_instead_of_matching_silently(
 
         assert resolved is not None
         assert resolved.source_search_key is None
+        keyless_id = resolved.id
 
         warnings = _url_less_warnings(caplog)
         assert len(warnings) == 1, (
@@ -489,11 +493,32 @@ def test_an_email_without_a_search_url_says_so_instead_of_matching_silently(
         message = warnings[0]
         assert "#116" in message
         assert "keyless" in message, "the keyless half of the split is not named as one"
-        assert "splits the subscription" in message
+        assert "concurrently" in message, (
+            "the warning blames the split on something other than the race"
+        )
+        assert "adopts this row" in message, (
+            "the warning does not say what the sequential case actually does"
+        )
         assert "Junio" in message, "the warning does not name the label it matched on"
-        assert str(resolved.id) in message, (
+        assert str(keyless_id) in message, (
             "the warning does not name the profile the email landed in"
         )
+
+        # ... and the sequential claim is true, not asserted: the next alert
+        # for this label, carrying its URL, adopts this row instead of
+        # splitting off a twin.
+        adopted = SearchProfileService.resolve_profile(
+            "New detached house in your search: Search Junio!",
+            f'<a href="{TERRENOS_URL}">See all listings</a>',
+        )
+
+        assert adopted is not None
+        assert adopted.id == keyless_id, (
+            "a later URL-carrying alert did not adopt the keyless row, so the "
+            "warning's account of the sequential case is wrong"
+        )
+        assert adopted.source_search_key == TERRENOS_KEY
+        assert SearchProfile.query.count() == 1
 
 
 def test_a_url_less_email_matched_onto_a_keyed_profile_says_that_instead(app, caplog):
@@ -1269,6 +1294,102 @@ def test_the_merge_asks_the_database_to_hold_the_group_it_decides_on():
     assert sql.index("ORDER BY") < sql.index("FOR UPDATE")
 
 
+def test_the_merge_takes_one_globally_ordered_lock_before_it_touches_anything(
+    app, monkeypatch
+):
+    """Per-statement order is not acquisition order across a run.
+
+    The merge used to lock group by group. Every one of those statements
+    carried `ORDER BY id`, and the run as a whole still climbed and descended:
+    with groups [1, 100] and [2] it takes 1 and 100, then asks for 2, while a
+    repair that locked [2, 100] in one ordered statement holds 2 and waits for
+    100. Two well-ordered statements, one deadlock.
+
+    So the assertion is about the *sequence*: one lock statement, carrying
+    every id this run will look at in ascending order, issued before anything
+    is mutated. SQLite erases `FOR UPDATE` from the executed SQL, so the lock
+    is identified here by its shape and pinned as `FOR UPDATE` by the compile
+    test above.
+    """
+    with app.app_context():
+        # Two groups whose ids interleave - the shape that made the old
+        # group-by-group acquisition climb back down. The pairs differ only in
+        # case, so they group together without either name being *cleaned*
+        # into the other's: this test is about lock order, not about renames.
+        db.session.add_all(
+            [
+                SearchProfile(id=1, name="Alpha", is_active=True),
+                SearchProfile(id=2, name="Beta", is_active=True),
+                SearchProfile(id=3, name="beta", is_active=True),
+                SearchProfile(id=100, name="alpha", is_active=True),
+            ]
+        )
+        db.session.commit()
+        db.session.add(
+            Property(
+                source_email_id="imap_lock_1",
+                url="https://www.idealista.com/en/inmueble/5/",
+                search_profile_id=100,
+            )
+        )
+        db.session.commit()
+
+        locked_id_sets = []
+        original = search_profile_service.lock_profiles_statement
+
+        def record_lock(profile_ids):
+            locked_id_sets.append(list(profile_ids))
+            return original(profile_ids)
+
+        monkeypatch.setattr(
+            search_profile_service, "lock_profiles_statement", record_lock
+        )
+
+        executed = []
+
+        def record_statement(conn, cursor, statement, parameters, context, many):
+            executed.append((" ".join(statement.split()), parameters))
+
+        event.listen(db.engine, "before_cursor_execute", record_statement)
+        try:
+            report = SearchProfileService.merge_duplicate_profiles(commit=True)
+        finally:
+            event.remove(db.engine, "before_cursor_execute", record_statement)
+
+        assert report["merged_groups"] == 2, "both groups should have merged"
+
+        assert len(locked_id_sets) == 1, (
+            "the merge issues a lock statement per group, so its acquisition "
+            "order across the run is still unordered"
+        )
+        assert sorted(locked_id_sets[0]) == [1, 2, 3, 100], (
+            "the single lock does not cover every row the run decides on"
+        )
+
+        locks = [
+            (position, params)
+            for position, (statement, params) in enumerate(executed)
+            if "FROM search_profiles" in statement
+            and " IN (" in statement
+            and "ORDER BY search_profiles.id" in statement
+        ]
+        assert len(locks) == 1, f"expected exactly one lock statement, got {len(locks)}"
+        lock_position, lock_params = locks[0]
+        assert list(lock_params) == [1, 2, 3, 100], (
+            "the lock statement does not carry the full sorted id set"
+        )
+
+        mutations = [
+            position
+            for position, (statement, _) in enumerate(executed)
+            if statement.startswith(("UPDATE", "DELETE", "INSERT"))
+        ]
+        assert mutations, "the run mutated nothing, so it proves no ordering"
+        assert lock_position < min(mutations), (
+            "the merge mutated a row before it had taken its lock"
+        )
+
+
 def test_a_merge_that_writes_nothing_still_lets_go_of_the_rows_it_locked(app):
     """A conflicts-only run must not walk away holding every group FOR UPDATE.
 
@@ -1300,6 +1421,42 @@ def test_a_merge_that_writes_nothing_still_lets_go_of_the_rows_it_locked(app):
             "the merge returned still holding its row locks"
         )
         assert SearchProfile.query.count() == 2
+
+
+def test_a_merge_that_fails_while_grouping_still_closes_the_transaction(
+    app, monkeypatch
+):
+    """The guard has to start where the transaction does, not where the loop does.
+
+    `SearchProfile.query...all()` is what opens the transaction this call owns,
+    and the grouping that follows normalizes a name per row. A guard that began
+    at the group loop left that whole stretch outside it, so a failure in the
+    normalizer returned with the transaction open - the same leak, moved a few
+    lines up.
+    """
+    with app.app_context():
+        db.session.add(
+            SearchProfile(
+                name="Same label",
+                is_active=True,
+                travel_targets={"presets": {}, "custom": []},
+            )
+        )
+        db.session.commit()
+        assert _in_transaction() is False, "the seed left one open"
+
+        def explode(value):
+            raise RuntimeError("normalization blew up")
+
+        monkeypatch.setattr(search_profile_service, "_canonical_profile_name", explode)
+
+        with pytest.raises(RuntimeError):
+            SearchProfileService.merge_duplicate_profiles(commit=True)
+
+        assert _in_transaction() is False, (
+            "a failure between the first SELECT and the group loop left the "
+            "transaction, and its locks, open"
+        )
 
 
 def test_a_merge_that_fails_does_not_carry_its_locks_back_to_the_caller(

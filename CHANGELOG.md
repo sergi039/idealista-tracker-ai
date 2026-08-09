@@ -11,16 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **What**: an alert email that carries no saved-search URL now says so.
   `SearchProfileService.resolve_profile()` logs one warning per such email,
   naming the label it matched on and describing what actually happened — a
-  keyless profile (the half that later splits), a profile that already carries
-  a search key (matched on a label alone, nothing verified), or no single
-  profile at all. And `merge_duplicate_profiles()` takes its group `FOR UPDATE`
-  — through the same `lock_profiles_statement()` the repair service uses, now
-  defined once in `services/search_profile_service.py`, with the `ORDER BY id`
-  that actually fixes the acquisition order — and re-reads the rows under that
-  lock *before* it decides whether the group is safe to merge, holding them to
-  the end of the transaction. With `commit=True` it always ends that
-  transaction before returning, including on the conflicts-only and no-op runs
-  that write nothing; `commit=False` still leaves it to the caller.
+  keyless profile (the half a *concurrent* URL-carrying alert can split; a
+  later sequential one adopts it instead), a profile that already carries a
+  search key (matched on a label alone, nothing verified), or no single profile
+  at all. And `merge_duplicate_profiles()` takes **one** `FOR UPDATE` over
+  every row it will look at, in ascending id order, before any group's decision
+  or mutation — through the same `lock_profiles_statement()` the repair service
+  uses, now defined once in `services/search_profile_service.py` and carrying
+  the `ORDER BY id` that actually fixes acquisition order — then re-reads each
+  group from those held rows and keeps them to the end of the transaction. With
+  `commit=True` it always ends that transaction before returning, from the
+  first query onwards: the conflicts-only and no-op runs that write nothing,
+  and any failure in between, all release the locks. `commit=False` still
+  leaves the transaction to the caller.
 - **Why**: both races are from #110. The first splits one subscription across
   two profiles when a URL-carrying and a URL-less alert for the same new label
   arrive together; it cannot be constrained away, because `UNIQUE (name) WHERE
@@ -34,10 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   search a stored listing came from.
 - **Notes**: neither unique index was touched, and no constraint was widened.
   The lock is Postgres semantics; SQLite ignores `FOR UPDATE`, so the suite
-  pins that the statement asks for it, in id order, and that the decision is
-  taken from a re-read — not that a second connection blocks. Sorting the `IN`
-  list does *not* order lock acquisition: without `ORDER BY` in the SQL the
-  scan plan decides, and two concurrent runs can still deadlock.
+  pins that the lock is *requested* — one statement, full sorted id set, before
+  any mutation — and that the decision is taken from a re-read, but not that a
+  second connection blocks. Two things that look like ordering and are not:
+  sorting the `IN` list orders nothing without `ORDER BY` in the SQL, and
+  per-statement `ORDER BY` orders nothing across a run that locks group by
+  group — groups `[1, 100]` then `[2]` climb back down and can deadlock against
+  a repair holding `[2, 100]`.
 
 ### 🌊 Added: sea view is computed again, as four states instead of a flag (2026-08-09)
 - **What**: `services/sea_view_service.py` estimates a sea view from two

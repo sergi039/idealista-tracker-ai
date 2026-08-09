@@ -375,36 +375,52 @@ class SearchProfileService:
             return SearchProfileService.find_unidentified_by_name(cleaned)
 
     @staticmethod
-    def _lock_group_for_decision(group: List[SearchProfile]) -> List[SearchProfile]:
-        """Hold a merge group's rows, then re-read them, before deciding on it.
+    def _lock_groups_for_decision(
+        groups: Dict[str, List[SearchProfile]],
+    ) -> Dict[str, List[SearchProfile]]:
+        """Take every row this run will decide on, in one globally ordered lock.
 
-        The grouping read is an unlocked snapshot, and the refusal below is
-        computed from it. A `_claim_keyless_profile()` landing in between turns
-        a group that looked safe into one holding two search keys, and the
-        merge would then delete a row that had just acquired an identity -
-        unrecoverably, since nothing records which saved search a stored
-        listing came from (#116).
+        Two things are being bought here, and the second is why this takes the
+        *whole* mapping rather than one group at a time.
 
-        So the rows are taken ``FOR UPDATE`` first and held for the rest of the
-        transaction, and the instances the snapshot loaded are expired: every
-        read after this point - the refusal, the property counts, the key
-        carried onto the primary - comes from the locked rows rather than from
-        the snapshot. A row that disappeared before the lock is dropped from
-        the group instead of being refreshed into an `ObjectDeletedError`.
+        First, the decision must not be taken from the grouping snapshot. A
+        `_claim_keyless_profile()` landing in between turns a group that looked
+        safe into one holding two search keys, and the merge would then delete
+        a row that had just acquired an identity - unrecoverably, since nothing
+        records which saved search a stored listing came from (#116). So the
+        rows are held ``FOR UPDATE`` for the rest of the transaction and the
+        instances the snapshot loaded are expired: the refusal, the property
+        counts and the key carried onto the primary all come from the locked
+        rows. A row that disappeared before the lock is dropped from its group
+        rather than refreshed into an `ObjectDeletedError`.
+
+        Second, the order rows are acquired in has to be ascending across the
+        *run*, not merely inside each statement. Locking group by group is
+        globally unordered even when every statement carries ``ORDER BY id``:
+        with groups [1, 100] and [2], this run takes 1 and 100 and then asks
+        for 2, while a repair holding 2 waits for 100 - a deadlock built from
+        two individually well-ordered statements. One statement over the union
+        removes the interleaving instead of ordering its halves.
         """
-        if not group:
-            return []
+        members = [profile for group in groups.values() for profile in group]
+        if not members:
+            return {}
 
         locked_ids = {
             row[0]
             for row in db.session.execute(
-                lock_profiles_statement([profile.id for profile in group])
+                lock_profiles_statement([profile.id for profile in members])
             ).all()
         }
-        still_there = [profile for profile in group if profile.id in locked_ids]
-        for profile in still_there:
-            db.session.expire(profile)
-        return still_there
+
+        held: Dict[str, List[SearchProfile]] = {}
+        for canonical, group in groups.items():
+            still_there = [profile for profile in group if profile.id in locked_ids]
+            for profile in still_there:
+                db.session.expire(profile)
+            if still_there:
+                held[canonical] = still_there
+        return held
 
     @staticmethod
     def merge_duplicate_profiles(commit: bool = True) -> Dict[str, Any]:
@@ -433,14 +449,6 @@ class SearchProfileService:
         the caller's job not to sit on it.
         """
 
-        profiles = SearchProfile.query.order_by(SearchProfile.id.asc()).all()
-        groups: Dict[str, List[SearchProfile]] = {}
-        for profile in profiles:
-            canonical = _canonical_profile_name(profile.name)
-            if not canonical:
-                continue
-            groups.setdefault(canonical, []).append(profile)
-
         merged = 0
         reassigned = 0
         deleted = 0
@@ -448,14 +456,26 @@ class SearchProfileService:
         details: List[Dict[str, Any]] = []
         conflicts: List[Dict[str, Any]] = []
 
+        # The guard starts above the first query, because that query is what
+        # opens the transaction this call owns. Anything raised after it -
+        # including in the grouping, which normalizes a name per row - has to
+        # end that transaction rather than hand it back open with its locks in
+        # it.
         try:
-            for canonical, group in groups.items():
-                # Every read below - and every write that follows from it - is
-                # about rows this transaction holds, not about the snapshot above.
-                group = SearchProfileService._lock_group_for_decision(group)
-                if not group:
+            profiles = SearchProfile.query.order_by(SearchProfile.id.asc()).all()
+            groups: Dict[str, List[SearchProfile]] = {}
+            for profile in profiles:
+                canonical = _canonical_profile_name(profile.name)
+                if not canonical:
                     continue
+                groups.setdefault(canonical, []).append(profile)
 
+            # One lock over every row this run will look at, taken before any
+            # decision and before any mutation. Everything below reads rows
+            # this transaction already holds.
+            groups = SearchProfileService._lock_groups_for_decision(groups)
+
+            for canonical, group in groups.items():
                 search_keys = {
                     p.source_search_key for p in group if p.source_search_key
                 }
@@ -964,16 +984,25 @@ class SearchProfileService:
                     profile.source_search_key,
                 )
             else:
-                # The keyless half of the split. `UNIQUE (source_search_key)`
-                # cannot see this row and `UNIQUE (name) WHERE
-                # source_search_key IS NULL` cannot see a keyed one - two
-                # subscriptions may genuinely share a label, and that exclusion
-                # is what allows it - so neither index can stop the twin.
+                # The keyless half of the split - but only against a
+                # *concurrent* URL-carrying alert. Sequentially there is no
+                # split at all: the later alert takes the identity path,
+                # `_adopt_keyless_profile()` finds this row by its label and
+                # `_claim_keyless_profile()` stamps the key onto it, which is
+                # the upgrade path #102 was built for. The race is what neither
+                # index can stop: `UNIQUE (source_search_key)` cannot see this
+                # keyless row and `UNIQUE (name) WHERE source_search_key IS
+                # NULL` cannot see the keyed one the other ingestion inserts -
+                # deliberately, because two subscriptions may genuinely share a
+                # label - so both inserts succeed and the listings split.
                 logger.warning(
                     "Alert email carries no saved-search URL: matched by label "
-                    "%r alone, onto keyless profile %s (%r). A later alert for "
-                    "this label that does carry its URL creates a second "
-                    "profile and splits the subscription (#116)",
+                    "%r alone, onto keyless profile %s (%r). An alert for this "
+                    "label that does carry its URL, being ingested "
+                    "concurrently, can insert a twin profile and split the "
+                    "subscription across the two; one arriving later on its "
+                    "own adopts this row and stamps its key onto it instead "
+                    "(#116)",
                     search_name,
                     profile.id,
                     profile.name,
