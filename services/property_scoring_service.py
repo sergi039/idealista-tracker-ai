@@ -23,6 +23,18 @@ def _safe_float(value: Any) -> Optional[float]:
         return None
 
 
+def _finite_float(value: Any) -> Optional[float]:
+    """`_safe_float` that also rejects NaN and the infinities.
+
+    Stored JSON reaches the sea component directly, and `float("nan")` slips
+    through every comparison in the decay function to come out as a full score.
+    """
+    result = _safe_float(value)
+    if result is None or not math.isfinite(result):
+        return None
+    return result
+
+
 def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
     return max(low, min(high, value))
 
@@ -74,6 +86,10 @@ def _sea_distance_score(
     Logarithmic decay, which is what the hedonic literature on coastal premiums
     uses: the effect is steep over the first few hundred metres and flattens out
     as it fades, rather than falling off in a straight line.
+
+    `near_m` is the decay scale, not a plateau: the full 100 belongs to the
+    shoreline itself, and `near_m` is the distance at which the curve has
+    already given up a fifth of it. `far_m` is where the premium is gone.
     """
     if distance_m is None:
         return None
@@ -102,7 +118,7 @@ def _resolve_sea_distance_config(
     for key in ("near_m", "far_m"):
         if raw.get(key) is None:
             continue
-        value = _safe_float(raw.get(key))
+        value = _finite_float(raw.get(key))
         if value is None:
             return dict(defaults), f"{key} is not a finite number"
         resolved[key] = value
@@ -472,13 +488,28 @@ class HousingPropertyScorer(BasePropertyScorer):
 
         status = sea.get("status")
         if status == STATUS_NO_COASTLINE:
-            return 0.0, {**bounds, "status": STATUS_NO_COASTLINE, "distance_m": None}
+            # "No coastline found" only rules out the radius that was actually
+            # searched. A profile whose horizon reaches past it is asking about
+            # ground the measurement never covered, so there is nothing to score.
+            searched = _finite_float(sea.get("searched_m"))
+            if searched is None or far_m > searched:
+                return None, {
+                    **bounds,
+                    "status": "horizon_exceeds_search",
+                    "searched_m": searched,
+                }
+            return 0.0, {
+                **bounds,
+                "status": STATUS_NO_COASTLINE,
+                "distance_m": None,
+                "searched_m": searched,
+            }
 
         if status != STATUS_OK:
             # unavailable / no_coordinates: no measurement to score.
             return None, {**bounds, "status": status or "unknown"}
 
-        distance = _safe_float(sea.get("distance_m"))
+        distance = _finite_float(sea.get("distance_m"))
         if distance is None:
             return None, {**bounds, "status": "missing_distance"}
 

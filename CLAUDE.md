@@ -126,17 +126,27 @@ fails if those widths move back into the markup.
 Google.** `services/sea_distance_service.py` measures the straight-line
 distance to the OSM `natural=coastline` geometry over Overpass — free, and
 therefore alive, unlike the Distance Matrix targets whose billing is off. The
-Overpass answer is cached *per 0.5° grid cell*, not per listing, so every
+Overpass answer is cached *per 0.25° grid cell*, not per listing, so every
 property in a region reuses one request and a full backfill costs a handful of
-them. The result lands in `Property.enrichment["sea"]` (a JSON column — no
+them (15 cells covered all 351 listings on 2026-08-09). **The grid size and the
+15 km search radius are load-bearing, not arbitrary**: the public Overpass
+instance answers 504 for a 0.9°×1.2° coastline box even at `[timeout:180]`,
+while this one returns in ~76 s. Searching further would buy nothing anyway —
+past `far_m` every distance scores the same zero. Widen either number and the
+lookups start failing.
+
+The result lands in `Property.enrichment["sea"]` (a JSON column — no
 migration) with one of four statuses: `ok`, `no_coastline_within_radius`,
 `unavailable`, `no_coordinates`. Only a measured absence scores 0; a refusal
 scores `None` and is dropped from the weighted average, and a refusal never
 overwrites a previous measurement taken at the same coordinates. That split is
-the lesson of #98 — do not collapse it. The scorer applies logarithmic decay
-(`near_m` 300 → 100 points, `far_m` 10 000 → 0), overridable per subscription
-via `scoring_config.categories.<cat>.sea_distance`. Sea-view detection is still
-a separate, unimplemented thing.
+the lesson of #98 — do not collapse it. The scorer applies logarithmic decay:
+the shoreline scores 100, `near_m` (300) is the decay scale rather than a
+plateau, and `far_m` (10 000) is where the score reaches 0 — overridable per
+subscription via `scoring_config.categories.<cat>.sea_distance`. A `far_m`
+past the search radius scores `None` rather than 0, because the lookup never
+covered that ground. Sea-view detection is still a separate, unimplemented
+thing.
 
 The dual-build isolation contract
 from the transition — legacy on 5001 vs universal on 5050, unique Docker

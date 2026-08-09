@@ -65,7 +65,6 @@ class PropertyEnrichmentService:
                 e,
             )
 
->>>>>>> 1fa6510 (feat(scoring): score distance to the sea from OSM coastline)
         ok = self.travel_service.calculate_for_property(prop, commit=False)
         travel_state = travel_api_state(prop)
 

@@ -181,11 +181,32 @@ def test_overpass_remark_is_unavailable(app, monkeypatch):
     assert _service().measure(43.61, -5.85)["status"] == STATUS_UNAVAILABLE
 
 
-def test_element_without_geometry_is_unavailable(app, monkeypatch):
-    _patch_overpass(
-        monkeypatch,
-        lambda: FakeResponse(payload={"elements": [{"type": "way", "id": 7}]}),
-    )
+@pytest.mark.parametrize(
+    "element",
+    [
+        {"type": "way", "id": 7},
+        {"type": "way", "id": 7, "geometry": []},
+        {"type": "way", "id": 7, "geometry": [{"lat": 43.6}]},
+        {"type": "way", "id": 7, "geometry": [{"lat": 200.0, "lon": -5.8}]},
+    ],
+    ids=["absent", "empty", "no-lon", "out-of-range"],
+)
+def test_unusable_geometry_is_unavailable(app, monkeypatch, element):
+    """A partial answer must not shrink the coastline into a measured zero."""
+    _patch_overpass(monkeypatch, lambda: FakeResponse(payload={"elements": [element]}))
+
+    assert _service().measure(43.61, -5.85)["status"] == STATUS_UNAVAILABLE
+
+
+def test_broken_stream_is_unavailable(app, monkeypatch):
+    """The body can still fail after the headers looked fine."""
+
+    class BreakingResponse(FakeResponse):
+        def iter_content(self, chunk_size=None):
+            yield b'{"elements":'
+            raise requests.exceptions.ChunkedEncodingError("connection reset")
+
+    _patch_overpass(monkeypatch, lambda: BreakingResponse())
 
     assert _service().measure(43.61, -5.85)["status"] == STATUS_UNAVAILABLE
 
@@ -358,6 +379,30 @@ def test_decay_bounds_and_monotonicity():
     assert 100 > close > mid > far > 0
 
 
+def test_a_nan_distance_scores_nothing_rather_than_everything(app):
+    """NaN slips through every comparison and used to come out as a full 100."""
+    with app.app_context():
+        prop = _property(enrichment=_sea_enrichment(STATUS_OK, float("nan")))
+        score, meta = HousingPropertyScorer()._sea_score(prop, near_m=300, far_m=10000)
+
+    assert score is None
+    assert meta["status"] == "missing_distance"
+
+
+def test_absence_is_only_scored_within_the_radius_searched(app):
+    """A horizon past the search radius asks about ground nobody looked at."""
+    with app.app_context():
+        prop = _property(enrichment=_sea_enrichment(STATUS_NO_COASTLINE, None))
+        scorer = HousingPropertyScorer()
+
+        inside, _ = scorer._sea_score(prop, near_m=300, far_m=10000)
+        outside, meta = scorer._sea_score(prop, near_m=300, far_m=90000)
+
+    assert inside == 0.0
+    assert outside is None
+    assert meta["status"] == "horizon_exceeds_search"
+
+
 def test_invalid_overrides_fall_back_to_defaults():
     defaults = {"near_m": 300.0, "far_m": 10000.0}
 
@@ -367,6 +412,8 @@ def test_invalid_overrides_fall_back_to_defaults():
         {"far_m": 100},
         {"near_m": "abc"},
         {"near_m": float("inf")},
+        {"far_m": float("inf")},
+        {"far_m": float("nan")},
         "not-an-object",
     ):
         resolved, error = _resolve_sea_distance_config(bad, defaults)
@@ -409,7 +456,7 @@ def _sea_enrichment(status, distance_m, lat=43.61, lon=-5.86):
         "sea": {
             "status": status,
             "distance_m": distance_m,
-            "searched_m": 50000,
+            "searched_m": sds.MAX_SEARCH_M,
             "source": "osm_coastline",
             "origin": {"lat": lat, "lon": lon},
         }
@@ -531,7 +578,7 @@ def test_garage_ignores_the_sea_by_default():
     "status,distance_m,expected",
     [
         (STATUS_OK, 2500.0, "2.5 km"),
-        (STATUS_NO_COASTLINE, None, "No coastline within 50 km"),
+        (STATUS_NO_COASTLINE, None, "No coastline within"),
         (STATUS_UNAVAILABLE, None, "Coastline data unavailable"),
         (None, None, "Not measured yet"),
     ],
@@ -551,6 +598,96 @@ def test_detail_page_states_the_real_sea_status(app, status, distance_m, expecte
     body = response.get_data(as_text=True)
     assert "Distance to sea" in body
     assert expected in body
+
+
+# -- pipeline wiring ----------------------------------------------------
+
+
+def test_manual_enrichment_measures_before_it_scores(app, monkeypatch):
+    """The Enrich flow must feed the sea distance into the same rescore."""
+    from services.property_enrichment_service import PropertyEnrichmentService
+
+    order = []
+
+    class StubLocation:
+        def ensure_coordinates(self, prop, refresh=False):
+            return True
+
+    class StubTravel:
+        def calculate_for_property(self, prop, commit=False):
+            return True
+
+    class StubScoring:
+        def calculate_for_property(self, prop, commit=False):
+            order.append(
+                ("scoring", (prop.enrichment or {}).get("sea", {}).get("status"))
+            )
+            return True
+
+    class StubSea:
+        def update_property(self, prop, *, commit=False):
+            order.append(("sea", commit))
+            enrichment = dict(prop.enrichment or {})
+            enrichment["sea"] = {"status": STATUS_OK, "distance_m": 700.0}
+            prop.enrichment = enrichment
+            return enrichment["sea"]
+
+    with app.app_context():
+        prop = _property()
+        db.session.add(prop)
+        db.session.commit()
+
+        PropertyEnrichmentService(
+            location_service=StubLocation(),
+            travel_service=StubTravel(),
+            scoring_service=StubScoring(),
+            sea_distance_service=StubSea(),
+        ).enrich_property(prop)
+
+        property_id = prop.id
+        db.session.expire_all()
+        reloaded = db.session.get(Property, property_id)
+
+    # Measured first, on the shared commit, and the score saw the result.
+    assert order == [("sea", False), ("scoring", STATUS_OK)]
+    assert reloaded.enrichment["sea"]["distance_m"] == 700.0
+
+
+def test_an_old_profile_override_inherits_the_new_sea_weight(app):
+    """Profiles predating this criterion merge over the defaults, by design.
+
+    The owner chose a non-zero default plus a backfill, so a saved override that
+    only pins value/travel is meant to pick the sea weight up rather than opt
+    out of it silently.
+    """
+    with app.app_context():
+        legacy = _profile(
+            name="Sea legacy override",
+            scoring_config={
+                "categories": {
+                    "housing": {"lifestyle": {"travel_score": 0.6, "size_score": 0.4}}
+                }
+            },
+        )
+        db.session.add(legacy)
+        db.session.commit()
+
+        prop = _property(
+            source_email_id="sea-legacy",
+            search_profile_id=legacy.id,
+            enrichment=_sea_enrichment(STATUS_OK, 400.0),
+        )
+        db.session.add(prop)
+        db.session.commit()
+
+        PropertyScoringService().calculate_for_property(prop)
+
+        weights = prop.scoring["profiles"]["lifestyle"]["weights"]
+        assert weights["travel_score"] == 0.6
+        assert (
+            weights["sea_score"]
+            == HousingPropertyScorer.DEFAULT_LIFESTYLE_WEIGHTS["sea_score"]
+        )
 
 
 # -- backfill rollback --------------------------------------------------

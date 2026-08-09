@@ -45,21 +45,44 @@ SOURCE = "osm_coastline"
 
 EARTH_RADIUS_M = 6371008.8
 
-# Cache granularity. 0.5 degrees is roughly 55 km of latitude; the queried box is
-# the cell grown by MAX_SEARCH_M on every side, so any point inside the cell has
-# full coverage out to the search radius.
-GRID_DEG = 0.5
-MAX_SEARCH_M = 50_000
+# Cache granularity and reach. The queried box is the cell grown by
+# MAX_SEARCH_M on every side, so any point inside the cell has full coverage out
+# to the search radius.
+#
+# Both numbers are bounded by what the public Overpass instance will actually
+# serve, which was measured rather than guessed: a 0.9x1.2 degree box answers
+# 504 even at [timeout:180], while this one returns ~320 KB in ~76 s. Searching
+# further than the scoring horizon would buy nothing anyway -- beyond `far_m`
+# (10 km by default) every distance scores the same zero.
+GRID_DEG = 0.25
+MAX_SEARCH_M = 15_000
 
-# Coastline geometry is stable, so a long TTL is honest rather than risky.
-CACHE_TYPE = "sea_coastline_v1_50km"
+# Coastline geometry is stable, so a long TTL is honest rather than risky. The
+# reach is part of the key: a narrower search must not read a wider one's answer.
+CACHE_TYPE = "sea_coastline_v1_15km"
 CACHE_TTL_SECONDS = 60 * 60 * 24 * 30
 
 # The Overpass body is untrusted input: bound it before parsing.
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 RESPONSE_CHUNK_BYTES = 64 * 1024
 
-OVERPASS_TIMEOUT_SECONDS = 60
+# The public endpoint is slow under load; these are sized from the measurements
+# above, with the server given less than the client so it can answer "timed out"
+# in-band instead of leaving the client to guess.
+OVERPASS_QUERY_TIMEOUT_SECONDS = 120
+OVERPASS_TIMEOUT_SECONDS = 150
+
+# A refused Overpass query is refused because the instance is busy; retrying it
+# immediately just doubles the wait behind the same load.
+OVERPASS_ATTEMPTS = 1
+
+# Overpass answers 406 to the default `python-requests` User-Agent and expects
+# clients to identify themselves. Measured: default UA -> 406, this one -> 200.
+USER_AGENT = "IdealistaRank/1.0 (self-hosted listing tracker; sea-distance lookup)"
+
+# Sanity bounds for coordinates arriving in the response body.
+MAX_LAT = 90.0
+MAX_LON = 180.0
 
 # Coordinates are compared to decide whether a stored measurement still belongs
 # to this property; 1e-5 degrees is about a metre.
@@ -97,10 +120,12 @@ def _cell_bbox(cell_lat: float, cell_lon: float) -> Tuple[float, float, float, f
     """(south, west, north, east) for the cell grown by the search radius."""
     lat_margin = GRID_DEG / 2 + math.degrees(MAX_SEARCH_M / EARTH_RADIUS_M)
 
-    # Longitude degrees shrink towards the poles; use the widest edge of the cell
-    # so the margin holds across the whole box.
-    widest_lat = max(abs(cell_lat) - GRID_DEG / 2, 0.0)
-    cos_lat = max(math.cos(math.radians(min(widest_lat, 89.0))), 1e-6)
+    # A degree of longitude is shortest at the poleward edge of the cell, so that
+    # edge needs the most degrees to cover the same metres. Sizing the margin
+    # anywhere else leaves a corner short of the promised radius, and a coastline
+    # missed that way would read as a measured zero.
+    poleward_lat = min(abs(cell_lat) + GRID_DEG / 2, 89.0)
+    cos_lat = max(math.cos(math.radians(poleward_lat)), 1e-6)
     lon_margin = GRID_DEG / 2 + math.degrees(MAX_SEARCH_M / (EARTH_RADIUS_M * cos_lat))
 
     south = max(cell_lat - lat_margin, -90.0)
@@ -242,7 +267,7 @@ class SeaDistanceService:
     ) -> List[List[List[float]]]:
         south, west, north, east = bbox
         query = (
-            f"[out:json][timeout:{OVERPASS_TIMEOUT_SECONDS - 35}];"
+            f"[out:json][timeout:{OVERPASS_QUERY_TIMEOUT_SECONDS}];"
             f'way["natural"="coastline"]({south},{west},{north},{east});'
             "out geom;"
         )
@@ -253,9 +278,13 @@ class SeaDistanceService:
             response = request_with_retries(
                 requests.post,
                 self.overpass_url,
-                data=query.encode("utf-8"),
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                # Overpass wants the query as the form field `data`. Posting the
+                # raw text under a form Content-Type instead gets a 406: the
+                # server parses it as a form and finds no query in it.
+                data={"data": query},
+                headers={"User-Agent": USER_AGENT},
                 timeout=OVERPASS_TIMEOUT_SECONDS,
+                max_attempts=OVERPASS_ATTEMPTS,
                 stream=True,
                 logger=logger,
             )
@@ -266,6 +295,9 @@ class SeaDistanceService:
             if response.status_code != 200:
                 raise _CoastlineUnavailable(f"HTTP {response.status_code}")
             body = self._read_bounded(response)
+        except requests.RequestException as exc:
+            # The stream can still break after the headers looked fine.
+            raise _CoastlineUnavailable(f"stream failed: {exc}") from exc
         finally:
             response.close()
 
@@ -309,9 +341,10 @@ class SeaDistanceService:
             if not isinstance(element, dict):
                 raise _CoastlineUnavailable("element is not an object")
             geometry = element.get("geometry")
-            if not isinstance(geometry, list):
-                # A coastline way without geometry means the answer is partial;
-                # treating it as "no coastline" would invent a fact.
+            # A coastline way with no usable geometry means the answer is
+            # partial. Skipping it would quietly shrink the coastline and hand
+            # back a measured zero built on missing data.
+            if not isinstance(geometry, list) or not geometry:
                 raise _CoastlineUnavailable("element without geometry")
             points: List[List[float]] = []
             for node in geometry:
@@ -321,9 +354,10 @@ class SeaDistanceService:
                 node_lon = _safe_float(node.get("lon"))
                 if node_lat is None or node_lon is None:
                     raise _CoastlineUnavailable("geometry node without coordinates")
+                if abs(node_lat) > MAX_LAT or abs(node_lon) > MAX_LON:
+                    raise _CoastlineUnavailable("geometry node out of range")
                 points.append([node_lat, node_lon])
-            if points:
-                ways.append(points)
+            ways.append(points)
         return ways
 
     def _throttle(self) -> None:

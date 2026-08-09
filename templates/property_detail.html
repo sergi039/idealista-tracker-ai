@@ -463,7 +463,9 @@
                         {% if sea is mapping and sea.get('status') == 'ok' and sea.get('distance_m') is not none %}
                             <span class="badge bg-primary">{{ "%.1f"|format(sea.get('distance_m') / 1000) }} km</span>
                         {% elif sea is mapping and sea.get('status') == 'no_coastline_within_radius' %}
-                            <span class="badge bg-secondary">{{ t('sea_distance_no_coastline') }}</span>
+                            <span class="badge bg-secondary">
+                                {{ t('sea_distance_no_coastline') }} {{ ((sea.get('searched_m') or 0) / 1000)|round|int }} km
+                            </span>
                         {% elif sea is mapping and sea.get('status') == 'unavailable' %}
                             <span class="badge bg-warning text-dark">{{ t('sea_distance_unavailable') }}</span>
                         {% else %}
