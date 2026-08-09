@@ -217,7 +217,21 @@ and TODO.md; respect it if you ever run both side by side.
   still paced — overpass-api.de grants two query slots per IP and answers
   504 while they are busy, and it refuses the default `python-requests`
   User-Agent outright — so keep the per-cell caching and the bare product
-  token in `services/sea_view_service.py`.
+  token, now `utils/http.py` `HTTP_USER_AGENT`, shared by
+  `services/sea_view_service.py` and the OSM amenity call in
+  `services/enrichment_service.py`.
+- **Every Overpass caller reads three refusals, not one** (#144, all measured
+  against the live instance): the `406` above, which also fires for a UA
+  carrying a parenthetical comment; the `504` above, which needs a backoff in
+  tens of seconds, not the half-second default in `utils/http.py`; and a
+  server-side failure delivered *inside a 200* as
+  `{"elements": [], "remark": "runtime error: Query timed out ..."}`. Reading
+  `elements` off that last one writes a computed negative for a query that
+  never ran, and caches it — the #98 defect, in a free API. Treat a `remark`,
+  and a body with no `elements` list, as refusals. All three are already
+  handled in `EnrichmentService._enrich_with_osm_data` and pinned by
+  `tests/test_overpass_user_agent_and_refusal.py`; this rule exists so the
+  next Overpass caller does not have to rediscover them.
 - Preserve the scraping throttle in `services/listing_status_service.py`
   (randomized sleeps between listing fetches). No bulk re-scrape loops.
 - **There is no authentication** (owner decision, 2026-08-08): the admin
