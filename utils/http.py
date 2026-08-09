@@ -7,6 +7,15 @@ import requests
 
 _DEFAULT_RETRY_STATUSES = (429, 500, 502, 503, 504)
 
+# The User-Agent to send to public, unauthenticated APIs.
+#
+# overpass-api.de answers `406 Not Acceptable` to the default
+# `python-requests/x.y.z` User-Agent, and also to any UA carrying a
+# parenthetical comment -- measured against the live instance, not guessed:
+# `IdealistaRank/1.0 (personal property tracker)` is refused while the bare
+# product token is served. Keep this a plain token.
+HTTP_USER_AGENT = "IdealistaRank/1.0"
+
 
 def _compute_backoff(attempt: int, base: float, max_delay: float) -> float:
     jitter = random.uniform(0, 0.2)
