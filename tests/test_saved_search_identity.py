@@ -448,13 +448,23 @@ def _in_transaction() -> bool:
     return db.session().in_transaction()
 
 
-def _url_less_warnings(caplog) -> list:
-    """The warnings `resolve_profile()` raises for an email with no search URL."""
+PROFILE_SERVICE_LOGGER = "services.search_profile_service"
+
+
+def _service_warnings(caplog) -> list:
+    """Every WARNING the profile service logged, whatever it happens to say.
+
+    Deliberately unfiltered. Counting only the records that match a phrase
+    counts the messages the test already knows about: a second warning about
+    the same email, written in a different spelling, sits quietly outside the
+    filter while `len(...) == 1` still passes. That is how one URL-less email
+    came to raise two warnings - "no search URL" and "no saved-search URL" -
+    under a test whose stated contract was one.
+    """
     return [
         record.getMessage()
         for record in caplog.records
-        if record.levelno >= logging.WARNING
-        and "no saved-search URL" in record.getMessage()
+        if record.name == PROFILE_SERVICE_LOGGER and record.levelno >= logging.WARNING
     ]
 
 
@@ -486,9 +496,10 @@ def test_an_email_without_a_search_url_says_so_instead_of_matching_silently(
         assert resolved.source_search_key is None
         keyless_id = resolved.id
 
-        warnings = _url_less_warnings(caplog)
+        warnings = _service_warnings(caplog)
         assert len(warnings) == 1, (
-            "one URL-less email must produce exactly one warning about it"
+            "one URL-less email must produce exactly one warning from the "
+            f"profile service; it produced {len(warnings)}: {warnings}"
         )
         message = warnings[0]
         assert "#116" in message
@@ -506,7 +517,9 @@ def test_an_email_without_a_search_url_says_so_instead_of_matching_silently(
 
         # ... and the sequential claim is true, not asserted: the next alert
         # for this label, carrying its URL, adopts this row instead of
-        # splitting off a twin.
+        # splitting off a twin. (Cleared first, so the count above can never
+        # be read as covering two calls.)
+        caplog.clear()
         adopted = SearchProfileService.resolve_profile(
             "New detached house in your search: Search Junio!",
             f'<a href="{TERRENOS_URL}">See all listings</a>',
@@ -549,8 +562,10 @@ def test_a_url_less_email_matched_onto_a_keyed_profile_says_that_instead(app, ca
         assert resolved is not None
         assert resolved.id == keyed_id
 
-        warnings = _url_less_warnings(caplog)
-        assert len(warnings) == 1
+        warnings = _service_warnings(caplog)
+        assert len(warnings) == 1, (
+            f"expected one warning for this email, got {len(warnings)}: {warnings}"
+        )
         message = warnings[0]
         assert "keyless" not in message, (
             "a profile that carries a search key was reported as keyless"
@@ -590,8 +605,10 @@ def test_a_url_less_email_whose_label_resolves_to_nothing_says_that(app, caplog)
         assert resolved.source_search_key is None
         assert resolved.is_default is True
 
-        warnings = _url_less_warnings(caplog)
-        assert len(warnings) == 1
+        warnings = _service_warnings(caplog)
+        assert len(warnings) == 1, (
+            f"expected one warning for this email, got {len(warnings)}: {warnings}"
+        )
         message = warnings[0]
         assert "resolves to no single profile" in message
         assert "keyless" not in message
@@ -609,11 +626,10 @@ def test_an_email_that_carries_its_search_url_stays_quiet(app, caplog):
 
         assert resolved is not None
         assert resolved.source_search_key == TERRENOS_KEY
-        assert not [
-            record
-            for record in caplog.records
-            if "no saved-search URL" in record.getMessage()
-        ]
+        # Nothing at all, rather than "nothing matching a phrase": an
+        # identified email is the quiet path, and a warning under any wording
+        # would mean it stopped being one.
+        assert _service_warnings(caplog) == []
 
 
 def test_an_unlabelled_email_with_a_url_never_lands_in_default(app):

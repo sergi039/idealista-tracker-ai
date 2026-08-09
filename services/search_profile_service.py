@@ -342,7 +342,14 @@ class SearchProfileService:
             if len(matches) == 1:
                 return matches[0]
             if matches:
-                logger.warning(
+                # Deliberately not a warning. `resolve_profile()` raises
+                # exactly one per URL-less email and names these claimants in
+                # it (#116); a second record here said the same thing about the
+                # same email in different words, and two spellings of one event
+                # are what let a "exactly one warning" check pass while two
+                # were being written. Logged at info instead, so the detail
+                # stays reachable for anything that calls this directly.
+                logger.info(
                     "Label %r is claimed by %d saved searches %s; an email that "
                     "carries no search URL cannot say which one it belongs to",
                     cleaned,
@@ -978,11 +985,21 @@ class SearchProfileService:
         if search_name:
             profile = SearchProfileService.get_or_create_profile_by_name(search_name)
             if profile is None:
+                # Who claims the label is the whole reason this resolved to
+                # nothing, so it belongs in this record rather than in a second
+                # one. `_profiles_named()` is the same canonical comparison
+                # `get_or_create_profile_by_name()` just made. An empty list
+                # here is not the ambiguous case at all - it means the insert
+                # lost its race and recovered nothing - and the count says so.
+                claimants = SearchProfileService._profiles_named(search_name)
                 logger.warning(
                     "Alert email carries no saved-search URL and its label %r "
-                    "resolves to no single profile; falling through to the "
-                    "matchers and the catch-all (#116)",
+                    "resolves to no single profile: %d saved searches claim it "
+                    "(%s). Falling through to the matchers and the catch-all "
+                    "(#116)",
                     search_name,
+                    len(claimants),
+                    claimants,
                 )
             elif profile.source_search_key:
                 # Nothing verified that this email belongs to that
