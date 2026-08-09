@@ -4,9 +4,27 @@ from typing import Any, Dict, List, Optional, Tuple
 from models import Property, SearchProfile
 from services.search_profile_service import SearchProfileService
 
+# Idealista titles read "<what it is> in <where it is>": "Land plot in
+# Caserio Casa de Anes, 267, Siero", "Casa o chalet en venta en Siero". Only
+# the head names the type; the tail is an address, and matching rules against
+# the whole line let a street name decide the category -- that plot in
+# "Caserio **Casa** de Anes" was filed as a house inside a land subscription.
+_TITLE_LOCATION_SPLIT = re.compile(r"\s+(?:in|en)\s+", re.IGNORECASE)
+
 
 class PropertyClassificationService:
     """Centralized category/subtype classification for Properties (regex-driven)."""
+
+    @staticmethod
+    def title_head(title: Any) -> str:
+        """The part of a listing title before its address.
+
+        A title with no location separator is its own head, so this only ever
+        narrows the text -- and `classify_property` still falls back to the
+        full title, which is what keeps the phrases a head cannot carry on its
+        own ("Solar **en venta** en Sevilla") classified exactly as before.
+        """
+        return _TITLE_LOCATION_SPLIT.split(str(title or ""), maxsplit=1)[0].strip()
 
     @staticmethod
     def classify_text(
@@ -33,6 +51,8 @@ class PropertyClassificationService:
         """Classify a Property using profile-specific rules (fallback to global defaults)."""
         rules = SearchProfileService.get_classification_rules(profile)
         texts = [
+            # The type first, before any address can claim a rule.
+            cls.title_head(prop.title),
             str(prop.title or ""),
             str(prop.email_subject or ""),
             str(prop.description or ""),
