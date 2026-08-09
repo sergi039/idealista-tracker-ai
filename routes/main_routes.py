@@ -1,7 +1,6 @@
 import logging
 import math
 import uuid
-from datetime import timezone
 from decimal import Decimal
 from flask import (
     Blueprint,
@@ -1556,40 +1555,10 @@ def recalculate_profile_classification(profile_id: int):
         return redirect(url_for("main.edit_profile", profile_id=profile_id))
 
 
-@main_bp.route("/properties/<int:property_id>/set-status", methods=["POST"])
-def set_property_status_form(property_id: int):
-    """Set listing status for a Property."""
-    try:
-        from datetime import datetime
-
-        prop = db.get_or_404(Property, property_id)
-        new_status = (request.form.get("status") or "removed").strip().lower()
-        if new_status not in ("active", "removed", "sold"):
-            flash("Invalid status. Must be active/removed/sold.", "error")
-            return redirect(url_for("main.property_detail", property_id=property_id))
-
-        old_status = prop.listing_status or "active"
-        prop.listing_status = new_status
-        prop.listing_last_checked = datetime.now(timezone.utc)
-        if new_status in ("removed", "sold") and old_status == "active":
-            prop.listing_removed_date = datetime.now(timezone.utc)
-        elif new_status == "active" and old_status in ("removed", "sold"):
-            prop.listing_removed_date = None
-
-        db.session.commit()
-        flash(f"Status updated to {new_status}", "success")
-        return redirect(
-            safe_referrer_redirect(
-                url_for("main.property_detail", property_id=property_id)
-            )
-        )
-    except HTTPException:
-        raise
-    except Exception:
-        logger.error("Failed to set property status %s", property_id, exc_info=True)
-        db.session.rollback()
-        flash("An error occurred while setting status. Check server logs.", "error")
-        return redirect(url_for("main.property_detail", property_id=property_id))
+# The property page's "Set status" form is gone (owner decision, 2026-08-09),
+# and its POST handler went with it: leaving the endpoint behind would keep a
+# state-changing route on an app that has no authentication. The listing status
+# is what `check_property_status` observes on Idealista.
 
 
 @main_bp.route("/lands/<int:land_id>")

@@ -19,9 +19,47 @@
                     <i class="fas fa-star {{ 'text-warning' if property.is_favorite else 'text-muted' }}"></i>
                 </button>
                 <div>
-                    <h1 class="h3 mb-1">
-                        <i class="fas fa-map-marker-alt me-2"></i>
-                        {{ property.title or ('Property #' ~ property.id) }}
+                    {# One Google Maps link for both cases: the coordinate when we
+                       have one, the municipality when we do not. The link used to
+                       live in a Location panel further down that carried the same
+                       two branches; the panel is gone, the fallback is not. #}
+                    {% if property.location_lat and property.location_lon %}
+                        {% set _maps_url = 'https://www.google.com/maps/search/?api=1&query=' ~ property.location_lat ~ ',' ~ property.location_lon %}
+                    {% elif property.municipality %}
+                        {% set _maps_url = 'https://www.google.com/maps/search/' ~ property.municipality|urlencode ~ ',+Spain' %}
+                    {% else %}
+                        {% set _maps_url = none %}
+                    {% endif %}
+                    <h1 class="h3 mb-1 d-flex flex-wrap align-items-center gap-2">
+                        <span>
+                            <i class="fas fa-map-marker-alt me-2"></i>{{ property.title or ('Property #' ~ property.id) }}
+                        </span>
+                        {# The three destinations are icons next to the title instead
+                           of a labelled button group in a panel of its own: same
+                           links, none of the vertical space (owner decision,
+                           2026-08-09). Each one still says what it is to a screen
+                           reader and on hover. #}
+                        <span class="detail-link-icons d-inline-flex align-items-center gap-1">
+                            {% if _maps_url %}
+                            <a href="{{ _maps_url }}" target="_blank" rel="noopener"
+                               class="btn btn-sm btn-outline-primary detail-link-icon"
+                               title="Google Maps" aria-label="Google Maps">
+                                <i class="fas fa-map"></i>
+                            </a>
+                            {% endif %}
+                            {% if property.url %}
+                            <a href="{{ property.url }}" target="_blank" rel="noopener"
+                               class="btn btn-sm btn-outline-success detail-link-icon"
+                               title="Idealista" aria-label="Idealista">
+                                <i class="fas fa-home"></i>
+                            </a>
+                            {% endif %}
+                            <a href="{{ url_for('main.map_view', focus=property.id) }}"
+                               class="btn btn-sm btn-outline-secondary detail-link-icon"
+                               title="{{ t('view_on_app_map') }}" aria-label="{{ t('view_on_app_map') }}">
+                                <i class="fas fa-map-marked-alt"></i>
+                            </a>
+                        </span>
                     </h1>
                     <div class="d-flex flex-wrap align-items-center gap-2">
                         {% if property.listing_status == 'removed' %}
@@ -52,6 +90,22 @@
                         {% endif %}
                         {% if property.listing_removed_date %}<span class="me-2">Removed: {{ property.listing_removed_date.strftime('%Y-%m-%d') }}</span>{% endif %}
                         {% if property.search_profile %}<span class="me-2">Profile: {{ property.search_profile.name }}</span>{% endif %}
+                        {# The coordinate reads here, in the metadata line, rather
+                           than in a panel of its own. Accuracy stays with it: an
+                           "approximate" coordinate is why a sea view can come back
+                           `unknown`, so it is not decoration. #}
+                        {% if property.location_lat and property.location_lon %}
+                            {% set _coords = "%.6f, %.6f"|format(property.location_lat, property.location_lon) %}
+                            <span class="me-2 text-nowrap">
+                                <i class="fas fa-location-dot me-1"></i><span class="font-monospace">{{ _coords }}</span>
+                                <span class="ms-1">({{ property.location_accuracy or 'unknown' }})</span>
+                                <button type="button" class="btn btn-link p-0 ms-1 align-baseline copy-coords-btn"
+                                        data-copy-text="{{ _coords }}"
+                                        title="Copy coordinates" aria-label="Copy coordinates">
+                                    <i class="fas fa-copy"></i>
+                                </button>
+                            </span>
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -176,96 +230,25 @@
                     </div>
                 </div>
 
-                {% set _travel = property.travel if property.travel is mapping else {} %}
-                {% set _targets = _travel.get('targets') if _travel is mapping else {} %}
+                {# The Location panel that stood here is gone: the coordinate reads
+                   in the header metadata line and its three links are the icons
+                   next to the title. #}
 
-                {% if property.location_lat and property.location_lon %}
-                    <div class="overview-location bg-body-tertiary border rounded p-3">
-                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-                            <div>
-                                <div class="overview-label text-body-secondary">
-                                    <i class="fas fa-location-dot me-1"></i>Location
-                                </div>
-                                <div class="overview-value font-monospace">
-                                    {{ "%.6f"|format(property.location_lat) }}, {{ "%.6f"|format(property.location_lon) }}
-                                </div>
-                                <div class="small text-body-secondary">{{ property.location_accuracy or 'unknown' }}</div>
-                            </div>
-                            <div class="btn-group btn-group-sm" role="group" aria-label="Location links">
-                                <a href="https://www.google.com/maps/search/?api=1&query={{ property.location_lat }},{{ property.location_lon }}"
-                                   target="_blank" class="btn btn-outline-primary" rel="noopener">
-                                    <i class="fas fa-map me-1"></i>Google Maps
-                                </a>
-                                {% if property.url %}
-                                <a href="{{ property.url }}"
-                                   target="_blank" class="btn btn-outline-success" rel="noopener">
-                                    <i class="fas fa-home me-1"></i>Idealista
-                                </a>
-                                {% endif %}
-                                <a href="{{ url_for('main.map_view', focus=property.id) }}"
-                                   class="btn btn-outline-secondary"
-                                   title="{{ t('view_on_app_map') }}">
-                                    <i class="fas fa-map-marked-alt me-1"></i>Our Maps
-                                </a>
-                            </div>
-                        </div>
-                    </div>
-                {% elif property.municipality %}
-                    <div class="overview-location bg-body-tertiary border rounded p-3">
-                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-                            <div>
-                                <div class="overview-label text-body-secondary">
-                                    <i class="fas fa-location-dot me-1"></i>Location
-                                </div>
-                                <div class="overview-value">
-                                    {{ property.municipality }}
-                                </div>
-                            </div>
-                            <div class="btn-group btn-group-sm" role="group" aria-label="Location links">
-                                <a href="https://www.google.com/maps/search/{{ property.municipality|urlencode }},+Spain"
-                                   target="_blank" class="btn btn-outline-primary" rel="noopener">
-                                    <i class="fas fa-map me-1"></i>Google Maps
-                                </a>
-                                {% if property.url %}
-                                <a href="{{ property.url }}"
-                                   target="_blank" class="btn btn-outline-success" rel="noopener">
-                                    <i class="fas fa-home me-1"></i>Idealista
-                                </a>
-                                {% endif %}
-                                <a href="{{ url_for('main.map_view', focus=property.id) }}"
-                                   class="btn btn-outline-secondary"
-                                   title="{{ t('view_on_app_map') }}">
-                                    <i class="fas fa-map-marked-alt me-1"></i>Our Maps
-                                </a>
-                            </div>
-                        </div>
-                    </div>
-                {% endif %}
-
-                <div class="d-flex flex-wrap gap-2 mt-3">
+                {# Two buttons, one row. They were two rows, and the second also
+                   carried a status dropdown with a Set status submit -- a manual
+                   override of what "Check status" observes on Idealista. Nobody
+                   asked for it, and a hand-set status is the one thing the scraper
+                   cannot correct. #}
+                <div class="d-flex flex-wrap gap-2 mt-3 align-items-center">
                     <button type="button" class="btn btn-outline-info btn-sm" onclick="openAiSection('claude')">
                         <i class="fas fa-brain me-1"></i>AI Analyses
                     </button>
+                    <button type="button" class="btn btn-outline-primary btn-sm" id="check-listing-status-btn"
+                            onclick="checkPropertyListingStatus({{ property.id }})"
+                            title="Fetch the listing from Idealista and record what it says">
+                        <i class="fas fa-rotate me-1"></i>Check status
+                    </button>
                 </div>
-
-                    <div class="d-flex flex-wrap gap-2 mt-3 align-items-center">
-                        <button type="button" class="btn btn-outline-primary btn-sm" id="check-listing-status-btn"
-                                onclick="checkPropertyListingStatus({{ property.id }})"
-                                title="Fetch the listing from Idealista and record what it says">
-                            <i class="fas fa-rotate me-1"></i>Check status
-                        </button>
-                        <form method="POST" action="{{ url_for('main.set_property_status_form', property_id=property.id) }}" class="d-inline-flex align-items-center gap-2">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                            <select name="status" class="form-select form-select-sm" style="width: 140px;" aria-label="Set listing status">
-                                <option value="active" {% if (property.listing_status or 'active') == 'active' %}selected{% endif %}>active</option>
-                                <option value="removed" {% if property.listing_status == 'removed' %}selected{% endif %}>removed</option>
-                                <option value="sold" {% if property.listing_status == 'sold' %}selected{% endif %}>sold</option>
-                            </select>
-                            <button class="btn btn-outline-secondary btn-sm" type="submit" title="Set listing status">
-                                <i class="fas fa-tag me-1"></i>Set status
-                            </button>
-                        </form>
-                    </div>
             </div>
         </div>
 
@@ -1642,7 +1625,58 @@ document.addEventListener('DOMContentLoaded', function() {
     refreshAiComparison();
     renderAnalysisInto('ai-claude-structured-analysis', window.__EXISTING_CLAUDE_ANALYSIS__, 'ai-claude-placeholder');
     renderAnalysisInto('ai-chatgpt-structured-analysis', window.__EXISTING_OPENAI_ANALYSIS__, 'ai-chatgpt-placeholder');
+    wireCopyButtons();
 });
+
+/* Copy the coordinate pair. navigator.clipboard needs a secure context --
+   http://localhost:5001 counts as one, but the same container reached over a
+   LAN address does not -- so fall back to the hidden-textarea path, and when
+   neither works say so on the button instead of flashing a tick for a
+   clipboard that never changed. */
+async function copyTextToClipboard(text) {
+    if (!text) throw new Error('nothing to copy');
+    if (window.isSecureContext && navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+        return;
+    }
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.top = '-1000px';
+    document.body.appendChild(area);
+    area.select();
+    let copied = false;
+    try {
+        copied = document.execCommand('copy');
+    } finally {
+        document.body.removeChild(area);
+    }
+    if (!copied) throw new Error('execCommand("copy") was refused');
+}
+
+function wireCopyButtons() {
+    document.querySelectorAll('.copy-coords-btn').forEach((btn) => {
+        const icon = btn.querySelector('i');
+        const originalIconClass = icon ? icon.className : null;
+        const originalTitle = btn.title;
+        btn.addEventListener('click', async () => {
+            try {
+                await copyTextToClipboard(btn.dataset.copyText);
+                if (icon) icon.className = 'fas fa-check text-success';
+                btn.title = 'Copied';
+            } catch (error) {
+                console.error('Copy failed', error);
+                if (icon) icon.className = 'fas fa-triangle-exclamation text-danger';
+                btn.title = 'Could not copy — select the coordinates and copy them by hand';
+            }
+            setTimeout(() => {
+                if (icon && originalIconClass) icon.className = originalIconClass;
+                btn.title = originalTitle;
+            }, 1800);
+        });
+    });
+}
 
 /* Runs one provider and reports the outcome to the Enrich pass; the button
    state belongs to that pass now, so nothing here touches it. */

@@ -15,6 +15,17 @@ providers. "Run Claude" and "Run ChatGPT" were two further buttons, in two
 tabs, that the owner had to find and press after the enrichment they depend
 on -- Claude and ChatGPT read the scores and travel times the enrichment pass
 writes, so running them by hand meant analysing whatever was there before.
+
+Two more, same day, same reason -- the page spent height on things that are
+one line and one icon:
+
+* The Location panel is gone. Its coordinate reads in the header metadata
+  line with a copy button, and its Google Maps / Idealista / Our Maps buttons
+  are icon links next to the title. The panel rendered them twice, once per
+  branch of "do we have a coordinate".
+* The manual status override is gone -- the dropdown and its "Set status"
+  submit, and the POST handler behind them. "Check status" asks Idealista;
+  a hand-set status is the one thing that check cannot correct.
 """
 
 import pytest
@@ -61,6 +72,24 @@ def listing(app):
             description="A plot with a view",
             location_lat=43.56,
             location_lon=-6.15,
+            location_accuracy="approximate",
+            url="https://www.idealista.com/inmueble/112239547/",
+        )
+        db.session.add(prop)
+        db.session.commit()
+        return prop.id
+
+
+@pytest.fixture
+def listing_without_coordinates(app):
+    """The other branch of the old Location panel: no coordinate, only a
+    municipality."""
+    with app.app_context():
+        prop = Property(
+            source_email_id="property_page_actions_no_coords",
+            title="NoCoordinatesFixtureTitle",
+            listing_status="active",
+            municipality="Cudillero",
         )
         db.session.add(prop)
         db.session.commit()
@@ -153,3 +182,91 @@ class TestTheOneButtonRunsBothAiProviders:
     def test_the_empty_tabs_point_at_that_button(self, client, listing):
         body = client.get(f"/properties/{listing}").get_data(as_text=True)
         assert body.count("Press “Enrich” at the top of the page to generate it.") == 2
+
+
+class TestTheLocationPanelIsGone:
+    """The Location panel is now a coordinate in the header metadata line plus
+    three icon links next to the title (owner decision, 2026-08-09). It carried
+    a labelled button group and a full-width card of its own for two numbers.
+    """
+
+    def test_the_panel_itself_is_gone(self, client, listing):
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        assert "overview-location" not in body
+        assert 'aria-label="Location links"' not in body
+        # The labels went with it; the links did not.
+        assert "Our Maps</a>" not in body
+        assert "Google Maps</a>" not in body
+
+    def test_the_three_links_are_icons_next_to_the_title(self, client, listing):
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        icons = body[body.index('class="detail-link-icons') :]
+        icons = icons[: icons.index("</h1>")]
+        assert 'aria-label="Google Maps"' in icons
+        assert 'aria-label="Idealista"' in icons
+        assert 'aria-label="Our Maps"' in icons
+        assert "https://www.google.com/maps/search/?api=1&amp;query=43.56" in icons
+        assert "https://www.idealista.com/inmueble/112239547/" in icons
+        assert f"/map?focus={listing}" in icons
+
+    def test_each_link_exists_exactly_once_on_the_page(self, client, listing):
+        """Two panels used to render the same three links in two branches."""
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        assert body.count('aria-label="Google Maps"') == 1
+        assert body.count('aria-label="Idealista"') == 1
+        assert body.count('aria-label="Our Maps"') == 1
+
+    def test_a_property_without_coordinates_still_maps_its_municipality(
+        self, client, listing_without_coordinates
+    ):
+        body = client.get(f"/properties/{listing_without_coordinates}").get_data(
+            as_text=True
+        )
+        assert "https://www.google.com/maps/search/Cudillero,+Spain" in body
+        # No coordinate means nothing to copy, not a copy button over an
+        # empty string.
+        assert "data-copy-text" not in body
+
+    def test_the_coordinate_reads_in_the_header_with_a_copy_button(
+        self, client, listing
+    ):
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        assert 'data-copy-text="43.560000, -6.150000"' in body
+        assert body.count("copy-coords-btn") >= 1
+        # Accuracy travels with the coordinate: "approximate" is why a sea-view
+        # verdict can come back unknown.
+        assert "(approximate)" in body
+        # And it is in the header, above the Overview card.
+        assert body.index("copy-coords-btn") < body.index("Overview")
+
+    def test_a_failed_copy_is_reported_rather_than_faked(self, client, listing):
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        assert "Could not copy" in body
+        assert "execCommand" in body
+
+
+class TestTheManualStatusOverrideIsGone:
+    """ "Check status" asks Idealista. The dropdown next to it set the status by
+    hand, which the scraper then could not correct."""
+
+    def test_the_form_is_gone(self, client, listing):
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        assert "Set status" not in body
+        assert 'aria-label="Set listing status"' not in body
+
+    def test_the_endpoint_is_gone_too(self, client, listing):
+        resp = client.post(f"/properties/{listing}/set-status", data={"status": "sold"})
+        assert resp.status_code == 404
+
+    def test_check_status_stayed(self, client, listing):
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        assert 'id="check-listing-status-btn"' in body
+        assert f"checkPropertyListingStatus({listing})" in body
+        assert "/api/property/${propertyId}/check-status" in body
+
+    def test_the_two_buttons_share_one_row(self, client, listing):
+        """AI Analyses and Check status were two stacked rows of one button."""
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        row = body[: body.index('id="check-listing-status-btn"')]
+        row = row[row.rindex('<div class="d-flex') :]
+        assert "AI Analyses" in row
