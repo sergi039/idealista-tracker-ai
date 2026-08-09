@@ -92,6 +92,9 @@ def two_profiles_with_properties(app):
             property_category="land",
             property_subtype="plot",
             is_favorite=True,
+            ai_analysis={
+                "rental_market_analysis": {"investment_rating": "EXCELLENT - strong"}
+            },
             search_profile_id=profile_a.id,
             listing_status="active",
             location_lat=38.34,
@@ -105,6 +108,9 @@ def two_profiles_with_properties(app):
             property_category="housing",
             property_subtype="apartment",
             is_favorite=False,
+            ai_analysis={
+                "rental_market_analysis": {"investment_rating": "MODERATE - average"}
+            },
             search_profile_id=profile_b.id,
             listing_status="active",
             location_lat=38.10,
@@ -248,6 +254,7 @@ class TestMapViewProfileSelector:
         "subtype=plot",
         "municipality=lican",
         "search=orchard",
+        "inv_metr=EXCELLENT",
         "favorites=on",
     ],
 )

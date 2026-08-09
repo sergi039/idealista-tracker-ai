@@ -1939,6 +1939,7 @@ def map_view():
         subtype_filter = request.args.get("subtype", "")
         municipality_filter = request.args.get("municipality", "")
         search_query = request.args.get("search", "")
+        investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
 
         if category_filter:
@@ -1973,6 +1974,10 @@ def map_view():
                     Property.description.ilike(pattern),
                     Property.municipality.ilike(pattern),
                 )
+            )
+        if investment_metrics_filter:
+            query = _filter_by_investment_rating(
+                query, Property, investment_metrics_filter
             )
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
