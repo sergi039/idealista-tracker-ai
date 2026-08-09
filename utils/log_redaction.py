@@ -72,6 +72,23 @@ _STRUCTURED_SECRET_RE: Final = re.compile(
     r"\s*[:=]\s*[\"'])([^\"']+)([\"'])"
 )
 
+#: The same names with an *unquoted* value: `token=abc`, `api_key: abc`. A log
+#: line is not always JSON — `logger.info("api_key=%s", key)` renders one of
+#: these, and the query-parameter pattern above cannot help because there is no
+#: `?` or `&` to anchor to. Reported in review as the remaining hole.
+#:
+#: Bare `key` is excluded here as well, for the reason given above: `sort_key=`
+#: and the codebase's own preset names would otherwise be redacted.
+#: The value must not start with `%`, because a `%` placeholder is where a
+#: credential gets substituted, not a credential. It matters on the one path
+#: that redacts an *unrendered* format string — the broken-formatting
+#: diagnostic below — where eating the `%s` out of `"token=%s"` would leave a
+#: string that formats cleanly and silently swallow the diagnostic.
+_UNQUOTED_SECRET_RE: Final = re.compile(
+    r"(?i)\b((?:api_?key|access_token|auth_token|token|password|secret)\s*[:=]\s*)"
+    r"(?!%)([^\s\"',;)\]}&]+)"
+)
+
 
 def redact(text: str) -> str:
     """Return *text* with any credential it carries replaced by ``REDACTED``."""
@@ -79,6 +96,7 @@ def redact(text: str) -> str:
     text = _GOOGLE_KEY_RE.sub(REDACTED, text)
     text = _BEARER_RE.sub(r"\1" + REDACTED, text)
     text = _STRUCTURED_SECRET_RE.sub(r"\1" + REDACTED + r"\3", text)
+    text = _UNQUOTED_SECRET_RE.sub(r"\1" + REDACTED, text)
     return text
 
 
@@ -103,6 +121,49 @@ def _withhold_args(args):
     if isinstance(args, dict):
         return {k: f"<{type(v).__name__}>" for k, v in args.items()}
     return tuple(f"<{type(a).__name__}>" for a in args)
+
+
+#: Stand-in for a message that cannot be turned into text at all.
+UNPRINTABLE: Final = "<unprintable log message withheld>"
+
+#: Marks a record whose arguments have already been replaced by type names.
+_WITHHELD_FLAG: Final = "_redaction_args_withheld"
+
+
+def _withhold_record_args(record: logging.LogRecord) -> None:
+    """Withhold a record's arguments, at most once.
+
+    One record can reach this twice — the filter withholds when rendering
+    fails, and the formatter withholds again when the *handler's* format string
+    is what failed. Applied twice, the type names describe each other:
+    ``42`` becomes ``'<int>'`` becomes ``'<str>'``, and the diagnostic starts
+    lying about what arrived.
+    """
+    if getattr(record, _WITHHELD_FLAG, False):
+        return
+    record.args = _withhold_args(record.args)
+    setattr(record, _WITHHELD_FLAG, True)
+
+
+def _withhold(record: logging.LogRecord) -> None:
+    """Make a record that failed to render safe to print as a diagnostic.
+
+    `logging` never drops such a record: `Handler.handleError` writes
+    ``record.msg`` and ``record.args`` to stderr. The message is still worth
+    pattern-matching; the arguments are not judgeable and are withheld.
+
+    Rendering the message can fail a second time — ``str(record.msg)`` runs the
+    object's own ``__str__``, and that is what raised in the first place. A
+    filter that let it propagate would be worse than the leak it guards: an
+    exception raised in `Filter.filter` travels out of ``logger.error(...)``
+    into the caller, turning a log line into an application failure. `logging`
+    itself never does that, so neither may this.
+    """
+    try:
+        record.msg = redact(str(record.msg))
+    except Exception:
+        record.msg = UNPRINTABLE
+    _withhold_record_args(record)
 
 
 class SecretRedactingFilter(logging.Filter):
@@ -135,8 +196,7 @@ class SecretRedactingFilter(logging.Filter):
             # Rendering failed, so `handleError` will print `record.msg` and
             # `record.args` verbatim. The message can still be pattern-matched;
             # the arguments cannot be judged at all, so they are withheld.
-            record.msg = redact(str(record.msg))
-            record.args = _withhold_args(record.args)
+            _withhold(record)
             return True
 
         redacted = redact(message)
@@ -168,9 +228,26 @@ class RedactingFormatter(logging.Formatter):
         self.inner = inner
 
     def format(self, record: logging.LogRecord) -> str:
-        formatted = self.inner.format(record)
+        try:
+            formatted = self.inner.format(record)
+        except Exception:
+            # `handleError` is reached from here too, by a route the filter
+            # cannot cover: the record rendered fine, and the *handler's* format
+            # string is what failed - a `%(field)s` the record does not carry.
+            # It prints `record.args` just the same, and those arguments have
+            # never been through a pattern (an unrendered argument carries no
+            # marker to match). Withhold them, then let the failure continue so
+            # logging still reports the broken formatter.
+            _withhold_record_args(record)
+            raise
+
         if record.exc_text:
             record.exc_text = redact(record.exc_text)
+        # `stack_info` is cached on the record exactly like `exc_text`, and a
+        # handler that formats after this one would otherwise render the
+        # original text from it.
+        if record.stack_info:
+            record.stack_info = redact(record.stack_info)
         return redact(formatted)
 
 

@@ -31,6 +31,10 @@ from utils.log_redaction import (
 # and teaches the wrong habit, and the repository's pre-push hook rejects it.
 FAKE_GOOGLE_KEY = "AI" + "za" + "SyFAKE_TEST_KEY_" + ("0" * 19)
 
+# A credential-shaped value with no marker of its own, for the paths that have
+# to withhold rather than pattern-match.
+SECRET_VALUE = "sk-live-" + "TOPSECRET"
+
 
 @pytest.fixture
 def captured():
@@ -370,6 +374,116 @@ class TestBrokenFormatting:
         err = self._log_with_broken_formatting("test_broken_int", "n=%d %s", 42)
 
         assert "<int>" in err
+
+
+class TestASecondReviewRound:
+    """Findings from the independent review of the merged head.
+
+    Each one is a route to `handleError`, to a cached record attribute, or to
+    the caller — reached past the three the earlier rounds closed.
+    """
+
+    def test_a_broken_handler_format_string_does_not_print_the_arguments(self):
+        """`handleError` is reachable from the *formatter*, not just the filter.
+
+        The record renders fine, so the filter's own guard never runs; then the
+        handler's format string names a field the record does not carry, and
+        `handleError` prints the raw arguments to stderr.
+        """
+        stderr = io.StringIO()
+        handler = logging.StreamHandler(io.StringIO())
+        handler.setFormatter(logging.Formatter("%(nonexistent)s %(message)s"))
+
+        logger = logging.getLogger("test_broken_formatter")
+        logger.handlers = [handler]
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+        install_log_redaction(logger)
+
+        # Held in a variable rather than written inline: `handleError` prints
+        # the call stack, source lines included, so a literal here would show up
+        # in stderr as the *test's* own text and prove nothing either way.
+        secret = SECRET_VALUE
+        with redirect_stderr(stderr):
+            logger.error("%s", secret)
+        logger.handlers = []
+
+        err = stderr.getvalue()
+        assert "TOPSECRET" not in err, "the broken formatter printed the argument"
+        assert "<str>" in err
+
+    def test_a_message_whose_str_raises_does_not_reach_the_caller(self):
+        """A filter that raises turns a log call into an application failure.
+
+        `logging` catches nothing around `Filter.filter`, so an exception here
+        travels out of `logger.error(...)`. `str(record.msg)` runs the object's
+        own `__str__` — the very thing that failed rendering a moment earlier.
+        """
+
+        class Unprintable:
+            def __str__(self):
+                raise ValueError("cannot render")
+
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        logger = logging.getLogger("test_unprintable_msg")
+        logger.handlers = [handler]
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+        install_log_redaction(logger)
+
+        with redirect_stderr(io.StringIO()):
+            logger.error(Unprintable(), "sk-live-TOPSECRET")  # raises inside filter
+        logger.handlers = []
+
+    def test_a_credential_in_stack_info_is_redacted_on_the_record(self):
+        """`stack_info` is cached like `exc_text`, so it is redacted in place.
+
+        A second handler formatting the same record would otherwise render the
+        original text straight out of the attribute.
+        """
+        record = logging.LogRecord(
+            name="t",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg="failed",
+            args=(),
+            exc_info=None,
+        )
+        record.stack_info = f'  File "x.py", line 1\n    call("?key={FAKE_GOOGLE_KEY}")'
+
+        RedactingFormatter(logging.Formatter("%(message)s")).format(record)
+
+        assert FAKE_GOOGLE_KEY not in record.stack_info
+        assert REDACTED in record.stack_info
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "api_key=sk-live-TOPSECRET",
+            "token: sk-live-TOPSECRET",
+            "Using access_token=sk-live-TOPSECRET for the call",
+            "password=sk-live-TOPSECRET",
+        ],
+    )
+    def test_an_unquoted_credential_outside_a_query_string_is_stripped(self, line):
+        """Neither JSON nor a URL: `logger.info("api_key=%s", key)` renders this.
+
+        The query-parameter pattern needs a `?` or `&` to anchor to and the
+        structured pattern needs quotes, so this shape fell between them.
+        """
+        redacted = redact(line)
+
+        assert "TOPSECRET" not in redacted
+        assert REDACTED in redacted
+
+    def test_the_unquoted_pattern_still_leaves_preset_names_alone(self):
+        """Widening must not start redacting the codebase's own data."""
+        text = "sorting by sort_key=price, monkey=1"
+
+        assert redact(text) == text
+        assert redact('{"key": "airport"}') == '{"key": "airport"}'
 
 
 class TestInstallation:
