@@ -72,6 +72,18 @@ def _safe_float(value: Any) -> Optional[float]:
     return result
 
 
+def _coordinate(value: Any, *, limit: float) -> Optional[float]:
+    """A coordinate, or None when it is missing or off the globe.
+
+    An out-of-range latitude would still find no coastline nearby and be filed
+    as the measured fact "not near the sea"; it is bad input, not a location.
+    """
+    result = _safe_float(value)
+    if result is None or abs(result) > limit:
+        return None
+    return result
+
+
 def _nearest_point_distance_m(
     lat: float, lon: float, points: Sequence[Tuple[float, float]]
 ) -> Optional[float]:
@@ -139,8 +151,8 @@ class SeaDistanceService:
         if not getattr(Config, "SEA_DISTANCE_ENABLED", True):
             return None
 
-        lat = _safe_float(prop.location_lat)
-        lon = _safe_float(prop.location_lon)
+        lat = _coordinate(prop.location_lat, limit=90.0)
+        lon = _coordinate(prop.location_lon, limit=180.0)
         previous = self._stored_payload(prop)
         now = _now_iso()
 

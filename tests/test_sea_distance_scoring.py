@@ -214,6 +214,43 @@ def test_missing_coordinates_are_recorded_without_geocoding(app, monkeypatch):
         assert calls == []
 
 
+def test_off_globe_coordinates_are_not_a_measured_absence(app, monkeypatch):
+    """91 degrees north finds no coastline, but that is bad input, not a fact.
+
+    The properties table rejects such a latitude outright (`ck_properties_lat_range`),
+    so this exercises an unsaved object -- the code must not depend on the
+    constraint being the only guard.
+    """
+    calls = _patch_coastline(monkeypatch, [])
+
+    with app.app_context():
+        prop = _property(location_lat=Decimal("91.0000000"))
+        payload = _service().update_property(prop, commit=False)
+
+    assert payload["status"] == STATUS_NO_COORDINATES
+    assert calls == []
+
+
+def test_unusable_geometry_from_the_source_is_unavailable(app, monkeypatch):
+    """The shared client must raise, not hand back a shortened coastline."""
+    import requests as _requests
+
+    from services import sea_view_service as svs
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"elements": [{"type": "way", "geometry": []}]}
+
+    monkeypatch.setattr(svs, "OVERPASS_MIN_INTERVAL_S", 0)
+    monkeypatch.setattr(svs, "_cache_get", lambda *a, **k: None)
+    monkeypatch.setattr(svs, "_cache_set", lambda *a, **k: None)
+    monkeypatch.setattr(_requests, "post", lambda *a, **k: _Resp())
+
+    assert _service().measure(43.61, -5.86)["status"] == STATUS_UNAVAILABLE
+
+
 def test_outage_keeps_the_last_good_measurement(app, monkeypatch):
     with app.app_context():
         prop = _property()
