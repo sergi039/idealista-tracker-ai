@@ -3,6 +3,11 @@
 {% block title %}{{ property.title or ('Property #' ~ property.id) }}{% endblock %}
 
 {% block content %}
+{# Travel targets are what "enriched" means for a property: coordinates plus at
+   least one measured destination. Computed here because the header's Enrich
+   button reads it too. #}
+{% set _targets = (property.travel.get('targets') if property.travel is mapping else {}) or {} %}
+{% set has_enrichment = (property.location_lat and property.location_lon and _targets and (_targets|length > 0)) %}
 <div class="row">
     <div class="col-12 mb-4">
         <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
@@ -44,9 +49,25 @@
                     </div>
                 </div>
             </div>
-            <a href="{{ url_for('main.properties') }}" class="btn btn-outline-secondary btn-sm">
-                <i class="fas fa-arrow-left me-1"></i>{{ t('back_to_properties') }}
-            </a>
+            <div class="d-flex align-items-center gap-2">
+                {# One action, not three: `enrich_property()` geocodes, then
+                   recalculates travel and scoring in the same pass -- running
+                   them as separate buttons billed Google twice for the same
+                   answer. #}
+                <button class="btn btn-success btn-sm" id="enrich-property-btn"
+                        hx-post="{{ url_for('api.manual_property_enrichment', property_id=property.id) }}"
+                        hx-trigger="click"
+                        hx-indicator="#enrichment-spinner"
+                        hx-swap="none"
+                        data-enrich-label="Enrich"
+                        title="Google enrichment + travel times + scoring, in one pass">
+                    <i class="fas fa-wand-magic-sparkles me-1"></i>Enrich
+                    {% if has_enrichment %}<span class="badge bg-light text-dark ms-1">&check;</span>{% endif %}
+                </button>
+                <a href="{{ url_for('main.properties') }}" class="btn btn-outline-secondary btn-sm">
+                    <i class="fas fa-arrow-left me-1"></i>{{ t('back_to_properties') }}
+                </a>
+            </div>
         </div>
     </div>
 </div>
@@ -148,7 +169,6 @@
 
                 {% set _travel = property.travel if property.travel is mapping else {} %}
                 {% set _targets = _travel.get('targets') if _travel is mapping else {} %}
-                {% set has_enrichment = (property.location_lat and property.location_lon and _targets and (_targets|length > 0)) %}
 
                 {% if property.location_lat and property.location_lon %}
                     <div class="overview-location bg-body-tertiary border rounded p-3">
@@ -217,18 +237,6 @@
                     <button type="button" class="btn btn-outline-info btn-sm" onclick="openAiSection('claude')">
                         <i class="fas fa-brain me-1"></i>AI Analyses
                     </button>
-                    <button class="btn {{ 'btn-success' if has_enrichment else 'btn-outline-warning' }} btn-sm"
-                            hx-post="{{ url_for('api.manual_property_enrichment', property_id=property.id) }}"
-                            hx-trigger="click"
-                            hx-indicator="#enrichment-spinner"
-                            hx-swap="none"
-                            data-enrich-label="Enrich with Google APIs">
-                        <i class="fas fa-sync me-1 {{ 'text-white' if has_enrichment else '' }}"></i>
-                        Enrich with Google APIs
-                        {% if has_enrichment %}
-                            <span class="badge bg-light text-dark ms-1">✓</span>
-                        {% endif %}
-                    </button>
                 </div>
 
                     <div class="d-flex flex-wrap gap-2 mt-3">
@@ -241,18 +249,6 @@
                             </select>
                             <button class="btn btn-outline-secondary btn-sm" type="submit" title="Set listing status">
                                 <i class="fas fa-tag me-1"></i>Set status
-                            </button>
-                        </form>
-                        <form method="POST" action="{{ url_for('main.recalculate_property_travel', property_id=property.id) }}" class="d-inline">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                            <button class="btn btn-outline-secondary btn-sm" type="submit" title="Recalculate travel (Places + Distance Matrix)">
-                                <i class="fas fa-route me-1"></i>Recalculate travel
-                            </button>
-                        </form>
-                        <form method="POST" action="{{ url_for('main.recalculate_property_score', property_id=property.id) }}" class="d-inline">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                            <button class="btn btn-outline-secondary btn-sm" type="submit" title="Recalculate scoring for this property">
-                                <i class="fas fa-calculator me-1"></i>Recalculate scoring
                             </button>
                         </form>
                     </div>
@@ -268,108 +264,6 @@
         </div>
         {% endif %}
 
-        {% set assignment_meta = property.enrichment.get('profile_assignment') if property.enrichment is mapping else {} %}
-        <div class="card shadow-sm mb-3">
-            <div class="card-body">
-                <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
-                    <h5 class="mb-0">Profile assignment</h5>
-                    {% if assignment_meta and assignment_meta.get('method') %}
-                        <span class="badge bg-info text-dark">Last: {{ assignment_meta.get('method') }}</span>
-                    {% endif %}
-                </div>
-
-                <form method="POST" action="{{ url_for('main.set_property_profile_form', property_id=property.id) }}" class="row g-2 align-items-end">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                    <div class="col-12 col-md-5">
-                        <label class="form-label small mb-1">Profile</label>
-                        <select name="profile_id" class="form-select form-select-sm">
-                            <option value="">Default (auto)</option>
-                            {% for p in profiles %}
-                                <option value="{{ p.id }}" {% if property.search_profile_id == p.id %}selected{% endif %}>
-                                    {{ p.name }}
-                                </option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <div class="form-check mt-4">
-                            <input class="form-check-input" type="checkbox" id="profile_recalc_travel" name="recalc_travel" checked>
-                            <label class="form-check-label" for="profile_recalc_travel">Recalculate travel</label>
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <div class="form-check mt-4">
-                            <input class="form-check-input" type="checkbox" id="profile_recalc_scoring" name="recalc_scoring" checked>
-                            <label class="form-check-label" for="profile_recalc_scoring">Recalculate scoring</label>
-                        </div>
-                    </div>
-                    <div class="col-12 col-md-1 d-grid">
-                        <button class="btn btn-outline-primary btn-sm" type="submit">
-                            <i class="fas fa-save me-1"></i>Save
-                        </button>
-                    </div>
-                    <div class="col-12">
-                        <div class="form-text">
-                            Auto-assignment uses the nearest custom target from each active profile.
-                            Manual save sets an override for this property.
-                        </div>
-                        {% if assignment_meta and assignment_meta.get('distance_km') %}
-                            <div class="small text-body-secondary">
-                                Last assignment: {{ assignment_meta.get('profile_name') }} ({{ assignment_meta.get('distance_km') }} km)
-                            </div>
-                        {% endif %}
-                    </div>
-                </form>
-            </div>
-        </div>
-
-        {% set attrs = property.attributes if property.attributes is mapping else {} %}
-        {% set locked = attrs.get('classification_locked') %}
-        <div class="card shadow-sm mb-3">
-            <div class="card-body">
-                <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
-                    <h5 class="mb-0">Classification</h5>
-                    {% if locked %}
-                        <span class="badge bg-warning text-dark">Locked</span>
-                    {% endif %}
-                </div>
-
-                <form method="POST" action="{{ url_for('main.set_property_classification_form', property_id=property.id) }}" class="row g-2 align-items-end">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                    <div class="col-12 col-md-3">
-                        <label class="form-label small mb-1">Category</label>
-                        <input class="form-control form-control-sm" name="property_category" value="{{ property.property_category or '' }}" placeholder="housing / land / garage / ...">
-                    </div>
-                    <div class="col-12 col-md-3">
-                        <label class="form-label small mb-1">Subtype</label>
-                        <input class="form-control form-control-sm" name="property_subtype" value="{{ property.property_subtype or '' }}" placeholder="apartment / house / plot / ...">
-                    </div>
-                    <div class="col-12 col-md-3">
-                        <div class="form-check mt-4">
-                            <input class="form-check-input" type="checkbox" id="classification_locked" name="classification_locked" {% if locked %}checked{% endif %}>
-                            <label class="form-check-label" for="classification_locked">Lock (skip bulk reclassify)</label>
-                        </div>
-                        <div class="form-check mt-2">
-                            <input class="form-check-input" type="checkbox" id="classification_recalc_scoring" name="recalc_scoring" checked>
-                            <label class="form-check-label" for="classification_recalc_scoring">Recalculate scoring</label>
-                        </div>
-                    </div>
-                    <div class="col-12 col-md-3 d-grid gap-2">
-                        <button class="btn btn-outline-primary btn-sm" type="submit" name="action" value="set_manual">
-                            <i class="fas fa-save me-1"></i>Save
-                        </button>
-                        <button class="btn btn-outline-secondary btn-sm" type="submit" name="action" value="auto">
-                            <i class="fas fa-wand-magic-sparkles me-1"></i>Auto classify
-                        </button>
-                    </div>
-                    <div class="col-12">
-                        <div class="form-text">
-                            Auto classify uses the current profile rules (or global defaults). After changing rules, use “Reclassify properties” on the profile.
-                        </div>
-                    </div>
-                </form>
-            </div>
-        </div>
 
         <!-- AI Analysis Section (legacy parity) -->
         <div id="ai-analysis-section" class="mb-3">
@@ -618,7 +512,7 @@
                 {% else %}
                     <div class="text-body-secondary small">
                         Travel not calculated yet.
-                        Use “Recalculate travel” after setting coordinates/targets.
+                        Use “Enrich” at the top of the page after setting coordinates/targets.
                     </div>
                 {% endif %}
             </div>
