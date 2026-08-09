@@ -13,6 +13,7 @@ raises the level again. These tests pin the filter, not the level.
 import io
 import logging
 import sys
+from contextlib import redirect_stderr
 
 import pytest
 
@@ -303,6 +304,72 @@ class TestTracebacks:
         assert record.exc_text is not None, "the formatter did not render the traceback"
         assert FAKE_GOOGLE_KEY not in record.exc_text
         assert REDACTED in record.exc_text
+
+
+class TestBrokenFormatting:
+    """A record that cannot be rendered leaks *more*, not less.
+
+    Reported as a BLOCKER on PR #148. `logging` does not drop a record whose
+    `%` substitution fails — it calls `Handler.handleError`, which prints the
+    format string and the raw arguments to stderr. The filter used to pass such
+    a record through untouched, on the reasoning that an unrendered record
+    cannot leak a rendered secret. That reasoning was wrong.
+    """
+
+    @staticmethod
+    def _log_with_broken_formatting(name, msg, *args, install=True):
+        stderr = io.StringIO()
+        handler = logging.StreamHandler(io.StringIO())
+
+        logger = logging.getLogger(name)
+        logger.handlers = [handler]
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+        if install:
+            install_log_redaction(logger)
+
+        with redirect_stderr(stderr):
+            logger.error(msg, *args)
+        logger.handlers = []
+        return stderr.getvalue()
+
+    def test_without_redaction_the_arguments_are_printed(self):
+        """Baseline — the reported failing input, unprotected."""
+        err = self._log_with_broken_formatting(
+            "test_broken_baseline", "token=%s %s", "TOPSECRET", install=False
+        )
+
+        assert "TOPSECRET" in err
+
+    def test_the_reported_failing_input_no_longer_leaks(self):
+        err = self._log_with_broken_formatting(
+            "test_broken_fixed", "token=%s %s", "TOPSECRET"
+        )
+
+        assert "TOPSECRET" not in err
+        # The diagnostic still says how many arguments arrived, which is what
+        # it is for.
+        assert "<str>" in err
+
+    def test_too_many_arguments_do_not_leak(self):
+        err = self._log_with_broken_formatting(
+            "test_broken_extra", "a %s", "TOPSECRET", "X"
+        )
+
+        assert "TOPSECRET" not in err
+        assert "'<str>', '<str>'" in err
+
+    def test_dict_arguments_do_not_leak(self):
+        err = self._log_with_broken_formatting(
+            "test_broken_dict", "%(a)s %(b)s", {"a": "token=TOPSECRET"}
+        )
+
+        assert "TOPSECRET" not in err
+
+    def test_a_non_string_argument_keeps_its_type_in_the_diagnostic(self):
+        err = self._log_with_broken_formatting("test_broken_int", "n=%d %s", 42)
+
+        assert "<int>" in err
 
 
 class TestInstallation:

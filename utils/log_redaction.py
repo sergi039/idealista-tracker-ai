@@ -82,6 +82,29 @@ def redact(text: str) -> str:
     return text
 
 
+def _withhold_args(args):
+    """Replace a record's arguments with their type names.
+
+    Only reached when rendering already failed, and then the values cannot be
+    judged. Pattern matching works on a *marked* secret — `?key=…`,
+    `Bearer …`, an `AIza…` key — but a bare argument carries no marker: in
+    `logger.error("token=%s %s", "TOPSECRET")` the only thing identifying
+    `TOPSECRET` as a credential is the format string it never got substituted
+    into. Redacting by pattern therefore cannot work here, and guessing wrong
+    means printing the secret.
+
+    So the values are withheld rather than inspected. The type names are kept
+    because they are what a broken-formatting diagnostic is actually for —
+    seeing that three arguments arrived for two placeholders — and a type name
+    is not a credential.
+    """
+    if not args:
+        return args
+    if isinstance(args, dict):
+        return {k: f"<{type(v).__name__}>" for k, v in args.items()}
+    return tuple(f"<{type(a).__name__}>" for a in args)
+
+
 class SecretRedactingFilter(logging.Filter):
     """Rewrite the *message* of a record that carries a credential.
 
@@ -96,15 +119,24 @@ class SecretRedactingFilter(logging.Filter):
     handlers filter before they format. Tracebacks are handled by
     :class:`RedactingFormatter`, which is the only place they exist as text.
 
-    A record whose rendering raises is passed through untouched: swallowing it
-    would hide a logging bug, and a record that cannot be rendered cannot leak
-    a rendered secret either. That is deliberate, not an oversight.
+    A record whose rendering *raises* still has to be redacted, and this was
+    the third thing review caught. `logging` does not drop such a record: it
+    calls `Handler.handleError`, which prints the format string and the raw
+    arguments to stderr as a diagnostic. So `logger.error("token=%s %s",
+    "TOPSECRET")` — one placeholder too many — wrote `Arguments:
+    ('TOPSECRET',)` in the clear. Passing the record through untouched was
+    exactly wrong: a record that cannot be rendered leaks *more*, not less.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             message = record.getMessage()
-        except Exception:  # pragma: no cover - malformed record, keep as-is
+        except Exception:
+            # Rendering failed, so `handleError` will print `record.msg` and
+            # `record.args` verbatim. The message can still be pattern-matched;
+            # the arguments cannot be judged at all, so they are withheld.
+            record.msg = redact(str(record.msg))
+            record.args = _withhold_args(record.args)
             return True
 
         redacted = redact(message)

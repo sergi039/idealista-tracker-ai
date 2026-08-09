@@ -54,6 +54,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The structured-output pattern therefore covers `api_key`, `token`,
   `password`, `secret` and friends but deliberately not a bare `key`, so
   redaction does not blind the diagnostics it exists to keep readable.
+- **A record that cannot be rendered leaks more, not less** — the third review
+  finding. `logging` does not drop a record whose `%` substitution fails; it
+  calls `Handler.handleError`, which prints the format string *and the raw
+  arguments* to stderr. `logger.error("token=%s %s", "TOPSECRET")` wrote
+  `Arguments: ('TOPSECRET',)` in the clear.
+- **There the arguments are withheld, not pattern-matched.** Patterns work on a
+  *marked* secret — `?key=`, `Bearer …`, an `AIza…` key. A bare argument has no
+  marker: in that example the only thing identifying `TOPSECRET` as a
+  credential is the format string it never got substituted into. Guessing
+  cannot be made reliable, so each argument is replaced by its type name —
+  `('<str>', '<str>')` still answers the question a broken-formatting
+  diagnostic exists to answer, and a type name is not a credential.
 - **Not covered**: handlers added *after* `create_app()` runs. Redaction is a
   net under accidents, not a licence to log secrets deliberately.
 
