@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🧹 Fixed: the type filters now describe the subscription on screen (2026-08-09)
+- **What**: `/properties` builds its `Type`, `Subtype` and `Municipality`
+  choices from the subscriptions currently selected instead of from the whole
+  `properties` table, and the subtypes narrow again to the chosen type. The
+  hard-coded `Unclassified` option is now offered only when the selection
+  really holds a row with no category/subtype (or the filter is already on
+  it) — the same rule the "No subscription" checkbox follows. An applied
+  filter stays listed even when the new selection has none of it, so the
+  control can never read "All types" over a filtered page.
+- **Why**: a saved search for land offered `apartment`, `house` and
+  `developed` — values owned by other, mostly retired subscriptions, which
+  can only ever return an empty page there — plus `Unclassified`, which
+  matched **zero** of the 351 stored listings because every one of them is
+  classified.
+
+### 🧹 Fixed: an address no longer decides a listing's type (2026-08-09)
+- **What**: classification reads the head of a title (the part before ` in ` /
+  ` en `) before falling back to the full text, so the type comes from what
+  the listing *is*, not from where it is.
+- **Why**: the `casa` rule outranks the land rule and matched the *address*:
+  five plots — "Land plot in Caserio **Casa** de Anes", "Land in Camín de
+  **Casa** Pelayo" and three more — were stored as `housing/house`, one of
+  them inside the owner's land subscription. Re-checked against all 351
+  production titles: the fix changes those five rows and nothing else.
+
 ### 🧭 Changed: one listing surface, with the saved searches on it (2026-08-09, #125)
 - **What**: `/lands` redirects to `/properties`; `templates/lands.html` and its
   archive banner are gone. `/properties` is rebuilt in the layout the owner

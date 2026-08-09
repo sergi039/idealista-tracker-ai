@@ -52,6 +52,10 @@ DEFAULT_PROPERTY_SORT = "created_at"
 # what "sort by Inv. Metr." orders on; the keys are what the filter accepts.
 INVESTMENT_RATING_ORDER = ("BELOW", "MODERATE", "GOOD", "EXCELLENT")
 
+# What the Type / Subtype filters send for "classified as nothing at all".
+# A query-string sentinel, never a stored value.
+UNCLASSIFIED_FILTER = "__none__"
+
 
 def _investment_rating_expr(model):
     """Upper-cased `ai_analysis.rental_market_analysis.investment_rating`.
@@ -298,6 +302,98 @@ def _travel_display_targets(profile_ids, include_custom=False):
     return targets
 
 
+def _unclassified_clause(column):
+    """Rows the classifier never labelled: NULL or an empty string."""
+    return or_(column.is_(None), column == "")
+
+
+def _visible_distinct_values(column, profile_selection, extra_filter=None):
+    """Distinct non-empty values of `column` within the subscriptions shown."""
+    query = apply_profile_filter(
+        db.session.query(column).distinct(),
+        Property.search_profile_id,
+        profile_selection,
+    )
+    if extra_filter is not None:
+        query = query.filter(extra_filter)
+    return sorted({row[0] for row in query.all() if row and row[0]})
+
+
+def _selection_has_unclassified(column, profile_selection, extra_filter=None):
+    """Whether the subscriptions shown hold a row with no value in `column`."""
+    query = apply_profile_filter(
+        db.session.query(Property.id),
+        Property.search_profile_id,
+        profile_selection,
+    ).filter(_unclassified_clause(column))
+    if extra_filter is not None:
+        query = query.filter(extra_filter)
+    return bool(db.session.query(query.exists()).scalar())
+
+
+def _keep_applied_choice(values, applied):
+    """Keep an applied filter in its dropdown even when the selection lost it.
+
+    Switching subscriptions with a filter on would otherwise leave the select
+    reading "All types" over a page that is still filtered -- the control
+    would disagree with the query it produced.
+    """
+    if applied and applied != UNCLASSIFIED_FILTER and applied not in values:
+        values.append(applied)
+        values.sort()
+    return values
+
+
+def _property_filter_options(
+    profile_selection,
+    category_filter="",
+    subtype_filter="",
+    municipality_filter="",
+):
+    """Type / Subtype / Municipality choices for the subscriptions on screen.
+
+    These dropdowns used to be built from the whole `properties` table, so a
+    saved search for land offered `apartment` and `developed` as well --
+    values owned by other subscriptions, which can only ever return an empty
+    page here. They now come from the same selection the listing is filtered
+    by, and the subtypes narrow again to the chosen category.
+
+    "Unclassified" is offered the way the "No subscription" box is: only when
+    such rows exist in the selection, or when the filter is already on it.
+    Ingestion can still produce a listing no classification rule matched, and
+    hiding the only way to find those would trade dead UI for lost rows.
+    """
+    if category_filter == UNCLASSIFIED_FILTER:
+        category_clause = _unclassified_clause(Property.property_category)
+    elif category_filter:
+        category_clause = Property.property_category == category_filter
+    else:
+        category_clause = None
+
+    return {
+        "categories": _keep_applied_choice(
+            _visible_distinct_values(Property.property_category, profile_selection),
+            category_filter,
+        ),
+        "subtypes": _keep_applied_choice(
+            _visible_distinct_values(
+                Property.property_subtype, profile_selection, category_clause
+            ),
+            subtype_filter,
+        ),
+        "municipalities": _keep_applied_choice(
+            _visible_distinct_values(Property.municipality, profile_selection),
+            municipality_filter,
+        ),
+        "has_unclassified_category": _selection_has_unclassified(
+            Property.property_category, profile_selection
+        ),
+        "has_unclassified_subtype": _selection_has_unclassified(
+            Property.property_subtype, profile_selection, category_clause
+        ),
+    }
+
+
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance between two points, in kilometers."""
     r = 6371.0
@@ -411,23 +507,13 @@ def properties():
         )
 
         if category_filter:
-            if category_filter == "__none__":
-                query = query.filter(
-                    or_(
-                        Property.property_category.is_(None),
-                        Property.property_category == "",
-                    )
-                )
+            if category_filter == UNCLASSIFIED_FILTER:
+                query = query.filter(_unclassified_clause(Property.property_category))
             else:
                 query = query.filter(Property.property_category == category_filter)
         if subtype_filter:
-            if subtype_filter == "__none__":
-                query = query.filter(
-                    or_(
-                        Property.property_subtype.is_(None),
-                        Property.property_subtype == "",
-                    )
-                )
+            if subtype_filter == UNCLASSIFIED_FILTER:
+                query = query.filter(_unclassified_clause(Property.property_subtype))
             else:
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
@@ -521,36 +607,14 @@ def properties():
             )
         }
 
-        # Distinct lists for dropdowns (small, best-effort)
-        categories = [
-            r[0]
-            for r in db.session.query(Property.property_category)
-            .distinct()
-            .filter(Property.property_category.isnot(None))
-            .all()
-            if r and r[0]
-        ]
-        categories.sort()
-
-        subtypes = [
-            r[0]
-            for r in db.session.query(Property.property_subtype)
-            .distinct()
-            .filter(Property.property_subtype.isnot(None))
-            .all()
-            if r and r[0]
-        ]
-        subtypes.sort()
-
-        municipalities = [
-            r[0]
-            for r in db.session.query(Property.municipality)
-            .distinct()
-            .filter(Property.municipality.isnot(None))
-            .all()
-            if r and r[0]
-        ]
-        municipalities.sort()
+        # Dropdown choices for the subscriptions actually on screen -- see
+        # `_property_filter_options` for why they are not global lists.
+        filter_options = _property_filter_options(
+            profile_selection,
+            category_filter=category_filter,
+            subtype_filter=subtype_filter,
+            municipality_filter=municipality_filter,
+        )
 
         return render_template(
             "properties.html",
@@ -567,9 +631,7 @@ def properties():
             selected_profile_id=selected_profile_id,
             profile_selection=profile_selection,
             travel_display_targets=travel_display_targets,
-            categories=categories,
-            subtypes=subtypes,
-            municipalities=municipalities,
+            **filter_options,
             current_filters={
                 # A list, so `url_for` repeats the parameter instead of
                 # stringifying it -- every in-page link is rebuilt from here.
@@ -608,6 +670,8 @@ def properties():
             categories=[],
             subtypes=[],
             municipalities=[],
+            has_unclassified_category=False,
+            has_unclassified_subtype=False,
             current_filters={
                 "mode": "combined",
                 "active_mode": "combined",
@@ -1585,23 +1649,13 @@ def map_view():
         favorites_filter = request.args.get("favorites", "") == "on"
 
         if category_filter:
-            if category_filter == "__none__":
-                query = query.filter(
-                    or_(
-                        Property.property_category.is_(None),
-                        Property.property_category == "",
-                    )
-                )
+            if category_filter == UNCLASSIFIED_FILTER:
+                query = query.filter(_unclassified_clause(Property.property_category))
             else:
                 query = query.filter(Property.property_category == category_filter)
         if subtype_filter:
-            if subtype_filter == "__none__":
-                query = query.filter(
-                    or_(
-                        Property.property_subtype.is_(None),
-                        Property.property_subtype == "",
-                    )
-                )
+            if subtype_filter == UNCLASSIFIED_FILTER:
+                query = query.filter(_unclassified_clause(Property.property_subtype))
             else:
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
@@ -2605,23 +2659,13 @@ def export_properties_csv():
         )
 
         if category_filter:
-            if category_filter == "__none__":
-                query = query.filter(
-                    or_(
-                        Property.property_category.is_(None),
-                        Property.property_category == "",
-                    )
-                )
+            if category_filter == UNCLASSIFIED_FILTER:
+                query = query.filter(_unclassified_clause(Property.property_category))
             else:
                 query = query.filter(Property.property_category == category_filter)
         if subtype_filter:
-            if subtype_filter == "__none__":
-                query = query.filter(
-                    or_(
-                        Property.property_subtype.is_(None),
-                        Property.property_subtype == "",
-                    )
-                )
+            if subtype_filter == UNCLASSIFIED_FILTER:
+                query = query.filter(_unclassified_clause(Property.property_subtype))
             else:
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
