@@ -79,14 +79,15 @@ _STRUCTURED_SECRET_RE: Final = re.compile(
 #:
 #: Bare `key` is excluded here as well, for the reason given above: `sort_key=`
 #: and the codebase's own preset names would otherwise be redacted.
-#: The value must not start with `%`, because a `%` placeholder is where a
-#: credential gets substituted, not a credential. It matters on the one path
-#: that redacts an *unrendered* format string — the broken-formatting
-#: diagnostic below — where eating the `%s` out of `"token=%s"` would leave a
-#: string that formats cleanly and silently swallow the diagnostic.
 _UNQUOTED_SECRET_RE: Final = re.compile(
     r"(?i)\b((?:api_?key|access_token|auth_token|token|password|secret)\s*[:=]\s*)"
-    r"(?!%)([^\s\"',;)\]}&]+)"
+    r"([^\s\"',;)\]}&]+)"
+)
+
+#: A printf conversion specifier, in the shapes `logging` accepts:
+#: `%s`, `%(name)s`, `%-5.2f`, `%%`.
+_PRINTF_SPEC_RE: Final = re.compile(
+    r"%(?:\([^)]*\))?[-#0 +]*(?:\*|\d+)?(?:\.(?:\*|\d+))?[hlL]?[diouxXeEfFgGcrsa%]"
 )
 
 
@@ -98,6 +99,29 @@ def redact(text: str) -> str:
     text = _STRUCTURED_SECRET_RE.sub(r"\1" + REDACTED + r"\3", text)
     text = _UNQUOTED_SECRET_RE.sub(r"\1" + REDACTED, text)
     return text
+
+
+def redact_format_string(text: str) -> str:
+    """Redact a format string without consuming its placeholders.
+
+    Only the failure paths need this. Everywhere else the record is rendered
+    first, so a `%s` has already become whatever it stood for and the patterns
+    see ordinary text. Here the text is still the template, and a pattern that
+    swallowed the placeholder out of ``"GET /x?key=%s %s"`` would leave
+    ``"GET /x?key=REDACTED %s"`` — one placeholder for one argument, which
+    formats cleanly. The record would then be emitted instead of reaching
+    `Handler.handleError`, and the diagnostic that says formatting is broken
+    would disappear silently. Reported in review, and the placeholder is not a
+    credential in any case: it is the hole a credential gets substituted into.
+    """
+    specifiers = _PRINTF_SPEC_RE.findall(text)
+    literals = _PRINTF_SPEC_RE.split(text)
+
+    out = [redact(literals[0])]
+    for specifier, literal in zip(specifiers, literals[1:]):
+        out.append(specifier)
+        out.append(redact(literal))
+    return "".join(out)
 
 
 def _withhold_args(args):
@@ -141,7 +165,15 @@ def _withhold_record_args(record: logging.LogRecord) -> None:
     """
     if getattr(record, _WITHHELD_FLAG, False):
         return
-    record.args = _withhold_args(record.args)
+    try:
+        record.args = _withhold_args(record.args)
+    except Exception:
+        # Even naming the types can fail: a mapping argument whose `items()`
+        # raises reaches here, and an exception escaping a filter leaves
+        # `logging` entirely and lands in the caller. Withhold everything
+        # instead — an empty tuple is always safe, and `getMessage()` then
+        # returns the format string untouched.
+        record.args = ()
     setattr(record, _WITHHELD_FLAG, True)
 
 
@@ -160,7 +192,7 @@ def _withhold(record: logging.LogRecord) -> None:
     itself never does that, so neither may this.
     """
     try:
-        record.msg = redact(str(record.msg))
+        record.msg = redact_format_string(str(record.msg))
     except Exception:
         record.msg = UNPRINTABLE
     _withhold_record_args(record)
@@ -239,6 +271,13 @@ class RedactingFormatter(logging.Formatter):
             # marker to match). Withhold them, then let the failure continue so
             # logging still reports the broken formatter.
             _withhold_record_args(record)
+            # `Formatter.format` sets `record.message` from the arguments before
+            # it applies the format string, so the rendered value is already
+            # cached on the record even though the failure meant nothing was
+            # written. Drop it, or the next thing to read the record gets the
+            # value the withholding above just refused to print. Any later
+            # formatter recreates it from the withheld arguments.
+            record.__dict__.pop("message", None)
             raise
 
         if record.exc_text:

@@ -432,9 +432,15 @@ class TestASecondReviewRound:
         logger.propagate = False
         install_log_redaction(logger)
 
-        with redirect_stderr(io.StringIO()):
-            logger.error(Unprintable(), "sk-live-TOPSECRET")  # raises inside filter
+        # Not written inline: `handleError` prints the call stack with source
+        # lines, so a literal here would land in stderr as the test's own text.
+        secret = SECRET_VALUE
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            logger.error(Unprintable(), secret)  # used to raise inside the filter
         logger.handlers = []
+
+        assert "TOPSECRET" not in stderr.getvalue()
 
     def test_a_credential_in_stack_info_is_redacted_on_the_record(self):
         """`stack_info` is cached like `exc_text`, so it is redacted in place.
@@ -484,6 +490,90 @@ class TestASecondReviewRound:
 
         assert redact(text) == text
         assert redact('{"key": "airport"}') == '{"key": "airport"}'
+
+
+class TestAThirdReviewRound:
+    """Findings from the review of the previous round's fixes.
+
+    All three are the same mistake seen from different sides: a guard that
+    protects one route while a neighbouring one stays open.
+    """
+
+    @staticmethod
+    def _emit(name, msg, *args, fmt=None):
+        """Log one record and return (stderr, the record the handler saw)."""
+        seen = {}
+
+        class Spy(logging.Filter):
+            def filter(self, record):
+                seen["record"] = record
+                return True
+
+        stderr = io.StringIO()
+        handler = logging.StreamHandler(io.StringIO())
+        if fmt:
+            handler.setFormatter(logging.Formatter(fmt))
+
+        logger = logging.getLogger(name)
+        logger.handlers = [handler]
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+        install_log_redaction(logger)
+        handler.addFilter(Spy())  # after the redactor, so it sees the result
+
+        with redirect_stderr(stderr):
+            logger.error(msg, *args)
+        logger.handlers = []
+        return stderr.getvalue(), seen.get("record")
+
+    def test_redacting_a_format_string_keeps_its_placeholders(self):
+        """Eating a placeholder makes a broken record format cleanly.
+
+        `"GET /x?key=%s %s"` with one argument must reach `handleError`. If the
+        query pattern swallows the `%s` into `REDACTED`, what is left has one
+        placeholder for one argument, the record emits, and the diagnostic that
+        says formatting is broken never appears.
+        """
+        secret = SECRET_VALUE
+        err, _ = self._emit("test_placeholder_kept", "GET /x?key=%s %s", secret)
+
+        assert err.strip(), "the broken-formatting diagnostic was swallowed"
+        assert "TOPSECRET" not in err
+        assert "<str>" in err
+
+    def test_a_formatter_failure_does_not_leave_the_value_on_the_record(self):
+        """`Formatter.format` caches `record.message` before it can fail.
+
+        The arguments are withheld on that path, but the rendered value is
+        already sitting on the record for whatever reads it next.
+        """
+        secret = SECRET_VALUE
+        _, record = self._emit(
+            "test_message_cache", "%s", secret, fmt="%(nonexistent)s %(message)s"
+        )
+
+        assert "TOPSECRET" not in getattr(record, "message", "")
+
+    def test_withholding_that_cannot_name_the_types_still_does_not_raise(self):
+        """A mapping argument whose `items()` raises reaches the withholder.
+
+        An exception escaping a filter leaves `logging` altogether and lands in
+        the caller — a log line must never do that.
+        """
+
+        class ExplodingDict(dict):
+            def items(self):
+                raise RuntimeError("boom")
+
+        # `_emit` would propagate the RuntimeError out of `logger.error(...)`
+        # if the withholder let it through, so reaching the assertions at all is
+        # half the proof; the other half is that the record still went through.
+        _, record = self._emit(
+            "test_exploding_args", "%(a)s %(b)s", ExplodingDict(a="ok")
+        )
+
+        assert record is not None, "the record was dropped instead of handled"
+        assert record.args == (), "the unnameable arguments were not withheld"
 
 
 class TestInstallation:
