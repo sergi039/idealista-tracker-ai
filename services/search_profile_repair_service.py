@@ -86,6 +86,11 @@ alone:
   that decision -- it has a unique index and the default-profile CHECK behind
   it -- so an emptied profile that still holds a key is kept and reported
   rather than removed.
+- **It never resolves a label that two saved searches share.** Since #102 a
+  label no longer identifies a subscription: two identified searches may
+  legitimately carry the same one. Handing a fragment's listings to whichever
+  of them sorts first would merge two subscriptions, so an ambiguous label is
+  reported BLOCKED -- the same answer `get_or_create_profile_by_name()` gives.
 - **It never creates a profile**, and **never adopts a listing that is
   already orphaned** -- both are reported, neither is acted on.
 - **It never touches a listing whose saved-search name cannot be recomputed.**
@@ -385,17 +390,33 @@ class RepairPlan:
         return sum(group.moves for group in self.groups)
 
 
+def _search_key(profile: SearchProfile) -> Optional[str]:
+    """The profile's saved-search identity (#110), or None if it has none."""
+    return getattr(profile, "source_search_key", None)
+
+
 def _find_profile_by_name(
     name: str,
     canonical: str,
     profiles: Sequence[SearchProfile],
     effective_names: Dict[int, str],
-) -> Optional[SearchProfile]:
-    """The profile ingestion would reuse for `name`, or None.
+) -> tuple[Optional[SearchProfile], List[int]]:
+    """Resolve a label to one profile. Returns `(profile, ambiguous_ids)`.
 
-    Mirrors `SearchProfileService.get_or_create_profile_by_name()` lookup
-    order -- exact name first, then canonical -- minus the create half, which
-    a dry run must never trigger.
+    Mirrors `SearchProfileService.get_or_create_profile_by_name()`, minus the
+    create half a dry run must never trigger:
+
+    - an **unidentified** profile carrying the label wins, and the partial
+      unique index keeps at most one of those;
+    - otherwise a single canonical match is honoured, key or no key;
+    - a label claimed by several saved searches resolves to **nothing**.
+
+    That last case is the one #102 created. Labels stopped being unique, so
+    two identified subscriptions may legitimately share one -- and a label
+    that cannot say which subscription it means must not be resolved to
+    whichever row sorts first, or a fragment's listings are handed to an
+    arbitrary saved search. `ambiguous_ids` is non-empty exactly then, and the
+    caller blocks the group instead of guessing.
 
     Matches on `effective_names`, not on `profile.name`: an earlier group in
     the same plan may already have renamed a profile, and a rename *frees* the
@@ -403,15 +424,21 @@ def _find_profile_by_name(
     hands the renamed profile to a second saved search and merges the two.
     """
     for profile in profiles:
-        if effective_names.get(profile.id) == name:
-            return profile
+        if effective_names.get(profile.id) == name and _search_key(profile) is None:
+            return profile, []
     if not canonical:  # pragma: no cover - callers pass a canonicalized name
-        return None
-    for profile in profiles:
-        current = effective_names.get(profile.id)
-        if current and _canonical_profile_name(current) == canonical:
-            return profile
-    return None
+        return None, []
+    matches = [
+        profile
+        for profile in profiles
+        if (effective_names.get(profile.id) or "")
+        and _canonical_profile_name(effective_names.get(profile.id)) == canonical
+    ]
+    if len(matches) == 1:
+        return matches[0], []
+    if matches:
+        return None, sorted(profile.id for profile in matches)
+    return None, []
 
 
 def _plan_settings_merge(
@@ -650,9 +677,24 @@ class _Planner:
         """Plan one group. Returns None when planned, else why it is blocked."""
         property_ids = self.grouped[canonical]
         name = self.display_names[canonical]
-        target = _find_profile_by_name(
+        target, ambiguous_ids = _find_profile_by_name(
             name, canonical, self.profiles, self.effective_names
         )
+        if ambiguous_ids:
+            # The label belongs to several saved searches at once, so it
+            # cannot say which one these listings are. Promoting a fragment
+            # into that name would be worse than doing nothing, so this does
+            # not fall through to the promotion path.
+            blocked = self._block(
+                canonical,
+                property_ids,
+                f"this label is claimed by {len(ambiguous_ids)} saved searches "
+                f"(profiles {ambiguous_ids}), so it cannot say which "
+                f"subscription these listings belong to -- the same refusal "
+                f"get_or_create_profile_by_name() makes since #102",
+            )
+            blocked["ambiguous_profile_ids"] = ambiguous_ids
+            return blocked
         rename_to: Optional[str] = None
 
         # Only a proven fold fragment may give up its listings or its name.

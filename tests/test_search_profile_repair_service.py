@@ -86,7 +86,6 @@ def app():
     setup_test_environment()
     app = create_app()
     app.config["TESTING"] = True
-    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
 
     with app.app_context():
         db.create_all()
@@ -835,15 +834,41 @@ def test_profile_lookup_uses_the_names_the_plan_has_already_changed():
     profiles = [one, two]
     effective = {1: "Beta", 2: "scratch"}
 
-    assert _find_profile_by_name("Beta", "beta", profiles, effective) is one
+    assert _find_profile_by_name("Beta", "beta", profiles, effective) == (one, [])
 
     # Profile 1 has just been promoted and renamed by an earlier group.
     effective[1] = "Alpha"
 
-    assert _find_profile_by_name("Beta", "beta", profiles, effective) is None, (
+    assert _find_profile_by_name("Beta", "beta", profiles, effective) == (None, []), (
         "the freed name must not still resolve to the profile that gave it up"
     )
-    assert _find_profile_by_name("Alpha", "alpha", profiles, effective) is one
+    assert _find_profile_by_name("Alpha", "alpha", profiles, effective) == (one, [])
+
+
+def test_profile_lookup_refuses_a_label_two_subscriptions_share():
+    """The unit contract behind the BLOCKED group: ambiguity resolves to None."""
+    from services.search_profile_repair_service import _find_profile_by_name
+
+    keyed_one = SearchProfile(id=1, name="Shared", source_search_key="k1")
+    keyed_two = SearchProfile(id=2, name="Shared", source_search_key="k2")
+    keyless = SearchProfile(id=3, name="Shared")
+    effective = {1: "Shared", 2: "Shared", 3: "Shared"}
+
+    # Two identified subscriptions and nothing else: refuse, and say which.
+    assert _find_profile_by_name(
+        "Shared", "shared", [keyed_one, keyed_two], effective
+    ) == (None, [1, 2])
+
+    # A keyless profile with that label is the unambiguous answer.
+    assert _find_profile_by_name(
+        "Shared", "shared", [keyed_one, keyed_two, keyless], effective
+    ) == (keyless, [])
+
+    # A single identified subscription is not ambiguous either.
+    assert _find_profile_by_name("Shared", "shared", [keyed_one], effective) == (
+        keyed_one,
+        [],
+    )
 
 
 def test_a_profile_that_gains_a_saved_search_while_planning_is_blocked(app):
@@ -1143,6 +1168,71 @@ def test_settings_changed_after_planning_abort_the_repair(fragmented, monkeypatc
             "market_context": "just set by the owner"
         }, "the setting made after planning must survive"
         assert _count(TARGET_ID) == FRAGMENTS[TARGET_ID][2], "nothing was committed"
+
+
+def test_a_label_claimed_by_two_subscriptions_blocks_the_group(app):
+    """Since #102 a label no longer picks out one saved search.
+
+    Two identified subscriptions may legitimately share a canonical label --
+    the partial unique index only keeps keyless names apart. Resolving such a
+    label to whichever row came back first hands a fragment's listings to an
+    arbitrary subscription. `get_or_create_profile_by_name()` answers None to
+    exactly this ambiguity; the repair has to refuse it too.
+    """
+    if not hasattr(SearchProfile, "source_search_key"):
+        pytest.skip("#110 (saved-search identity) is not present in this tree")
+
+    full = "alpha beta gamma"
+
+    with app.app_context():
+        db.session.add_all(
+            [
+                SearchProfile(id=1, name=full, is_active=True, source_search_key="k1"),
+                SearchProfile(id=2, name=full, is_active=True, source_search_key="k2"),
+                SearchProfile(id=3, name="alpha beta", is_active=True),
+            ]
+        )
+        _add_listings(3, _folded_at(full, "alpha beta"), 4, "frag")
+        db.session.commit()
+
+        report = SearchProfileRepairService.apply()
+
+        assert report["properties_moved"] == 0
+        assert report["profiles_deleted"] == []
+        assert db.session.get(SearchProfile, 3).name == "alpha beta"
+        assert _count(3) == 4
+        assert _count(1) == 0
+        assert _count(2) == 0
+
+        blocked = report["blocked_groups"]
+        assert [g["name"] for g in blocked] == [full]
+        assert "claimed by" in blocked[0]["reason"]
+        assert blocked[0]["ambiguous_profile_ids"] == [1, 2]
+
+
+def test_a_single_canonical_match_still_resolves_when_it_carries_a_key(app):
+    """One identified subscription with that label is not ambiguous."""
+    if not hasattr(SearchProfile, "source_search_key"):
+        pytest.skip("#110 (saved-search identity) is not present in this tree")
+
+    full = "alpha beta gamma"
+
+    with app.app_context():
+        db.session.add_all(
+            [
+                SearchProfile(id=1, name=full, is_active=True, source_search_key="k1"),
+                SearchProfile(id=2, name="alpha beta", is_active=True),
+            ]
+        )
+        _add_listings(1, _plain(full), 1, "home")
+        _add_listings(2, _folded_at(full, "alpha beta"), 4, "frag")
+        db.session.commit()
+
+        report = SearchProfileRepairService.apply()
+
+        assert report["blocked_groups"] == []
+        assert _count(1) == 5
+        assert db.session.get(SearchProfile, 2) is None
 
 
 def test_a_profile_carrying_a_subscription_key_is_never_deleted(fragmented):

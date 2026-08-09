@@ -207,6 +207,9 @@ alone:
 - **It never deletes a profile carrying a saved-search identity key** (#110),
   and never moves a key between profiles — `merge_duplicate_profiles()` owns
   that. An emptied profile that still holds a key is kept and reported.
+- **It never resolves a label that two saved searches share.** Since #102 a
+  label no longer identifies a subscription, so an ambiguous one is reported
+  `BLOCKED:` instead of being handed to whichever profile sorts first.
 - **It never creates a profile**, and **never adopts an already-orphaned
   listing** — both are reported, neither is acted on.
 - **It never touches a listing whose saved-search name cannot be recomputed.**
