@@ -44,8 +44,22 @@ def test_global_docker_names_are_scoped_by_a_prefix_variable():
     assert '"127.0.0.1:${APP_HOST_PORT:-5001}:5001"' in compose
     assert '"127.0.0.1:${DB_HOST_PORT:-5434}:5432"' in compose
 
+
+def test_the_dev_override_does_not_republish_the_database():
+    # Compose appends `ports` across files instead of replacing the list, so a
+    # second entry here does not override the base one - it joins it. That gave
+    # host port 5434 two publications, one of them with no bind address and so
+    # on every interface, and the stack could not start at all (#166). The
+    # override inherits the base publication; it must not add one.
+    root = Path(__file__).parent.parent
     dev_compose = (root / "docker-compose.dev.yml").read_text(encoding="utf-8")
-    assert '"${DB_HOST_PORT:-5434}:5432"' in dev_compose
+
+    # Any republication at all, whatever port it names - the appending is the
+    # defect, not the number. Saying so in a comment is fine and expected.
+    assert "ports:" not in dev_compose, (
+        "the dev override republishes a port; Compose will append it to the "
+        "base file's, not replace it"
+    )
 
 
 def test_env_example_uses_separate_db_name():
