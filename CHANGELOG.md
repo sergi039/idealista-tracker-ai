@@ -32,7 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `utils/http.py` `OVERPASS_GATE`, shared with the coastline query in
   `services/sea_view_service.py`; pacing them separately paced neither. A
   property with no usable coordinates is recorded as not asked rather than
-  geocoded, because geocoding is a paid Google call. On a row mirrored from
+  geocoded, because geocoding is a paid Google call — including the listing
+  geocoding *failed* to place, where `enrich_property` gives up before
+  anything else can run. The gate reserves each caller's slot under its lock
+  and sleeps outside it, so a finishing request never blocks for a whole
+  interval behind somebody else's wait; it paces when a call may start, which
+  on an endpoint granting two concurrent slots is the design rather than a
+  hole in it. On a row mirrored from
   `lands` the first write seeds the section from the legacy one, since
   `Property.infrastructure_extended` stops falling back the moment a top-level
   section exists — without that, the first measurement would have hidden every

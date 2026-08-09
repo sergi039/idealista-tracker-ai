@@ -25,36 +25,53 @@ OVERPASS_MIN_INTERVAL_S = 2.0
 class RateGate:
     """Pace the calls this process makes to one shared endpoint.
 
-    The wait is taken while holding the lock on purpose: several worker threads
-    reaching a busy endpoint at once would otherwise all measure the same gap,
-    all decide it has passed, and fire together. Only the wait is serialised --
-    the request itself runs outside, so callers stay concurrent, merely spaced.
+    Each caller *reserves* the next slot under the lock and then sleeps until
+    it, outside the lock. Reserving is what makes this work across threads: two
+    workers arriving together would otherwise measure the same gap, both decide
+    it had passed, and fire together. Sleeping outside the lock is what keeps a
+    finishing call's `mark()` from blocking for a whole interval behind
+    somebody else's wait.
 
-    `wait()` before the request, `mark()` when it returns, so the interval is
-    measured from the end of the previous call rather than its start.
+    It paces when a call is *allowed to start*, not when it reaches the wire:
+    a thread descheduled between its permit and its socket can still overlap
+    the next one. Overpass grants two concurrent slots per IP, so that margin
+    is the design rather than a hole in it -- this is a courtesy pacer, not an
+    admission-control system.
+
+    `wait()` before the request, `mark()` when it returns, so a call slower
+    than the interval still spaces the next one from its end rather than its
+    start.
     """
 
     def __init__(self, min_interval_s: float, name: str = ""):
         self.min_interval_s = min_interval_s
         self.name = name
         self._lock = threading.Lock()
-        self._last_call_at = 0.0
+        self._next_slot_at = 0.0
 
     def wait(self) -> float:
-        """Block until the next call is due. Returns the seconds slept."""
+        """Block until this caller's slot. Returns the seconds slept."""
         with self._lock:
-            slept = 0.0
-            delay = self.min_interval_s - (time.monotonic() - self._last_call_at)
-            if delay > 0:
-                time.sleep(delay)
-                slept = delay
-            self._last_call_at = time.monotonic()
-            return slept
+            now = time.monotonic()
+            slot = max(now, self._next_slot_at)
+            self._next_slot_at = slot + self.min_interval_s
+
+        delay = slot - now
+        if delay > 0:
+            time.sleep(delay)
+            return delay
+        return 0.0
 
     def mark(self) -> None:
-        """Record that a call has just finished."""
+        """Record that a call has just finished.
+
+        Never pulls an already-reserved slot backwards: a waiter that has been
+        promised a time is not overtaken by a call finishing before it.
+        """
         with self._lock:
-            self._last_call_at = time.monotonic()
+            self._next_slot_at = max(
+                self._next_slot_at, time.monotonic() + self.min_interval_s
+            )
 
 
 # One gate for every Overpass caller in the process: the coastline query in

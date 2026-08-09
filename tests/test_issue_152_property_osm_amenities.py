@@ -30,6 +30,8 @@ What is pinned here:
 * the backfill tool goes through the free amenity call only.
 """
 
+import threading
+import time
 from decimal import Decimal
 from unittest.mock import Mock, patch
 
@@ -366,6 +368,56 @@ class TestNoCoordinatesIsNotNothingNearby:
         assert section[OSM_STATUS_KEY]["reason"] == OSM_REASON_NO_COORDINATES
         assert "osm_amenities" not in section
 
+    @patch("services.enrichment_service.request_with_retries")
+    def test_a_listing_that_cannot_be_geocoded_records_the_gap_too(
+        self, mock_request, app
+    ):
+        """Through the orchestrator, not the helper.
+
+        `enrich_property` gives up as soon as geocoding fails to place the
+        listing, and that early return used to leave the amenity section absent
+        -- which is the very reading #152 is about. The independent review of
+        this change found it there rather than in the helper, so the test lives
+        at the same level as the defect.
+        """
+        property_id = _property(app, "prop_osm_ungeocodable", lat=None, lon=None)
+
+        class _FailedGeocoding:
+            def ensure_coordinates(self, prop, refresh=False):
+                return False
+
+        with app.app_context():
+            prop = db.session.get(Property, property_id)
+            ok = _enrichment_service_under_test(
+                location_service=_FailedGeocoding()
+            ).enrich_property(prop)
+
+            db.session.expire_all()
+            section = db.session.get(Property, property_id).enrichment[
+                "infrastructure_extended"
+            ]
+
+        assert ok is False
+        mock_request.assert_not_called()
+        assert section[OSM_STATUS_KEY]["state"] == OSM_STATE_UNAVAILABLE
+        assert section[OSM_STATUS_KEY]["reason"] == OSM_REASON_NO_COORDINATES
+
+    @patch("services.enrichment_service.request_with_retries")
+    def test_a_listing_at_zero_zero_is_a_location_not_a_gap(self, mock_request, app):
+        """`0` is falsy in Python and a coordinate in the Gulf of Guinea."""
+        mock_request.return_value = _amenities("cafe")
+        property_id = _property(app, "prop_osm_zero", lat="0", lon="0")
+
+        with app.app_context():
+            prop = db.session.get(Property, property_id)
+            _enrichment_service_under_test().enrich_property(prop)
+
+            db.session.expire_all()
+            section = db.session.get(Property, property_id).infrastructure_extended
+
+        assert section["osm_amenities"] == {"cafe": 1}
+        assert section[OSM_STATUS_KEY]["state"] == OSM_STATE_OK
+
 
 class TestPacing:
     """overpass-api.de grants two query slots per IP, for the whole process."""
@@ -395,6 +447,54 @@ class TestPacing:
             gate.wait()
 
         assert slept == [pytest.approx(1.75)]
+
+    def test_concurrent_callers_are_spaced_rather_than_bunched(self):
+        """Two threads arriving together must not both fire immediately.
+
+        This is the case a single-threaded test cannot see, and the reason the
+        slot is reserved under the lock: measuring the gap and then acting on
+        it lets both callers read the same gap and pass.
+        """
+        gate = RateGate(0.15, name="threaded")
+        gate.wait()  # the first slot is taken; both threads below must queue
+        starts = []
+        barrier = threading.Barrier(2)
+
+        def _caller():
+            barrier.wait()
+            gate.wait()
+            starts.append(time.monotonic())
+
+        threads = [threading.Thread(target=_caller) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        assert len(starts) == 2
+        assert abs(starts[1] - starts[0]) >= 0.15 * 0.8, starts
+
+    def test_a_finished_call_does_not_block_behind_another_callers_wait(self):
+        """`mark()` must not wait out somebody else's pacing interval.
+
+        Holding the lock across the sleep made a returning request block for a
+        whole interval before it could record that it was done -- found by the
+        independent review, with 0.205s measured on a 0.20s interval.
+        """
+        gate = RateGate(1.0, name="mark-not-blocked")
+        gate.wait()
+
+        waiter = threading.Thread(target=gate.wait)
+        waiter.start()
+        try:
+            time.sleep(0.05)  # let the waiter reach its sleep
+            started = time.monotonic()
+            gate.mark()
+            blocked_for = time.monotonic() - started
+        finally:
+            waiter.join(timeout=5)
+
+        assert blocked_for < 0.2, blocked_for
 
     @patch("services.enrichment_service.request_with_retries")
     def test_the_amenity_lookup_goes_through_the_gate(
@@ -459,6 +559,46 @@ class TestTheBackfillStaysFree:
 
         assert recorder.seen == [(property_id, True)]
         assert outcome["measured"] == 1
+
+    @patch("services.enrichment_service.request_with_retries")
+    def test_the_real_service_reaches_overpass_and_nothing_else(
+        self, mock_request, app
+    ):
+        """The recorder above cannot see paid work added *inside* the amenity
+        call, so this one runs the real `EnrichmentService` and watches where
+        the requests go."""
+        from config import Config
+        from utils import backfill_osm_amenities
+
+        mock_request.return_value = _amenities("cafe")
+        property_id = _property(app, "prop_osm_backfill_real")
+        service = EnrichmentService()
+
+        with app.app_context():
+            with (
+                patch.object(
+                    EnrichmentService,
+                    "_enrich_with_google_places",
+                    side_effect=AssertionError("paid Places call"),
+                ),
+                patch.object(
+                    EnrichmentService,
+                    "_enrich_with_google_maps",
+                    side_effect=AssertionError("paid Distance Matrix call"),
+                ),
+                patch.object(
+                    service.geocoding_service,
+                    "geocode_address",
+                    side_effect=AssertionError("paid Geocoding call"),
+                ),
+            ):
+                outcome = backfill_osm_amenities.backfill(
+                    [db.session.get(Property, property_id)], service
+                )
+
+        assert outcome["measured"] == 1
+        urls = [call.args[1] for call in mock_request.call_args_list]
+        assert urls == [Config.OSM_OVERPASS_URL]
 
     def test_only_missing_skips_a_property_that_already_answered(self, app):
         from utils import backfill_osm_amenities

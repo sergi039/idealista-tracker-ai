@@ -55,7 +55,22 @@ class PropertyEnrichmentService:
         # Coordinates first (needed for travel).
         self.location_service.ensure_coordinates(prop, refresh=refresh_coords)
 
-        if not (prop.location_lat and prop.location_lon):
+        # `is None`, not truthiness: a coordinate of exactly 0 is a location,
+        # and the amenity lookup below already treats it as one.
+        if prop.location_lat is None or prop.location_lon is None:
+            # Geocoding could not place this listing, so nothing below can run.
+            # Record that the amenity lookup was never asked rather than
+            # leaving the section absent, which reads as "nothing nearby"
+            # (#152). This path has no shared commit to ride, so it takes its
+            # own.
+            try:
+                self.enrichment_service.enrich_osm_amenities(prop, commit=True)
+            except Exception as e:
+                logger.warning(
+                    "Could not record the amenity gap for %s: %s",
+                    getattr(prop, "id", None),
+                    e,
+                )
             return False
 
         # Enrichment does not touch `search_profile_id` (owner decision,
