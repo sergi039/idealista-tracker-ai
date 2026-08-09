@@ -17,6 +17,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
 from app import db
+from services.profile_selection import (
+    MAX_SELECTED_PROFILE_IDS,
+    apply_profile_filter,
+    empty_profile_selection,
+    parse_profile_selection,
+    resolve_profile_selection,
+)
 from utils.redirects import safe_referrer_redirect
 
 logger = logging.getLogger(__name__)
@@ -75,20 +82,94 @@ def _investment_rating_rank(model):
     )
 
 
-def _list_view_profile_id(resolved_profile_id):
-    """What `/map` should hand to `/properties` so both show the same rows.
+def _map_auto_profile_id(default_profile, profiles):
+    """The map's own fallback when the request names no profile.
 
-    Forwards the request's own `profile_id` values untouched when there are
-    any -- `all` stays `all`, and a repeated parameter stays a list, which is
-    the shape issue #104 will send. Nothing to forward means the map
-    auto-selected on its own (by "most mappable rows", where /properties uses
-    "richest active profile"), so the resolved id has to travel explicitly or
-    the list would auto-select a *different* subscription.
+    Deliberately different from `/properties`, which takes the richest active
+    profile: a map is useless without coordinates, so the profile with the
+    most mappable rows wins. When nothing has coordinates yet it falls back to
+    the most recently active profile, then the default, then the first one.
+
+    Because the two pages resolve differently, whatever this returns has to
+    travel in the link back to the list (`ResolvedProfileSelection.
+    link_values`) or the user lands on a different subscription than the map
+    just showed -- and the focused listing may not even be loaded there.
     """
-    requested = request.args.getlist("profile_id")
-    if requested:
-        return requested
-    return resolved_profile_id
+    mappable = (
+        db.session.query(
+            Property.search_profile_id,
+            func.count(Property.id).label("cnt"),
+            func.max(Property.created_at).label("latest"),
+        )
+        .join(SearchProfile, SearchProfile.id == Property.search_profile_id)
+        .filter(SearchProfile.is_active.is_(True))
+        .filter(Property.location_lat.isnot(None), Property.location_lon.isnot(None))
+        .filter(Property.listing_status.notin_(["removed", "sold"]))
+        .group_by(Property.search_profile_id)
+        .order_by(func.count(Property.id).desc(), func.max(Property.created_at).desc())
+        .first()
+    )
+    if mappable and mappable[0] is not None:
+        return int(mappable[0])
+
+    recent = (
+        db.session.query(
+            Property.search_profile_id,
+            func.max(Property.created_at).label("latest"),
+        )
+        .join(SearchProfile, SearchProfile.id == Property.search_profile_id)
+        .filter(SearchProfile.is_active.is_(True))
+        .group_by(Property.search_profile_id)
+        .order_by(func.max(Property.created_at).desc())
+        .first()
+    )
+    if recent and recent[0] is not None:
+        return int(recent[0])
+    if default_profile:
+        return default_profile.id
+    if profiles:
+        return profiles[0].id
+    return None
+
+
+def _profile_dropdown_options(profiles, resolved):
+    """Rows for the subscription dropdown: active profiles, plus whatever is
+    selected but not among them.
+
+    The dropdown offers active profiles, but a selection can legitimately name
+    one that is not there -- an inactive profile reached by id, or an id that
+    no longer exists. Leaving those out is not merely cosmetic: the page's own
+    script recomputes the state from the checkboxes, so a selection with no
+    checkbox reads as "nothing ticked", and the next Apply would silently
+    widen the view to every active profile.
+    """
+    options = [
+        {"id": profile.id, "name": profile.name, "is_active": True}
+        for profile in profiles
+    ]
+
+    missing = [
+        profile_id
+        for profile_id in resolved.checked_ids
+        if profile_id not in {profile.id for profile in profiles}
+    ]
+    if not missing:
+        return options
+
+    # One query, not one per id: `missing` is bounded by the parser's id cap.
+    named = {
+        profile.id: profile.name
+        for profile in SearchProfile.query.filter(SearchProfile.id.in_(missing)).all()
+    }
+    for profile_id in missing:
+        options.append(
+            {
+                "id": profile_id,
+                "name": named.get(profile_id) or f"Unknown profile #{profile_id}",
+                "is_active": False,
+            }
+        )
+    return options
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -121,34 +202,31 @@ def index():
 def properties():
     """Properties listing -- the working page since issue #105."""
     try:
-        from services.search_profile_service import (
-            PROFILE_ALL_SENTINEL,
-            SearchProfileService,
-        )
+        from services.search_profile_service import SearchProfileService
 
-        profiles = SearchProfileService.list_profiles(active_only=True)
+        # Default first, so a fresh install's auto-created profile is in the
+        # dropdown that "all profiles" is defined against.
         default_profile = SearchProfileService.get_default_profile(create=True)
+        profiles = SearchProfileService.list_profiles(active_only=True)
 
-        # "auto": no profile_id in the URL -- apply the same fallback as before
-        #   (preserves old bookmarked/saved links).
-        # "all": profile_id=all or profile_id= (empty) -- the user explicitly
-        #   asked to see every profile at once, so selected_profile_id stays
-        #   None and no profile filter is applied below.
-        # "specific": profile_id=<int> -- filter to exactly that profile.
-        profile_state, requested_profile_id = (
-            SearchProfileService.parse_profile_selection(request.args)
-        )
-        explicit_all_profiles = profile_state == "all"
-        if profile_state == "specific":
-            selected_profile_id = requested_profile_id
-        elif profile_state == "all":
-            selected_profile_id = None
-        else:
-            selected_profile_id = (
+        # `profile_id` is a repeated parameter since #104 -- auto | all |
+        # selected(ids); see services/profile_selection.py for what each
+        # state means and why "all" is never inferred from an empty tick list.
+        selection = parse_profile_selection(request.args)
+        profile_selection = resolve_profile_selection(
+            selection,
+            [profile.id for profile in profiles],
+            auto_profile_id=(
                 SearchProfileService.resolve_richest_active_profile_id(
                     default_profile, profiles
                 )
-            )
+                if selection.is_auto
+                else None
+            ),
+        )
+        # Profile-specific data (travel targets, the recalculate actions) is
+        # only meaningful for exactly one profile.
+        selected_profile_id = profile_selection.single_id
 
         # Filters
         category_filter = request.args.get("category", "")
@@ -203,9 +281,9 @@ def properties():
         per_page = request.args.get("per_page", 25, type=int)
         per_page = min(max(per_page, 10), 100)
 
-        query = Property.query
-        if selected_profile_id is not None:
-            query = query.filter(Property.search_profile_id == selected_profile_id)
+        query = apply_profile_filter(
+            Property.query, Property.search_profile_id, profile_selection
+        )
 
         if category_filter:
             if category_filter == "__none__":
@@ -395,17 +473,18 @@ def properties():
             properties=pagination.items,
             pagination=pagination,
             profiles=profiles,
+            profile_options=_profile_dropdown_options(profiles, profile_selection),
+            max_selected_profiles=MAX_SELECTED_PROFILE_IDS,
             selected_profile_id=selected_profile_id,
+            profile_selection=profile_selection,
             travel_display_targets=travel_display_targets,
             categories=categories,
             subtypes=subtypes,
             municipalities=municipalities,
             current_filters={
-                "profile_id": (
-                    PROFILE_ALL_SENTINEL
-                    if explicit_all_profiles
-                    else selected_profile_id
-                ),
+                # A list, so `url_for` repeats the parameter instead of
+                # stringifying it -- every in-page link is rebuilt from here.
+                "profile_id": list(profile_selection.link_values),
                 "category": category_filter,
                 "subtype": subtype_filter,
                 "municipality": municipality_filter,
@@ -430,7 +509,11 @@ def properties():
             properties=[],
             pagination=None,
             profiles=[],
+            profile_options=[],
+            max_selected_profiles=MAX_SELECTED_PROFILE_IDS,
             selected_profile_id=None,
+            profile_selection=empty_profile_selection(),
+            travel_display_targets=[],
             categories=[],
             subtypes=[],
             municipalities=[],
@@ -1825,69 +1908,32 @@ def map_view():
     try:
         from services.search_profile_service import SearchProfileService
 
-        profiles = SearchProfileService.list_profiles(active_only=True)
         default_profile = SearchProfileService.get_default_profile(create=True)
+        profiles = SearchProfileService.list_profiles(active_only=True)
 
-        # Same profile_id contract as /properties: absent -> auto-select below,
-        # "all"/"" -> show every profile's markers, "<int>" -> that profile only.
-        profile_state, requested_profile_id = (
-            SearchProfileService.parse_profile_selection(request.args)
+        # Same `profile_id` contract as /properties (#104): auto | all |
+        # selected(ids). Only the auto fallback differs -- the map prefers the
+        # profile with the most mappable rows.
+        selection = parse_profile_selection(request.args)
+        profile_selection = resolve_profile_selection(
+            selection,
+            [profile.id for profile in profiles],
+            auto_profile_id=(
+                _map_auto_profile_id(default_profile, profiles)
+                if selection.is_auto
+                else None
+            ),
         )
-        if profile_state == "specific":
-            selected_profile_id = requested_profile_id
-        elif profile_state == "all":
-            selected_profile_id = None
-        else:
-            selected_profile_id = None
-            # For better UX, auto-select the profile with the most mappable properties (coords present).
-            # If none have coords yet, fall back to the most recently active profile with any properties.
-            mappable = (
-                db.session.query(
-                    Property.search_profile_id,
-                    func.count(Property.id).label("cnt"),
-                    func.max(Property.created_at).label("latest"),
-                )
-                .join(SearchProfile, SearchProfile.id == Property.search_profile_id)
-                .filter(SearchProfile.is_active.is_(True))
-                .filter(
-                    Property.location_lat.isnot(None), Property.location_lon.isnot(None)
-                )
-                .filter(Property.listing_status.notin_(["removed", "sold"]))
-                .group_by(Property.search_profile_id)
-                .order_by(
-                    func.count(Property.id).desc(), func.max(Property.created_at).desc()
-                )
-                .first()
-            )
-            if mappable and mappable[0] is not None:
-                selected_profile_id = int(mappable[0])
-            else:
-                recent = (
-                    db.session.query(
-                        Property.search_profile_id,
-                        func.max(Property.created_at).label("latest"),
-                    )
-                    .join(SearchProfile, SearchProfile.id == Property.search_profile_id)
-                    .filter(SearchProfile.is_active.is_(True))
-                    .group_by(Property.search_profile_id)
-                    .order_by(func.max(Property.created_at).desc())
-                    .first()
-                )
-                if recent and recent[0] is not None:
-                    selected_profile_id = int(recent[0])
-                elif default_profile:
-                    selected_profile_id = default_profile.id
-                elif profiles:
-                    selected_profile_id = profiles[0].id
-                else:
-                    selected_profile_id = None
+        selected_profile_id = profile_selection.single_id
 
-        query = Property.query.filter(
-            Property.location_lat.isnot(None),
-            Property.location_lon.isnot(None),
+        query = apply_profile_filter(
+            Property.query.filter(
+                Property.location_lat.isnot(None),
+                Property.location_lon.isnot(None),
+            ),
+            Property.search_profile_id,
+            profile_selection,
         )
-        if selected_profile_id is not None:
-            query = query.filter(Property.search_profile_id == selected_profile_id)
 
         query = query.filter(Property.listing_status.notin_(["removed", "sold"]))
         props = query.all()
@@ -1981,7 +2027,8 @@ def map_view():
             markers=markers,
             profiles=profiles,
             selected_profile_id=selected_profile_id,
-            list_view_profile_id=_list_view_profile_id(selected_profile_id),
+            profile_selection=profile_selection,
+            list_view_profile_id=list(profile_selection.link_values),
             travel_display_targets=travel_display_targets,
         )
 
@@ -1993,6 +2040,7 @@ def map_view():
             markers=[],
             profiles=[],
             selected_profile_id=None,
+            profile_selection=empty_profile_selection(),
             list_view_profile_id=None,
             travel_display_targets=[],
         )
@@ -2795,22 +2843,22 @@ def export_properties_csv():
         default_profile = SearchProfileService.get_default_profile(create=True)
         profiles = SearchProfileService.list_profiles(active_only=True)
 
-        # Same profile_id contract as /properties, and the same auto-select
-        # fallback, so an "auto" CSV export matches what that page is showing
-        # instead of landing on a possibly-empty default profile.
-        profile_state, requested_profile_id = (
-            SearchProfileService.parse_profile_selection(request.args)
-        )
-        if profile_state == "specific":
-            selected_profile_id = requested_profile_id
-        elif profile_state == "all":
-            selected_profile_id = None
-        else:
-            selected_profile_id = (
+        # Same profile_id contract as /properties (auto | all | selected(ids))
+        # and the same auto-select fallback, so an export matches what that
+        # page is showing instead of landing on a possibly-empty default.
+        selection = parse_profile_selection(request.args)
+        profile_selection = resolve_profile_selection(
+            selection,
+            [profile.id for profile in profiles],
+            auto_profile_id=(
                 SearchProfileService.resolve_richest_active_profile_id(
                     default_profile, profiles
                 )
-            )
+                if selection.is_auto
+                else None
+            ),
+        )
+        selected_profile_id = profile_selection.single_id
 
         category_filter = request.args.get("category", "")
         subtype_filter = request.args.get("subtype", "")
@@ -2843,13 +2891,15 @@ def export_properties_csv():
         sort_by = request.args.get("sort", "created_at")
         sort_order = request.args.get("order", "desc")
 
-        query = Property.query.options(
-            defer(Property.description),
-            defer(Property.enhanced_description),
-            defer(Property.ai_analysis),
+        query = apply_profile_filter(
+            Property.query.options(
+                defer(Property.description),
+                defer(Property.enhanced_description),
+                defer(Property.ai_analysis),
+            ),
+            Property.search_profile_id,
+            profile_selection,
         )
-        if selected_profile_id is not None:
-            query = query.filter(Property.search_profile_id == selected_profile_id)
 
         if category_filter:
             query = query.filter(Property.property_category == category_filter)
