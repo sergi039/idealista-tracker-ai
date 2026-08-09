@@ -30,6 +30,9 @@ TRANSLATIONS = {
         "buildable": "Buildable",
         "all_municipalities": "All Municipalities",
         "sea_view_only": "Sea View Only",
+        # Quick scope switches on the properties toolbar
+        "favorites": "Favorites",
+        "hide_removed": "Hide removed",
         "price": "Price",
         "area": "Area",
         "beach_distance": "Beach Distance",
@@ -136,6 +139,8 @@ TRANSLATIONS = {
         "buildable": "Construible",
         "all_municipalities": "Todos los Municipios",
         "sea_view_only": "Solo Vista al Mar",
+        "favorites": "Favoritos",
+        "hide_removed": "Ocultar retirados",
         "price": "Precio",
         "area": "Área",
         "beach_distance": "Distancia a Playa",

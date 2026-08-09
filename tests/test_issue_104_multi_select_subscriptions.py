@@ -88,6 +88,14 @@ def _anchor_href(body, needle):
     return hrefs[0]
 
 
+def _switcher(body):
+    """The subscription toolbar, so an assertion about a chip cannot match
+    some other link on the page that happens to carry the same profile_id."""
+    match = re.search(r'id="subscription-switcher"(.*?)<!-- Filters -->', body, re.S)
+    assert match, "the subscription switcher is missing"
+    return match.group(1)
+
+
 def _pagination_hrefs(body):
     """The Prev/Next hrefs, keyed by label (the label is the link text)."""
     found = {}
@@ -621,6 +629,16 @@ class TestTruncationIsNotSilent:
 
 
 class TestFilterBarKeepsOneControl:
+    """One subscription control on the page, wherever it is drawn.
+
+    It used to live in the filter bar. Since 2026-08-09 it sits on the
+    toolbar beside the subscription chips, because the filter bar carried a
+    second copy of a control the page already had -- the same dropdown the
+    chips and the archive button were already expressing. The invariant is
+    unchanged: one control, one place, and it never disagrees with what is on
+    screen.
+    """
+
     def test_the_profile_control_is_a_single_dropdown(self, client, subscriptions):
         body = client.get("/properties?profile_id=all").get_data(as_text=True)
         assert body.count('id="profile-select-dropdown"') == 1
@@ -665,15 +683,31 @@ class TestFilterBarKeepsOneControl:
             r'<input[^>]*type="hidden"[^>]*name="profile_id"[^>]*value="all"', body
         ), "the filter form needs an explicit all-profiles fallback value"
 
-    def test_button_reads_all_profiles_when_nothing_is_narrowed(
-        self, client, subscriptions
-    ):
+    def test_nothing_narrowed_is_said_once(self, client, subscriptions):
+        """Amended 2026-08-09: the chip says it, the menu does not repeat it.
+
+        The dropdown used to be the page's only subscription control, so its
+        label had to read "All subscriptions". It now stands beside chips that
+        carry that state themselves, and a menu echoing them would put the
+        same words on screen twice. What is pinned is what the old assertion
+        was really protecting: something on the toolbar states the selection,
+        and nothing claims a narrowed view when nothing is narrowed.
+        """
         body = client.get("/properties?profile_id=all").get_data(as_text=True)
+        chip = re.search(
+            r'<a[^>]*href="[^"]*profile_id=all[^"]*"[^>]*>\s*All subscriptions',
+            _switcher(body),
+        )
+        assert chip, "the All subscriptions chip is missing from the toolbar"
+        assert "btn-primary" in chip.group(0), "it has to be the marked one"
+
         button = re.search(
             r'id="profile-select-dropdown"[^>]*>(.*?)</button>', body, re.S
         )
         assert button, "the dropdown toggle must be a button"
-        assert "All subscriptions" in button.group(1)
+        assert "selected" not in button.group(1), (
+            "nothing is narrowed, so the menu must not report a selection"
+        )
 
     def test_button_counts_the_selected_profiles(self, client, pair):
         body = client.get(f"/properties?{pair['query']}").get_data(as_text=True)
