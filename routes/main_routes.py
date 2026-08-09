@@ -2902,9 +2902,25 @@ def export_properties_csv():
         )
 
         if category_filter:
-            query = query.filter(Property.property_category == category_filter)
+            if category_filter == "__none__":
+                query = query.filter(
+                    or_(
+                        Property.property_category.is_(None),
+                        Property.property_category == "",
+                    )
+                )
+            else:
+                query = query.filter(Property.property_category == category_filter)
         if subtype_filter:
-            query = query.filter(Property.property_subtype == subtype_filter)
+            if subtype_filter == "__none__":
+                query = query.filter(
+                    or_(
+                        Property.property_subtype.is_(None),
+                        Property.property_subtype == "",
+                    )
+                )
+            else:
+                query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
             query = query.filter(
                 Property.municipality.ilike(f"%{municipality_filter}%")
