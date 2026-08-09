@@ -403,18 +403,35 @@ class TestNoCoordinatesIsNotNothingNearby:
         assert section[OSM_STATUS_KEY]["reason"] == OSM_REASON_NO_COORDINATES
 
     @patch("services.enrichment_service.request_with_retries")
-    def test_a_listing_at_zero_zero_is_a_location_not_a_gap(self, mock_request, app):
-        """`0` is falsy in Python and a coordinate in the Gulf of Guinea."""
+    def test_a_listing_at_zero_zero_runs_the_whole_pass(self, mock_request, app):
+        """`0` is falsy in Python and a coordinate in the Gulf of Guinea.
+
+        The amenity counts alone do not prove this: under the old truthiness
+        check the property took the *gap* branch, which measures amenities too
+        (`_osm_coordinate` accepts 0) and then returns, silently skipping sea
+        distance, travel and scoring. The second review round caught exactly
+        that, so the return value and the later steps are what is asserted.
+        """
         mock_request.return_value = _amenities("cafe")
         property_id = _property(app, "prop_osm_zero", lat="0", lon="0")
+        scored = []
+
+        class _RecordingScoring:
+            def calculate_for_property(self, prop, commit=False):
+                scored.append(prop.id)
+                return True
 
         with app.app_context():
             prop = db.session.get(Property, property_id)
-            _enrichment_service_under_test().enrich_property(prop)
+            ok = _enrichment_service_under_test(
+                scoring_service=_RecordingScoring()
+            ).enrich_property(prop)
 
             db.session.expire_all()
             section = db.session.get(Property, property_id).infrastructure_extended
 
+        assert ok is True
+        assert scored == [property_id]
         assert section["osm_amenities"] == {"cafe": 1}
         assert section[OSM_STATUS_KEY]["state"] == OSM_STATE_OK
 

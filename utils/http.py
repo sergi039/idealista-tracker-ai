@@ -49,12 +49,17 @@ class RateGate:
         self._lock = threading.Lock()
         self._next_slot_at = 0.0
 
+    def _interval(self) -> float:
+        """The interval to honour. A negative one would walk the slot backwards
+        and hand two callers the same moment, so it reads as no pacing."""
+        return max(0.0, self.min_interval_s)
+
     def wait(self) -> float:
         """Block until this caller's slot. Returns the seconds slept."""
         with self._lock:
             now = time.monotonic()
             slot = max(now, self._next_slot_at)
-            self._next_slot_at = slot + self.min_interval_s
+            self._next_slot_at = slot + self._interval()
 
         delay = slot - now
         if delay > 0:
@@ -70,7 +75,7 @@ class RateGate:
         """
         with self._lock:
             self._next_slot_at = max(
-                self._next_slot_at, time.monotonic() + self.min_interval_s
+                self._next_slot_at, time.monotonic() + self._interval()
             )
 
 
