@@ -1390,6 +1390,102 @@ def test_the_merge_takes_one_globally_ordered_lock_before_it_touches_anything(
         )
 
 
+def test_a_profile_renamed_at_the_lock_seam_is_no_longer_a_duplicate(app):
+    """Group membership must be rebuilt after the lock, not carried over it.
+
+    Expiring the locked rows' attributes is not enough while the
+    canonical->members mapping is still the one computed from pre-lock names:
+    what a group *is* comes from those names. `_relabel_if_auto_created()`
+    renames an auto-created profile whenever an alert rewords a saved search,
+    so a row can stop being a duplicate between the snapshot and the lock - and
+    a merge running off the stale mapping deletes it as one and carries its
+    search key onto a profile it no longer shares a label with.
+
+    The rename is landed exactly at the seam: on the lock statement itself,
+    after it executes and before the regroup reads any name. It is written
+    through the DBAPI cursor rather than the session, so it does not re-enter
+    SQLAlchemy's event machinery - and, being on the one connection SQLite
+    gives us, it shares this transaction. That is why a third profile is
+    seeded: its name needs cleaning, so the run writes something and therefore
+    commits, and the simulated competitor's rename survives to be inspected.
+    """
+    with app.app_context():
+        db.session.add_all(
+            [
+                SearchProfile(id=1, name="Alpha", is_active=True),
+                SearchProfile(
+                    id=2,
+                    name="alpha",
+                    is_active=True,
+                    is_auto_created=True,
+                    source_search_key=TERRENOS_KEY,
+                    source_search_url=TERRENOS_URL,
+                ),
+                SearchProfile(id=3, name="Gamma!", is_active=True),
+            ]
+        )
+        db.session.commit()
+        db.session.add(
+            Property(
+                source_email_id="imap_rename_1",
+                url="https://www.idealista.com/en/inmueble/7/",
+                search_profile_id=1,
+            )
+        )
+        db.session.commit()
+
+        renamed_at_the_seam = False
+
+        def rename_on_the_lock(conn, cursor, statement, parameters, context, many):
+            nonlocal renamed_at_the_seam
+            collapsed = " ".join(statement.split())
+            if renamed_at_the_seam:
+                return
+            if (
+                "FROM search_profiles" not in collapsed
+                or " IN (" not in collapsed
+                or "ORDER BY search_profiles.id" not in collapsed
+            ):
+                return
+            renamed_at_the_seam = True
+            # "The other ingestion" follows a reworded saved search, which is
+            # exactly what `_relabel_if_auto_created()` does in production.
+            cursor.connection.execute(
+                "UPDATE search_profiles SET name = 'Beta' WHERE id = 2"
+            )
+
+        event.listen(db.engine, "after_cursor_execute", rename_on_the_lock)
+        try:
+            report = SearchProfileService.merge_duplicate_profiles(commit=True)
+        finally:
+            event.remove(db.engine, "after_cursor_execute", rename_on_the_lock)
+
+        assert renamed_at_the_seam, "the rename never landed; the seam moved"
+
+        assert report["merged_groups"] == 0, (
+            "a profile that had stopped being a duplicate was merged anyway"
+        )
+        assert report["profiles_deleted"] == 0
+
+        db.session.expire_all()
+        survivor = db.session.get(SearchProfile, 2)
+        assert survivor is not None, (
+            "the renamed profile was deleted as a duplicate of a label it no "
+            "longer carries"
+        )
+        assert survivor.name == "Beta"
+        assert survivor.source_search_key == TERRENOS_KEY, (
+            "the surviving subscription lost its identity"
+        )
+
+        untouched = db.session.get(SearchProfile, 1)
+        assert untouched.name == "Alpha"
+        assert untouched.source_search_key is None, (
+            "another subscription's key was carried onto this profile"
+        )
+        assert Property.query.filter_by(search_profile_id=1).count() == 1
+
+
 def test_a_merge_that_writes_nothing_still_lets_go_of_the_rows_it_locked(app):
     """A conflicts-only run must not walk away holding every group FOR UPDATE.
 

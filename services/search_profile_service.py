@@ -375,51 +375,73 @@ class SearchProfileService:
             return SearchProfileService.find_unidentified_by_name(cleaned)
 
     @staticmethod
-    def _lock_groups_for_decision(
-        groups: Dict[str, List[SearchProfile]],
+    def _lock_and_regroup(
+        profiles: List[SearchProfile],
     ) -> Dict[str, List[SearchProfile]]:
-        """Take every row this run will decide on, in one globally ordered lock.
+        """Lock every candidate row once, then group them by their *current* names.
 
-        Two things are being bought here, and the second is why this takes the
-        *whole* mapping rather than one group at a time.
+        Three things, and each one is a defect this method exists to have
+        already fixed.
 
-        First, the decision must not be taken from the grouping snapshot. A
+        **The decision must not be taken from the snapshot's values.** A
         `_claim_keyless_profile()` landing in between turns a group that looked
         safe into one holding two search keys, and the merge would then delete
         a row that had just acquired an identity - unrecoverably, since nothing
-        records which saved search a stored listing came from (#116). So the
-        rows are held ``FOR UPDATE`` for the rest of the transaction and the
-        instances the snapshot loaded are expired: the refusal, the property
-        counts and the key carried onto the primary all come from the locked
-        rows. A row that disappeared before the lock is dropped from its group
-        rather than refreshed into an `ObjectDeletedError`.
+        records which saved search a stored listing came from (#116). The rows
+        are therefore held ``FOR UPDATE`` for the rest of the transaction and
+        the loaded instances are expired, so the refusal, the property counts
+        and the key carried onto the primary all read the held rows.
 
-        Second, the order rows are acquired in has to be ascending across the
-        *run*, not merely inside each statement. Locking group by group is
-        globally unordered even when every statement carries ``ORDER BY id``:
-        with groups [1, 100] and [2], this run takes 1 and 100 and then asks
-        for 2, while a repair holding 2 waits for 100 - a deadlock built from
-        two individually well-ordered statements. One statement over the union
+        **Nor from the snapshot's grouping.** Expiring the attributes is not
+        enough while the canonical->members mapping is still the one computed
+        from pre-lock names: what a group *is* comes from those names.
+        `_relabel_if_auto_created()` renames a profile whenever an alert
+        rewords a saved search, so a row can stop being a duplicate between the
+        snapshot and the lock - and a merge running off the stale mapping
+        deletes it as one, carrying its key onto a profile it no longer shares
+        a label with. So the mapping is rebuilt here, from the names the locked
+        rows carry now; the snapshot's is discarded. A row whose fresh
+        canonical no longer matches its old neighbours simply lands where its
+        current name puts it, usually alone, and a group of one merges nothing.
+
+        **And the rows must be acquired in ascending order across the run**,
+        not merely inside each statement. Locking group by group is globally
+        unordered even when every statement carries ``ORDER BY id``: with
+        groups [1, 100] and [2] this run takes 1 and 100 and then asks for 2,
+        while a repair holding 2 waits for 100 - a deadlock built from two
+        individually well-ordered statements. One statement over the union
         removes the interleaving instead of ordering its halves.
+
+        What this does **not** close, stated plainly: the lock set can only be
+        derived from the snapshot, because a row has to be known before it can
+        be locked. A profile *inserted* under one of these labels by a
+        concurrent ingestion is neither locked nor seen, and this run merges
+        without it. The regroup closes the rename seam, not the insert seam.
         """
-        members = [profile for group in groups.values() for profile in group]
-        if not members:
+        candidates = [
+            profile for profile in profiles if _canonical_profile_name(profile.name)
+        ]
+        if not candidates:
             return {}
 
         locked_ids = {
             row[0]
             for row in db.session.execute(
-                lock_profiles_statement([profile.id for profile in members])
+                lock_profiles_statement([profile.id for profile in candidates])
             ).all()
         }
 
         held: Dict[str, List[SearchProfile]] = {}
-        for canonical, group in groups.items():
-            still_there = [profile for profile in group if profile.id in locked_ids]
-            for profile in still_there:
-                db.session.expire(profile)
-            if still_there:
-                held[canonical] = still_there
+        for profile in sorted(candidates, key=lambda candidate: candidate.id):
+            # A row that disappeared before the lock is dropped rather than
+            # refreshed into an `ObjectDeletedError`.
+            if profile.id not in locked_ids:
+                continue
+            db.session.expire(profile)
+            canonical = _canonical_profile_name(profile.name)
+            if not canonical:
+                continue
+            held.setdefault(canonical, []).append(profile)
         return held
 
     @staticmethod
@@ -462,18 +484,11 @@ class SearchProfileService:
         # end that transaction rather than hand it back open with its locks in
         # it.
         try:
+            # This read decides only *which* rows to lock. The groups below are
+            # built after the lock, from the names those rows carry then - a
+            # snapshot grouping would be a decision taken on pre-lock values.
             profiles = SearchProfile.query.order_by(SearchProfile.id.asc()).all()
-            groups: Dict[str, List[SearchProfile]] = {}
-            for profile in profiles:
-                canonical = _canonical_profile_name(profile.name)
-                if not canonical:
-                    continue
-                groups.setdefault(canonical, []).append(profile)
-
-            # One lock over every row this run will look at, taken before any
-            # decision and before any mutation. Everything below reads rows
-            # this transaction already holds.
-            groups = SearchProfileService._lock_groups_for_decision(groups)
+            groups = SearchProfileService._lock_and_regroup(profiles)
 
             for canonical, group in groups.items():
                 search_keys = {

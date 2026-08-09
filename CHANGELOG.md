@@ -18,8 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every row it will look at, in ascending id order, before any group's decision
   or mutation — through the same `lock_profiles_statement()` the repair service
   uses, now defined once in `services/search_profile_service.py` and carrying
-  the `ORDER BY id` that actually fixes acquisition order — then re-reads each
-  group from those held rows and keeps them to the end of the transaction. With
+  the `ORDER BY id` that actually fixes acquisition order — then rebuilds the
+  groups from the names those locked rows carry *now*, discarding the snapshot's
+  grouping, and keeps the rows to the end of the transaction. With
   `commit=True` it always ends that transaction before returning, from the
   first query onwards: the conflicts-only and no-op runs that write nothing,
   and any failure in between, all release the locks. `commit=False` still
@@ -43,7 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sorting the `IN` list orders nothing without `ORDER BY` in the SQL, and
   per-statement `ORDER BY` orders nothing across a run that locks group by
   group — groups `[1, 100]` then `[2]` climb back down and can deadlock against
-  a repair holding `[2, 100]`.
+  a repair holding `[2, 100]`. One seam stays open by construction: the lock set
+  can only be derived from the snapshot, since a row must be known before it can
+  be locked, so a profile *inserted* under one of these labels mid-run is
+  neither locked nor seen. The regroup closes the rename seam, not that one.
 
 ### 🌊 Added: sea view is computed again, as four states instead of a flag (2026-08-09)
 - **What**: `services/sea_view_service.py` estimates a sea view from two
