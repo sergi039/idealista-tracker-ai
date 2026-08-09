@@ -10,6 +10,8 @@ left `Property.query` unfiltered by `search_profile_id`, so a page showing
 more than one profile's listings at once was impossible.
 """
 
+import html
+import json
 import re
 
 import pytest
@@ -31,6 +33,18 @@ def _extract_href(body, title_text):
     match = re.search(rf'href="([^"]*)"\s*\n?\s*title="{re.escape(title_text)}"', body)
     assert match, f"no link with title={title_text!r} found in the page"
     return match.group(1)
+
+
+def _property_ids(body):
+    """Return the listing IDs rendered by /properties."""
+    return {int(value) for value in re.findall(r'href="/properties/(\d+)"', body)}
+
+
+def _marker_ids(body):
+    """Return the listing IDs in /map's public marker payload."""
+    match = re.search(r"const markers = (\[.*\]);", body)
+    assert match, "map marker payload not found"
+    return {marker["id"] for marker in json.loads(match.group(1))}
 
 
 @pytest.fixture
@@ -73,7 +87,11 @@ def two_profiles_with_properties(app):
         prop_a = Property(
             source_email_id="selector_test_a",
             title="AlphaListingUniqueTitle",
+            description="Rare coastal orchard",
             municipality="Alicante",
+            property_category="land",
+            property_subtype="plot",
+            is_favorite=True,
             search_profile_id=profile_a.id,
             listing_status="active",
             location_lat=38.34,
@@ -82,7 +100,11 @@ def two_profiles_with_properties(app):
         prop_b = Property(
             source_email_id="selector_test_b",
             title="BetaListingUniqueTitle",
+            description="City apartment",
             municipality="Quesada",
+            property_category="housing",
+            property_subtype="apartment",
+            is_favorite=False,
             search_profile_id=profile_b.id,
             listing_status="active",
             location_lat=38.10,
@@ -94,6 +116,8 @@ def two_profiles_with_properties(app):
         return {
             "profile_a_id": profile_a.id,
             "profile_b_id": profile_b.id,
+            "prop_a_id": prop_a.id,
+            "prop_b_id": prop_b.id,
         }
 
 
@@ -215,3 +239,29 @@ class TestMapViewProfileSelector:
         body = resp.get_data(as_text=True)
         assert "AlphaListingUniqueTitle" in body
         assert "BetaListingUniqueTitle" not in body
+
+
+@pytest.mark.parametrize(
+    "filter_query",
+    [
+        "category=land",
+        "subtype=plot",
+        "municipality=lican",
+        "search=orchard",
+        "favorites=on",
+    ],
+)
+def test_filtered_properties_map_link_has_the_same_listing_ids(
+    client, two_profiles_with_properties, filter_query
+):
+    """Regression for #114: list filters must survive into map markers."""
+    response = client.get(f"/properties?profile_id=all&hide_removed=on&{filter_query}")
+    assert response.status_code == 200
+    list_body = response.get_data(as_text=True)
+    list_ids = _property_ids(list_body)
+    assert list_ids == {two_profiles_with_properties["prop_a_id"]}
+
+    map_href = html.unescape(_extract_href(list_body, "View properties on map"))
+    map_response = client.get(map_href)
+    assert map_response.status_code == 200
+    assert _marker_ids(map_response.get_data(as_text=True)) == list_ids
