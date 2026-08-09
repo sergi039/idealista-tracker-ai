@@ -67,9 +67,15 @@ _BEARER_RE: Final = re.compile(r"(?i)(bearer\s+)([^\s\"'<>,;]+)")
 #: "police"}` in enrichment data; redacting those would blind the diagnostics
 #: this filter exists to keep readable. In a query string `key=` is Google's
 #: credential parameter, so there the bare name stays.
+#: The closing quote is a backreference to the opening one, and the value is
+#: "anything that is not that quote". Accepting either quote at both ends is
+#: the allow-list mistake in another costume: `password="abc'TOPSECRET"` ends
+#: the value at the apostrophe and yields `password="REDACTED'TOPSECRET"` —
+#: a leak that looks handled, which is the whole reason the Bearer pattern
+#: stopped matching by character class.
 _STRUCTURED_SECRET_RE: Final = re.compile(
     r"(?i)([\"']?(?:api_?key|access_token|auth_token|token|password|secret)[\"']?"
-    r"\s*[:=]\s*[\"'])([^\"']+)([\"'])"
+    r"\s*[:=]\s*([\"']))((?:(?!\2).)*)(\2)"
 )
 
 #: The same names with an *unquoted* value: `token=abc`, `api_key: abc`. A log
@@ -96,7 +102,7 @@ def redact(text: str) -> str:
     text = _QUERY_PARAM_RE.sub(r"\1" + REDACTED, text)
     text = _GOOGLE_KEY_RE.sub(REDACTED, text)
     text = _BEARER_RE.sub(r"\1" + REDACTED, text)
-    text = _STRUCTURED_SECRET_RE.sub(r"\1" + REDACTED + r"\3", text)
+    text = _STRUCTURED_SECRET_RE.sub(r"\1" + REDACTED + r"\4", text)
     text = _UNQUOTED_SECRET_RE.sub(r"\1" + REDACTED, text)
     return text
 
@@ -251,6 +257,35 @@ class SecretRedactingFilter(logging.Filter):
         return True
 
 
+class FormattingFailed(Exception):
+    """Stands in for a formatter's own exception, with the text redacted.
+
+    `Handler.handleError` prints the exception and its traceback to stderr, so
+    a formatter that raised ``ValueError("api_key=…")`` would report the
+    credential itself. The failure still has to be reported — the handler is
+    broken and someone has to know — so the report is kept and the payload is
+    dropped.
+    """
+
+
+def _redact_cached(record: logging.LogRecord) -> None:
+    """Redact every rendered field `Formatter.format` leaves on the record.
+
+    Returning redacted text is not enough: these are a cache, and a handler
+    formatting the same record afterwards reads them instead of rendering
+    again. `exc_text` and `stack_info` carry real text; `asctime` only ever
+    carries a credential if a `datefmt` does, and is covered because "redact
+    what is returned, leave the cache" is a mistake this module already made
+    once.
+    """
+    if record.exc_text:
+        record.exc_text = redact(record.exc_text)
+    if record.stack_info:
+        record.stack_info = redact(record.stack_info)
+    if getattr(record, "asctime", None):
+        record.asctime = redact(record.asctime)
+
+
 class RedactingFormatter(logging.Formatter):
     """Wrap another formatter and redact whatever it produces.
 
@@ -274,7 +309,7 @@ class RedactingFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         try:
             formatted = self.inner.format(record)
-        except Exception:
+        except Exception as exc:
             # `handleError` is reached from here too, by a route the filter
             # cannot cover: the record rendered fine, and the *handler's* format
             # string is what failed - a `%(field)s` the record does not carry.
@@ -290,20 +325,18 @@ class RedactingFormatter(logging.Formatter):
             # value the withholding above just refused to print. Any later
             # formatter recreates it from the withheld arguments.
             record.__dict__.pop("message", None)
-            raise
+            # The half-built cache is left behind too - `asctime` is assigned
+            # before the format string is applied - so this path needs the same
+            # sweep the successful one gets.
+            _redact_cached(record)
+            # And the failure itself is printed by `handleError`, message and
+            # traceback: an inner formatter that raised
+            # `ValueError("api_key=...")` would put it on stderr. Re-raising a
+            # redacted stand-in keeps the report and drops the payload;
+            # `from None` is deliberate, or the original arrives chained to it.
+            raise FormattingFailed(redact(f"{type(exc).__name__}: {exc}")) from None
 
-        # Everything `Formatter.format` caches on the record has to be redacted
-        # in place, not only returned redacted: a handler that formats after
-        # this one reads the cache instead of rendering again. `exc_text` and
-        # `stack_info` are the ones that carry real text; `asctime` only ever
-        # holds a credential if someone put one in a `datefmt`, and is covered
-        # for the same reason rather than because it is likely.
-        if record.exc_text:
-            record.exc_text = redact(record.exc_text)
-        if record.stack_info:
-            record.stack_info = redact(record.stack_info)
-        if getattr(record, "asctime", None):
-            record.asctime = redact(record.asctime)
+        _redact_cached(record)
         return redact(formatted)
 
 

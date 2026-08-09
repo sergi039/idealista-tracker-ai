@@ -612,6 +612,82 @@ class TestAThirdReviewRound:
         assert REDACTED in record.asctime
 
 
+class TestAFourthReviewRound:
+    """Findings from the review of the third round.
+
+    Two are the same partial-coverage shape as before; the third is the
+    allow-list mistake wearing quotes.
+    """
+
+    def test_a_quoted_value_ends_at_its_own_quote(self):
+        """Either quote at either end truncates the value at the wrong one.
+
+        `password="abc'TOPSECRET"` matched the opening `"` and the inner `'`,
+        redacting three characters and leaving the rest — the Bearer bug again
+        in a different costume.
+        """
+        redacted = redact("password=\"abc'" + "TOPSECRET" + '"')
+
+        assert "TOPSECRET" not in redacted
+        assert redacted == f'password="{REDACTED}"'
+
+    def test_a_formatter_that_raises_a_credential_does_not_print_it(self):
+        """`handleError` prints the exception and its traceback.
+
+        An inner formatter raising `ValueError("api_key=…")` reports the
+        credential itself, and chaining would carry the original along even if
+        the replacement were redacted.
+        """
+        secret = "api_key=" + "TOPSECRET"
+
+        class Exploding(logging.Formatter):
+            def format(self, record):
+                raise ValueError(secret)
+
+        stderr = io.StringIO()
+        handler = logging.StreamHandler(io.StringIO())
+        handler.setFormatter(Exploding())
+
+        logger = logging.getLogger("test_formatter_raises_secret")
+        logger.handlers = [handler]
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+        install_log_redaction(logger)
+
+        with redirect_stderr(stderr):
+            logger.error("something happened")
+        logger.handlers = []
+
+        err = stderr.getvalue()
+        assert err.strip(), "the broken formatter was not reported at all"
+        assert "TOPSECRET" not in err
+        assert REDACTED in err
+
+    def test_the_failure_path_also_sweeps_the_cache(self):
+        """`asctime` is assigned before the format string is applied.
+
+        The successful path redacts the cache; the failing one dropped
+        `message` and left everything else half-built.
+        """
+        record = logging.LogRecord(
+            name="t",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg="done",
+            args=(),
+            exc_info=None,
+        )
+        inner = logging.Formatter(
+            "%(asctime)s %(missing)s", datefmt="api_key=" + "TOPSECRET"
+        )
+
+        with pytest.raises(Exception):
+            RedactingFormatter(inner).format(record)
+
+        assert "TOPSECRET" not in getattr(record, "asctime", "")
+
+
 class TestInstallation:
     def test_installing_twice_does_not_stack_filters(self, captured):
         """One filter per handler, however many times the installer runs.
