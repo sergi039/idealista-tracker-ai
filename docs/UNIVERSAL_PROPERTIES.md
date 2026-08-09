@@ -4,7 +4,11 @@ For the latest “what’s running and how it’s isolated”, see `docs/STATE.m
 
 This branch introduces a new `Property` model and `/properties` UI as the foundation for making the app work for **any Idealista sale listing type** (housing, land, garage, commercial, etc.) across **all Spain**.
 
-The legacy `Land` model and `/lands` UI remain available during the migration.
+The migration is finished: `/properties` is the only listing surface
+(2026-08-09). `/lands` redirects to it, `templates/lands.html` is gone, and the
+legacy rows are readable through the archived "Legacy Lands" subscription.
+The `Land` model itself stays for `/lands/<id>`, `/export.csv` and the
+migration helper below.
 
 ## What Exists Now
 
@@ -39,7 +43,7 @@ Incoming emails are assigned to a `SearchProfile` via `SearchProfile.email_match
 1. Update UI to optionally consume `/api/properties` (useful for external clients).
 2. Extend scoring/AI registry beyond `housing` + `land` (garage/commercial/building/new development).
 3. Make enrichment write into `Property.enrichment` (category-aware).
-4. Migration cleanup: retire legacy `/lands` once stable (optional).
+4. ~~Migration cleanup: retire legacy `/lands` once stable~~ — done 2026-08-09 (#125).
 
 ## Migration (Land → Property)
 

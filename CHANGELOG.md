@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🧭 Changed: one listing surface, with the saved searches on it (2026-08-09, #125)
+- **What**: `/lands` redirects to `/properties`; `templates/lands.html` and its
+  archive banner are gone. `/properties` is rebuilt in the layout the owner
+  uses (row count + last sync, Filters & Search, the scoring-mode toggle, and
+  the Score / ★ / Title / Price / Area / Coords / Travel / Inv. Metr. / Type /
+  Added / Actions table). A visible switcher lists every live subscription by
+  name with its listing count, retired ones sit under *Archive*, and a bare
+  `/properties` now shows **all** live subscriptions instead of one
+  auto-selected profile. Rows carry a subscription badge when more than one is
+  on screen; travel columns survive the union (presets shared, custom targets
+  withheld).
+- **Why**: the owner has two saved searches on idealista.com and was looking at
+  two differently-styled pages, one of which opened on a single subscription
+  chosen for them and hid the other behind a closed dropdown.
+
+### 🧹 Removed: three enrichment buttons and two unasked-for editors (2026-08-09, #131)
+- **What**: the property page has one `Enrich` in its header instead of
+  "Enrich with Google APIs" + "Recalculate travel" + "Recalculate scoring", and
+  the "Profile assignment" and "Classification" editors are gone. All four
+  now-unreachable POST endpoints were removed with them.
+- **Why**: `enrich_property()` already geocodes, recalculates travel and
+  rescores in one pass, so the two extra buttons re-billed Google for the same
+  answer. The editors arrived with the original universal-tracker import and
+  duplicate what ingestion and the profile rules decide. A state-changing route
+  with no UI is a hole on an app with no authentication, not a leftover.
+
+### 🛟 Fixed: AI sections that had data reported themselves empty (2026-08-09, #132)
+- **What**: Investment Potential falls back to `forecast` (and lists
+  `key_drivers`); `renderSimilarProperties()` accepts the
+  `{comparison_summary, recommended_alternatives}` object as well as an array.
+- **Why**: both providers write those shapes, and the renderer looked for a
+  `summary` key and an array — so a filled-in analysis showed "No investment
+  potential analysis available" and "No similar properties found". ChatGPT's
+  N/A rental metrics are *not* part of this: those are real nulls, the model
+  declined to put numbers on a single-comparable market.
+
 ### 🛟 Fixed: listing pagination has a deterministic order (2026-08-09, #113)
 - **What**: `/properties`, `/lands`, and their CSV exports now use the model ID
   as the final sort key after every nullable user-selected ordering.
