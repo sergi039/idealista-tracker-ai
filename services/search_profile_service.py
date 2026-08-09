@@ -1,8 +1,8 @@
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 
 from app import db
 from models import Property, SearchProfile
@@ -44,6 +44,26 @@ def _as_list(value: Any) -> List[Any]:
     if isinstance(value, list):
         return value
     return []
+
+
+def lock_profiles_statement(profile_ids: Sequence[int]):
+    """``SELECT id FROM search_profiles WHERE id IN (...) FOR UPDATE``.
+
+    The one row-lock statement for `search_profiles`: the merge below and
+    `services/search_profile_repair_service.py` both take their rows with it,
+    so the two cannot drift apart on what "locked" means.
+
+    Always in id order, so two runs cannot deadlock against each other.
+
+    Postgres semantics. SQLite ignores ``FOR UPDATE`` (and serialises writers
+    anyway), so the test suite can pin that the lock is *requested* but cannot
+    demonstrate it blocking.
+    """
+    return (
+        select(SearchProfile.id)
+        .where(SearchProfile.id.in_(sorted(profile_ids)))
+        .with_for_update()
+    )
 
 
 def _clean_profile_name(value: str) -> Optional[str]:
@@ -349,6 +369,38 @@ class SearchProfileService:
             return SearchProfileService.find_unidentified_by_name(cleaned)
 
     @staticmethod
+    def _lock_group_for_decision(group: List[SearchProfile]) -> List[SearchProfile]:
+        """Hold a merge group's rows, then re-read them, before deciding on it.
+
+        The grouping read is an unlocked snapshot, and the refusal below is
+        computed from it. A `_claim_keyless_profile()` landing in between turns
+        a group that looked safe into one holding two search keys, and the
+        merge would then delete a row that had just acquired an identity -
+        unrecoverably, since nothing records which saved search a stored
+        listing came from (#116).
+
+        So the rows are taken ``FOR UPDATE`` first and held for the rest of the
+        transaction, and the instances the snapshot loaded are expired: every
+        read after this point - the refusal, the property counts, the key
+        carried onto the primary - comes from the locked rows rather than from
+        the snapshot. A row that disappeared before the lock is dropped from
+        the group instead of being refreshed into an `ObjectDeletedError`.
+        """
+        if not group:
+            return []
+
+        locked_ids = {
+            row[0]
+            for row in db.session.execute(
+                lock_profiles_statement([profile.id for profile in group])
+            ).all()
+        }
+        still_there = [profile for profile in group if profile.id in locked_ids]
+        for profile in still_there:
+            db.session.expire(profile)
+        return still_there
+
+    @staticmethod
     def merge_duplicate_profiles(commit: bool = True) -> Dict[str, Any]:
         """Merge profiles that normalize to the same canonical name.
 
@@ -357,6 +409,10 @@ class SearchProfileService:
         `shape`. A group holding more than one distinct search key is
         therefore reported as a conflict and left completely alone - merging
         it would delete a real subscription.
+
+        Each group is locked and re-read before that decision is taken, so the
+        answer is about the rows as they are now rather than about the snapshot
+        the grouping was built from (#116).
         """
 
         profiles = SearchProfile.query.order_by(SearchProfile.id.asc()).all()
@@ -375,6 +431,12 @@ class SearchProfileService:
         conflicts: List[Dict[str, Any]] = []
 
         for canonical, group in groups.items():
+            # Every read below - and every write that follows from it - is
+            # about rows this transaction holds, not about the snapshot above.
+            group = SearchProfileService._lock_group_for_decision(group)
+            if not group:
+                continue
+
             search_keys = {p.source_search_key for p in group if p.source_search_key}
 
             # Two reasons to refuse a group outright. Both would destroy an
@@ -832,8 +894,29 @@ class SearchProfileService:
             return profile
 
         # 2) The saved search name embedded in the email.
+        #
+        # This is the silent half of the split in #116. The profile this path
+        # finds or creates carries no `source_search_key`, so `UNIQUE
+        # (source_search_key)` cannot see it and `UNIQUE (name) WHERE
+        # source_search_key IS NULL` cannot see a keyed row - two subscriptions
+        # may genuinely share a label, and that exclusion is what allows it. An
+        # alert for this same label that *does* carry its URL therefore inserts
+        # a second profile, and one subscription's listings end up split across
+        # both. Nothing can be constrained away here without forbidding the
+        # supported case, so the precondition is at least made observable
+        # before the damage: the label and the profile it landed on are named
+        # every time an email resolves without a search URL.
         if search_name:
             profile = SearchProfileService.get_or_create_profile_by_name(search_name)
+            logger.warning(
+                "Alert email carries no saved-search URL: matched by label %r "
+                "alone, onto keyless profile %s (%r). A later alert for this "
+                "label that does carry its URL creates a second profile and "
+                "splits the subscription (#116)",
+                search_name,
+                profile.id if profile is not None else None,
+                profile.name if profile is not None else None,
+            )
             if profile:
                 return profile
 

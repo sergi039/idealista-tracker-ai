@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🛟 Fixed: the two saved-search identity races are observable and locked (2026-08-09, #116)
+- **What**: an alert email that carries no saved-search URL now says so.
+  `SearchProfileService.resolve_profile()` logs a warning naming the label it
+  matched on and the keyless profile the email landed in, every time. And
+  `merge_duplicate_profiles()` takes its group `FOR UPDATE` — through the same
+  `lock_profiles_statement()` the repair service uses, now defined once in
+  `services/search_profile_service.py` — and re-reads the rows under that lock
+  *before* it decides whether the group is safe to merge, holding them to the
+  end of the transaction.
+- **Why**: both races are from #110. The first splits one subscription across
+  two profiles when a URL-carrying and a URL-less alert for the same new label
+  arrive together; it cannot be constrained away, because `UNIQUE (name) WHERE
+  source_search_key IS NULL` deliberately ignores keyed rows so that two
+  genuinely different subscriptions may share a label. Nothing marked the
+  URL-less path, so the precondition was invisible until the damage showed up
+  in the listing counts. The second decided from an unlocked snapshot: a
+  `_claim_keyless_profile()` landing in between turned a safe-looking group
+  into one holding two keys, and the merge deleted a row that had just
+  acquired an identity — unrecoverably, since nothing records which saved
+  search a stored listing came from.
+- **Notes**: neither unique index was touched, and no constraint was widened.
+  The lock is Postgres semantics; SQLite ignores `FOR UPDATE`, so the suite
+  pins that the statement asks for it and that the decision is taken from a
+  re-read, not that a second connection blocks.
+
 ### 🌊 Added: sea view is computed again, as four states instead of a flag (2026-08-09)
 - **What**: `services/sea_view_service.py` estimates a sea view from two
   independent signals and stores the verdict at

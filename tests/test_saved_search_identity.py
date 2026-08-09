@@ -438,6 +438,68 @@ def test_an_email_without_a_search_url_keeps_the_old_resolution(app):
         assert by_name.is_auto_created is True
 
 
+def test_an_email_without_a_search_url_says_so_instead_of_matching_silently(
+    app, caplog
+):
+    """The label path is the precondition for the #116 split; make it visible.
+
+    A URL-less alert creates or finds a *keyless* profile. `UNIQUE
+    (source_search_key)` cannot see that row and `UNIQUE (name) WHERE
+    source_search_key IS NULL` cannot see a keyed one - deliberately, because
+    two real subscriptions may share a label - so an alert for the same label
+    that does carry its URL inserts a second profile and the subscription's
+    listings split across both. Neither index may be widened without forbidding
+    the supported case, so the one thing available is that the precondition
+    stops being silent: the label and the profile it landed on are named.
+    """
+    with app.app_context():
+        with caplog.at_level(logging.WARNING):
+            resolved = SearchProfileService.resolve_profile(
+                "New detached house in your search: Search Junio!",
+                "See all listings for 'Search Junio'",
+            )
+
+        assert resolved is not None
+        assert resolved.source_search_key is None
+
+        warnings = [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno >= logging.WARNING
+        ]
+        matched_by_label = [
+            message
+            for message in warnings
+            if "no saved-search URL" in message and "#116" in message
+        ]
+        assert matched_by_label, (
+            "an email resolved by its label alone left no trace in the log"
+        )
+        assert any("Junio" in message for message in matched_by_label), (
+            "the warning does not name the label it matched on"
+        )
+        assert any(str(resolved.id) in message for message in matched_by_label), (
+            "the warning does not name the profile the email landed in"
+        )
+
+
+def test_an_email_that_carries_its_search_url_stays_quiet(app, caplog):
+    """The warning must mean something: an identified email must not raise it."""
+    with app.app_context():
+        with caplog.at_level(logging.WARNING):
+            resolved = SearchProfileService.resolve_profile(
+                SUBJECT_FULL, f'<a href="{TERRENOS_URL}">x</a>'
+            )
+
+        assert resolved is not None
+        assert resolved.source_search_key == TERRENOS_KEY
+        assert not [
+            record
+            for record in caplog.records
+            if "no saved-search URL" in record.getMessage()
+        ]
+
+
 def test_an_unlabelled_email_with_a_url_never_lands_in_default(app):
     with app.app_context():
         resolved = SearchProfileService.resolve_profile(
@@ -1088,6 +1150,100 @@ def test_merging_onto_a_keyless_primary_keeps_the_only_search_key(app):
             "the merge deleted the subscription's identity"
         )
         assert survivor.source_search_url == TERRENOS_URL
+
+
+def test_the_merge_asks_the_database_to_hold_the_group_it_decides_on():
+    """Pin that the lock is actually requested.
+
+    SQLite ignores `FOR UPDATE`, so this suite cannot demonstrate the locking
+    itself - only that the statement asks for it. The semantics come from
+    Postgres, the same honest limitation as the repair service's lock.
+    """
+    from sqlalchemy.dialects import postgresql
+
+    from services.search_profile_service import lock_profiles_statement
+
+    sql = str(lock_profiles_statement([9, 7, 8]).compile(dialect=postgresql.dialect()))
+
+    assert "FOR UPDATE" in sql
+    assert "search_profiles" in sql
+
+
+def test_merge_decides_on_the_rows_it_locked_not_on_the_snapshot(app, monkeypatch):
+    """A key acquired after the grouping read must not be merged away (#116).
+
+    `merge_duplicate_profiles()` grouped the profiles with a plain SELECT and
+    computed its refusal from that snapshot. A `_claim_keyless_profile()`
+    landing in between turns a group that looked safe - one key, so mergeable -
+    into one holding two, and the merge then deletes a row that has just
+    acquired an identity. Nothing records which saved search a stored listing
+    came from, so that is unrecoverable.
+
+    The interleaving is forced deterministically at the moment the group is
+    locked: the competing write is *not* committed, so it cannot expire the
+    snapshot's objects on its way past - the merge can only see it by reading
+    the rows again under the lock, which is the fix. SQLite cannot show the
+    lock blocking a second connection; that half is Postgres semantics.
+    """
+    with app.app_context():
+        keyless = SearchProfile(
+            name="Terrenos norte",
+            is_active=True,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        keyed = SearchProfile(
+            name="Terrenos Norte",
+            is_active=True,
+            is_auto_created=True,
+            source_search_key=TERRENOS_KEY,
+            source_search_url=TERRENOS_URL,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add_all([keyless, keyed])
+        db.session.commit()
+        keyless_id, keyed_id = keyless.id, keyed.id
+
+        other_key = search_key_for_url(VIVIENDAS_URL)
+        original = search_profile_service.lock_profiles_statement
+        raced = False
+
+        def claim_the_keyless_row_first(profile_ids):
+            nonlocal raced
+            if not raced:
+                raced = True
+                # "The other ingestion" binds a second subscription to the row
+                # the merge is about to treat as a spare duplicate.
+                db.session.execute(
+                    text(
+                        "UPDATE search_profiles SET source_search_key = :key "
+                        "WHERE id = :id"
+                    ),
+                    {"key": other_key, "id": keyless_id},
+                )
+            return original(profile_ids)
+
+        monkeypatch.setattr(
+            search_profile_service,
+            "lock_profiles_statement",
+            claim_the_keyless_row_first,
+        )
+
+        report = SearchProfileService.merge_duplicate_profiles()
+
+        assert raced, "the seam never fired; the merge does not lock its group"
+        assert report["merged_groups"] == 0
+        assert report["profiles_deleted"] == 0
+        assert report["conflicts"], (
+            "a group holding two search keys must be reported, not merged"
+        )
+
+        db.session.expire_all()
+        assert db.session.get(SearchProfile, keyed_id) is not None, (
+            "the merge deleted a profile that still carried its own identity"
+        )
+        assert (
+            db.session.get(SearchProfile, keyless_id).source_search_key == other_key
+        ), "the identity claimed mid-merge was overwritten"
 
 
 # --------------------------------------------------------------------------
