@@ -6,12 +6,21 @@ from sqlalchemy import func
 
 from app import db
 from models import Property, SearchProfile
+from services.search_subscription_identity import (
+    SearchSubscriptionIdentity,
+    extract_search_identity,
+)
 from services.settings_service import SettingsService
 
 logger = logging.getLogger(__name__)
 
 
 DEFAULT_PROFILE_NAME = "Default"
+
+# How many times identity resolution re-reads after losing a row to a
+# concurrent ingestion. Bounded: an unbounded retry would spin against a
+# livelock instead of reporting one.
+IDENTITY_RESOLUTION_ATTEMPTS = 3
 
 # Sentinel accepted in the `profile_id` query param to mean "no profile
 # filter, show every profile at once". An empty string means the same thing
@@ -207,13 +216,31 @@ def normalize_travel_targets_config(value: Any) -> Dict[str, Any]:
 
 class SearchProfileService:
     @staticmethod
+    def find_unidentified_by_name(name: str) -> Optional[SearchProfile]:
+        """A profile carrying this label that is not somebody's saved search.
+
+        Labels stopped being unique in #102, so any lookup by name may now hit
+        a real subscription: a saved search can be called "Default" without
+        being the catch-all, or "Legacy Lands" without being the archive.
+        Restricting to rows with no search key - of which the partial unique
+        index keeps at most one - is what makes a name lookup safe again.
+
+        This is the shared primitive for that. Every by-name lookup outside the
+        deliberate conflict *detectors* should go through it.
+        """
+        return SearchProfile.query.filter(
+            SearchProfile.name == name,
+            SearchProfile.source_search_key.is_(None),
+        ).first()
+
+    @staticmethod
     def get_default_profile(create: bool = True) -> Optional[SearchProfile]:
         """Return the default profile, creating one if missing (best-effort)."""
         profile = SearchProfile.query.filter_by(is_default=True).first()
         if profile:
             return profile
 
-        profile = SearchProfile.query.filter_by(name=DEFAULT_PROFILE_NAME).first()
+        profile = SearchProfileService.find_unidentified_by_name(DEFAULT_PROFILE_NAME)
         if profile:
             if not profile.is_default:
                 profile.is_default = True
@@ -238,9 +265,16 @@ class SearchProfileService:
             db.session.commit()
             return profile
         except Exception as e:
+            # Losing the insert race is normal now that the partial unique
+            # index enforces one keyless profile per label: read the winner
+            # instead of reporting "no default profile".
             logger.warning("Failed to auto-create default SearchProfile: %s", e)
             db.session.rollback()
-            return None
+            return SearchProfile.query.filter_by(
+                is_default=True
+            ).first() or SearchProfileService.find_unidentified_by_name(
+                DEFAULT_PROFILE_NAME
+            )
 
     @staticmethod
     def list_profiles(active_only: bool = True) -> List[SearchProfile]:
@@ -253,20 +287,43 @@ class SearchProfileService:
 
     @staticmethod
     def get_or_create_profile_by_name(name: str) -> Optional[SearchProfile]:
+        """Resolve an email by its label alone - only ever a last resort.
+
+        Since #102 a label can be shared by several *identified* saved
+        searches, so it no longer picks out one subscription on its own. An
+        unidentified profile with that label wins (the partial unique index
+        keeps at most one), a single canonical match is still honoured, and a
+        label claimed by several different subscriptions resolves to nothing
+        rather than to whichever row came back first.
+        """
         cleaned = _clean_profile_name(name)
         if not cleaned:
             return None
 
-        profile = SearchProfile.query.filter_by(name=cleaned).first()
+        profile = SearchProfileService.find_unidentified_by_name(cleaned)
         if profile:
             return profile
 
         canonical = _canonical_profile_name(cleaned)
         if canonical:
-            existing = SearchProfile.query.all()
-            for candidate in existing:
-                if _canonical_profile_name(candidate.name) == canonical:
-                    return candidate
+            matches = [
+                candidate
+                for candidate in SearchProfile.query.order_by(
+                    SearchProfile.id.asc()
+                ).all()
+                if _canonical_profile_name(candidate.name) == canonical
+            ]
+            if len(matches) == 1:
+                return matches[0]
+            if matches:
+                logger.warning(
+                    "Label %r is claimed by %d saved searches %s; an email that "
+                    "carries no search URL cannot say which one it belongs to",
+                    cleaned,
+                    len(matches),
+                    [candidate.id for candidate in matches],
+                )
+                return None
 
         try:
             profile = SearchProfile(
@@ -274,19 +331,33 @@ class SearchProfileService:
                 description="Autocreated from Idealista saved search name",
                 is_active=True,
                 is_default=False,
+                # The label came out of an email, so a later email carrying
+                # this subscription's URL may correct it (#102).
+                is_auto_created=True,
                 travel_targets=default_travel_targets_config(),
             )
             db.session.add(profile)
             db.session.commit()
             return profile
         except Exception as e:
+            # Losing the insert race to a concurrent ingestion is normal. Read
+            # back the *unidentified* winner: a plain lookup by name could
+            # return a keyed profile that appeared alongside it, handing this
+            # email to somebody else's subscription.
             logger.warning("Failed to create SearchProfile %r: %s", cleaned, e)
             db.session.rollback()
-            return SearchProfile.query.filter_by(name=cleaned).first()
+            return SearchProfileService.find_unidentified_by_name(cleaned)
 
     @staticmethod
     def merge_duplicate_profiles(commit: bool = True) -> Dict[str, Any]:
-        """Merge profiles that normalize to the same canonical name."""
+        """Merge profiles that normalize to the same canonical name.
+
+        A shared label is no longer evidence of a duplicate: since #102 two
+        saved searches may legitimately carry the same name with a different
+        `shape`. A group holding more than one distinct search key is
+        therefore reported as a conflict and left completely alone - merging
+        it would delete a real subscription.
+        """
 
         profiles = SearchProfile.query.order_by(SearchProfile.id.asc()).all()
         groups: Dict[str, List[SearchProfile]] = {}
@@ -301,8 +372,43 @@ class SearchProfileService:
         deleted = 0
         renamed = 0
         details: List[Dict[str, Any]] = []
+        conflicts: List[Dict[str, Any]] = []
 
         for canonical, group in groups.items():
+            search_keys = {p.source_search_key for p in group if p.source_search_key}
+
+            # Two reasons to refuse a group outright. Both would destroy an
+            # invariant that cannot be reconstructed afterwards, so they are
+            # reported for a human instead of resolved by guessing.
+            refusal = None
+            if len(search_keys) > 1:
+                refusal = "different saved-search keys"
+            elif search_keys and any(p.is_default for p in group):
+                # The default is the fallback for everything that matches
+                # nothing. Merging here would either pin its key onto the
+                # catch-all (it sorts first, so it becomes the primary) or make
+                # one subscription the recipient of all unmatched mail.
+                refusal = "the default profile and an identified saved search"
+
+            if refusal:
+                logger.warning(
+                    "Refusing to merge %d profiles labelled %r: the group holds "
+                    "%s (%s)",
+                    len(group),
+                    canonical,
+                    refusal,
+                    sorted(search_keys),
+                )
+                conflicts.append(
+                    {
+                        "canonical": canonical,
+                        "profile_ids": [p.id for p in group],
+                        "search_keys": sorted(search_keys),
+                        "reason": refusal,
+                    }
+                )
+                continue
+
             if len(group) <= 1:
                 primary = group[0]
                 cleaned_name = _clean_profile_name(primary.name)
@@ -323,6 +429,18 @@ class SearchProfileService:
             cleaned_name = _clean_profile_name(primary.name)
             if cleaned_name and cleaned_name != primary.name:
                 primary.name = cleaned_name
+
+            # The group holds at most one search key (the guard above), and
+            # the primary is picked by property count, so the keyless row
+            # usually wins. Deleting the keyed one would delete the
+            # subscription's identity with it, and nothing records which saved
+            # search a stored row came from, so it could not be recovered.
+            carried_key = next(
+                (p.source_search_key for p in group_sorted if p.source_search_key), None
+            )
+            carried_url = next(
+                (p.source_search_url for p in group_sorted if p.source_search_key), None
+            )
 
             for dup in group_sorted[1:]:
                 if dup.is_default and not primary.is_default:
@@ -372,6 +490,19 @@ class SearchProfileService:
                 db.session.delete(dup)
                 deleted += 1
 
+            if carried_key and not primary.source_search_key:
+                # Flush the deletes first: the unique index would reject the
+                # instant both rows hold the same key.
+                db.session.flush()
+                primary.source_search_key = carried_key
+                primary.source_search_url = carried_url
+                logger.info(
+                    "Merged group %r kept saved-search key %s on profile %s",
+                    canonical,
+                    carried_key,
+                    primary.id,
+                )
+
             merged += 1
             details.append(
                 {
@@ -391,22 +522,322 @@ class SearchProfileService:
             "properties_reassigned": reassigned,
             "profiles_renamed": renamed,
             "details": details,
+            "conflicts": conflicts,
         }
 
     @staticmethod
-    def resolve_profile(subject: str, body: str) -> Optional[SearchProfile]:
-        """Pick a profile for an incoming email using profile.email_matchers.
+    def _commit_profile_change(profile: SearchProfile, what: str) -> None:
+        try:
+            db.session.commit()
+        except Exception as e:
+            logger.warning("Failed to %s for profile %s: %s", what, profile.id, e)
+            db.session.rollback()
 
-        If no matchers match, falls back to the default profile.
+    @staticmethod
+    def _profiles_named(name: str, exclude_id: Optional[int] = None) -> List[int]:
+        """Ids of the profiles whose label normalizes to ``name``."""
+        canonical = _canonical_profile_name(name)
+        if not canonical:
+            return []
+        return [
+            profile.id
+            for profile in SearchProfile.query.order_by(SearchProfile.id.asc()).all()
+            if profile.id != exclude_id
+            and _canonical_profile_name(profile.name) == canonical
+        ]
+
+    @staticmethod
+    def _relabel_if_auto_created(
+        profile: SearchProfile, search_name: Optional[str]
+    ) -> bool:
+        """Follow a reworded saved-search name, but only on our own labels.
+
+        A label the owner chose is never rewritten (`is_auto_created`, a real
+        column rather than a guess at the description text), and neither is a
+        label that another profile already carries - that is an identity
+        conflict, reported and left alone rather than resolved by guessing.
         """
-        # 1) Try to derive profile from the saved search name embedded in the email.
+        if not search_name or profile.name == search_name:
+            return False
+
+        conflicting = SearchProfileService._profiles_named(
+            search_name, exclude_id=profile.id
+        )
+        if conflicting:
+            logger.warning(
+                "Saved-search identity conflict: search key %s belongs to profile "
+                "%s (%r) but the email label %r belongs to profile(s) %s; leaving "
+                "both alone",
+                profile.source_search_key,
+                profile.id,
+                profile.name,
+                search_name,
+                conflicting,
+            )
+            return False
+
+        if not profile.is_auto_created:
+            logger.info(
+                "Profile %s was named by the owner (%r); not relabelling it to %r",
+                profile.id,
+                profile.name,
+                search_name,
+            )
+            return False
+
+        logger.info(
+            "Saved search %s was relabelled: %r -> %r",
+            profile.source_search_key,
+            profile.name,
+            search_name,
+        )
+        profile.name = search_name
+        return True
+
+    @staticmethod
+    def _adopt_keyless_profile(
+        identity: SearchSubscriptionIdentity, search_name: Optional[str]
+    ) -> Tuple[Optional[SearchProfile], bool]:
+        """Bind the search key to the existing profile of the same name.
+
+        Returns `(profile, contested)`. `contested` means a candidate existed
+        but was claimed by someone else first, so the caller should look again
+        rather than immediately create a twin.
+
+        This is the upgrade path: profiles created before #102 have no key, so
+        the first email that carries a URL attaches the identity to the row
+        that already holds the listings instead of starting an empty twin.
+
+        The default profile is excluded on purpose. It is the catch-all for
+        everything that matches nothing, so pinning one subscription's key to
+        it would route that subscription's future emails through the same row
+        that keeps collecting unrelated mail.
+        """
+        if not search_name:
+            return None, False
+
+        canonical = _canonical_profile_name(search_name)
+        if not canonical:
+            return None, False
+
+        candidates = [
+            profile
+            for profile in SearchProfile.query.filter(
+                SearchProfile.source_search_key.is_(None)
+            )
+            .order_by(SearchProfile.id.asc())
+            .all()
+            if not profile.is_default
+            and _canonical_profile_name(profile.name) == canonical
+        ]
+        if not candidates:
+            return None, False
+
+        if len(candidates) > 1:
+            logger.warning(
+                "Label %r matches %d keyless profiles %s; binding search key %s to "
+                "the oldest one that is still free and leaving the rest untouched",
+                search_name,
+                len(candidates),
+                [candidate.id for candidate in candidates],
+                identity.key,
+            )
+
+        for candidate in candidates:
+            if SearchProfileService._claim_keyless_profile(candidate, identity):
+                return (
+                    SearchProfile.query.filter_by(
+                        source_search_key=identity.key
+                    ).first(),
+                    False,
+                )
+
+        # Every candidate was taken between the SELECT and the UPDATE.
+        return None, True
+
+    @staticmethod
+    def _claim_keyless_profile(
+        profile: SearchProfile, identity: SearchSubscriptionIdentity
+    ) -> bool:
+        """Bind the key to a profile, but only while the row still has none.
+
+        The candidate list above is a snapshot. Two ingestions overlap
+        routinely - the scheduled run and a manual one, across four gunicorn
+        threads - and two subscriptions may share a label, so both can select
+        the same keyless row. An unconditional UPDATE lets the second one
+        silently re-point that profile and hand its stored listings to the
+        wrong saved search, so the claim is conditional on the row still being
+        unclaimed and the caller retries when it loses.
+        """
+        claimed = SearchProfile.query.filter(
+            SearchProfile.id == profile.id,
+            SearchProfile.source_search_key.is_(None),
+        ).update(
+            {
+                SearchProfile.source_search_key: identity.key,
+                SearchProfile.source_search_url: identity.url,
+            },
+            synchronize_session=False,
+        )
+
+        if not claimed:
+            # Rolling back also expires the stale snapshot, so the retry reads
+            # the row as it now is.
+            db.session.rollback()
+            logger.warning(
+                "Profile %s was claimed by another saved search before %s could "
+                "bind to it; not re-pointing it",
+                profile.id,
+                identity.key,
+            )
+            return False
+
+        try:
+            db.session.commit()
+            return True
+        except Exception as e:
+            logger.warning(
+                "Failed to bind search key %s to profile %s: %s",
+                identity.key,
+                profile.id,
+                e,
+            )
+            db.session.rollback()
+            return False
+
+    @staticmethod
+    def _create_profile_for_identity(
+        identity: SearchSubscriptionIdentity, search_name: Optional[str]
+    ) -> Optional[SearchProfile]:
+        name = search_name or f"Idealista {identity.label_hint} ({identity.key[-8:]})"
+        try:
+            profile = SearchProfile(
+                name=name[:120],
+                description="Autocreated from an Idealista saved-search URL",
+                is_active=True,
+                is_default=False,
+                is_auto_created=True,
+                source_search_key=identity.key,
+                source_search_url=identity.url,
+                travel_targets=default_travel_targets_config(),
+            )
+            db.session.add(profile)
+            db.session.commit()
+            return profile
+        except Exception as e:
+            # A concurrent ingestion may have inserted the same key first; the
+            # unique index is what makes that safe to retry as a read.
+            logger.warning("Failed to create SearchProfile for %s: %s", identity.key, e)
+            db.session.rollback()
+            return SearchProfile.query.filter_by(source_search_key=identity.key).first()
+
+    @staticmethod
+    def resolve_profile_by_identity(
+        identity: SearchSubscriptionIdentity, search_name: Optional[str]
+    ) -> Optional[SearchProfile]:
+        """Resolve a saved search by its URL fingerprint.
+
+        Order: the search key, then an existing same-named profile that has no
+        key yet, then a new profile. Nothing here ever falls through to the
+        default profile - an email that names its own saved search must not
+        land in the catch-all.
+
+        The whole sequence retries when a concurrent ingestion claims the row
+        first: by then that row may even hold *this* key, so the retry starts
+        again from the key lookup rather than creating a twin.
+        """
+        for _ in range(IDENTITY_RESOLUTION_ATTEMPTS):
+            profile = SearchProfile.query.filter_by(
+                source_search_key=identity.key
+            ).first()
+            if profile is not None:
+                changed = SearchProfileService._relabel_if_auto_created(
+                    profile, search_name
+                )
+                if profile.source_search_url != identity.url:
+                    # Diagnostics: keep the most recent link, so the row shows
+                    # what the mailbox is actually sending for this search.
+                    profile.source_search_url = identity.url
+                    changed = True
+                if changed:
+                    SearchProfileService._commit_profile_change(
+                        profile, "update the label"
+                    )
+                return profile
+
+            adopted, contested = SearchProfileService._adopt_keyless_profile(
+                identity, search_name
+            )
+            if adopted is not None:
+                return adopted
+            if contested:
+                continue
+
+            return SearchProfileService._create_profile_for_identity(
+                identity, search_name
+            )
+
+        logger.error(
+            "Gave up resolving saved search %s after %d contested attempts; the "
+            "email is left unassigned rather than bound to a guess",
+            identity.key,
+            IDENTITY_RESOLUTION_ATTEMPTS,
+        )
+        return None
+
+    @staticmethod
+    def resolve_profile(subject: str, body: str) -> Optional[SearchProfile]:
+        """Pick a profile for an incoming email.
+
+        The saved-search URL in the body is the identity (#102); the name in
+        the subject is only a label. Emails that carry no recognizable search
+        URL keep the older resolution: saved-search name, then the profile's
+        own `email_matchers`, then the default profile.
+
+        Returns None for an email that links to several *different* searches.
+        That is not the same as an email with no link: falling back to the
+        label there would bind the listing to whichever same-named
+        subscription happens to exist, which is the guess this whole change
+        exists to prevent. The listing is stored unassigned instead, and the
+        conflict is in the log.
+        """
         search_name = extract_search_name(subject, body)
+
+        # 1) The saved search's own URL, which encodes its filters.
+        found = extract_search_identity(body)
+        if found.is_ambiguous:
+            logger.warning(
+                "Refusing to resolve a profile for an email that links to %d "
+                "different saved searches (%s)",
+                len(found.conflicting),
+                ", ".join(found.conflicting),
+            )
+            return None
+        if found.identity is not None:
+            profile = SearchProfileService.resolve_profile_by_identity(
+                found.identity, search_name
+            )
+            if profile is None:
+                # The email said which saved search it belongs to and we could
+                # not act on it (contested retries exhausted, or the insert
+                # failed). Falling through to the label would be worse than
+                # leaving it unassigned: labels are no longer unique among
+                # identified profiles, so the name could resolve to a profile
+                # carrying somebody else's search key.
+                logger.error(
+                    "Saved search %s was identified but could not be resolved; "
+                    "leaving the email unassigned rather than matching it by label",
+                    found.identity.key,
+                )
+            return profile
+
+        # 2) The saved search name embedded in the email.
         if search_name:
             profile = SearchProfileService.get_or_create_profile_by_name(search_name)
             if profile:
                 return profile
 
-        # 2) Fallback: custom regex matchers.
+        # 3) Fallback: custom regex matchers.
         text = f"{subject}\n{body}"
 
         candidates = SearchProfileService.list_profiles(active_only=True)

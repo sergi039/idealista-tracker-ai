@@ -54,12 +54,23 @@
                     <label class="form-check-label" for="profile_active">Active</label>
                 </div>
                 <div class="form-check">
+                    {# The default profile is the fallback for emails that match
+                       nothing, so a profile tied to one Idealista saved search
+                       can never be it. The database rejects the combination
+                       outright; don't offer the checkbox in the first place. #}
                     <input class="form-check-input"
                            type="checkbox"
                            id="profile_default"
                            name="is_default"
+                           {% if profile.source_search_key %}disabled{% endif %}
                            {% if profile.is_default %}checked{% endif %}>
                     <label class="form-check-label" for="profile_default">Make default</label>
+                    {% if profile.source_search_key %}
+                    <div class="form-text">
+                        Tied to a specific Idealista saved search, so it cannot be
+                        the fallback profile.
+                    </div>
+                    {% endif %}
                 </div>
             </div>
 
