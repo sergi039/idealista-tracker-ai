@@ -15,12 +15,22 @@ logger = logging.getLogger(__name__)
 api_bp = Blueprint("api", __name__)
 
 
-def _should_run_sync() -> bool:
+def _should_run_sync(allow_request_override: bool = True) -> bool:
+    """Should this request do the work inline instead of queueing it?
+
+    `allow_request_override=False` drops the `?sync=1` escape hatch for
+    endpoints where holding a worker for the full outbound timeout is a way to
+    exhaust the pool -- the API is unauthenticated, so a handful of concurrent
+    calls is all it takes, and a per-IP rate limit does not stop concurrency
+    (issue #136).
+    """
     try:
         if current_app and current_app.config.get("TESTING"):
             return True
     except Exception:
         pass
+    if not allow_request_override:
+        return False
     return request.args.get("sync") in ("1", "true", "yes", "on")
 
 
@@ -1781,6 +1791,88 @@ def check_land_status(land_id):
         raise
     except Exception:
         logger.error("Failed to check status for land %s", land_id, exc_info=True)
+        return jsonify(
+            {
+                "success": False,
+                "error": "An internal error occurred. Check server logs for details.",
+            }
+        ), 500
+
+
+@api_bp.route("/property/<int:property_id>/check-status", methods=["POST"])
+@limiter.limit("5 per minute")
+def check_property_status(property_id):
+    """Check whether a universal Property listing is still live on Idealista.
+
+    Rate-limited on purpose: this endpoint is unauthenticated and CSRF-exempt
+    like the rest of the JSON API, and every call spends one outbound request
+    on idealista. Without a cap, a page left in a loop would drive the scraper
+    straight past the throttle the lands sweep is careful to respect.
+
+    It also refuses `?sync=1`. The fetch can hold a worker for its full 15s
+    timeout, and the per-IP limit bounds the rate but not the concurrency: five
+    simultaneous calls would tie up five workers while idealista stalls.
+    """
+    try:
+        from models import Property
+        from services.listing_status_service import ListingStatusService
+
+        prop = db.get_or_404(Property, property_id)
+
+        if not prop.url:
+            return jsonify(
+                {"success": False, "error": "No URL available for this listing"}
+            ), 400
+
+        def _run():
+            prop_local = db.session.get(Property, property_id)
+            if not prop_local or not prop_local.url:
+                return {"success": False, "error": "No URL available for this listing"}
+
+            service = ListingStatusService()
+            result = service.check_property_status(prop_local)
+
+            return {
+                "success": True,
+                "property_id": property_id,
+                "status": prop_local.listing_status,
+                # The observed answer, which is not the stored status when the
+                # fetch was blocked or failed: that case reports "error" here
+                # while `status` keeps whatever we already knew.
+                "observed": result.get("new_status"),
+                "previous_status": result.get("previous_status"),
+                "changed": result.get("changed", False),
+                "last_checked": prop_local.listing_last_checked.isoformat()
+                if prop_local.listing_last_checked
+                else None,
+                "removed_date": prop_local.listing_removed_date.isoformat()
+                if prop_local.listing_removed_date
+                else None,
+            }
+
+        if _should_run_sync(allow_request_override=False):
+            return jsonify(_run())
+
+        job_id = _enqueue(
+            _run, job_type="property_check_status", meta={"property_id": prop.id}
+        )
+        return jsonify(
+            {
+                "success": True,
+                "status": "queued",
+                "job_id": job_id,
+                "message": "Listing status check queued",
+            }
+        ), 202
+
+    except HTTPException:
+        # get_or_404 on an unknown id is an answer, not a server fault; the
+        # blanket handler below would turn it into a 500.
+        raise
+    except Exception:
+        logger.error(
+            "Failed to check status for property %s", property_id, exc_info=True
+        )
         return jsonify(
             {
                 "success": False,
