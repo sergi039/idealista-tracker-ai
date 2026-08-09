@@ -9,6 +9,12 @@ Two changes, both asked for after looking at the real page:
   with Google APIs", "Recalculate travel", "Recalculate scoring" -- sitting
   mid-page, and the last two are steps `enrich_property()` performs anyway,
   so pressing them separately paid Google twice for the same answer.
+
+And one more of the same kind (2026-08-09): that button also runs both AI
+providers. "Run Claude" and "Run ChatGPT" were two further buttons, in two
+tabs, that the owner had to find and press after the enrichment they depend
+on -- Claude and ChatGPT read the scores and travel times the enrichment pass
+writes, so running them by hand meant analysing whatever was there before.
 """
 
 import pytest
@@ -107,3 +113,43 @@ class TestEnrichIsOneButton:
     def test_their_endpoints_are_gone_too(self, client, listing, path):
         resp = client.post(f"/properties/{listing}/{path}", data={})
         assert resp.status_code == 404
+
+
+class TestTheOneButtonRunsBothAiProviders:
+    def test_the_per_provider_run_buttons_are_gone(self, client, listing):
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        assert 'id="ai-claude-run-btn"' not in body
+        assert 'id="ai-chatgpt-run-btn"' not in body
+        assert "Run Claude" not in body
+        assert "Run ChatGPT" not in body
+
+    def test_the_enrich_button_drives_the_whole_pass(self, client, listing):
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        button = body[body.index('id="enrich-property-btn"') :][:600]
+        assert f"runEnrichAndAnalyze({listing})" in button
+
+    def test_the_pass_calls_google_then_both_providers(self, client, listing):
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        pass_body = body[body.index("async function runEnrichAndAnalyze") :]
+        pass_body = pass_body[: pass_body.index("async function runClaudeAnalysis")]
+        assert "runGoogleEnrichment(propertyId)" in pass_body
+        assert "runClaudeAnalysis(propertyId)" in pass_body
+        assert "generateChatGPTAnalysis(propertyId)" in pass_body
+        # Google first: the AI prompts read the scores and travel times it writes.
+        assert pass_body.index("runGoogleEnrichment(propertyId)") < pass_body.index(
+            "runClaudeAnalysis(propertyId)"
+        )
+
+    def test_chatgpt_is_skipped_rather_than_billed_when_unconfigured(
+        self, client, listing
+    ):
+        """AI_BRIDGE_TOKEN is unset in the test environment, so the page tells
+        the pass to run Claude only instead of firing a call that can only
+        fail."""
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        assert "window.__OPENAI_CONFIGURED__ = false;" in body
+        assert "if (window.__OPENAI_CONFIGURED__) {" in body
+
+    def test_the_empty_tabs_point_at_that_button(self, client, listing):
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        assert body.count("Press “Enrich” at the top of the page to generate it.") == 2
