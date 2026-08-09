@@ -28,8 +28,46 @@ IDENTITY_RESOLUTION_ATTEMPTS = 3
 # (the "All profiles" <option value=""> in the filter form submits this).
 PROFILE_ALL_SENTINEL = "all"
 
+# Google's `airport` place type is not "airport" as anyone shopping for a house
+# means it. Measured across the owner's 188 geocoded listings, the nearest hit
+# was a helipad for 107 of them -- hospital helipads included -- and some other
+# business that merely carries the tag for 59 more; only 22 named an actual
+# airport. "Nearest airport: 10 min" for a plot 40 km from Asturias Airport is
+# worse than no number, and it is a scoring input, so the obvious wrong answers
+# are refused here rather than measured and displayed.
+_AIRPORT_REJECT_NAMES = [
+    "helipuerto",
+    "heliport",
+    "helipad",
+    "helisuperficie",
+    "helideck",
+    "aeroclub",
+    "aero club",
+    "aeródromo",
+    "aerodromo",
+    "campo de vuelo",
+]
+# A place that is primarily a contractor, a hotel or a restaurant is not an
+# airport whatever Google tagged it with.
+_AIRPORT_REJECT_TYPES = [
+    "general_contractor",
+    "lodging",
+    "restaurant",
+    "food",
+    "store",
+    "car_repair",
+    "moving_company",
+    "real_estate_agency",
+    "hospital",
+]
+
 TRAVEL_PRESET_DEFS: Dict[str, Dict[str, Any]] = {
-    "airport": {"label": "Nearest airport", "place_types": ["airport"]},
+    "airport": {
+        "label": "Nearest airport",
+        "place_types": ["airport"],
+        "reject_name_patterns": _AIRPORT_REJECT_NAMES,
+        "reject_types": _AIRPORT_REJECT_TYPES,
+    },
     "train_station": {
         "label": "Nearest train station",
         "place_types": ["train_station"],
