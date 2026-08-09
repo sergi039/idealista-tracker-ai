@@ -45,6 +45,16 @@ Bypass a single push with `SKIP_LOCAL_CI=1 git push`. `.github/workflows/
 ci.yml` stays the merge gate for autopilot; since issue #81 it runs the same
 ruff commands, so the two really are in sync.
 
+The hook's shared-`.git/config` canary (issue #74) compares config keys and
+skips the four a parallel session writes (`branch.<name>.remote`, `.merge`,
+`.rebase`, `.vscode-merge-base`): sessions share this clone, so a parallel
+`git push -u` or `git worktree add -b` is not this gate leaking (issue #155).
+Any other changed key is named and blocks the push. Only `core.bare`,
+`core.worktree`, `core.repositoryformatversion`, `extensions.*` and
+`include.*` are written back — only git's plumbing writes those, while
+`user.email` or `core.hooksPath` may belong to another session.
+`SKIP_LOCAL_CI=1` is not the answer to a config complaint any more.
+
 Ruff itself is a locked dev dependency (`uv.lock`), so `uv run ruff` is one
 pinned version for CI, the hook and you. Rule selection is explicit in
 `pyproject.toml` (`[tool.ruff.lint] select`) because ruff's *default* set is
