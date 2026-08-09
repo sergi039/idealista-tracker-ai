@@ -47,6 +47,52 @@ def _as_list(value: Any) -> List[Any]:
     return []
 
 
+# The partial unique index that makes two overlapping URL-less ingestions safe:
+# at most one *keyless* profile may carry a given label (models.py). Losing an
+# insert to it is the routine race, and the only database error this module
+# treats as expected.
+KEYLESS_NAME_INDEX = "ux_search_profiles_name_without_key"
+
+# What SQLite says when that index refuses a row. It has no structured
+# diagnostics and names the offending *column* rather than the index, so the
+# whole message is compared literally: `search_profiles` has a second unique
+# index (`source_search_key`) and a CHECK constraint, and a substring test for
+# "UNIQUE" - or for the table name - would file either of those under the
+# routine race. A pre-#102 database still carrying the dropped `UNIQUE (name)`
+# produces this same text, which is harmless: the collision and the recovery
+# are the same event there.
+_SQLITE_KEYLESS_NAME_COLLISION = "UNIQUE constraint failed: search_profiles.name"
+
+
+def _is_keyless_name_collision(error: BaseException) -> bool:
+    """Whether `error` is *that* index refusing a duplicate keyless label.
+
+    Narrow on purpose. This is the one failure that means "another ingestion
+    got there first", which is expected and fully recovered; a CHECK
+    violation, the `source_search_key` unique index, a dropped connection or
+    anything else is a real failure and must keep its own report. Answering
+    True for those would file a foreign integrity error under an event nobody
+    needs to look at.
+
+    The two dialects report the cause differently. psycopg carries structured
+    diagnostics, so the index is named exactly and its answer is taken as
+    final - including when it names some other constraint. SQLite has no such
+    field, so the message shape above is matched in full.
+    """
+    if not isinstance(error, IntegrityError):
+        return False
+
+    orig = getattr(error, "orig", None)
+    if orig is None:
+        return False
+
+    constraint = getattr(getattr(orig, "diag", None), "constraint_name", None)
+    if constraint is not None:
+        return constraint == KEYLESS_NAME_INDEX
+
+    return str(orig).strip() == _SQLITE_KEYLESS_NAME_COLLISION
+
+
 def lock_profiles_statement(profile_ids: Sequence[int]):
     """``SELECT id ... WHERE id IN (...) ORDER BY id FOR UPDATE``.
 
@@ -380,17 +426,18 @@ class SearchProfileService:
             # email to somebody else's subscription.
             db.session.rollback()
             winner = SearchProfileService.find_unidentified_by_name(cleaned)
-            if isinstance(e, IntegrityError) and winner is not None:
-                # The expected shape, and the only one that gets demoted:
-                # `ux_search_profiles_name_without_key` refused a second
-                # keyless row for this label, and the row it refused us is the
-                # one just read back. Nothing was lost and nothing needs
-                # attention, so it is not a warning - two overlapping
-                # ingestions are routine here, and a warning would make the
-                # ordinary URL-less race raise two of them where
-                # `resolve_profile()` promises exactly one (#116). The
+            if _is_keyless_name_collision(e) and winner is not None:
+                # The expected shape, and the only one that gets demoted: that
+                # one index refused a second keyless row for this label, and
+                # the row it refused us is the one just read back. Nothing was
+                # lost and nothing needs attention, so it is not a warning -
+                # two overlapping ingestions are routine here, and a warning
+                # would make the ordinary URL-less race raise two of them
+                # where `resolve_profile()` promises exactly one (#116). The
                 # diagnostics stay: what was being created, what won, and the
-                # constraint that said so.
+                # error that said so. Both halves are required: a *different*
+                # integrity error that happens to coincide with a keyless
+                # namesake is not this event.
                 logger.info(
                     "Lost the insert race for SearchProfile %r to a concurrent "
                     "ingestion; using profile %s, which won it (%s)",

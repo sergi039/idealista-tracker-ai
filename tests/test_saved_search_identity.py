@@ -691,6 +691,100 @@ def test_a_url_less_email_that_loses_the_insert_race_still_warns_once(
         assert str(won_by["id"]) in message
 
 
+def test_an_integrity_error_that_is_not_the_race_is_still_reported(
+    app, monkeypatch, caplog
+):
+    """ "Recovered a profile" is not evidence that the race is what happened.
+
+    The demotion above is allowed exactly one cause:
+    `ux_search_profiles_name_without_key` refusing a duplicate keyless label.
+    A keyless winner landing at the seam does not make some *other* integrity
+    failure routine - here the row being inserted also violates
+    `ck_search_profiles_default_has_no_search_key`, the constraint that keeps
+    the catch-all from being somebody's saved search. The recovery read still
+    finds the winner, so a classifier that only asks "IntegrityError, and did
+    we recover something?" answers yes and files a foreign constraint failure
+    under an event nobody reads.
+
+    Two warnings here are correct: one genuine failure, one per-state record.
+    The contract is one warning per *expected* path, not silence on broken
+    ones.
+    """
+    with app.app_context():
+        original = search_profile_service.default_travel_targets_config
+        won_by = {}
+
+        def commit_the_winner():
+            monkeypatch.setattr(
+                search_profile_service, "default_travel_targets_config", original
+            )
+            db.session.execute(
+                text(
+                    "INSERT INTO search_profiles (name, is_active, is_default, "
+                    "created_at, updated_at) VALUES (:name, 1, 0, :now, :now)"
+                ),
+                {
+                    "name": SEARCH_NAME,
+                    "now": datetime(2026, 8, 8, tzinfo=timezone.utc),
+                },
+            )
+            db.session.commit()
+            won_by["id"] = SearchProfile.query.filter_by(name=SEARCH_NAME).one().id
+            return original()
+
+        monkeypatch.setattr(
+            search_profile_service,
+            "default_travel_targets_config",
+            commit_the_winner,
+        )
+
+        tripped = {}
+
+        def trip_the_check_constraint(session, flush_context, instances):
+            # The combination `ck_search_profiles_default_has_no_search_key`
+            # forbids, landed on the row this call is about to INSERT - so the
+            # statement fails on that CHECK and not on the label index, which
+            # covers keyless rows only and no longer applies to this one.
+            for pending in session.new:
+                if isinstance(pending, SearchProfile) and pending.name == SEARCH_NAME:
+                    pending.is_default = True
+                    pending.source_search_key = TERRENOS_KEY
+                    tripped["yes"] = True
+
+        event.listen(db.session, "before_flush", trip_the_check_constraint)
+        try:
+            with caplog.at_level(logging.WARNING):
+                resolved = SearchProfileService.resolve_profile(
+                    SUBJECT_FULL, "no links"
+                )
+        finally:
+            event.remove(db.session, "before_flush", trip_the_check_constraint)
+
+        assert tripped, "the CHECK was never tripped; this test proves nothing"
+
+        # The return behaviour is unchanged: the winner is still recovered.
+        assert resolved is not None
+        assert resolved.id == won_by["id"]
+        assert SearchProfile.query.count() == 1
+
+        warnings = _service_warnings(caplog)
+        failures = [
+            message
+            for message in warnings
+            if "Failed to create SearchProfile" in message
+        ]
+        assert len(failures) == 1, (
+            "a CHECK violation was filed as the routine insert race and "
+            f"disappeared from the log; warnings were: {warnings}"
+        )
+        assert "ck_search_profiles_default_has_no_search_key" in failures[0], (
+            "the report does not name the constraint that actually failed"
+        )
+        assert not [
+            message for message in warnings if "Lost the insert race" in message
+        ]
+
+
 def test_an_email_that_carries_its_search_url_stays_quiet(app, caplog):
     """The warning must mean something: an identified email must not raise it."""
     with app.app_context():
