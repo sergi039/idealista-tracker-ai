@@ -89,6 +89,56 @@ def _estimate_duration_seconds(distance_m: float, mode: str) -> int:
 
 
 @dataclass(frozen=True)
+class _RejectRules:
+    """What a preset refuses to accept as its nearest place.
+
+    Google's place types are broad: `airport` covers helipads and any business
+    that claimed the tag, and the nearest such hit is routinely not the thing
+    the preset is named after. A preset states what it will not take, and the
+    search walks past those candidates instead of stopping at the first one.
+    """
+
+    name_patterns: Tuple[str, ...] = ()
+    types: Tuple[str, ...] = ()
+
+    @property
+    def signature(self) -> str:
+        payload = "|".join(self.name_patterns) + "#" + "|".join(self.types)
+        return hashlib.md5(payload.encode("utf-8")).hexdigest()[:8]
+
+    def rejects(self, candidate: Dict[str, Any]) -> bool:
+        name = str(candidate.get("name") or "").casefold()
+        if any(pattern in name for pattern in self.name_patterns):
+            return True
+        candidate_types = candidate.get("types")
+        if isinstance(candidate_types, list):
+            lowered = {str(t).casefold() for t in candidate_types}
+            if lowered & set(self.types):
+                return True
+        return False
+
+
+def _reject_rules(preset_def: Dict[str, Any]) -> Optional[_RejectRules]:
+    if not isinstance(preset_def, dict):
+        return None
+    names = preset_def.get("reject_name_patterns")
+    types = preset_def.get("reject_types")
+    name_patterns = (
+        tuple(str(p).casefold() for p in names if str(p).strip())
+        if isinstance(names, list)
+        else ()
+    )
+    type_names = (
+        tuple(str(t).casefold() for t in types if str(t).strip())
+        if isinstance(types, list)
+        else ()
+    )
+    if not name_patterns and not type_names:
+        return None
+    return _RejectRules(name_patterns=name_patterns, types=type_names)
+
+
+@dataclass(frozen=True)
 class PlaceLookup:
     """Outcome of a nearest-place search.
 
@@ -474,10 +524,14 @@ class PropertyTravelService:
         if not isinstance(place_types, list) or not place_types:
             return PlaceLookup(reason=NOT_FOUND_NO_PLACE_TYPES)
 
+        reject = _reject_rules(preset_def)
+
         best: Optional[Tuple[float, Dict[str, Any]]] = None
         failure: Optional[GoogleApiFailure] = None
         for place_type in place_types:
-            lookup = self._nearest_place(lat, lon, place_type=str(place_type))
+            lookup = self._nearest_place(
+                lat, lon, place_type=str(place_type), reject=reject
+            )
             if lookup.failure is not None and failure is None:
                 failure = lookup.failure
             place = lookup.place
@@ -497,12 +551,22 @@ class PropertyTravelService:
 
         return PlaceLookup(failure=failure)
 
-    def _nearest_place(self, lat: float, lon: float, place_type: str) -> PlaceLookup:
+    def _nearest_place(
+        self,
+        lat: float,
+        lon: float,
+        place_type: str,
+        reject: Optional["_RejectRules"] = None,
+    ) -> PlaceLookup:
         place_type = (place_type or "").strip()
         if not place_type:
             return PlaceLookup()
 
+        # The rules are part of the key: entries cached before a preset learned
+        # to refuse helipads would otherwise keep serving the helipad.
         cache_type = f"{_PLACES_CACHE_PREFIX}:{place_type}"
+        if reject is not None:
+            cache_type = f"{cache_type}:{reject.signature}"
         cached = get_cached_enrichment_data(lat, lon, cache_type)
         if (
             isinstance(cached, dict)
@@ -544,20 +608,37 @@ class PropertyTravelService:
             # Google answered: nothing of this type nearby.
             return PlaceLookup()
 
-        first = results[0] if isinstance(results[0], dict) else {}
-        loc = (first.get("geometry") or {}).get("location") or {}
-        out = {
-            "name": first.get("name"),
-            "place_id": first.get("place_id"),
-            "types": first.get("types"),
-            "lat": loc.get("lat"),
-            "lon": loc.get("lng"),
-        }
-        if out.get("lat") is None or out.get("lon") is None:
-            return PlaceLookup()
+        # `rankby=distance` orders the list, so the first candidate the preset
+        # accepts is the nearest one. Taking `results[0]` unconditionally is
+        # what put a contractor tagged `airport` 2.4 km away in front of the
+        # real airport 40 km away.
+        for candidate in results:
+            if not isinstance(candidate, dict):
+                continue
+            if reject is not None and reject.rejects(candidate):
+                logger.debug(
+                    "Places lookup skipped %s for %s: fails the preset's rules",
+                    candidate.get("name"),
+                    place_type,
+                )
+                continue
+            loc = (candidate.get("geometry") or {}).get("location") or {}
+            out = {
+                "name": candidate.get("name"),
+                "place_id": candidate.get("place_id"),
+                "types": candidate.get("types"),
+                "lat": loc.get("lat"),
+                "lon": loc.get("lng"),
+            }
+            if out.get("lat") is None or out.get("lon") is None:
+                continue
 
-        cache_enrichment_data(lat, lon, cache_type, out, timeout=_PLACES_CACHE_TTL)
-        return PlaceLookup(place=out)
+            cache_enrichment_data(lat, lon, cache_type, out, timeout=_PLACES_CACHE_TTL)
+            return PlaceLookup(place=out)
+
+        # Everything nearby was refused. That is an answer -- "no airport here"
+        # -- and not a failure, so it must not read as an API refusal.
+        return PlaceLookup()
 
     def _get_distances(
         self, lat: float, lon: float, destinations: List[Dict[str, Any]], mode: str
