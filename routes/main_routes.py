@@ -1935,6 +1935,53 @@ def map_view():
             profile_selection,
         )
 
+        category_filter = request.args.get("category", "")
+        subtype_filter = request.args.get("subtype", "")
+        municipality_filter = request.args.get("municipality", "")
+        search_query = request.args.get("search", "")
+        investment_metrics_filter = request.args.get("inv_metr", "")
+        favorites_filter = request.args.get("favorites", "") == "on"
+
+        if category_filter:
+            if category_filter == "__none__":
+                query = query.filter(
+                    or_(
+                        Property.property_category.is_(None),
+                        Property.property_category == "",
+                    )
+                )
+            else:
+                query = query.filter(Property.property_category == category_filter)
+        if subtype_filter:
+            if subtype_filter == "__none__":
+                query = query.filter(
+                    or_(
+                        Property.property_subtype.is_(None),
+                        Property.property_subtype == "",
+                    )
+                )
+            else:
+                query = query.filter(Property.property_subtype == subtype_filter)
+        if municipality_filter:
+            query = query.filter(
+                Property.municipality.ilike(f"%{municipality_filter}%")
+            )
+        if search_query:
+            pattern = f"%{search_query}%"
+            query = query.filter(
+                or_(
+                    Property.title.ilike(pattern),
+                    Property.description.ilike(pattern),
+                    Property.municipality.ilike(pattern),
+                )
+            )
+        if investment_metrics_filter:
+            query = _filter_by_investment_rating(
+                query, Property, investment_metrics_filter
+            )
+        if favorites_filter:
+            query = query.filter(Property.is_favorite.is_(True))
+
         query = query.filter(Property.listing_status.notin_(["removed", "sold"]))
         props = query.all()
 
