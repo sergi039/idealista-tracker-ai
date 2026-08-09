@@ -28,7 +28,6 @@ def app():
     app = create_app()
     app.config["TESTING"] = True
     app.config["WTF_CSRF_ENABLED"] = False
-    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
     with app.app_context():
         db.create_all()
         yield app
@@ -49,28 +48,18 @@ def non_testing_app():
     from `app` in access terms -- it exists to exercise the non-TESTING code
     path, where the old auth gate used to live.
 
-    DATABASE_URL is overridden *before* create_app(), unlike the `app` fixture
-    above which sets SQLALCHEMY_DATABASE_URI after db.init_app() already bound
-    the engine to the suite-wide sqlite file. Tests here render heavy pages
-    (land detail, map, CSV export) instead of bouncing off a 401, and that
-    shared file is contended enough late in a run to fail drop_all() with
-    'database is locked'. A private in-memory DB avoids it."""
+    This fixture used to override DATABASE_URL by hand because the suite-wide
+    sqlite file got contended enough late in a run to fail drop_all() with
+    'database is locked'. setup_test_environment() now points DATABASE_URL at a
+    private in-memory database for every fixture, so the override is gone."""
     setup_test_environment()
-    orig_db_url = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = "sqlite:///:memory:"
-    try:
-        app = create_app()
-        app.config["TESTING"] = False
-        app.config["WTF_CSRF_ENABLED"] = False
-        with app.app_context():
-            db.create_all()
-            yield app
-            db.drop_all()
-    finally:
-        if orig_db_url is not None:
-            os.environ["DATABASE_URL"] = orig_db_url
-        else:
-            os.environ.pop("DATABASE_URL", None)
+    app = create_app()
+    app.config["TESTING"] = False
+    app.config["WTF_CSRF_ENABLED"] = False
+    with app.app_context():
+        db.create_all()
+        yield app
+        db.drop_all()
 
 
 @pytest.fixture
