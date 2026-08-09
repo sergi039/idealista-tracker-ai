@@ -294,6 +294,20 @@ review_is_pass() {
 
     log "  PR #${pr}: requesting independent review of ${base_sha:0:7}..${head_sha:0:7}"
     set +e
+    # Pin the reviewer to Codex instead of inheriting rx's `fallback` chain.
+    #
+    # `fallback` tries Claude first, and Claude answers correctly - but its
+    # verdict opens with a Markdown heading (`## PASS`), while `_parse_verdict`
+    # requires the first line to start with PASS or BLOCKER. The answer is
+    # discarded as UNAVAILABLE and the chain falls through to Codex anyway.
+    # Measured 2026-08-09: 18 of 18 Claude legs UNAVAILABLE, 14 of them burning
+    # the full 120s RX_CLAUDE_TIMEOUT, on top of a Codex review that then
+    # succeeded. Skipping the leg takes a bot review from ~150s to ~12s.
+    #
+    # This is a workaround, not the fix. The fix is the parser, which is not
+    # ours to change here: it decides what counts as a verdict for every gate
+    # on this machine. Drop this pin once Claude's answers are accepted.
+    RX_PROVIDER_POLICY=codex-only \
     rx --range "${base_sha}..${ref}" \
         "Review this pull request for merge into ${BASE_BRANCH} of a self-hosted Flask
 app that ingests real estate listings.
