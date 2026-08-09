@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔐 Fixed: a log handler can no longer write an API key in plain text (2026-08-09)
+- **What**: `utils/log_redaction.py` adds a logging filter that strips
+  credentials out of a record before any handler formats it — `key=`,
+  `api_key=`, `token=`, `password=` and friends in a query string, bare
+  `AIza…` Google keys wherever they appear, and `Bearer` tokens. `app.py`
+  installs it on the root logger's *handlers*, which is where records
+  propagating up from `urllib3` are actually emitted; a filter on the root
+  logger itself would never see them.
+- **Why**: the Google clients take their API key as a **query parameter**, so
+  it is part of every request URL — and `urllib3` logs the full URL at DEBUG.
+  Running the ingest by hand on 2026-08-09 printed the owner's live key in
+  full. Nothing in this codebase printed it: the HTTP library printed the URL,
+  which amounts to the same thing.
+- **Why not just keep DEBUG off**: that holds only until the next time someone
+  turns it on. `DEV_MODE=true`, a library that configures logging itself, or a
+  one-off `python -c` that never calls `basicConfig` all reach the same place.
+  The level is a preference; the filter is a property.
+- **Proven, not assumed**: `tests/test_log_redaction.py` opens with a baseline
+  test showing the key *is* written without the filter, then pins that the same
+  call with it installed is clean. The format it exercises is copied verbatim
+  from `urllib3.connectionpool` — the same `'%s://%s:%s "%s %s %s" %s %s'` and
+  the same eight arguments — because the secret arrives as an argument, not in
+  the format string, and a filter reading only `record.msg` would pass it
+  straight through.
+- **A filter alone was not enough, and review caught it.** The first version
+  redacted only in a `logging.Filter`. That covers the message and nothing
+  else: `logging` renders `exc_info` inside `Formatter.format`, and a handler
+  filters *before* it formats, so every raised exception carrying a credential
+  went out untouched — confirmed against a live logger. `RedactingFormatter`
+  wraps whatever formatter a handler already has and redacts the rendered
+  result, including the cached `exc_text` so a second handler cannot re-emit
+  the original from the cache.
+- **The test that missed it is gone.** It pre-populated `record.exc_text` and
+  called the filter directly, which passes against code that leaks. The
+  replacement raises a real exception and reads what the handler actually
+  wrote.
+- **Values are matched as "up to the delimiter", not as an allow-list of
+  characters** — the second thing review caught. `Bearer` under
+  `[A-Za-z0-9._-]+` stopped at the first character the list forgot:
+  `Bearer abcdefgh+TOPSECRET` became `Bearer REDACTED+TOPSECRET`, a leak that
+  looks handled. base64 carries `+`, `/` and `=`; JWTs carry `.`.
+- **`key` is a credential in a query string and a preset name in a dict.**
+  `?key=` is Google's API-key parameter, but this codebase stores
+  `{"key": "airport"}` in travel presets and `{"key": "police"}` in enrichment.
+  The structured-output pattern therefore covers `api_key`, `token`,
+  `password`, `secret` and friends but deliberately not a bare `key`, so
+  redaction does not blind the diagnostics it exists to keep readable.
+- **A record that cannot be rendered leaks more, not less** — the third review
+  finding. `logging` does not drop a record whose `%` substitution fails; it
+  calls `Handler.handleError`, which prints the format string *and the raw
+  arguments* to stderr. `logger.error("token=%s %s", "TOPSECRET")` wrote
+  `Arguments: ('TOPSECRET',)` in the clear.
+- **There the arguments are withheld, not pattern-matched.** Patterns work on a
+  *marked* secret — `?key=`, `Bearer …`, an `AIza…` key. A bare argument has no
+  marker: in that example the only thing identifying `TOPSECRET` as a
+  credential is the format string it never got substituted into. Guessing
+  cannot be made reliable, so each argument is replaced by its type name —
+  `('<str>', '<str>')` still answers the question a broken-formatting
+  diagnostic exists to answer, and a type name is not a credential.
+- **Not covered**: handlers added *after* `create_app()` runs. Redaction is a
+  net under accidents, not a licence to log secrets deliberately.
 ### 🛟 Fixed: the two saved-search identity races are observable and locked (2026-08-09, #116)
 - **What**: an alert email that carries no saved-search URL now says so.
   `SearchProfileService.resolve_profile()` logs one warning per such email,
