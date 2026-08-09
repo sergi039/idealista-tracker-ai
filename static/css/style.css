@@ -93,6 +93,22 @@
     border-radius: 0.375rem;
 }
 
+/* Detail header: Google Maps / Idealista / Our Maps are icon links sitting in
+   the <h1>, so they must not inherit its font size, and the copy button next to
+   the coordinate must not inherit the metadata line's link underline. */
+.detail-link-icon {
+    --bs-btn-padding-x: 0.5rem;
+    --bs-btn-padding-y: 0.2rem;
+    font-size: 0.85rem;
+    line-height: 1.2;
+}
+
+.copy-coords-btn {
+    text-decoration: none;
+    line-height: 1;
+    vertical-align: baseline;
+}
+
 /* Detail overview (header + stats) */
 .favorite-btn-header {
     width: 40px;
