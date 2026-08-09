@@ -1302,6 +1302,20 @@ function humanizeEnumLabel(value) {
     return humanTail ? `${humanHead} - ${humanTail}` : humanHead;
 }
 
+// One renderer for every AI metric, because a model is allowed to answer "I
+// cannot tell". A missing figure has to read as missing: `value || 'N/A'` plus
+// a literal unit produced "N/Ay", and it also swallowed a real 0.
+function formatMetricValue(value, suffix = '') {
+    if (value === null || value === undefined || value === '') return '—';
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return `${value}${suffix}`;
+    }
+    if (typeof value === 'string') {
+        return humanizeEnumLabel(value) || '—';
+    }
+    return String(value);
+}
+
 // Render structured AI analysis (legacy schema; tolerant to missing keys)
 function renderStructuredAIAnalysis(analysis) {
     if (!analysis || typeof analysis !== 'object') {
@@ -1365,8 +1379,8 @@ function renderStructuredAIAnalysis(analysis) {
                         <div class="d-flex justify-content-between align-items-start mb-2">
                             <h6 class="mb-0"><i class="fas fa-chart-line me-2"></i>Investment Potential</h6>
                             <div class="d-flex gap-1">
-                                <span class="badge bg-primary">${humanizeEnumLabel(investmentRating)}</span>
-                                <span class="badge bg-warning text-dark">${humanizeEnumLabel(riskLevel)}</span>
+                                <span class="badge bg-primary">Potential: ${humanizeEnumLabel(investmentRating)}</span>
+                                <span class="badge bg-warning text-dark">Risk: ${humanizeEnumLabel(riskLevel)}</span>
                             </div>
                         </div>
                         <p class="mb-0 small">${investment.summary || investment.forecast || 'No investment potential analysis available'}</p>
@@ -1383,22 +1397,22 @@ function renderStructuredAIAnalysis(analysis) {
                         <div class="row g-2 text-center mb-2">
                             <div class="col-6 col-md-3">
                                 <div class="small text-muted">Yield</div>
-                                <div class="fw-semibold">${rental.rental_yield || 'N/A'}%</div>
+                                <div class="fw-semibold">${formatMetricValue(rental.rental_yield, '%')}</div>
                             </div>
                             <div class="col-6 col-md-3">
                                 <div class="small text-muted">Cap Rate</div>
-                                <div class="fw-semibold">${rental.cap_rate || 'N/A'}%</div>
+                                <div class="fw-semibold">${formatMetricValue(rental.cap_rate, '%')}</div>
                             </div>
                             <div class="col-6 col-md-3">
                                 <div class="small text-muted">Price/Rent</div>
-                                <div class="fw-semibold">${rental.price_to_rent_ratio || 'N/A'}</div>
+                                <div class="fw-semibold">${formatMetricValue(rental.price_to_rent_ratio)}</div>
                             </div>
                             <div class="col-6 col-md-3">
                                 <div class="small text-muted">Payback</div>
-                                <div class="fw-semibold">${rental.payback_period_years || 'N/A'}y</div>
+                                <div class="fw-semibold">${formatMetricValue(rental.payback_period_years, 'y')}</div>
                             </div>
                         </div>
-                        <p class="mb-0 small">${rental.summary || rental.investment_rating || 'No rental analysis available'}</p>
+                        <p class="mb-0 small">${rental.summary || humanizeEnumLabel(rental.investment_rating) || 'No rental analysis available'}</p>
                     </div>
                 </div>
             </div>
@@ -1821,16 +1835,8 @@ async function refreshAiComparison() {
         const c = claude?.metrics || {};
         const g = gpt?.metrics || {};
 
-        const _formatMetricValue = (value, suffix='') => {
-            if (value === null || value === undefined || value === '') return '—';
-            if (typeof value === 'number' && Number.isFinite(value)) {
-                return `${value}${suffix}`;
-            }
-            if (typeof value === 'string') {
-                return humanizeEnumLabel(value) || '—';
-            }
-            return String(value);
-        };
+        // Same rule as the panels above; one implementation, not two.
+        const _formatMetricValue = formatMetricValue;
 
         const _appendRow = (tbodyEl, label, claudeVal, gptVal, baselineVal) => {
             const tr = document.createElement('tr');
