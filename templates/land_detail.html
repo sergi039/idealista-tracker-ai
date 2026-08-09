@@ -67,19 +67,18 @@
                             </span>
                         {% endif %}
                     </div>
-                    {# The coordinate reads here instead of in a panel of its own.
-                       Accuracy only when it says something: `Land.location_accuracy`
-                       defaults to "unknown" and these legacy rows never set it,
-                       so printing it would annotate all 168 of them with nothing.
-                       The property page prints it unconditionally because there
-                       the field is populated and "approximate" is why a sea-view
+                    {# The coordinate reads here instead of in a panel of its own,
+                       with its accuracy, exactly as on the property page. The
+                       legacy rows do carry one -- `precise` and `approximate`
+                       both occur in the live table -- and "unknown" is itself
+                       worth reading: an unrecorded accuracy is why a sea-view
                        verdict can come back unknown. #}
                     {% if land.location_lat and land.location_lon %}
                         {% set _coords = "%.6f, %.6f"|format(land.location_lat, land.location_lon) %}
                         <div class="text-body-secondary small mt-1">
                             <span class="text-nowrap">
                                 <i class="fas fa-location-dot me-1"></i><span class="font-monospace">{{ _coords }}</span>
-                                {% if land.location_accuracy and land.location_accuracy != 'unknown' %}<span class="ms-1">({{ land.location_accuracy }})</span>{% endif %}
+                                <span class="ms-1">({{ land.location_accuracy or 'unknown' }})</span>
                                 <button type="button" class="btn btn-link p-0 ms-1 align-baseline copy-coords-btn"
                                         data-copy-text="{{ _coords }}"
                                         title="Copy coordinates" aria-label="Copy coordinates">

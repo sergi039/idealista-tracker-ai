@@ -142,14 +142,12 @@ class TestTheLocationPanelIsGone:
         # In the header, above the description card.
         assert body.index("data-copy-text") < body.index("Property Description")
 
-    def test_the_default_unknown_accuracy_is_not_printed(self, client, land):
-        """`Land.location_accuracy` defaults to "unknown" and the legacy rows
-        never set it, so printing it would annotate every one of them with
-        nothing. A real value still shows."""
+    def test_an_unrecorded_accuracy_reads_as_unknown(self, client, land):
+        """Same as the property page: an unrecorded accuracy is itself worth
+        reading, because it is why a sea-view verdict can come back unknown.
+        The fixture leaves the column at its "unknown" default."""
         body = client.get(f"/lands/{land}").get_data(as_text=True)
-        coords_line = body[body.index("data-copy-text") - 400 :]
-        coords_line = coords_line[: coords_line.index("data-copy-text") + 400]
-        assert "(unknown)" not in coords_line
+        assert "(unknown)" in body
 
     def test_a_recorded_accuracy_is_printed(self, client, app):
         with app.app_context():
