@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🛟 Fixed: listing pagination has a deterministic order (2026-08-09, #113)
+- **What**: `/properties`, `/lands`, and their CSV exports now use the model ID
+  as the final sort key after every nullable user-selected ordering.
+- **Why**: rows tied on price, area, score, date, title, or a NULL run could
+  move between query executions, causing pagination to repeat or omit rows and
+  making the page disagree with its CSV export.
+
 ### 🔑 Changed: a saved search is identified by its URL, not its label (2026-08-08, #102)
 - **What**: alert emails link to the saved-search page, and that link encodes
   the subscription's filters. `services/search_subscription_identity.py`
@@ -62,6 +69,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/test_postgres_migrations.py` applies the real files to a real server.
   That test caught a percent-sign collision in `013` that would otherwise have
   failed at deploy time, after the container had already been replaced.
+
+### 🛟 Fixed: folded MIME headers are unfolded before anything parses them (2026-08-08, #101)
+- **What**: `utils/email_headers.py` owns unfolding plus RFC 2047 decoding, and
+  both IMAP services use it — for `Subject`, and now for `From`, which was not
+  decoded at all.
+- **Why**: a header longer than the line limit arrives folded (RFC 5322 2.2.3),
+  and `extract_search_name()` matches with a `[^\r\n]` class, so the
+  saved-search name was cut at the fold. Where the fold lands depends on the
+  subject prefix — "New detached house" folds elsewhere than "Price reduction" —
+  so one saved search produced four `SearchProfile` rows holding 41 listings
+  between them. The same CR also reached the skip list, price-change detection,
+  deal-type inference, classification, and the stored `Property.email_subject`.
+- **Also fixed here**: `decode_header()` returns chunks, and joining them with a
+  space breaks RFC 2047, where whitespace *between* two encoded-words is a
+  separator. `=?utf-8?Q?John?= =?iso-8859-1?Q?Doe?=` decoded to `John Doe  `
+  instead of `JohnDoe`. It predates this change and only ever touched `Subject`,
+  but `From` is a new call site, so `make_header()` does the joining now.
+
+### 🛟 Fixed: the four profiles of one saved search are repaired (2026-08-08, #103)
+- **What**: `services/search_profile_repair_service.py` — an idempotent
+  operator command, dry-run by default. On the owner's database it moved 38
+  listings onto profile #8 (41 total) and deleted profiles 7, 9 and 10; a second
+  run reports `clean`.
+- **Why**: #101 stops new fragments; the existing ones were still split.
+- **How a fragment is proven**: the repair replays the pre-#101 extraction over
+  the stored subject and requires it to return precisely the name that profile
+  carries. Not a heuristic and not a name shape — the bug itself, re-run. A
+  prefix rule was tried and dropped, because a fold landing on punctuation
+  (`Homes in Ciudad Quesada,\r\n Alicante`) leaves a name that is not a
+  word-boundary prefix, and the owner has such a subscription. It follows that
+  the repair can only ever act on rows written before #101.
+- **What it will never do**: move a hand-reassigned listing; rename a profile
+  that is not a proven fragment or that holds a second saved search; resolve a
+  label two subscriptions share; delete a profile that still holds a listing,
+  carries a search key, or is the default; create a profile. Every refusal is
+  reported as `BLOCKED:` with its reason.
+- **Concurrency**: one transaction, with the plan re-verified against the
+  database before anything is written and the deletes flushed *inside* it, so a
+  listing arriving mid-run aborts the repair rather than being orphaned by
+  `ON DELETE SET NULL`. Exit codes never overstate what is known: `1` means
+  nothing was committed, `2` committed but the after-report failed, `3` the
+  COMMIT outcome is unknowable. Run it with ingestion stopped — that buys
+  success, not safety.
+
+### 🔑 Changed: `/properties` is the working page, `/lands` the archive (2026-08-08, #105)
+- **What**: `/` and the navbar point at `/properties`. The cards/list toggle and
+  the combined/investment/lifestyle modes moved over with it. `/lands` still
+  works, labelled an archive.
+- **Why**: `/lands` reads the `lands` table — 168 rows, newest 2026-02-18. Every
+  fresh listing goes to `properties`, and of the 182 non-legacy rows there, 105
+  are plots and 77 are homes. The mail stream is no longer land-only, and the
+  `Land` model cannot represent a house. This reverses the 2026-08-07 decision.
+- **No faked parity**: `Sea View` and the "to beach" sort are rendered
+  unavailable with a reason, not wired to empty data — `Property` has no
+  `travel_time_nearest_beach` column and no beach travel target, and per #98 not
+  one of the 350 listings has a travel time. They come back when #98 is fixed.
+
+### ✨ Added: several subscriptions can be picked at once (2026-08-08, #104)
+- **What**: the profile control on `/properties` is a checkbox dropdown reading
+  `All profiles` or `N selected`. Selection state is modelled explicitly as
+  `auto | all | selected(ids)` in `services/profile_selection.py` and travels
+  through every link — column sorting, both pagination directions, the CSV
+  export and `/map`. Old single-`profile_id` bookmarks keep working.
+- **Why**: the owner asked to see everything at once or tick several searches,
+  without growing the filter bar. It stays one control.
+- **`No subscription`** sits below a divider as a peer of the profiles, never
+  part of `all`. A listing with no `search_profile_id` is otherwise unreachable
+  in the UI — it has no id to type — and #102 made that a legal state.
+- **With more than one profile selected**, profile-specific travel targets and
+  the recalculate buttons are hidden with an explanation, on the page and on the
+  map: custom target ids belong to different profiles, so a union would mislead.
 
 ### 🛟 Fixed: a refused Google API is no longer stored as a search result (2026-08-08, #98)
 - **What**: `PropertyTravelService.calculate_for_property()` wrote

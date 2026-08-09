@@ -470,14 +470,18 @@ def properties():
             rank = _investment_rating_rank(Property)
             rank_order = rank.asc() if sort_order == "asc" else rank.desc()
             query = query.order_by(
-                rank_order.nullslast(), Property.score_total.desc().nullslast()
+                rank_order.nullslast(),
+                Property.score_total.desc().nullslast(),
+                Property.id.asc(),
             )
         else:
             sort_column = sort_columns[sort_by]
             if sort_order == "asc":
-                query = query.order_by(sort_column.asc().nullslast())
+                query = query.order_by(sort_column.asc().nullslast(), Property.id.asc())
             else:
-                query = query.order_by(sort_column.desc().nullslast())
+                query = query.order_by(
+                    sort_column.desc().nullslast(), Property.id.asc()
+                )
 
         # Derive the highlighted mode from the sort actually applied, the same
         # way /lands does, so the buttons cannot disagree with the ordering.
@@ -1830,6 +1834,53 @@ def map_view():
             profile_selection,
         )
 
+        category_filter = request.args.get("category", "")
+        subtype_filter = request.args.get("subtype", "")
+        municipality_filter = request.args.get("municipality", "")
+        search_query = request.args.get("search", "")
+        investment_metrics_filter = request.args.get("inv_metr", "")
+        favorites_filter = request.args.get("favorites", "") == "on"
+
+        if category_filter:
+            if category_filter == "__none__":
+                query = query.filter(
+                    or_(
+                        Property.property_category.is_(None),
+                        Property.property_category == "",
+                    )
+                )
+            else:
+                query = query.filter(Property.property_category == category_filter)
+        if subtype_filter:
+            if subtype_filter == "__none__":
+                query = query.filter(
+                    or_(
+                        Property.property_subtype.is_(None),
+                        Property.property_subtype == "",
+                    )
+                )
+            else:
+                query = query.filter(Property.property_subtype == subtype_filter)
+        if municipality_filter:
+            query = query.filter(
+                Property.municipality.ilike(f"%{municipality_filter}%")
+            )
+        if search_query:
+            pattern = f"%{search_query}%"
+            query = query.filter(
+                or_(
+                    Property.title.ilike(pattern),
+                    Property.description.ilike(pattern),
+                    Property.municipality.ilike(pattern),
+                )
+            )
+        if investment_metrics_filter:
+            query = _filter_by_investment_rating(
+                query, Property, investment_metrics_filter
+            )
+        if favorites_filter:
+            query = query.filter(Property.is_favorite.is_(True))
+
         query = query.filter(Property.listing_status.notin_(["removed", "sold"]))
         props = query.all()
 
@@ -2642,23 +2693,33 @@ def export_csv():
             rank = _investment_rating_rank(Land)
             rank_order = rank.asc() if sort_order == "asc" else rank.desc()
             lands = query.order_by(
-                rank_order.nullslast(), Land.score_total.desc().nullslast()
+                rank_order.nullslast(),
+                Land.score_total.desc().nullslast(),
+                Land.id.asc(),
             ).all()
         elif hasattr(Land, sort_by):
             sort_column = getattr(Land, sort_by)
             if sort_order == "asc":
                 # For ascending, NULLs go last
-                lands = query.order_by(sort_column.asc().nullslast()).all()
+                lands = query.order_by(
+                    sort_column.asc().nullslast(), Land.id.asc()
+                ).all()
             else:
                 # For descending (default for scores), NULLs go last
-                lands = query.order_by(sort_column.desc().nullslast()).all()
+                lands = query.order_by(
+                    sort_column.desc().nullslast(), Land.id.asc()
+                ).all()
         else:
             # Fallback to mode default if invalid sort field
             fallback_column = getattr(Land, default_sort)
             if sort_order == "asc":
-                lands = query.order_by(fallback_column.asc().nullslast()).all()
+                lands = query.order_by(
+                    fallback_column.asc().nullslast(), Land.id.asc()
+                ).all()
             else:
-                lands = query.order_by(fallback_column.desc().nullslast()).all()
+                lands = query.order_by(
+                    fallback_column.desc().nullslast(), Land.id.asc()
+                ).all()
 
         # Create CSV
         output = io.StringIO()
@@ -2797,9 +2858,25 @@ def export_properties_csv():
         )
 
         if category_filter:
-            query = query.filter(Property.property_category == category_filter)
+            if category_filter == "__none__":
+                query = query.filter(
+                    or_(
+                        Property.property_category.is_(None),
+                        Property.property_category == "",
+                    )
+                )
+            else:
+                query = query.filter(Property.property_category == category_filter)
         if subtype_filter:
-            query = query.filter(Property.property_subtype == subtype_filter)
+            if subtype_filter == "__none__":
+                query = query.filter(
+                    or_(
+                        Property.property_subtype.is_(None),
+                        Property.property_subtype == "",
+                    )
+                )
+            else:
+                query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
             query = query.filter(
                 Property.municipality.ilike(f"%{municipality_filter}%")
@@ -2841,14 +2918,20 @@ def export_properties_csv():
             rank = _investment_rating_rank(Property)
             rank_order = rank.asc() if sort_order == "asc" else rank.desc()
             props = query.order_by(
-                rank_order.nullslast(), Property.score_total.desc().nullslast()
+                rank_order.nullslast(),
+                Property.score_total.desc().nullslast(),
+                Property.id.asc(),
             ).all()
         else:
             sort_column = sort_columns.get(sort_by, Property.created_at)
             if sort_order == "asc":
-                props = query.order_by(sort_column.asc().nullslast()).all()
+                props = query.order_by(
+                    sort_column.asc().nullslast(), Property.id.asc()
+                ).all()
             else:
-                props = query.order_by(sort_column.desc().nullslast()).all()
+                props = query.order_by(
+                    sort_column.desc().nullslast(), Property.id.asc()
+                ).all()
 
         travel_display_targets = []
         if selected_profile_id is not None:
