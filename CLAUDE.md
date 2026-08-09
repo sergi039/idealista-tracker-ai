@@ -122,31 +122,28 @@ attributes — an inline `!important` outranks every media query, which is what
 made the table 1344px wide at any viewport. `tests/test_tablet_list_layout.py`
 fails if those widths move back into the markup.
 
-**Distance to the sea is a scoring criterion, and it does not go through
-Google.** `services/sea_distance_service.py` measures the straight-line
-distance to the OSM `natural=coastline` geometry over Overpass — free, and
-therefore alive, unlike the Distance Matrix targets whose billing is off. The
-Overpass answer is cached *per 0.25° grid cell*, not per listing, so every
-property in a region reuses one request and a full backfill costs a handful of
-them (15 cells covered all 351 listings on 2026-08-09). **The grid size and the
-15 km search radius are load-bearing, not arbitrary**: the public Overpass
-instance answers 504 for a 0.9°×1.2° coastline box even at `[timeout:180]`,
-while this one returns in ~76 s. Searching further would buy nothing anyway —
-past `far_m` every distance scores the same zero. Widen either number and the
-lookups start failing.
+**Distance to the sea is a scoring criterion, and it reuses the sea-view
+coastline client.** `services/sea_distance_service.py` scores straight-line
+metres to the OSM coastline, but it does **not** fetch that coastline: it calls
+`fetch_coastline_points()` in `services/sea_view_service.py`, which already owns
+the Overpass side (one query per 0.1° cell, cached a month, throttled, plain
+User-Agent token because Overpass answers 406 to anything else). Do not add a
+second Overpass client — measured the hard way, a per-property or wide-box query
+gets 504s.
 
-The result lands in `Property.enrichment["sea"]` (a JSON column — no
-migration) with one of four statuses: `ok`, `no_coastline_within_radius`,
-`unavailable`, `no_coordinates`. Only a measured absence scores 0; a refusal
-scores `None` and is dropped from the weighted average, and a refusal never
-overwrites a previous measurement taken at the same coordinates. That split is
-the lesson of #98 — do not collapse it. The scorer applies logarithmic decay:
-the shoreline scores 100, `near_m` (300) is the decay scale rather than a
-plateau, and `far_m` (10 000) is where the score reaches 0 — overridable per
-subscription via `scoring_config.categories.<cat>.sea_distance`. A `far_m`
-past the search radius scores `None` rather than 0, because the lookup never
-covered that ground. Sea-view detection is still a separate, unimplemented
-thing.
+The result lands in `Property.enrichment["sea"]` (a JSON column — no migration,
+and a different key from sea view's `enrichment.environment.sea_view`) with one
+of four statuses: `ok`, `no_coastline_within_radius`, `unavailable`,
+`no_coordinates`. Only a measured absence scores 0; a refusal scores `None` and
+is dropped from the weighted average, and a refusal never overwrites a previous
+measurement taken at the same coordinates. That split is the lesson of #98 — do
+not collapse it. The scorer applies logarithmic decay: the shoreline scores 100,
+`near_m` (300) is the decay scale rather than a plateau, and `far_m` (10 000) is
+where the score reaches 0 — overridable per subscription via
+`scoring_config.categories.<cat>.sea_distance`. A `far_m` past the radius the
+lookup actually covers scores `None` rather than 0, because nobody looked there.
+`utils/recalc_sea_distance.py` backfills; it writes a rollback snapshot of the
+score columns first, since rolling the app back does not undo a data rewrite.
 
 The dual-build isolation contract
 from the transition — legacy on 5001 vs universal on 5050, unique Docker

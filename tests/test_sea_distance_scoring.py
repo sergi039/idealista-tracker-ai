@@ -1,9 +1,12 @@
 """Distance to the sea: measurement, failure contract and its scoring weight.
 
-The through-line of this module is issue #98: an API refusal must never be
-recorded, scored or displayed as "there is nothing nearby". Every failure mode
-Overpass can produce is checked to land on `unavailable`, and only a real answer
-is allowed to produce a zero.
+The through-line of this module is issue #98: a source refusal must never be
+recorded, scored or displayed as "there is nothing nearby". Only an answer that
+actually came back is allowed to produce a zero.
+
+The Overpass transport -- User-Agent, 504s, oversized bodies -- belongs to
+services/sea_view_service.py and is covered by tests/test_sea_view_service.py;
+here it is stubbed at that seam.
 """
 
 import json
@@ -11,7 +14,6 @@ import math
 from decimal import Decimal
 
 import pytest
-import requests
 
 from app import create_app, db
 from models import Property, SearchProfile
@@ -29,6 +31,7 @@ from services.sea_distance_service import (
     STATUS_UNAVAILABLE,
     SeaDistanceService,
 )
+from services.sea_view_service import SeaViewSourceError
 from tests import setup_test_environment
 from utils.cache import cache
 from utils.http import request_with_retries
@@ -75,40 +78,35 @@ class FakeResponse:
         self.closed = True
 
 
-def _way(points):
-    return {
-        "type": "way",
-        "id": 1,
-        "geometry": [{"lat": lat, "lon": lon} for lat, lon in points],
-    }
+def _coast_nodes():
+    """A short north-south run of coastline nodes off the Asturian coast."""
+    return [
+        (COAST_LAT_SOUTH + step * (COAST_LAT_NORTH - COAST_LAT_SOUTH) / 10, COAST_LON)
+        for step in range(11)
+    ]
 
 
-def _coastline_payload():
-    return {
-        "elements": [_way([(COAST_LAT_SOUTH, COAST_LON), (COAST_LAT_NORTH, COAST_LON)])]
-    }
+def _patch_coastline(monkeypatch, result):
+    """Stand in for the shared coastline fetch, counting the calls.
 
-
-def _patch_overpass(monkeypatch, response_factory):
-    """Route every Overpass POST to `response_factory`, counting the calls."""
+    Pass a list of (lat, lon) nodes, or an exception to raise. The Overpass
+    transport itself -- User-Agent, 504s, oversized bodies -- belongs to
+    services/sea_view_service.py and is covered by its own suite.
+    """
     calls = []
 
-    def fake_post(url, **kwargs):
-        calls.append(url)
-        result = response_factory()
+    def fake_fetch(lat, lon, session=None):
+        calls.append((lat, lon))
         if isinstance(result, Exception):
             raise result
-        return result
+        return list(result)
 
-    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setattr(sds, "fetch_coastline_points", fake_fetch)
     return calls
 
 
 def _service():
-    service = SeaDistanceService()
-    # Never sleep inside the suite.
-    service.throttle_range_seconds = (0.0, 0.0)
-    return service
+    return SeaDistanceService()
 
 
 def _property(**kwargs):
@@ -131,18 +129,18 @@ def _property(**kwargs):
 
 def test_measures_distance_to_a_known_segment(app, monkeypatch):
     """A point due east of the segment is measured across the longitude gap."""
-    _patch_overpass(monkeypatch, lambda: FakeResponse(payload=_coastline_payload()))
+    _patch_coastline(monkeypatch, _coast_nodes())
 
     result = _service().measure(43.61, COAST_LON + 0.01)
 
     # 0.01 degrees of longitude at 43.61 N: 0.01 * pi/180 * R * cos(lat).
-    expected_m = math.radians(0.01) * sds.EARTH_RADIUS_M * math.cos(math.radians(43.61))
+    expected_m = math.radians(0.01) * 6_371_000.0 * math.cos(math.radians(43.61))
     assert result["status"] == STATUS_OK
     assert result["distance_m"] == pytest.approx(expected_m, rel=0.01)
 
 
 def test_distance_grows_with_separation(app, monkeypatch):
-    _patch_overpass(monkeypatch, lambda: FakeResponse(payload=_coastline_payload()))
+    _patch_coastline(monkeypatch, _coast_nodes())
     service = _service()
 
     near = service.measure(43.61, COAST_LON + 0.01)
@@ -154,8 +152,8 @@ def test_distance_grows_with_separation(app, monkeypatch):
 # -- failure contract (issue #98) ---------------------------------------
 
 
-def test_http_error_is_unavailable_not_missing_coastline(app, monkeypatch):
-    _patch_overpass(monkeypatch, lambda: FakeResponse(status_code=500))
+def test_source_refusal_is_unavailable_not_missing_coastline(app, monkeypatch):
+    _patch_coastline(monkeypatch, SeaViewSourceError("Overpass returned HTTP 504"))
 
     result = _service().measure(43.61, -5.85)
 
@@ -163,69 +161,9 @@ def test_http_error_is_unavailable_not_missing_coastline(app, monkeypatch):
     assert result["distance_m"] is None
 
 
-def test_network_error_is_unavailable(app, monkeypatch):
-    _patch_overpass(monkeypatch, lambda: requests.ConnectionError("no route"))
-
-    assert _service().measure(43.61, -5.85)["status"] == STATUS_UNAVAILABLE
-
-
-def test_overpass_remark_is_unavailable(app, monkeypatch):
-    """Overpass reports its own timeouts in-band, with HTTP 200."""
-    _patch_overpass(
-        monkeypatch,
-        lambda: FakeResponse(
-            payload={"remark": "runtime error: Query timed out", "elements": []}
-        ),
-    )
-
-    assert _service().measure(43.61, -5.85)["status"] == STATUS_UNAVAILABLE
-
-
-@pytest.mark.parametrize(
-    "element",
-    [
-        {"type": "way", "id": 7},
-        {"type": "way", "id": 7, "geometry": []},
-        {"type": "way", "id": 7, "geometry": [{"lat": 43.6}]},
-        {"type": "way", "id": 7, "geometry": [{"lat": 200.0, "lon": -5.8}]},
-    ],
-    ids=["absent", "empty", "no-lon", "out-of-range"],
-)
-def test_unusable_geometry_is_unavailable(app, monkeypatch, element):
-    """A partial answer must not shrink the coastline into a measured zero."""
-    _patch_overpass(monkeypatch, lambda: FakeResponse(payload={"elements": [element]}))
-
-    assert _service().measure(43.61, -5.85)["status"] == STATUS_UNAVAILABLE
-
-
-def test_broken_stream_is_unavailable(app, monkeypatch):
-    """The body can still fail after the headers looked fine."""
-
-    class BreakingResponse(FakeResponse):
-        def iter_content(self, chunk_size=None):
-            yield b'{"elements":'
-            raise requests.exceptions.ChunkedEncodingError("connection reset")
-
-    _patch_overpass(monkeypatch, lambda: BreakingResponse())
-
-    assert _service().measure(43.61, -5.85)["status"] == STATUS_UNAVAILABLE
-
-
-def test_unparsable_body_is_unavailable(app, monkeypatch):
-    _patch_overpass(monkeypatch, lambda: FakeResponse(body=b"<html>nope</html>"))
-
-    assert _service().measure(43.61, -5.85)["status"] == STATUS_UNAVAILABLE
-
-
-def test_oversized_body_is_unavailable_and_not_parsed(app, monkeypatch):
-    monkeypatch.setattr(sds, "MAX_RESPONSE_BYTES", 64)
-    _patch_overpass(monkeypatch, lambda: FakeResponse(chunks=[b"x" * 40, b"y" * 40]))
-
-    assert _service().measure(43.61, -5.85)["status"] == STATUS_UNAVAILABLE
-
-
-def test_empty_elements_is_a_measured_absence(app, monkeypatch):
-    _patch_overpass(monkeypatch, lambda: FakeResponse(payload={"elements": []}))
+def test_no_coastline_points_is_a_measured_absence(app, monkeypatch):
+    """An empty list means the source answered and there is no sea in range."""
+    _patch_coastline(monkeypatch, [])
 
     result = _service().measure(40.4, -3.7)
 
@@ -233,36 +171,12 @@ def test_empty_elements_is_a_measured_absence(app, monkeypatch):
     assert result["distance_m"] is None
 
 
-def test_failed_lookup_is_not_cached(app, monkeypatch):
-    """A refusal must not be remembered as an answer for the whole cell."""
-    calls = _patch_overpass(monkeypatch, lambda: FakeResponse(status_code=500))
-    service = _service()
+def test_coastline_beyond_the_guaranteed_radius_is_an_absence(app, monkeypatch):
+    """Past the radius the query covers, the nearest node proves nothing."""
+    far_north = 43.61 + (sds.SEARCH_RADIUS_M * 2) / 111_320
+    _patch_coastline(monkeypatch, [(far_north, -5.85)])
 
-    service.measure(43.61, -5.85)
-    after_first = len(calls)
-    service.measure(43.61, -5.85)
-
-    assert after_first > 0
-    # The second lookup went back to the network instead of reading a cached
-    # failure, which would have frozen the whole cell as "no coastline".
-    assert len(calls) > after_first
-
-
-# -- caching ------------------------------------------------------------
-
-
-def test_one_request_serves_every_point_in_the_cell(app, monkeypatch):
-    calls = _patch_overpass(
-        monkeypatch, lambda: FakeResponse(payload=_coastline_payload())
-    )
-    service = _service()
-
-    first = service.measure(43.61, -5.86)
-    second = service.measure(43.62, -5.84)
-
-    assert len(calls) == 1
-    assert first["status"] == STATUS_OK
-    assert second["status"] == STATUS_OK
+    assert _service().measure(43.61, -5.85)["status"] == STATUS_NO_COASTLINE
 
 
 # -- persistence --------------------------------------------------------
@@ -270,7 +184,7 @@ def test_one_request_serves_every_point_in_the_cell(app, monkeypatch):
 
 def test_measurement_survives_commit(app, monkeypatch):
     """`enrichment` is a plain JSON column, so the write needs flag_modified."""
-    _patch_overpass(monkeypatch, lambda: FakeResponse(payload=_coastline_payload()))
+    _patch_coastline(monkeypatch, _coast_nodes())
 
     with app.app_context():
         prop = _property()
@@ -287,9 +201,7 @@ def test_measurement_survives_commit(app, monkeypatch):
 
 
 def test_missing_coordinates_are_recorded_without_geocoding(app, monkeypatch):
-    calls = _patch_overpass(
-        monkeypatch, lambda: FakeResponse(payload=_coastline_payload())
-    )
+    calls = _patch_coastline(monkeypatch, _coast_nodes())
 
     with app.app_context():
         prop = _property(location_lat=None, location_lon=None)
@@ -308,12 +220,12 @@ def test_outage_keeps_the_last_good_measurement(app, monkeypatch):
         db.session.add(prop)
         db.session.commit()
 
-        _patch_overpass(monkeypatch, lambda: FakeResponse(payload=_coastline_payload()))
+        _patch_coastline(monkeypatch, _coast_nodes())
         first = _service().update_property(prop, commit=True)
         assert first["status"] == STATUS_OK
 
         cache.clear()
-        _patch_overpass(monkeypatch, lambda: FakeResponse(status_code=503))
+        _patch_coastline(monkeypatch, SeaViewSourceError("Overpass returned HTTP 503"))
         second = _service().update_property(prop, commit=True)
 
         assert second["status"] == STATUS_OK
@@ -330,11 +242,11 @@ def test_outage_keeps_a_measured_absence_too(app, monkeypatch):
         db.session.add(prop)
         db.session.commit()
 
-        _patch_overpass(monkeypatch, lambda: FakeResponse(payload={"elements": []}))
+        _patch_coastline(monkeypatch, [])
         _service().update_property(prop, commit=True)
 
         cache.clear()
-        _patch_overpass(monkeypatch, lambda: FakeResponse(status_code=503))
+        _patch_coastline(monkeypatch, SeaViewSourceError("Overpass returned HTTP 503"))
         second = _service().update_property(prop, commit=True)
 
         assert second["status"] == STATUS_NO_COASTLINE
@@ -350,14 +262,14 @@ def test_moved_property_discards_the_old_measurement(app, monkeypatch):
         db.session.add(prop)
         db.session.commit()
 
-        _patch_overpass(monkeypatch, lambda: FakeResponse(payload=_coastline_payload()))
+        _patch_coastline(monkeypatch, _coast_nodes())
         _service().update_property(prop, commit=True)
 
         # Re-geocoded somewhere else: the stored distance is about another point.
         prop.location_lat = Decimal("40.4000000")
         prop.location_lon = Decimal("-3.7000000")
         cache.clear()
-        _patch_overpass(monkeypatch, lambda: FakeResponse(status_code=503))
+        _patch_coastline(monkeypatch, SeaViewSourceError("Overpass returned HTTP 503"))
         result = _service().update_property(prop, commit=True)
 
         assert result["status"] == STATUS_UNAVAILABLE
@@ -456,7 +368,7 @@ def _sea_enrichment(status, distance_m, lat=43.61, lon=-5.86):
         "sea": {
             "status": status,
             "distance_m": distance_m,
-            "searched_m": sds.MAX_SEARCH_M,
+            "searched_m": sds.SEARCH_RADIUS_M,
             "source": "osm_coastline",
             "origin": {"lat": lat, "lon": lon},
         }
