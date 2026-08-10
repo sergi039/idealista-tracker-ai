@@ -1,4 +1,11 @@
-"""Session-scoped guard against Config mutation that escapes a test.
+"""Guards against per-process state that escapes a test.
+
+Two independent guards live here. The `pytest_runtest_teardown` wrapper
+(per-test) fails any test that leaves a Flask app or request context pushed,
+and scrubs the application reference flask-caching retains on the
+module-global `utils.cache.cache` -- see its docstring for why that retention
+makes a test behave differently alone and in the full run. The rest of the
+module is the session-scoped Config-mutation guard below.
 
 `Config` (config.py) keeps several mutable containers as *class* attributes -
 `DEFAULT_SCORING_WEIGHTS`, `SCORING_PROFILES`, `COMBINED_MIX` and friends. They
@@ -32,9 +39,89 @@ import copy
 from collections.abc import Iterable
 from typing import Any
 
+import flask
 import pytest
+from flask import globals as flask_globals
 
 from config import Config
+from utils.cache import cache as flask_cache
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item, nextitem):
+    """Fail a test that leaks Flask state, and scrub what it leaked.
+
+    A hook wrapper, deliberately not an autouse fixture: pytest-flask's own
+    autouse `_monkeypatch_response_class` instantiates any fixture named
+    `app` via `getfixturevalue` before a conftest autouse fixture gets its
+    turn, so a fixture-based guard finalises FIRST and pops the app context
+    out from under every `with app.app_context(): yield` fixture --
+    measured as 857 teardown errors across the suite. The wrapper's
+    post-yield code runs after `teardown_exact`, i.e. after every fixture
+    has finalised, which is the only point where "still pushed" means
+    "leaked".
+
+    Two channels, both chased while the #196 follow-up branch's new sea-view
+    test passed file-alone and failed in the full suite (2026-08-10):
+
+    * A pushed-and-never-popped app or request context. One leaked context
+      would make `flask.current_app` resolve in every later test on the
+      thread, silently changing what hundreds of them actually exercise --
+      most visibly, cache reads that are supposed to no-op outside an app
+      context start returning real values. Measured over the whole suite with
+      a drain-and-report plugin, no test does this today; the guard exists so
+      the first one to start is named at its own teardown instead of being
+      diagnosed from a symptom three files later. The drain below is so one
+      offender does not also fail every test that runs after it.
+
+    * flask-caching's retained application. `Cache._set_cache` keeps the last
+      app it was initialised for (`self.app`, flask-caching 2.3.1 -- despite
+      the comment in `init_app` saying it must not), and its backend lookup
+      is `current_app or self.app`. `current_app` is falsy outside a context
+      rather than raising (werkzeug's `__bool__` fallback), so once ANY
+      earlier test has called create_app(), the module-global
+      `utils.cache.cache` serves real cached values with no app context at
+      all. That was the actual mechanism behind the #196 symptom: a coastline
+      cell cached by one test was served to the next, whose transport mock
+      then never fired -- in the full suite only, because file-alone no app
+      had ever been created. Deleting the binding restores the fresh-process
+      state (`self.app` missing, lookup raises AttributeError, callers
+      no-op), so a test without the `app` fixture behaves the same alone and
+      in the full run.
+    """
+    teardown_error: BaseException | None = None
+    result = None
+    try:
+        result = yield
+    except BaseException as exc:
+        teardown_error = exc
+
+    leaked = 0
+    # Request contexts first: popping one also pops the app context it
+    # carried in with it, and an app context cannot pop from under one.
+    while flask.has_request_context():
+        flask_globals.request_ctx._get_current_object().pop()
+        leaked += 1
+    while flask.has_app_context():
+        flask_globals.app_ctx._get_current_object().pop()
+        leaked += 1
+
+    vars(flask_cache).pop("app", None)
+
+    # A teardown that failed on its own outranks the leak report: re-raising
+    # it keeps the original diagnosis, and the drain above has already run.
+    if teardown_error is not None:
+        raise teardown_error
+
+    if leaked:
+        pytest.fail(
+            f"this test left {leaked} Flask context(s) pushed. Enter contexts "
+            "with `with app.app_context():` (or pop in teardown what setup "
+            "pushed); a leaked context changes what every later test in the "
+            "process actually tests."
+        )
+    return result
+
 
 # In-place mutation of one of these is the failure mode. Tuples/frozensets and
 # scalars cannot be aliased and then mutated, so they are out of scope.
