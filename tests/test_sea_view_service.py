@@ -152,6 +152,11 @@ class TestOutgoingRequests:
         monkeypatch.setattr(svc.requests, "post", _post)
         svc.fetch_coastline_points(43.0, -6.0)
         assert captured["headers"]["User-Agent"] == svc.HTTP_USER_AGENT
+        # The size ceiling only means anything if the body actually streams:
+        # without the kwarg the reply is materialised before any check runs,
+        # and the test double streams either way, so losing it would be
+        # invisible everywhere else in this file (rx audit note, 2026-08-10).
+        assert captured.get("stream") is True
 
     def test_the_elevation_request_sends_it(self, monkeypatch):
         captured = {}

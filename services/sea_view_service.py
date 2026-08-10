@@ -348,13 +348,21 @@ def _read_bounded_body(response) -> bytes:
         declared = response.headers.get("Content-Length") if response.headers else None
         if declared is not None:
             try:
-                if int(declared) > MAX_COASTLINE_RESPONSE_BYTES:
-                    raise SeaViewSourceError(
-                        f"Overpass announced {declared} bytes, over the "
-                        f"{MAX_COASTLINE_RESPONSE_BYTES}-byte ceiling"
-                    )
+                declared_bytes = int(declared)
             except ValueError:
-                pass  # an unparseable header decides nothing; the read below does
+                # An unparseable header decides nothing; the read below does.
+                # Only the int() sits in the try -- a wider net would also have
+                # caught the refusal itself if its class ever grew a ValueError
+                # ancestry, silently demoting this check to the chunk path.
+                declared_bytes = None
+            if (
+                declared_bytes is not None
+                and declared_bytes > MAX_COASTLINE_RESPONSE_BYTES
+            ):
+                raise SeaViewSourceError(
+                    f"Overpass announced {declared} bytes, over the "
+                    f"{MAX_COASTLINE_RESPONSE_BYTES}-byte ceiling"
+                )
 
         body = bytearray()
         for chunk in response.iter_content(chunk_size=COASTLINE_CHUNK_BYTES):
