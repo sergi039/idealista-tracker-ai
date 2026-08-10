@@ -310,6 +310,9 @@ def fetch_coastline_points(
         raise SeaViewSourceError(f"Overpass request failed: {exc}") from exc
 
     if response.status_code != 200:
+        # Streamed and never read: dropped without `close()`, the connection
+        # stays checked out until garbage collection gets around to it.
+        response.close()
         raise SeaViewSourceError(f"Overpass returned HTTP {response.status_code}")
 
     # Whatever goes wrong reading this body, the caller must see one exception
@@ -341,30 +344,36 @@ def _read_bounded_body(response) -> bytes:
     body is still arriving. Both the advertised length and the bytes actually
     received are checked -- a header can lie.
     """
-    declared = response.headers.get("Content-Length") if response.headers else None
-    if declared is not None:
-        try:
-            if int(declared) > MAX_COASTLINE_RESPONSE_BYTES:
-                raise SeaViewSourceError(
-                    f"Overpass announced {declared} bytes, over the "
-                    f"{MAX_COASTLINE_RESPONSE_BYTES}-byte ceiling"
-                )
-        except ValueError:
-            pass  # an unparseable header decides nothing; the read below does
+    try:
+        declared = response.headers.get("Content-Length") if response.headers else None
+        if declared is not None:
+            try:
+                if int(declared) > MAX_COASTLINE_RESPONSE_BYTES:
+                    raise SeaViewSourceError(
+                        f"Overpass announced {declared} bytes, over the "
+                        f"{MAX_COASTLINE_RESPONSE_BYTES}-byte ceiling"
+                    )
+            except ValueError:
+                pass  # an unparseable header decides nothing; the read below does
 
-    body = bytearray()
-    for chunk in response.iter_content(chunk_size=COASTLINE_CHUNK_BYTES):
-        if not chunk:
-            continue
-        # Check before extending, not after: appending first would put the
-        # oversized body in memory, which is the thing being prevented.
-        if len(body) + len(chunk) > MAX_COASTLINE_RESPONSE_BYTES:
-            response.close()
-            raise SeaViewSourceError(
-                f"Overpass sent more than {MAX_COASTLINE_RESPONSE_BYTES} bytes"
-            )
-        body.extend(chunk)
-    return bytes(body)
+        body = bytearray()
+        for chunk in response.iter_content(chunk_size=COASTLINE_CHUNK_BYTES):
+            if not chunk:
+                continue
+            # Check before extending, not after: appending first would put the
+            # oversized body in memory, which is the thing being prevented.
+            if len(body) + len(chunk) > MAX_COASTLINE_RESPONSE_BYTES:
+                raise SeaViewSourceError(
+                    f"Overpass sent more than {MAX_COASTLINE_RESPONSE_BYTES} bytes"
+                )
+            body.extend(chunk)
+        return bytes(body)
+    except BaseException:
+        # A streamed response abandoned before the end holds its socket. Every
+        # refusal path -- a lying header, the ceiling, a transport error from
+        # `iter_content` -- has to hand the connection back on its way out.
+        response.close()
+        raise
 
 
 def _parse_coastline_payload(payload: Any) -> List[Tuple[float, float]]:

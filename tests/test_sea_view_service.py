@@ -293,6 +293,38 @@ class TestAPartialAnswerIsNotAnAnswer:
         monkeypatch.setattr(svc.requests, "post", lambda url, **kwargs: huge)
         with pytest.raises(svc.SeaViewSourceError, match="ceiling"):
             svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+        assert huge.closed, "a response refused on its header still holds a socket"
+
+    def test_a_refused_status_still_releases_the_connection(self, monkeypatch):
+        """Independent review (rx, 2026-08-10): streamed and never read, a
+        refused response kept its socket checked out until garbage collection.
+        403 rather than a retryable status, so the retry loop is not in play."""
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+
+        refused = _FakeResponse(b"", status_code=403)
+        monkeypatch.setattr(svc.requests, "post", lambda url, **kwargs: refused)
+        with pytest.raises(svc.SeaViewSourceError, match="HTTP 403"):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+        assert refused.closed
+
+    def test_a_transport_error_midstream_closes_and_degrades(self, monkeypatch):
+        """...and a transport error out of `iter_content` left the socket open
+        too, besides needing to surface as a SeaViewSourceError."""
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+
+        class _DiesMidstream(_FakeResponse):
+            def __init__(self):
+                super().__init__(b"", headers={})
+
+            def iter_content(self, chunk_size=1):
+                yield b'{"elem'
+                raise svc.requests.exceptions.ChunkedEncodingError("wire cut")
+
+        response = _DiesMidstream()
+        monkeypatch.setattr(svc.requests, "post", lambda url, **kwargs: response)
+        with pytest.raises(svc.SeaViewSourceError):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+        assert response.closed
 
     def test_one_oversized_chunk_is_refused_before_it_is_appended(self, monkeypatch):
         """Sixth review round: the ceiling was checked after extending the
