@@ -23,7 +23,7 @@ concept of: **an independent reviewer must return PASS**.
 | Enforced by | What |
 |---|---|
 | GitHub branch protection | required checks green, branch up to date, PR required, no force-push |
-| `merge_bot.sh` | independent review, verdict bound to the exact diff, BLOCKER posted on the PR |
+| `merge_bot.sh` | independent review, verdict bound to the exact diff, BLOCKER posted on the PR, diff small enough to review at all |
 
 ## Scripts
 
@@ -111,6 +111,38 @@ PASS stops applying the moment either end moves, and `--match-head-commit`
 guarantees the merged commit is the reviewed one.
 
 **UNAVAILABLE is not PASS.** A reviewer that cannot run leaves the PR open.
+
+**A diff over 60 000 bytes is refused before the attempt is spent, and no
+timeout will change that** (issue #182). `rx` does not degrade on a large diff,
+it dies: `bin/cx` pipes the whole codex transcript to stderr and the coordinator
+kills the process group at its 256 KB cap, reporting `UNAVAILABLE`. Since
+`UNAVAILABLE` is correctly not a pass, the bot would re-request the same
+impossible review on every tick, for ever, with nothing in the log saying why.
+
+The tell that it is a kill and not a timeout: PR #177 measured 94 621 bytes and
+failed at a 240 s limit after 210 s, then at an 800 s limit after **157 s** —
+sooner, with more time. The seven merges before it ran 3 589 to 35 117 bytes, so
+`AUTOPILOT_REVIEW_DIFF_MAX_BYTES` defaults to 60 000, between the largest diff
+known to work and the one known to fail. That is one failure and seven
+successes, not a curve — re-measure before moving it, and do not raise it
+because a particular PR happens to be over.
+
+The refusal is journalled as `OVERSIZED` and posted once on the PR, so the next
+tick is silent. Split the PR, or review it by hand: running the same model
+directly works, because it is the wrapper that fails and not the provider.
+
+```bash
+codex exec --ephemeral --ignore-user-config --ignore-rules -m gpt-5.6-sol \
+  -s read-only -c model_reasoning_effort=xhigh --output-last-message /tmp/verdict.txt \
+  -- "<prompt asking for PASS or BLOCKER on the first line>"
+```
+
+Two sibling failures print the same `UNAVAILABLE` and are also not timeouts: the
+coordinator's secret preflight rejects the **diff** when an added line matches a
+credential pattern (`review evidence failed…`), and the **prompt** when the
+embedded text does (`review request failed…`). Neither names the offending line.
+A test fixture imitating a real token will do it — so will a comment quoting one
+to explain the first failure.
 
 **A documentation-only PR is reviewed against the base, not against nothing.**
 The reviewer's contract is to audit the embedded diff and nothing else, which is

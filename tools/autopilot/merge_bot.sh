@@ -45,6 +45,20 @@ REQUIRED_CHECKS_OVERRIDE="${AUTOPILOT_REQUIRED_CHECKS:-}"
 # for every file the documentation cites, and it runs while this script holds
 # the merge lock.
 DOCS_EVIDENCE_TIMEOUT="${AUTOPILOT_DOCS_EVIDENCE_TIMEOUT:-60}"
+# Largest diff worth sending to `rx`, and the number is measured (issue #182).
+#
+# `rx` does not degrade on a large diff, it dies: `cx` pipes the whole codex
+# transcript to stderr and the coordinator kills the process group at its 256 KB
+# cap, reporting `UNAVAILABLE` - which this script correctly refuses to treat as
+# a pass and retries on the next tick, for ever. PR #177 measured 94 621 bytes
+# and failed that way twice, at a 240 s and then at an 800 s timeout, failing
+# *sooner* with the larger limit because a kill is not a timeout. The seven
+# merges before it ran between 3 589 and 35 117 bytes.
+#
+# 60 000 sits between the largest diff known to work and the one known to fail.
+# It is one failure and seven successes, not a curve: re-measure before moving
+# it, and do not raise it because a PR happens to be over.
+REVIEW_DIFF_MAX_BYTES="${AUTOPILOT_REVIEW_DIFF_MAX_BYTES:-60000}"
 
 # One name per line, split on newlines only. A check may legitimately be called
 # "Unit tests / pytest", and word-splitting would turn that into four names
@@ -248,6 +262,34 @@ commit is never covered by this one." >>"$LOG_FILE" 2>&1 \
         || log "  PR #${pr}: could not post the BLOCKER comment (merge still refused)"
 }
 
+# The size refusal is not a verdict about the code, so it does not read like
+# one. It says what the bot could not do and what makes it possible.
+post_oversized_comment() {
+    local pr="$1" base_sha="$2" head_sha="$3" bytes="$4"
+
+    gh pr comment "$pr" --repo "$REPO_SLUG" --body "## Not reviewed: the diff is too large for the reviewer
+
+\`tools/autopilot/merge_bot.sh\` found CI green and the branch up to date, then
+stopped before the independent review. This is not a verdict about the change.
+
+The diff is **${bytes} bytes** against a ceiling of ${REVIEW_DIFF_MAX_BYTES}.
+Past roughly that size \`rx\` does not return a verdict at all: \`cx\` pipes the
+whole reviewer transcript to stderr and the coordinator kills it at a 256 KB
+cap, which surfaces as \`UNAVAILABLE\`. \`UNAVAILABLE\` is not a pass, so the
+bot would re-request the same doomed review on every tick. Refusing once and
+saying so costs less and tells you more (issue #182).
+
+What makes this mergeable:
+
+- **Split it.** Several PRs under the ceiling each get a real review.
+- **Or review it by hand** and merge it yourself. Running the same model
+  directly works — it is the wrapper that fails, not the provider.
+
+Range: \`${base_sha:0:7}..${head_sha:0:7}\`. This decision is keyed to that
+pair, so pushing a smaller diff gets a fresh look automatically." >>"$LOG_FILE" 2>&1 \
+        || log "  PR #${pr}: could not post the oversized comment (review still refused)"
+}
+
 # --- gate 2: independent review -------------------------------------------
 # Every prompt opens with this. A reviewer that runs `gh pr merge` performs the
 # very action it is gating - observed once in practice, where only a missing
@@ -440,6 +482,9 @@ review_is_pass() {
         BLOCKER)
             log "  PR #${pr}: cached BLOCKER for ${base_sha:0:7}..${head_sha:0:7} - needs a human or a new push"
             return 1 ;;
+        OVERSIZED)
+            log "  PR #${pr}: cached OVERSIZED for ${base_sha:0:7}..${head_sha:0:7} - needs a smaller diff or a human"
+            return 1 ;;
     esac
 
     if [ "$DRY_RUN" = "1" ]; then
@@ -478,6 +523,32 @@ review_is_pass() {
     # that will never exist, and costs a bounded rx attempt to do it.
     if ! git merge-base --is-ancestor "$base_sha" "$ref" 2>/dev/null; then
         log "  PR #${pr}: behind ${BASE_BRANCH} (${base_sha:0:7}) - rebase it before it can be reviewed"
+        return 1
+    fi
+
+    # Measure what would be sent before sending it (issue #182). Past the
+    # ceiling `rx` returns no verdict at all, so requesting one is not a review
+    # that might fail - it is a review that cannot happen, repeated every tick.
+    # Refuse once, record it, and say so on the PR.
+    #
+    # A cap the operator can set to nonsense is not a cap: refuse rather than
+    # guess, and refuse for every PR so the typo is visible immediately instead
+    # of only on the large one.
+    case "$REVIEW_DIFF_MAX_BYTES" in
+        ''|*[!0-9]*|0) log "  AUTOPILOT_REVIEW_DIFF_MAX_BYTES must be a positive integer - refusing"
+                       return 1 ;;
+    esac
+
+    local diff_bytes
+    if ! diff_bytes="$(git diff --no-color "${base_sha}..${ref}" | wc -c | tr -d '[:space:]')"; then
+        log "  PR #${pr}: could not measure the diff - skipping"
+        return 1
+    fi
+    if [ "$diff_bytes" -gt "$REVIEW_DIFF_MAX_BYTES" ]; then
+        log "  PR #${pr}: diff is ${diff_bytes} bytes, over the ${REVIEW_DIFF_MAX_BYTES} the reviewer survives"
+        log "            not requesting a review that would come back UNAVAILABLE - see issue #182"
+        record_verdict "$key" OVERSIZED "pr-${pr}"
+        post_oversized_comment "$pr" "$base_sha" "$head_sha" "$diff_bytes"
         return 1
     fi
 
