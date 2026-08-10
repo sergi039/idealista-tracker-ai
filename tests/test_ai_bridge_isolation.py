@@ -4,6 +4,7 @@ The bridge is a host-side script outside the Flask app, so it is loaded here by
 path rather than imported as a package.
 """
 
+import ast
 import importlib.util
 import json
 import os
@@ -217,6 +218,13 @@ def test_runs_are_bounded(bridge, tmp_path, monkeypatch):
     monkeypatch.setenv("AI_BRIDGE_WORKDIR", str(tmp_path / "cold"))
     monkeypatch.setattr(bridge, "MAX_CONCURRENT_RUNS", 1)
     monkeypatch.setattr(bridge, "_RUN_SLOTS", threading.BoundedSemaphore(1))
+    # This test is about serialisation, not the floor: at the production
+    # MIN_RUN_SECONDS (45.0, #206 item 4) a 30 s timeout leaves almost no
+    # room to queue at all (`_queue_floor(30) == 29.5`), so the second thread
+    # below would spuriously see BridgeBusy instead of the delay it is meant
+    # to observe. Lowered here the same way test_the_budget_covers_queueing_
+    # and_running_together does.
+    monkeypatch.setattr(bridge, "MIN_RUN_SECONDS", 0.5)
 
     sleeper = [sys.executable, "-c", "import time; time.sleep(0.6)"]
     started = time.monotonic()
@@ -235,37 +243,51 @@ def test_runs_are_bounded(bridge, tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     ("timeout", "expected"),
     [
-        # A short call granted a slot at once keeps its whole budget.
+        # A short call granted a slot at once keeps its whole budget: these
+        # three stay below MIN_RUN_SECONDS regardless of where that floor is
+        # tuned (production is 45.0, see MIN_RUN_SECONDS's own comment), so
+        # they exercise the `timeout - grace` cap rather than the floor.
         (2, 1.5),
         (1, 0.5),
         (0.4, 0.0),
-        # A long call that queued its way down under MIN_RUN_SECONDS is refused.
-        (8, 5.0),
-        (600, 5.0),
+        # A long call that queued its way down under MIN_RUN_SECONDS is
+        # refused, at the production floor (#206 item 4: raised from 5.0).
+        (8, 7.5),
+        (600, 45.0),
     ],
 )
 def test_the_queue_floor_never_rejects_a_call_that_did_not_queue(
     bridge, timeout, expected
 ):
     """Only time spent queueing may push a run under the floor."""
+    assert bridge.MIN_RUN_SECONDS == pytest.approx(45.0), (
+        "this test's expectations are pinned to the production default; "
+        "update both together if MIN_RUN_SECONDS is retuned"
+    )
     assert bridge._queue_floor(timeout) == pytest.approx(expected)
 
 
 def test_a_queued_call_below_the_minimum_is_refused_not_started(bridge, monkeypatch):
-    """4.1 s left of an 8 s budget is under the 5 s minimum: refuse it.
+    """A budget that queues below the production MIN_RUN_SECONDS is refused.
 
-    At the production floor, not a lowered one.
+    Uses a timeout comfortably larger than MIN_RUN_SECONDS so the floor here
+    is bound by the production minimum itself, not by the `timeout - grace`
+    cap that binds for short-lived calls (see the parametrized
+    `_queue_floor` tests above) -- this test is not run at a lowered floor.
     """
     monkeypatch.setattr(bridge, "MAX_CONCURRENT_RUNS", 1)
     slots = threading.BoundedSemaphore(1)
     monkeypatch.setattr(bridge, "_RUN_SLOTS", slots)
+
+    timeout = bridge.MIN_RUN_SECONDS + 1
+    hold_seconds = 2.0  # leaves timeout - hold_seconds < MIN_RUN_SECONDS
 
     held = threading.Event()
 
     def hold_the_slot():
         slots.acquire()
         held.set()
-        time.sleep(3.9)
+        time.sleep(hold_seconds)
         slots.release()
 
     holder = threading.Thread(target=hold_the_slot)
@@ -274,7 +296,7 @@ def test_a_queued_call_below_the_minimum_is_refused_not_started(bridge, monkeypa
         assert held.wait(5)
         with pytest.raises(bridge.BridgeBusy):
             # Never reaches a CLI: this argv would fail loudly if it did.
-            bridge._run(["/nonexistent/cli"], "", 8)
+            bridge._run(["/nonexistent/cli"], "", timeout)
     finally:
         holder.join()
 
@@ -363,6 +385,95 @@ def test_codex_answer_is_the_last_message_not_every_message(bridge, recorded_cmd
     )
     result = bridge.complete_codex("prompt", "", "gpt-5.6-terra", 60)
     assert result["text"] == '{"verdict":"fair"}'
+
+
+def test_codex_answer_survives_a_trailing_closing_remark(bridge, recorded_cmd):
+    """The mirror case of the test above (#206 item 2).
+
+    codex sometimes emits the JSON answer and then a closing remark ("Let me
+    know if you need anything else."). The old "always take the last
+    message" rule let that remark win and silently discarded the analysis;
+    the bridge answered 200 with prose the app's json.loads then failed on.
+    """
+    recorded_cmd["stdout"] = "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": '{"verdict":"fair"}'},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "agent_message",
+                        "text": "Let me know if you need anything else.",
+                    },
+                }
+            ),
+            json.dumps({"type": "turn.completed", "usage": {"input_tokens": 5}}),
+        ]
+    )
+    result = bridge.complete_codex("prompt", "", "gpt-5.6-terra", 60)
+    assert result["text"] == '{"verdict":"fair"}'
+
+
+def test_codex_answer_tolerates_a_fenced_json_body(bridge, recorded_cmd):
+    """A ```-fenced JSON answer must still be recognised as JSON.
+
+    `services/property_ai_service.py`'s `_clean_json_text` strips a fence
+    before parsing, so the bridge's own "does this look like JSON" check has
+    to tolerate the same fence or it would judge a perfectly good fenced
+    answer as prose and let a trailing remark win instead.
+    """
+    fenced = '```json\n{"verdict": "fair"}\n```'
+    recorded_cmd["stdout"] = "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": fenced},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "Done."},
+                }
+            ),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+    )
+    result = bridge.complete_codex("prompt", "", "gpt-5.6-terra", 60)
+    assert result["text"] == fenced
+
+
+def test_codex_answer_falls_back_to_the_last_message_when_nothing_parses(
+    bridge, recorded_cmd
+):
+    """No message parsing as JSON is a real failure and must surface as one.
+
+    Falling back to the last non-empty message (the old behaviour) rather
+    than an empty string keeps that failure visible to the app's own
+    json.loads instead of masking it as an empty success.
+    """
+    recorded_cmd["stdout"] = "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "agent_message",
+                        "text": "I could not complete this analysis.",
+                    },
+                }
+            ),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+    )
+    result = bridge.complete_codex("prompt", "", "gpt-5.6-terra", 60)
+    assert result["text"] == "I could not complete this analysis."
 
 
 def test_a_truncated_codex_stream_is_a_failure(bridge, recorded_cmd):
@@ -540,10 +651,56 @@ def test_an_unknown_provider_variable_is_stripped_by_default(
 
 
 def test_bridge_has_no_shell_invocation():
-    """argv is built as a list; a shell would make the prompt injectable."""
+    """argv is built as a list; a shell would make the prompt injectable.
+
+    The previous version of this test also asserted
+    `"subprocess.run(" not in source or "start_new_session" in source`: since
+    the bridge stopped using `subprocess.run(` outright, the left side of
+    that `or` was always true and the right side -- the actual isolation
+    property -- was never evaluated. Verified by mutation (#206 item 6):
+    deleting `start_new_session=True` from the `Popen` call left that
+    assertion green. `test_the_bridge_isolates_every_run_in_its_own_process_group`
+    below replaces it with a real, AST-based check of the `Popen` call
+    itself, which mutation can't fool the same way.
+    """
     source = _BRIDGE_PATH.read_text()
     assert "shell=True" not in source
-    assert "subprocess.run(" not in source or "start_new_session" in source
+
+
+def test_the_bridge_isolates_every_run_in_its_own_process_group():
+    """Every `subprocess.Popen` call must pass `start_new_session=True`.
+
+    `_kill_process_group` signals the whole process group via `proc.pid`
+    (see its docstring), which only works because `start_new_session=True`
+    made the child its own group leader. Without it, a timeout's SIGTERM/
+    SIGKILL would hit only the direct child -- `codex`'s node wrapper --
+    and leave the grandchild that does the real work running and billing
+    the subscription (the #201 leak this test exists to prevent).
+
+    Parses the source with `ast` rather than grepping for the substring so a
+    mutation that removes the keyword, or a second `Popen` call added later
+    without it, cannot pass silently.
+    """
+    tree = ast.parse(_BRIDGE_PATH.read_text())
+    popen_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "Popen"
+    ]
+    assert popen_calls, "no subprocess.Popen call found in the bridge"
+
+    for call in popen_calls:
+        kwargs = {kw.arg: kw.value for kw in call.keywords}
+        assert "start_new_session" in kwargs, (
+            "a Popen call is missing start_new_session=True -- a timeout "
+            "would then only kill the direct child, not its process group"
+        )
+        value = kwargs["start_new_session"]
+        assert isinstance(value, ast.Constant) and value.value is True, (
+            "start_new_session must be literally True, not merely present"
+        )
 
 
 # --- the bridge's own shutdown (#206) --------------------------------------

@@ -39,8 +39,10 @@ dead" never has two different answers depending on which code path asks.
 
 A lease set once, at enqueue, is not enough: `_EXECUTOR` is a
 `ThreadPoolExecutor` with a fixed worker count and an *unbounded* queue.
-Enough ~600 s jobs ahead of one in the queue and it can outlive its own
-`LEASE_TTL_SECONDS` before a worker ever picks it up -- at which point a
+Enough jobs ahead of one in the queue -- each up to `config.py`'s
+`AI_ANALYSIS_TIMEOUT_SECONDS` plus the bridge's own margin (#206 item 3) --
+and it can outlive its own `LEASE_TTL_SECONDS` before a worker ever picks it
+up -- at which point a
 lease sweep (this process's own next `enqueue_job` call, a different
 process's `create_app()`, or the periodic scheduler tick below) would reap
 it while its `Future` is still very much alive, and queue a paid duplicate
@@ -308,10 +310,13 @@ _ENQUEUE_MAX_ATTEMPTS = 3
 
 # How long a lease lasts past its last renewal before a row is presumed
 # abandoned. The longest known job budget is the AI analysis call: up to
-# 600 s server-side (services/property_ai_service.py), plus the client's own
-# 60 s queueing allowance (static/js/main.js JOB_POLL_TIMEOUTS.aiAnalysis =
-# 660000 ms). 900 s (15 min) leaves about 4 minutes of margin past that for
-# scheduling jitter without leaving a genuinely dead row live for long.
+# config.py's AI_ANALYSIS_TIMEOUT_SECONDS (180 s) plus the bridge's own
+# socket margin (services/subscription_transport.py), plus the client's own
+# queueing allowance -- static/js/main.js JOB_POLL_TIMEOUTS.aiAnalysis =
+# 265000 ms total (#206 item 3; was 660000 ms when the analysis timeout
+# itself was 600 s). 900 s (15 min) leaves well over 10 minutes of margin
+# past that for scheduling jitter without leaving a genuinely dead row live
+# for long.
 LEASE_TTL_SECONDS = int(
     os.environ.get("BACKGROUND_JOB_LEASE_TTL_SECONDS", str(15 * 60))
 )

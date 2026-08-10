@@ -446,7 +446,7 @@ class PropertyAIService:
                 provider="openai",
                 system="Return only a single JSON object. No prose, no code fences.",
                 model=self.openai_model,
-                timeout=600,
+                timeout=Config.AI_ANALYSIS_TIMEOUT_SECONDS,
             )
         except subscription_transport.SubscriptionTransportError as exc:
             logger.error("OpenAI analysis via subscription bridge failed: %s", exc)
@@ -477,7 +477,7 @@ class PropertyAIService:
                 provider="claude",
                 system="Return only a single JSON object. No prose, no code fences.",
                 model=self.anthropic_model,
-                timeout=600,
+                timeout=Config.AI_ANALYSIS_TIMEOUT_SECONDS,
             )
             cleaned = _clean_json_text(result.get("text", ""))
             analysis_data = json.loads(cleaned)

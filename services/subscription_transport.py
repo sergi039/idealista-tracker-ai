@@ -47,8 +47,14 @@ def _post(path: str, payload: Dict[str, Any], timeout: int) -> Dict[str, Any]:
         method="POST",
     )
     try:
-        # Bounded read: the bridge answers with a small JSON document.
-        with urllib.request.urlopen(request, timeout=timeout + 15) as response:
+        # Bounded read: the bridge answers with a small JSON document. The
+        # margin added to `timeout` is config.py's AI_BRIDGE_SOCKET_MARGIN_
+        # SECONDS -- the single place that number is derived (#206 item 3),
+        # so it tracks the bridge's own AI_BRIDGE_KILL_GRACE instead of the
+        # old hardcoded `+ 15`, which was exactly `3 * KILL_GRACE_SECONDS` at
+        # the default grace and left no slack for anything else.
+        socket_timeout = timeout + Config.AI_BRIDGE_SOCKET_MARGIN_SECONDS
+        with urllib.request.urlopen(request, timeout=socket_timeout) as response:
             body = response.read(4 * 1024 * 1024)
     except urllib.error.HTTPError as exc:
         detail = exc.read(8192).decode("utf-8", "replace")
