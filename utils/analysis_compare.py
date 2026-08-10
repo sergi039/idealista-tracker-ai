@@ -118,13 +118,18 @@ def _truncate(value: Any, max_len: int = 120) -> Optional[str]:
 def _join_top(value: Any, limit: int = 3, max_len: int = 160) -> Optional[str]:
     """The first few entries of a list field as one line, or `None`.
 
-    `None` for anything that is not a list: a provider that answered with a
-    sentence where the schema asked for a list has not given a list, and the
-    row must read as missing rather than as that sentence.
+    A provider that answered with a sentence where the schema asked for a list
+    still answered, so it is read as one item: reporting nothing would say the
+    provider was silent when it was not. Anything that is neither a list nor a
+    string is not an answer.
     """
-    if not isinstance(value, list):
+    if isinstance(value, str):
+        items: List[Any] = [value]
+    elif isinstance(value, list):
+        items = value
+    else:
         return None
-    text = " • ".join(str(x) for x in value[:limit] if x is not None)
+    text = " • ".join(str(x) for x in items[:limit] if x is not None)
     return _truncate(text, max_len) or None
 
 

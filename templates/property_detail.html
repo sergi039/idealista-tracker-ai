@@ -1486,8 +1486,13 @@ function renderStructuredAIAnalysis(analysis) {
        the page simply never rendered it, so the badge and the comparison row
        stated a verdict with nothing behind it (#209). */
     const risks = analysis.risks_analysis || {};
+    /* A provider that answered with a sentence where the schema asked for a
+       list still answered; dropping it would report silence. */
+    const riskItems = (value) => Array.isArray(value)
+        ? value
+        : (typeof value === 'string' && value.trim() ? [value] : []);
     const riskDetail = ['major_risks', 'minor_issues', 'advantages'].some(
-        (key) => Array.isArray(risks[key]) && risks[key].length > 0
+        (key) => riskItems(risks[key]).length > 0
     ) || !!risks.mitigation;
 
     // Rental analysis section
@@ -1543,9 +1548,9 @@ function renderStructuredAIAnalysis(analysis) {
                         </div>
                         <p class="mb-2 small text-body-secondary">${RISK_LEVEL_NOTE}</p>
                         ${riskDetail ? `
-                            ${renderListItems(risks.major_risks, 'Major risks', 'danger')}
-                            ${renderListItems(risks.minor_issues, 'Minor issues', 'warning')}
-                            ${renderListItems(risks.advantages, 'Advantages', 'success')}
+                            ${renderListItems(riskItems(risks.major_risks), 'Major risks', 'danger')}
+                            ${renderListItems(riskItems(risks.minor_issues), 'Minor issues', 'warning')}
+                            ${renderListItems(riskItems(risks.advantages), 'Advantages', 'success')}
                             ${risks.mitigation ? `<p class="mb-0 small"><span class="fw-semibold">Mitigation:</span> ${risks.mitigation}</p>` : ''}
                         ` : `<p class="mb-0 small">This provider listed no specific risks for this listing.</p>`}
                     </div>

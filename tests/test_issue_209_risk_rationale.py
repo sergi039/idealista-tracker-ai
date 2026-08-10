@@ -97,10 +97,16 @@ class TestHighlightsCarryTheReasons:
             "an absent section must read as missing, never as an empty risk list"
         )
 
-    def test_a_sentence_where_the_schema_asked_for_a_list_is_not_a_list(self):
+    def test_a_sentence_where_the_schema_asked_for_a_list_is_still_an_answer(self):
+        """Reporting nothing would say the provider was silent when it was not."""
         highlights = extract_highlights(
-            _analysis(risks={"major_risks": "there are several risks"})
+            _analysis(risks={"major_risks": "permits could slip"})
         )
+
+        assert highlights["key_risks"] == "permits could slip"
+
+    def test_a_shape_that_is_neither_a_list_nor_a_sentence_is_not_an_answer(self):
+        highlights = extract_highlights(_analysis(risks={"major_risks": {"a": 1}}))
 
         assert highlights["key_risks"] is None
 
@@ -200,6 +206,14 @@ class TestThePanelShowsWhatTheBadgeIsBasedOn:
         assert "Risk Assessment" in html
         assert "listed no specific risks" in html
         assert "Major risks" not in html, "a heading with nothing under it"
+
+    def test_a_sentence_instead_of_a_list_is_shown_rather_than_dropped(self):
+        html = _render(_analysis(risks={"major_risks": "permits could slip"}))
+
+        assert "permits could slip" in html
+        assert "listed no specific risks" not in html, (
+            "the provider answered; reporting silence would be the wrong way round"
+        )
 
     def test_the_comparison_row_carries_the_note_under_its_label(self):
         payload = {
