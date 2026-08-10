@@ -57,6 +57,11 @@ LABEL_INDEX = "ux_search_profiles_name_without_key"
 CATCH_ALL_CONSTRAINT = "ck_search_profiles_default_has_no_search_key"
 BACKGROUND_JOBS_DEDUPE_INDEX = "ux_background_jobs_active_dedupe_key"
 BACKGROUND_JOBS_STATUS_CHECK = "ck_background_jobs_status_enum"
+PROPERTY_AI_VARIANT_MIGRATION = "017_property_ai_variant_unique"
+PROPERTY_VARIANT_UNIQUE_CONSTRAINT = (
+    "ux_property_ai_analysis_variants_property_provider"
+)
+PROPERTY_VARIANT_OLD_INDEX = "ix_property_ai_analysis_variants_property_provider"
 
 _DATABASE_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 
@@ -113,6 +118,25 @@ def _migrations_through_baseline(tmp_path: Path) -> Path:
         shutil.copy(
             MIGRATIONS_DIR / f"{identifier}.sql", directory / f"{identifier}.sql"
         )
+    return directory
+
+
+def _migrations_through(tmp_path: Path, through_version: str) -> Path:
+    """The repository's migrations, truncated to (and including) a version.
+
+    Generalizes `_migrations_through_baseline` to an arbitrary cutoff, for
+    tests that need to seed pre-migration data and then run exactly one
+    later migration over it (the same "old schema, then apply the fix"
+    shape as test_013_frees_the_label_on_a_database_that_already_holds_rows).
+    """
+    import shutil
+
+    directory = tmp_path / f"through-{through_version}"
+    directory.mkdir()
+    for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+        version = path.name.split("_", 1)[0]
+        if version <= through_version:
+            shutil.copy(path, directory / path.name)
     return directory
 
 
@@ -241,6 +265,7 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
             ASSIGNMENT_CLEANUP_MIGRATION,
             STATUS_SOURCE_MIGRATION,
             BACKGROUND_JOBS_MIGRATION,
+            PROPERTY_AI_VARIANT_MIGRATION,
         ]
 
         # Two *identified* subscriptions may now share the label...
@@ -754,5 +779,185 @@ def test_016_two_concurrent_inserts_for_the_same_key_leave_only_one_active_job(
                 {"key": key},
             ).scalar_one()
         assert active == 1
+    finally:
+        engine.dispose()
+
+
+def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
+    postgres_url, tmp_path
+):
+    """The upgrade path: migration 010's non-unique index already let two
+    rows exist for the same (property_id, provider) pair (#190 review,
+    blocker 3) -- migration 017 must collapse them to the newest one before
+    it can add the constraint that stops it happening again."""
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine, migrations_dir=_migrations_through(tmp_path, "016"))
+
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO properties (source_email_id, title) "
+                    "VALUES ('017-prop', '017 test property')"
+                )
+            )
+            property_id = connection.execute(
+                text("SELECT id FROM properties WHERE source_email_id = '017-prop'")
+            ).scalar_one()
+
+            # Duplicates exactly as the pre-017 query-then-insert race could
+            # leave them: same pair, different created_at.
+            connection.execute(
+                text(
+                    "INSERT INTO property_ai_analysis_variants "
+                    "(property_id, provider, model, analysis, created_at) "
+                    "VALUES (:pid, 'claude', 'model-old', '{}'::json, "
+                    "NOW() - INTERVAL '1 hour')"
+                ),
+                {"pid": property_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO property_ai_analysis_variants "
+                    "(property_id, provider, model, analysis, created_at) "
+                    "VALUES (:pid, 'claude', 'model-new', '{\"a\": 1}'::json, NOW())"
+                ),
+                {"pid": property_id},
+            )
+            # A different provider is a different pair -- untouched by dedup.
+            connection.execute(
+                text(
+                    "INSERT INTO property_ai_analysis_variants "
+                    "(property_id, provider, model, analysis) "
+                    "VALUES (:pid, 'openai', 'other-model', '{}'::json)"
+                ),
+                {"pid": property_id},
+            )
+
+        assert run_migrations(engine) == [PROPERTY_AI_VARIANT_MIGRATION]
+
+        with engine.begin() as connection:
+            rows = (
+                connection.execute(
+                    text(
+                        "SELECT provider, model, analysis "
+                        "FROM property_ai_analysis_variants "
+                        "WHERE property_id = :pid ORDER BY provider"
+                    ),
+                    {"pid": property_id},
+                )
+                .mappings()
+                .all()
+            )
+
+        assert len(rows) == 2, "the duplicate 'claude' pair must collapse to one row"
+        by_provider = {row["provider"]: row for row in rows}
+        assert by_provider["claude"]["model"] == "model-new", (
+            "the newest row (by created_at) must be the one kept"
+        )
+        assert by_provider["claude"]["analysis"] == {"a": 1}
+        assert by_provider["openai"]["model"] == "other-model"
+
+        inspector = inspect(engine)
+        assert PROPERTY_VARIANT_OLD_INDEX not in {
+            index["name"]
+            for index in inspector.get_indexes("property_ai_analysis_variants")
+        }
+        assert PROPERTY_VARIANT_UNIQUE_CONSTRAINT in {
+            constraint["name"]
+            for constraint in inspector.get_unique_constraints(
+                "property_ai_analysis_variants"
+            )
+        }
+
+        # The constraint refuses a new duplicate for the pair it just kept.
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO property_ai_analysis_variants "
+                        "(property_id, provider, model, analysis) "
+                        "VALUES (:pid, 'claude', 'attempt', '{}'::json)"
+                    ),
+                    {"pid": property_id},
+                )
+
+        # Re-running the file must not fail on the constraint it already added.
+        sql = (MIGRATIONS_DIR / f"{PROPERTY_AI_VARIANT_MIGRATION}.sql").read_text(
+            encoding="utf-8"
+        )
+        with engine.begin() as connection:
+            connection.exec_driver_sql(sql)
+    finally:
+        engine.dispose()
+
+
+def test_017_two_concurrent_inserts_for_the_same_pair_leave_only_one_row(postgres_url):
+    """The guard holds under an actual race, not just a sequential check --
+    the same empirical proof as background_jobs' dedupe_key index, now for
+    the (property_id, provider) pair (#190 review, blocker 3)."""
+    import threading
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO properties (source_email_id, title) "
+                    "VALUES ('017-race', '017 race property')"
+                )
+            )
+            property_id = connection.execute(
+                text("SELECT id FROM properties WHERE source_email_id = '017-race'")
+            ).scalar_one()
+
+        barrier = threading.Barrier(2)
+        outcomes: dict[str, str] = {}
+
+        def _attempt(label: str, model: str) -> None:
+            thread_engine = create_engine(postgres_url)
+            try:
+                barrier.wait(timeout=5)
+                try:
+                    with thread_engine.begin() as connection:
+                        connection.execute(
+                            text(
+                                "INSERT INTO property_ai_analysis_variants "
+                                "(property_id, provider, model, analysis) "
+                                "VALUES (:pid, 'claude', :model, '{}'::json)"
+                            ),
+                            {"pid": property_id, "model": model},
+                        )
+                    outcomes[label] = "ok"
+                except IntegrityError:
+                    outcomes[label] = "blocked"
+            finally:
+                thread_engine.dispose()
+
+        first = threading.Thread(target=_attempt, args=("first", "model-a"))
+        second = threading.Thread(target=_attempt, args=("second", "model-b"))
+        first.start()
+        second.start()
+        first.join(timeout=10)
+        second.join(timeout=10)
+
+        assert not first.is_alive() and not second.is_alive(), "a thread hung"
+        assert sorted(outcomes.values()) == ["blocked", "ok"], outcomes
+
+        with engine.begin() as connection:
+            count = connection.execute(
+                text(
+                    "SELECT count(*) FROM property_ai_analysis_variants "
+                    "WHERE property_id = :pid AND provider = 'claude'"
+                ),
+                {"pid": property_id},
+            ).scalar_one()
+        assert count == 1
     finally:
         engine.dispose()

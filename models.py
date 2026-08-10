@@ -1155,7 +1155,20 @@ class AiAnalysisVariant(db.Model):
 
 
 class PropertyAiAnalysisVariant(db.Model):
-    """Stores alternative AI analyses per Property (e.g., Claude vs ChatGPT)."""
+    """Stores alternative AI analyses per Property (e.g., Claude vs ChatGPT).
+
+    At most one row per (property_id, provider) -- enforced by the database,
+    not just by the writer's own logic (#190 review, blocker 3; migration
+    017). Before that migration the composite index here was a plain
+    (non-unique) `db.Index`, and routes/api_routes.py's writer was
+    query-then-insert: an interrupted job's async retry racing a `?sync=1`
+    request (which bypasses background_jobs' dedupe_key entirely) could both
+    see "no row for this pair" and both insert, leaving two variants racing
+    for the same property/provider. See
+    `routes.api_routes._upsert_property_ai_variant`, the update-or-insert
+    writer this constraint lets recover from a lost race instead of just
+    preventing it silently.
+    """
 
     __tablename__ = "property_ai_analysis_variants"
 
@@ -1178,10 +1191,10 @@ class PropertyAiAnalysisVariant(db.Model):
     )
 
     __table_args__ = (
-        db.Index(
-            "ix_property_ai_analysis_variants_property_provider",
+        db.UniqueConstraint(
             "property_id",
             "provider",
+            name="ux_property_ai_analysis_variants_property_provider",
         ),
     )
 

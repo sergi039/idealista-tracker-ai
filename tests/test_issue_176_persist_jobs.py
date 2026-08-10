@@ -17,8 +17,8 @@ and pin the *behaviour*: reconciliation at startup, the honest
 
 Tests that need to observe a job's worker actually run patch
 `services.background_jobs._EXECUTOR` to execute inline instead of on a real
-thread. That runs the exact same `enqueue_job`/`_run`/`_transition` code --
-nothing about the code under test is replaced -- it only avoids a genuine
+thread. That runs the exact same `enqueue_job`/`_run_job`/`_write_status` code
+-- nothing about the code under test is replaced -- it only avoids a genuine
 artifact of the *test* database: Flask-SQLAlchemy gives an in-memory SQLite
 engine a single shared `StaticPool` connection (app.py's own comment on
 `_is_in_memory_sqlite` says as much), and two Python threads issuing
@@ -27,9 +27,18 @@ SQLAlchemy's C row-buffer (`IndexError: tuple index out of range` in
 `sqlalchemy.cyextension.resultproxy`), independent of anything this module
 does. Real PostgreSQL gives every thread its own connection, which is exactly
 what `test_postgres_migrations.py`'s concurrent-insert test runs against.
+
+The tests under "Blocker 1" below were added after an independent Tier-2
+review of PR #190 (codex gpt-5.6-sol) found that a terminal status write
+whose *first* commit attempt failed left a row stuck `running` forever, with
+`enqueue_job`'s dedupe_key check then handing that dead row back to every
+future caller. They pin the fix: `_write_status`'s bounded retry plus
+fresh-session fallback, and `enqueue_job`'s staleness check that reaps a row
+no fallback could save.
 """
 
 import time
+from datetime import timedelta
 
 import pytest
 
@@ -319,3 +328,146 @@ def test_a_failing_job_is_recorded_as_error_not_left_queued(app, inline_executor
     assert job["error"] == "provider refused the request"
     assert job["started_at"] is not None
     assert job["finished_at"] is not None
+
+
+# --- Blocker 1 (#190 review): a broken terminal write must not strand a job
+
+
+def test_a_terminal_write_that_fails_recovers_via_a_fresh_session(
+    app, inline_executor, monkeypatch
+):
+    """Simulates the first commit(s) of the terminal transition failing.
+
+    `_write_status` retries `_TRANSITION_MAX_ATTEMPTS` times against the
+    normal session, then falls back once to a brand-new `Session`. This
+    fails every attempt against the normal session and lets only the
+    fresh-session fallback through, proving the row reaches `success`
+    rather than staying `running` forever.
+    """
+    real_try_write = background_jobs._try_write
+    calls = {"terminal_attempts": 0}
+
+    def _flaky_try_write(session, job_id, fields):
+        if fields.get("status") != "success":
+            # Let "mark running" through untouched.
+            return real_try_write(session, job_id, fields)
+        calls["terminal_attempts"] += 1
+        if calls["terminal_attempts"] <= background_jobs._TRANSITION_MAX_ATTEMPTS:
+            return False
+        return real_try_write(session, job_id, fields)
+
+    monkeypatch.setattr(background_jobs, "_try_write", _flaky_try_write)
+
+    def _fn():
+        return {"success": True}
+
+    with app.app_context():
+        job_id = enqueue_job(_fn, job_type="property_ai_analysis", app=app)
+        job = get_job(job_id)
+
+    # _TRANSITION_MAX_ATTEMPTS failures against the normal session, then one
+    # more call that is the fresh-session fallback succeeding.
+    assert calls["terminal_attempts"] == background_jobs._TRANSITION_MAX_ATTEMPTS + 1
+    assert job["status"] == "success", (
+        "the row must not stay 'running' forever when the normal session's "
+        "commit is broken -- the fresh-session fallback must recover it"
+    )
+    assert job["result"] == {"success": True}
+
+
+def test_a_terminal_write_that_always_fails_leaves_the_row_running_but_reapable(
+    app, inline_executor, monkeypatch
+):
+    """The genuine worst case: even the fresh-session fallback fails.
+
+    `_write_status` can only return False here -- nothing can force a commit
+    that truly never succeeds. What matters is that the row does not then
+    block its dedupe_key forever: `enqueue_job`'s staleness check is what
+    frees it, proven by the next test. This one just pins that
+    `_write_status` gives up honestly (returns False, logs, does not raise)
+    rather than crashing the worker or claiming success.
+    """
+    monkeypatch.setattr(background_jobs, "_try_write", lambda *a, **kw: False)
+
+    def _fn():
+        return {"success": True}
+
+    with app.app_context():
+        job_id = enqueue_job(_fn, job_type="property_ai_analysis", app=app)
+        job = get_job(job_id)
+
+    # "mark running" also went through the always-failing patch, so the row
+    # never left 'queued' -- exactly the stuck state a real, total DB outage
+    # would produce. No exception escaped enqueue_job or the worker.
+    assert job["status"] == "queued"
+
+
+def test_a_stale_active_job_is_reaped_instead_of_blocking_dedupe_forever(
+    app, monkeypatch
+):
+    """The backstop for blocker 1: even if a row's writer could never record
+    its own outcome, a later enqueue for the same dedupe_key must not hang
+    on it forever. Its dedupe_key is freed once the row has gone unstirred
+    for longer than any real job could plausibly still be running."""
+    monkeypatch.setattr(background_jobs, "STALE_JOB_AFTER_SECONDS", 60)
+
+    key = "property_ai_analysis:355:claude"
+    stale_id = "9" * 32
+    long_ago = background_jobs._now().replace(tzinfo=None) - timedelta(hours=1)
+    _insert_row(
+        app,
+        id=stale_id,
+        job_type="property_ai_analysis",
+        status="running",
+        dedupe_key=key,
+        started_at=long_ago,
+    )
+
+    def _fn():
+        return {"success": True}
+
+    with app.app_context():
+        new_id = enqueue_job(
+            _fn, job_type="property_ai_analysis", app=app, dedupe_key=key
+        )
+
+    assert new_id != stale_id, "a stale row must not be handed back as the active job"
+
+    with app.app_context():
+        stale_job = get_job(stale_id)
+        active = BackgroundJob.query.filter(
+            BackgroundJob.dedupe_key == key,
+            BackgroundJob.status.in_(("queued", "running")),
+        ).count()
+
+    assert stale_job["status"] == "interrupted"
+    assert "stale" in stale_job["error"].lower()
+    assert active == 1, "exactly the new job, not both the stale one and the new one"
+
+
+def test_a_fresh_active_job_is_not_reaped(app):
+    """The staleness check must not fire on a job that is genuinely still
+    within its budget -- only on one that has outlived any plausible one.
+    Uses the module's real default threshold, deliberately not patched."""
+    key = "property_ai_analysis:355:claude"
+    existing_id = "8" * 32
+    _insert_row(
+        app,
+        id=existing_id,
+        job_type="property_ai_analysis",
+        status="running",
+        dedupe_key=key,
+        started_at=background_jobs._now().replace(tzinfo=None),
+    )
+
+    def _fn():
+        return {"success": True}
+
+    with app.app_context():
+        returned_id = enqueue_job(
+            _fn, job_type="property_ai_analysis", app=app, dedupe_key=key
+        )
+
+    assert returned_id == existing_id
+    with app.app_context():
+        assert get_job(existing_id)["status"] == "running"

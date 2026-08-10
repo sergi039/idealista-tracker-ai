@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from flask import Blueprint, Response, current_app, jsonify, request
+from sqlalchemy.exc import IntegrityError
 
 # get_or_404 raises HTTPException, and the blanket `except Exception` handlers
 # below would answer 500 for it: every one of them re-raises it first so an
@@ -59,6 +60,116 @@ def _enqueue(job_fn, *, job_type: str, meta=None, dedupe_key=None) -> str:
         app=app_obj,
         dedupe_key=dedupe_key,
     )
+
+
+# The unique constraint migration 017 adds (#190 review, blocker 3). Named so
+# `_is_property_variant_collision` can recognize it from PostgreSQL's
+# structured diagnostics.
+PROPERTY_VARIANT_UNIQUE_CONSTRAINT = (
+    "ux_property_ai_analysis_variants_property_provider"
+)
+# What SQLite says when that same constraint (declared as a UniqueConstraint
+# on the model) refuses a row -- it has no structured diagnostics, so the
+# message is matched in full. See services/search_profile_service.py's
+# _is_keyless_name_collision for the same idiom against a different table.
+_SQLITE_PROPERTY_VARIANT_COLLISION = (
+    "UNIQUE constraint failed: property_ai_analysis_variants.property_id, "
+    "property_ai_analysis_variants.provider"
+)
+
+
+def _is_property_variant_collision(error: Exception) -> bool:
+    """Whether `error` is the (property_id, provider) unique constraint
+    refusing a second row for a pair that already has one -- the expected,
+    fully-recovered shape of the #190 review's blocker 3 insert race.
+
+    Narrow on purpose, the same way _is_keyless_name_collision is: an
+    unrelated IntegrityError (a dropped connection, a foreign-key violation)
+    must keep its own report rather than being silently treated as "someone
+    else already wrote this". property_ai_analysis_variants only has the one
+    unique constraint plus a FK to properties(id) that cannot fail here (the
+    property was already loaded via get_or_404 earlier in the request), which
+    keeps the false-positive risk low, but the check still names the
+    constraint rather than assuming any IntegrityError here is the race.
+    """
+    if not isinstance(error, IntegrityError):
+        return False
+    orig = getattr(error, "orig", None)
+    if orig is None:
+        return False
+    constraint = getattr(getattr(orig, "diag", None), "constraint_name", None)
+    if constraint is not None:
+        return constraint == PROPERTY_VARIANT_UNIQUE_CONSTRAINT
+    return str(orig).strip() == _SQLITE_PROPERTY_VARIANT_COLLISION
+
+
+def _upsert_property_ai_variant(
+    property_id: int, provider: str, *, model, analysis
+) -> None:
+    """Write the (property_id, provider) AI-analysis variant without the
+    query-then-insert race migration 017 closes off at the database level
+    (#190 review, blocker 3).
+
+    An UPDATE first -- the common case, since a variant usually already
+    exists after a property's first successful analysis for that provider.
+    If none matched, INSERT. If that INSERT loses a race to a concurrent
+    writer (an interrupted job's async retry alongside a `?sync=1` request,
+    which bypasses background_jobs' dedupe_key entirely because it never
+    goes through enqueue_job), the unique constraint turns the race into an
+    IntegrityError this recovers from by updating the winner -- instead of
+    either leaving this run's result silently unwritten or letting a second
+    row exist for the same pair.
+
+    Commits internally (possibly more than once, if it has to recover from
+    a race) rather than leaving that to the caller, since the recovery path
+    needs its own rollback and a caller with other unrelated pending changes
+    in the same session must not have those rolled back too; see the
+    `provider == "claude"` commit right before this is called in
+    analyze_universal_property_structured.
+    """
+    from models import PropertyAiAnalysisVariant
+
+    stamp = datetime.now(timezone.utc)
+    fields = {"analysis": analysis, "model": model, "created_at": stamp}
+
+    updated = (
+        db.session.query(PropertyAiAnalysisVariant)
+        .filter_by(property_id=property_id, provider=provider)
+        .update(fields, synchronize_session=False)
+    )
+    if updated:
+        db.session.commit()
+        return
+
+    try:
+        db.session.add(
+            PropertyAiAnalysisVariant(
+                property_id=property_id,
+                provider=provider,
+                model=model,
+                analysis=analysis,
+            )
+        )
+        db.session.commit()
+    except IntegrityError as exc:
+        db.session.rollback()
+        if not _is_property_variant_collision(exc):
+            raise
+        recovered = (
+            db.session.query(PropertyAiAnalysisVariant)
+            .filter_by(property_id=property_id, provider=provider)
+            .update(fields, synchronize_session=False)
+        )
+        db.session.commit()
+        if not recovered:
+            # The row that just won the race would have to be deleted in
+            # this exact instant for this to happen. Fail loudly rather than
+            # claim success silently over a result that was never stored.
+            raise RuntimeError(
+                "Lost the insert race for property_ai_analysis_variants "
+                f"(property_id={property_id}, provider={provider}) but the "
+                "row that won it could not be found to update"
+            ) from exc
 
 
 @api_bp.route("/jobs/<job_id>", methods=["GET"])
@@ -379,25 +490,43 @@ def analyze_property_structured(land_id):
         is_enrichment = existing_analysis is not None
 
         def _run():
+            # #190 review, blocker 2: the async path runs this closure on a
+            # ThreadPoolExecutor thread, inside its own app context -- a
+            # different Flask-SQLAlchemy scoped session than the one that
+            # loaded `land` above. Mutating that request-session object and
+            # committing through this thread's own session does not flush
+            # the mutation (the object was never part of this session's unit
+            # of work); by the time the request's own session tears down,
+            # `land.ai_analysis` was silently never persisted. Capturing only
+            # `land_id` and reloading here -- the same pattern
+            # `analyze_universal_property_structured` and
+            # `generate_openai_structured` already use -- keeps every read
+            # and write inside one session.
+            land_local = db.session.get(Land, land_id)
+            if land_local is None:
+                return {"success": False, "error": "Land not found"}
+
             from services.anthropic_service import get_anthropic_service
 
             anthropic_service = get_anthropic_service()
 
             property_data = {
-                "id": land.id,
-                "title": land.title,
-                "price": float(land.price) if land.price else None,
-                "area": float(land.area) if land.area else None,
-                "municipality": land.municipality,
-                "land_type": land.land_type,
-                "score_total": float(land.score_total) if land.score_total else None,
-                "description": land.description,
-                "travel_time_nearest_beach": land.travel_time_nearest_beach,
-                "nearest_beach_name": land.nearest_beach_name,
-                "travel_time_oviedo": land.travel_time_oviedo,
-                "travel_time_gijon": land.travel_time_gijon,
-                "travel_time_airport": land.travel_time_airport,
-                "infrastructure_basic": land.infrastructure_basic or {},
+                "id": land_local.id,
+                "title": land_local.title,
+                "price": float(land_local.price) if land_local.price else None,
+                "area": float(land_local.area) if land_local.area else None,
+                "municipality": land_local.municipality,
+                "land_type": land_local.land_type,
+                "score_total": float(land_local.score_total)
+                if land_local.score_total
+                else None,
+                "description": land_local.description,
+                "travel_time_nearest_beach": land_local.travel_time_nearest_beach,
+                "nearest_beach_name": land_local.nearest_beach_name,
+                "travel_time_oviedo": land_local.travel_time_oviedo,
+                "travel_time_gijon": land_local.travel_time_gijon,
+                "travel_time_airport": land_local.travel_time_airport,
+                "infrastructure_basic": land_local.infrastructure_basic or {},
                 "existing_analysis": existing_analysis,
             }
 
@@ -410,10 +539,10 @@ def analyze_property_structured(land_id):
                 if is_enrichment and existing_analysis and new_analysis:
                     merged_analysis = dict(existing_analysis)
                     merged_analysis.update(new_analysis)
-                    land.ai_analysis = merged_analysis
+                    land_local.ai_analysis = merged_analysis
                     final_analysis = merged_analysis
                 else:
-                    land.ai_analysis = new_analysis
+                    land_local.ai_analysis = new_analysis
                     final_analysis = new_analysis
 
                 db.session.commit()
@@ -516,9 +645,7 @@ def analyze_property_structured(land_id):
 def analyze_universal_property_structured(property_id: int):
     """Analyze a universal Property with a category-aware structured JSON schema."""
     try:
-        from datetime import datetime
-
-        from models import Property, PropertyAiAnalysisVariant
+        from models import Property
         from services.property_ai_service import PropertyAIService
 
         prop = db.get_or_404(Property, property_id)
@@ -564,27 +691,24 @@ def analyze_universal_property_structured(property_id: int):
                 final = merged
 
             # Claude remains the primary analysis stored on the Property record itself (legacy parity).
+            # Committed on its own, before the variant upsert below: that
+            # helper recovers from a lost insert race with its own
+            # rollback, and a rollback there must not also discard this
+            # unrelated change still pending in the same session (#190
+            # review, blocker 3).
             if provider == "claude":
                 prop_local.ai_analysis = final
+                db.session.commit()
 
-            # Store per-provider analysis for side-by-side comparison in the UI.
+            # Store per-provider analysis for side-by-side comparison in the
+            # UI. _upsert_property_ai_variant is an update-or-insert that
+            # recovers from a lost race against the unique constraint
+            # migration 017 adds, rather than the old query-then-insert that
+            # let two concurrent writers both see "no row" and both insert.
             try:
-                variant = PropertyAiAnalysisVariant.query.filter_by(
-                    property_id=property_id, provider=provider
-                ).first()
-                if variant:
-                    variant.analysis = final
-                    variant.model = result.get("model")
-                    variant.created_at = datetime.now(timezone.utc)
-                else:
-                    db.session.add(
-                        PropertyAiAnalysisVariant(
-                            property_id=property_id,
-                            provider=provider,
-                            model=result.get("model"),
-                            analysis=final,
-                        )
-                    )
+                _upsert_property_ai_variant(
+                    property_id, provider, model=result.get("model"), analysis=final
+                )
             except Exception as e:
                 logger.warning(
                     "Failed to store AI analysis variant for property %s (%s): %s",
@@ -592,8 +716,7 @@ def analyze_universal_property_structured(property_id: int):
                     provider,
                     e,
                 )
-
-            db.session.commit()
+                db.session.rollback()
 
             return {
                 "success": True,
