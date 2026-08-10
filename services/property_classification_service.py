@@ -45,23 +45,43 @@ class PropertyClassificationService:
         return None, None
 
     @classmethod
-    def classify_property(
-        cls, prop: Property, profile: Optional[SearchProfile] = None
+    def classify_sources(
+        cls,
+        title: Any,
+        subject: Any,
+        body: Any,
+        rules: List[Dict[str, Any]],
     ) -> Tuple[Optional[str], Optional[str]]:
-        """Classify a Property using profile-specific rules (fallback to global defaults)."""
-        rules = SearchProfileService.get_classification_rules(profile)
+        """The order every caller classifies in: type first, address never.
+
+        Ingestion used to run its own sequence over the raw title, so a plot in
+        "Caserio **Casa** de Anes" was stored as housing while the manual
+        reclassify tool called it land (#223). One order, one place.
+        """
         texts = [
             # The type first, before any address can claim a rule.
-            cls.title_head(prop.title),
-            str(prop.title or ""),
-            str(prop.email_subject or ""),
-            str(prop.description or ""),
+            cls.title_head(title),
+            str(title or ""),
+            str(subject or ""),
+            str(body or ""),
         ]
         for text in texts:
             category, subtype = cls.classify_text(text, rules)
             if category:
                 return category, subtype
         return None, None
+
+    @classmethod
+    def classify_property(
+        cls, prop: Property, profile: Optional[SearchProfile] = None
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Classify a Property using profile-specific rules (fallback to global defaults)."""
+        return cls.classify_sources(
+            prop.title,
+            prop.email_subject,
+            prop.description,
+            SearchProfileService.get_classification_rules(profile),
+        )
 
     @classmethod
     def apply_classification(
