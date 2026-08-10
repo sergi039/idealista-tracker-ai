@@ -7,6 +7,9 @@ path rather than imported as a package.
 import importlib.util
 import json
 import os
+import signal
+import socket
+import subprocess
 import sys
 import threading
 import time
@@ -541,3 +544,149 @@ def test_bridge_has_no_shell_invocation():
     source = _BRIDGE_PATH.read_text()
     assert "shell=True" not in source
     assert "subprocess.run(" not in source or "start_new_session" in source
+
+
+# --- the bridge's own shutdown (#206) --------------------------------------
+#
+# Everything above drives `_run()` in-process, which cannot prove this: the
+# leak #206 item 1 closes is the bridge process's *own* lifecycle (a redeploy
+# via `launchctl kickstart -k` sends SIGTERM while a run is in flight), not
+# the per-request timeout path the cancellation tests above already cover.
+# Proving it needs a real bridge process, signalled from outside.
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _wait_for_health(port: int, deadline: float) -> None:
+    url = f"http://127.0.0.1:{port}/health"
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=1) as response:
+                if response.status == 200:
+                    return
+        except Exception:  # noqa: BLE001 - polling until the server accepts
+            time.sleep(0.1)
+    raise AssertionError("bridge never became healthy")
+
+
+def _fake_claude_script(pid_file: Path) -> str:
+    """A stand-in `claude` binary: spawns a grandchild that ignores SIGTERM,
+    the same shape codex's node-wrapper/rust-child leaves behind (see
+    `_grandchild_script` above), then blocks like a real valuation would.
+    """
+    return (
+        "import os, signal, subprocess, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "grandchild = subprocess.Popen([sys.executable, '-c', "
+        '"import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "\n'
+        '"time.sleep(300)"])\n'
+        f"open({str(pid_file)!r}, 'w').write(f'{{os.getpid()}} {{grandchild.pid}}')\n"
+        "time.sleep(300)\n"
+    )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX")
+def test_the_bridges_own_shutdown_kills_an_in_flight_run(tmp_path):
+    """A restart must not orphan the CLI it was serving (#206 item 1).
+
+    Points the bridge at a fake `claude` through the same `_which()` PATH
+    lookup it already uses — the least invasive seam, no test-only production
+    code needed. The real `claude` on this host resolves via `$HOME/.local/
+    bin`, so overriding `HOME` for the spawned bridge is what lets the fake
+    one win; `codex` sits at a fixed `/opt/homebrew/bin` this test cannot
+    shadow without touching real installed state, so the request uses
+    `claude`.
+    """
+    port = _free_port()
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    pid_file = tmp_path / "claude.pids"
+
+    fake_claude = fake_bin / "claude"
+    fake_claude.write_text(f"#!{sys.executable}\n" + _fake_claude_script(pid_file))
+    fake_claude.chmod(0o755)
+
+    env = dict(os.environ)
+    env["HOME"] = str(tmp_path / "fakehome")
+    env["PATH"] = os.pathsep.join([str(fake_bin), env.get("PATH", "")])
+    env["AI_BRIDGE_TOKEN"] = "test-token"
+    env["AI_BRIDGE_HOST"] = "127.0.0.1"
+    env["AI_BRIDGE_PORT"] = str(port)
+    # Keeps the test fast without skipping the SIGTERM-then-SIGKILL path.
+    env["AI_BRIDGE_KILL_GRACE"] = "1"
+
+    bridge_proc = subprocess.Popen(
+        [sys.executable, str(_BRIDGE_PATH)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    request_thread = None
+    child_pid = None
+    grandchild_pid = None
+    try:
+        _wait_for_health(port, time.monotonic() + 10)
+
+        def _fire_request():
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/v1/complete",
+                data=json.dumps(
+                    {"provider": "claude", "prompt": "hi", "timeout": 60}
+                ).encode(),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": "Bearer test-token",
+                },
+                method="POST",
+            )
+            try:
+                urllib.request.urlopen(request, timeout=30)
+            except Exception:  # noqa: BLE001 - liveness is asserted below,
+                pass  # not this reply, which never arrives once the bridge dies
+
+        request_thread = threading.Thread(target=_fire_request, daemon=True)
+        request_thread.start()
+
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not pid_file.exists():
+            time.sleep(0.1)
+        assert pid_file.exists(), "the fake claude CLI never started"
+        child_pid, grandchild_pid = (int(part) for part in pid_file.read_text().split())
+
+        # The redeploy step this closes: SIGTERM to the bridge itself while a
+        # run is in flight.
+        bridge_proc.send_signal(signal.SIGTERM)
+        bridge_proc.wait(timeout=20)
+
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and (
+            _pid_alive(child_pid) or _pid_alive(grandchild_pid)
+        ):
+            time.sleep(0.1)
+        assert not _pid_alive(child_pid), (
+            f"the fake CLI child {child_pid} survived the bridge's own "
+            "shutdown - this is the #206 leak"
+        )
+        assert not _pid_alive(grandchild_pid), (
+            f"the grandchild {grandchild_pid} survived the bridge's own "
+            "shutdown - this is the #206 leak"
+        )
+    finally:
+        if bridge_proc.poll() is None:
+            bridge_proc.kill()
+            bridge_proc.wait(timeout=5)
+        if request_thread is not None:
+            request_thread.join(timeout=5)
+        # Best-effort: never leave the grandchild running even if an
+        # assertion above already failed.
+        for pid in (child_pid, grandchild_pid):
+            if pid is not None:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
