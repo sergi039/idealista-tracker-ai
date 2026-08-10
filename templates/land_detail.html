@@ -101,12 +101,14 @@
                            was, because it observed nothing. #}
                         <span class="text-nowrap">
                             <i class="fas fa-clock-rotate-left me-1"></i>
-                            {% if land.listing_last_checked %}
+                            <span id="listing-last-checked">
+                            {%- if land.listing_last_checked %}
                                 Checked: {{ land.listing_last_checked.strftime('%Y-%m-%d') }}
-                            {% else %}
+                            {%- else %}
                                 <span class="fst-italic"
                                       title="Nobody has read this listing off Idealista yet">Checked: never</span>
-                            {% endif %}
+                            {%- endif %}
+                            </span>
                         </span>
                     </div>
                 </div>
@@ -1411,6 +1413,16 @@ async function checkListingStatus(landId, btn) {
         restore();
     };
 
+    // Same as the property page: a check that observed something moves the
+    // date in the header line, so paint it instead of leaving the reader on
+    // "never" until they reload. A refused check carries no date -- the
+    // service leaves the column alone.
+    const paintLastChecked = (isoDate) => {
+        const slot = document.getElementById('listing-last-checked');
+        if (!slot || !isoDate) return;
+        slot.textContent = `Checked: ${String(isoDate).slice(0, 10)}`;
+    };
+
     const settle = (result) => {
         if (!result || !result.success) {
             report('fas fa-triangle-exclamation', 'Status check failed — see the server logs.', 'error');
@@ -1420,6 +1432,7 @@ async function checkListingStatus(landId, btn) {
             window.location.reload();
             return;
         }
+        paintLastChecked(result.last_checked);
         if (result.observed === 'error') {
             report(
                 'fas fa-ban',

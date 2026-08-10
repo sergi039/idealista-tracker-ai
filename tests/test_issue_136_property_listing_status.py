@@ -408,6 +408,21 @@ class TestTheApiAndThePage:
         assert "Checked: 2026-08-09" in body
         assert "Checked: never" not in body
 
+    def test_a_completed_check_repaints_the_date_without_a_reload(self, app, client):
+        """The button sits beside the field it updates. A check that observed
+        something moves `listing_last_checked`, and the page must not leave the
+        reader looking at "never" until they refresh. A refused check carries no
+        date, so the same code cannot invent one."""
+        prop = make_property(key="page-repaint")
+
+        body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
+        handler = body[body.index("async function checkPropertyListingStatus") :]
+        handler = handler[: handler.index("// Formatting functions")]
+
+        assert 'id="listing-last-checked"' in body
+        assert "paintLastChecked(result.last_checked)" in handler
+        assert "if (!slot || !isoDate) return;" in handler
+
     def test_the_page_states_no_status_of_its_own(self, app, client):
         """What did change (owner decision, 2026-08-09): the metadata line went,
         and "Status: active" with it. "Checked:" came back into the header line
@@ -499,3 +514,12 @@ class TestTheLandEndpointHasTheSameContract:
         assert "Checked: never" in never_body
         assert "Checked: 2026-08-09" in checked_body
         assert "Checked: never" not in checked_body
+
+    def test_a_completed_check_repaints_the_date_without_a_reload(self, app, client):
+        land = self._make_land("page-repaint")
+
+        body = client.get(f"/lands/{land.id}").get_data(as_text=True)
+        handler = body[body.index("async function checkListingStatus") :]
+
+        assert 'id="listing-last-checked"' in body
+        assert "paintLastChecked(result.last_checked)" in handler
