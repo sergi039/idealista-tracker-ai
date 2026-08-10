@@ -33,30 +33,20 @@ caught and fixed for this PR only after these tests initially passed against
 the *reverted*, pre-fix code -- see the git history/PR description for how
 that was found.
 
-The two blocker-2 tests below originally forced the real async path -- the
-genuine `ThreadPoolExecutor` `services.background_jobs._EXECUTOR`, a
-module-level singleton shared by *every* test in the whole 1500+-test
-session, including a daemon heartbeat thread started the first time any test
-anywhere calls `enqueue_job`/`run_job_sync` and never stopped again. CI
-observed one of them stuck at `{"status": "queued", "started_at": None}`
-until its own poll timeout gave up -- the worker was never dispatched, or
-never reached its own "mark running" write, in a run where this suite's
-other 1500+ tests had already been submitting and completing work through
-that same shared executor and the same shared heartbeat thread for minutes.
-That is exactly the class of nondeterminism `_ImmediateExecutor`/
-`inline_executor` already exists to remove from `tests/
-test_issue_176_persist_jobs.py`'s own tests (see that module's docstring).
-It removes it here too, for these two tests specifically, without weakening
-what they prove: Flask-SQLAlchemy scopes `db.session` by **app-context
-identity**, not by OS thread -- `_run_job` pushes its own
-`app_obj.app_context()` regardless of which thread calls it, and a nested
-context on the *same* thread resolves to a genuinely different session
-object than the one the request already had open (verified directly:
-`id(db.session())` differs before and after pushing a second, nested
-context on one thread). The bug blocker 2 fixed was a session-identity bug,
-never a thread-identity one; forcing the closure to run inline only removes
-the *incidental* concurrency this suite could never fully control anyway,
-not the property under test.
+The two blocker-2 tests below need the real async path -- a genuinely
+different OS thread reaching `_run_job` -- but they took it from
+`services.background_jobs._EXECUTOR`, a module-level singleton shared by
+*every* test in the whole 1500+-test session. CI observed one of them stuck
+at `{"status": "queued", "started_at": None}` until its own poll timeout
+gave up: the worker was never dispatched in time, in a run where this
+suite's other tests had already been submitting work through that same
+shared pool for minutes. `dedicated_executor` removes exactly that
+nondeterminism and nothing else. The closure still runs on a real, second
+OS thread; it is just a thread nothing else in the session is queued behind,
+and the test joins the future it produced instead of racing a wall-clock
+deadline. What these tests prove is untouched -- Flask-SQLAlchemy scopes
+`db.session` by app-context identity, and `_run_job` pushes its own
+`app_obj.app_context()` either way.
 
 Blocker 3 -- `PropertyAiAnalysisVariant`'s (property_id, provider) pair was
 protected by a plain (non-unique) index, and the writer in
@@ -87,6 +77,7 @@ as its writer.
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from sqlalchemy import text
@@ -97,18 +88,36 @@ from services import background_jobs
 from tests import setup_test_environment
 
 
-class _ImmediateExecutor:
-    """Runs a submitted callable synchronously, in the caller's thread.
+class _DedicatedExecutor:
+    """A one-thread `ThreadPoolExecutor` private to a single test.
 
-    The same stand-in `tests/test_issue_176_persist_jobs.py` uses for the
-    real `ThreadPoolExecutor` -- `enqueue_job` still calls
-    `_EXECUTOR.submit(_run_job, ...)` exactly as it does in production, this
-    just resolves it inline instead of scheduling it onto a second, real
-    thread this suite cannot otherwise control the timing of.
+    `enqueue_job` still calls `_EXECUTOR.submit(_run_job, ...)` exactly as it
+    does in production and the closure still runs on a real, second OS
+    thread -- but on a pool nothing else in this session is queued behind,
+    and every future it hands out is recorded so the test can join it.
     """
 
+    def __init__(self):
+        self._pool = ThreadPoolExecutor(max_workers=1)
+        self._futures = []
+
     def submit(self, fn, *args, **kwargs):
-        fn(*args, **kwargs)
+        future = self._pool.submit(fn, *args, **kwargs)
+        self._futures.append(future)
+        return future
+
+    def drain(self, timeout=30.0):
+        """Block until every job submitted so far has finished.
+
+        Re-raises whatever `_run_job` let escape: it records its own failures
+        as an `error` status, so an exception surfacing here is a defect in
+        the test setup, not a run this test should keep polling about.
+        """
+        for future in list(self._futures):
+            future.result(timeout=timeout)
+
+    def shutdown(self):
+        self._pool.shutdown(wait=True)
 
 
 @pytest.fixture
@@ -129,9 +138,12 @@ def client(app):
 
 
 @pytest.fixture
-def inline_executor(monkeypatch):
-    """Make enqueue_job's worker run synchronously for this test only."""
-    monkeypatch.setattr(background_jobs, "_EXECUTOR", _ImmediateExecutor())
+def dedicated_executor(monkeypatch):
+    """Give this test its own worker thread for enqueue_job's closure."""
+    executor = _DedicatedExecutor()
+    monkeypatch.setattr(background_jobs, "_EXECUTOR", executor)
+    yield executor
+    executor.shutdown()
 
 
 def _poll_job(client, job_id, timeout=10.0):
@@ -184,14 +196,15 @@ def _read_land_ai_analysis_raw(land_id):
 
 
 def test_land_claude_worker_persists_ai_analysis_readable_by_a_fresh_session(
-    app, client, monkeypatch
+    app, client, monkeypatch, dedicated_executor
 ):
     """A worker that received only land_id must persist ai_analysis where a
     brand-new session (a different request, a different process) reads it.
 
     Forces the real async path -- `_should_run_sync` is patched False, so
-    this exercises the actual ThreadPoolExecutor + Flask-SQLAlchemy scoped
-    session boundary the bug lived in, not an inlined stand-in for it.
+    this exercises the actual `ThreadPoolExecutor` + Flask-SQLAlchemy scoped
+    session boundary the bug lived in, not an inlined stand-in for it. The
+    pool is this test's own; see the module docstring for why.
     """
     with app.app_context():
         land = Land(source_email_id="blocker2-1", title="Land for worker test")
@@ -221,6 +234,8 @@ def test_land_claude_worker_persists_ai_analysis_readable_by_a_fresh_session(
     assert resp.status_code == 202
     job_id = resp.get_json()["job_id"]
 
+    dedicated_executor.drain()
+
     job = _poll_job(client, job_id)
     assert job["status"] == "success", job
     assert job["result"]["success"] is True
@@ -240,7 +255,7 @@ def test_land_claude_worker_persists_ai_analysis_readable_by_a_fresh_session(
 
 
 def test_land_claude_worker_merges_into_a_fresh_session_on_enrichment(
-    app, client, monkeypatch
+    app, client, monkeypatch, dedicated_executor
 ):
     """Same bug, the enrichment (existing_analysis merge) branch."""
     with app.app_context():
@@ -275,6 +290,8 @@ def test_land_claude_worker_merges_into_a_fresh_session_on_enrichment(
     )
     assert resp.status_code == 202
     job_id = resp.get_json()["job_id"]
+
+    dedicated_executor.drain()
 
     job = _poll_job(client, job_id)
     assert job["status"] == "success", job
