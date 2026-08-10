@@ -52,6 +52,15 @@ class ListingStatusService:
     # User agent to mimic browser
     USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+    # When idealista refuses this machine it refuses everything: measured
+    # 2026-08-10, the home page answers 403 with the same DataDome block page a
+    # listing does, with or without a full set of browser headers. A sweep that
+    # keeps going then spends one outbound request per remaining row to learn
+    # the same thing, and hammering a site that has just said no is the wrong
+    # answer besides. Stop after this many refusals in a row and report that
+    # the run was cut short -- an unfinished sweep is not a finished one.
+    CONSECUTIVE_ERROR_LIMIT = 3
+
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update(
@@ -207,6 +216,10 @@ class ListingStatusService:
             return False, None
 
         record.listing_last_checked = datetime.now(timezone.utc)
+        # This is the one path that read the listing page, so it is the one path
+        # that may claim so. A hand-set status and a status taken from
+        # idealista's removal email stamp their own source instead.
+        record.listing_status_source = "check"
         current = record.listing_status or "active"
 
         if status in ("removed", "sold") and current == "active":
@@ -311,6 +324,23 @@ class ListingStatusService:
             "changed": changed,
         }
 
+    @staticmethod
+    def _was_refused(result: Dict) -> bool:
+        """Did this row's check fail to reach the listing page?
+
+        Both shapes count: a row the service could not even try (no URL) and a
+        fetch idealista refused, which `check_listing_status` reports as the
+        observed status 'error'. Neither told us anything about the listing.
+
+        The first shape cannot reach the sweeps that use this -- both select on
+        `Land.url.isnot(None)` -- so a run cut short really is idealista saying
+        no, not a gap in our own data. It is counted anyway because a caller
+        that skips that filter would still be learning nothing per request.
+        """
+        if not result.get("success"):
+            return True
+        return result.get("new_status") == "error"
+
     def check_favorites_status(self, limit: int = 50) -> Dict:
         """
         Check status of all favorite listings.
@@ -340,10 +370,13 @@ class ListingStatusService:
             "removed": 0,
             "sold": 0,
             "errors": 0,
+            "stopped_early": False,
+            "unchecked": 0,
             "details": [],
         }
 
-        for land in favorites:
+        consecutive_errors = 0
+        for index, land in enumerate(favorites):
             # Add small delay between requests to be polite
             time.sleep(random.uniform(1, 3))
 
@@ -372,6 +405,20 @@ class ListingStatusService:
                     )
             else:
                 results["errors"] += 1
+
+            consecutive_errors = (
+                consecutive_errors + 1 if self._was_refused(result) else 0
+            )
+            if consecutive_errors >= self.CONSECUTIVE_ERROR_LIMIT:
+                results["stopped_early"] = True
+                results["unchecked"] = len(favorites) - (index + 1)
+                logger.warning(
+                    "Stopping the favourites sweep after %s refusals in a row; "
+                    "%s left unchecked",
+                    consecutive_errors,
+                    results["unchecked"],
+                )
+                break
 
         logger.info(
             f"Checked {results['checked']} favorites: "
@@ -423,10 +470,13 @@ class ListingStatusService:
             "removed": 0,
             "sold": 0,
             "errors": 0,
+            "stopped_early": False,
+            "unchecked": 0,
             "details": [],
         }
 
-        for land in listings:
+        consecutive_errors = 0
+        for index, land in enumerate(listings):
             # Add delay between requests
             time.sleep(random.uniform(2, 4))
 
@@ -456,6 +506,20 @@ class ListingStatusService:
                     )
             else:
                 results["errors"] += 1
+
+            consecutive_errors = (
+                consecutive_errors + 1 if self._was_refused(result) else 0
+            )
+            if consecutive_errors >= self.CONSECUTIVE_ERROR_LIMIT:
+                results["stopped_early"] = True
+                results["unchecked"] = len(listings) - (index + 1)
+                logger.warning(
+                    "Stopping the listing sweep after %s refusals in a row; "
+                    "%s left unchecked",
+                    consecutive_errors,
+                    results["unchecked"],
+                )
+                break
 
         # Record in SyncHistory if any listings were removed/sold
         if record_sync and (results["removed"] > 0 or results["sold"] > 0):

@@ -174,27 +174,44 @@ class TestTheLocationPanelIsGone:
 
 
 class TestTheManualStatusOverrideIsGone:
-    def test_the_controls_are_gone(self, client, land):
+    """Removed on 2026-08-09, asked for back on 2026-08-10 once idealista's
+    DataDome block made every "Check status" answer `error` -- see the property
+    page's copy of this class for the measurement. It comes back in the header,
+    marked `manual`, without stamping listing_last_checked.
+    """
+
+    def test_the_old_actions_row_controls_stayed_gone(self, client, land):
+        """The dropdown that stood among the actions at the bottom, and the
+        "Mark as Active" button that replaced it for a removed row."""
         body = client.get(f"/lands/{land}").get_data(as_text=True)
-        assert "Mark Status" not in body.replace("Mark Status dropdown", "")
+        assert "></i>Mark Status" not in body
         assert "Mark as Removed" not in body
         assert "Mark as Sold" not in body
         assert "Mark as Active" not in body
 
-    def test_its_javascript_went_with_it(self, client, land):
+    def test_the_control_is_one_dropdown_beside_the_map_icons(self, client, land):
         body = client.get(f"/lands/{land}").get_data(as_text=True)
-        assert "function setListingStatus" not in body
-        assert 'onclick="setListingStatus' not in body
-        assert "/api/land/${landId}/set-status" not in body
+        icons = body[body.index('class="detail-link-icons') :]
+        icons = icons[: icons.index("</h1>")]
+        assert body.count('id="set-status-btn"') == 1
+        assert 'id="set-status-btn"' in icons
+        for value in ("active", "removed", "sold"):
+            assert f"setListingStatus({land}, '{value}')" in icons
 
-    def test_a_removed_land_offers_no_status_override_either(
-        self, client, removed_land
+    def test_it_posts_to_the_json_api_and_says_idealista_is_not_asked(
+        self, client, land
     ):
+        body = client.get(f"/lands/{land}").get_data(as_text=True)
+        handler = body[body.index("async function setListingStatus") :]
+        assert "/api/land/${landId}/set-status" in handler
+        assert "Idealista is not consulted" in handler
+
+    def test_a_removed_land_can_be_put_back(self, client, removed_land):
+        """The banner still renders, and the row is not stuck: `active` is one
+        of the three the dropdown offers."""
         body = client.get(f"/lands/{removed_land}").get_data(as_text=True)
-        assert "no longer available on Idealista" in body  # the banner still renders
-        assert "Mark as Active" not in body
-        assert "function setListingStatus" not in body
-        assert 'onclick="setListingStatus' not in body
+        assert "no longer available on Idealista" in body
+        assert f"setListingStatus({removed_land}, 'active')" in body
 
 
 class TestCheckStatusIsOneButton:
