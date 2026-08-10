@@ -708,33 +708,82 @@ def test_a_backslash_in_a_subsection_name_still_matches_its_own_key(tmp_path):
     )
 
 
-def test_a_key_with_a_tab_in_its_name_is_refused_rather_than_mis_compared(tmp_path):
-    """git allows a tab in a subsection name; this comparison cannot.
+TAB_KEY = "includeif.gitdir:a\tb.path"
 
-    Every entry is rendered as `key<TAB>value`, so a key that itself contains
-    a tab splits in the wrong place and two different configs can render
-    identically. Refusing to judge is the only honest answer — reading it as
-    "nothing changed" is the failure mode this whole canary exists to avoid.
+
+def _seed_tab_bearing_key(repo, value):
+    """Give the toy repo a clone-scope key with a real tab in its name.
+
+    git accepts a tab inside a subsection name, and reports it verbatim, so
+    the key really is `includeif.gitdir:a<TAB>b.path` — one key, not two.
     """
-    repo = _make_repo(tmp_path, committed_gate_exit=0)
     config = repo / ".git" / "config"
     with config.open("a") as handle:
-        handle.write('[includeIf "gitdir:a\tb"]\n\tpath = x.inc\n')
-    assert (
-        "includeif.gitdir:a\tb.path"
-        in _git(repo, "config", "--file", str(config), "--list").stdout
-    ), "git no longer produces a tab-bearing key, so this test is moot"
+        handle.write(f'[includeIf "gitdir:a\tb"]\n\tpath = {value}\n')
+    assert TAB_KEY in _git(repo, "config", "--file", str(config), "--list").stdout, (
+        "git no longer produces a tab-bearing key, so these tests are moot"
+    )
+    return config
 
-    _write_gate_script(repo, "#!/bin/bash\ngit config core.bare true\nexit 0\n")
-    _commit_all(repo, "gate mutating a config the canary cannot render")
+
+def test_a_tab_bearing_key_does_not_veto_a_parallel_branch_write(tmp_path):
+    """Owning such a key must not cost you every push (#155 follow-up).
+
+    The fingerprint writes one `key<TAB>value` line per entry, so a raw tab
+    in the key used to split the record in the wrong place. The first fix
+    refused to judge the file at all, which meant a clone owning one legal
+    key had every push aborted the moment anything — a parallel
+    `git push -u` included — touched its config. Encoding the key removes
+    the ambiguity instead of the push.
+    """
+    repo = _make_repo(tmp_path, committed_gate_exit=0)
+    config = _seed_tab_bearing_key(repo, "x.inc")
+    _write_gate_script(
+        repo,
+        "#!/bin/bash\n"
+        f"git config --file {shlex.quote(str(config))} branch.other.remote origin\n"
+        "exit 0\n",
+    )
+    _commit_all(repo, "gate racing a branch write, with a tab-bearing key present")
 
     res = _run_hook(repo)
-
     output = res.stdout + res.stderr
-    assert res.returncode != 0, "an unjudgeable config must abort the push:\n" + output
-    assert "tab in its subsection name" in output, (
-        "the hook judged a config it cannot render unambiguously instead of "
-        "saying so:\n" + output
+
+    assert res.returncode == 0, (
+        "a legal tab-bearing key turned a benign branch write into an "
+        "aborted push:\n" + output
+    )
+    assert "FATAL" not in output
+
+
+def test_a_tab_bearing_key_is_repaired_under_its_own_name(tmp_path):
+    """The repair must name the key git named, not a prefix of it.
+
+    Split on the raw tab, `includeif.gitdir:a<TAB>b.path` reads as the key
+    `includeif.gitdir:a` — which does not exist. The hook would then report
+    that name and write *it* back, inventing a key while leaving the mutated
+    one exactly as the gate left it.
+    """
+    repo = _make_repo(tmp_path, committed_gate_exit=0)
+    config = _seed_tab_bearing_key(repo, "x.inc")
+    _write_gate_script(
+        repo,
+        "#!/bin/bash\n"
+        f"git config --file {shlex.quote(str(config))} "
+        f"--replace-all {shlex.quote(TAB_KEY)} poison.inc\n"
+        "exit 0\n",
+    )
+    _commit_all(repo, "gate mutating a tab-bearing clone-scope key")
+
+    res = _run_hook(repo)
+    output = res.stdout + res.stderr
+
+    assert res.returncode != 0, output
+    assert _config_value(repo, TAB_KEY) == "x.inc", (
+        "the tab-bearing key was not put back at its pre-gate value:\n" + output
+    )
+    assert _config_value(repo, "includeif.gitdir:a") is None, (
+        "the hook invented a key from the part of the name before the tab:\n" + output
     )
 
 
