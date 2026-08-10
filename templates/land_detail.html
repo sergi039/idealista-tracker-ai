@@ -62,10 +62,11 @@
                             </button>
                         </span>
                     </h1>
-                    {# One line: the place and the coordinate, same as the property
-                       page. Accuracy stays with the coordinate -- an unrecorded or
-                       approximate one is why a sea-view verdict can come back
-                       unknown, so it is not decoration. #}
+                    {# One line: the place, the coordinate and when the listing was
+                       last checked, same as the property page. Accuracy stays with
+                       the coordinate -- an unrecorded or approximate one is why a
+                       sea-view verdict can come back unknown, so it is not
+                       decoration. #}
                     <div class="d-flex flex-wrap align-items-center gap-2 text-body-secondary small">
                         {% if land.listing_status == 'removed' %}
                             <span class="badge bg-danger">
@@ -93,6 +94,20 @@
                                 </button>
                             </span>
                         {% endif %}
+                        {# When the listing was last read off Idealista, next to the
+                           button that reads it. "never" is the honest answer for a
+                           row nobody has checked, and it is not the same as an old
+                           date (issue #136); a blocked fetch leaves this where it
+                           was, because it observed nothing. #}
+                        <span class="text-nowrap">
+                            <i class="fas fa-clock-rotate-left me-1"></i>
+                            {% if land.listing_last_checked %}
+                                Checked: {{ land.listing_last_checked.strftime('%Y-%m-%d') }}
+                            {% else %}
+                                <span class="fst-italic"
+                                      title="Nobody has read this listing off Idealista yet">Checked: never</span>
+                            {% endif %}
+                        </span>
                     </div>
                 </div>
             </div>
