@@ -49,6 +49,7 @@ REQUIRE_ENV = "REQUIRE_POSTGRES_TESTS"
 
 IDENTITY_MIGRATION = "013_add_search_profile_search_identity"
 ASSIGNMENT_CLEANUP_MIGRATION = "014_clear_profile_assignment_metadata"
+STATUS_SOURCE_MIGRATION = "015_add_listing_status_source"
 IDENTITY_COLUMNS = ("source_search_key", "source_search_url", "is_auto_created")
 IDENTITY_INDEX = "ux_search_profiles_source_search_key"
 LABEL_INDEX = "ux_search_profiles_name_without_key"
@@ -226,6 +227,7 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
         assert run_migrations(engine) == [
             IDENTITY_MIGRATION,
             ASSIGNMENT_CLEANUP_MIGRATION,
+            STATUS_SOURCE_MIGRATION,
         ]
 
         # Two *identified* subscriptions may now share the label...
@@ -481,5 +483,68 @@ def test_014_re_raises_anything_that_is_not_a_json_decoding_failure(postgres_url
                 text("SELECT enrichment FROM properties WHERE source_email_id='pinned'")
             ).scalar_one()
         assert stored == {"profile_assignment": {"manual_override": True}}
+    finally:
+        engine.dispose()
+
+
+def test_015_adds_the_status_source_column_and_guards_its_values(postgres_url):
+    """The column the page reads to say where a status came from.
+
+    Nothing is backfilled on purpose: an existing row records no evidence of how
+    its status was decided, and inventing one would be the false confirmation
+    the column exists to prevent.
+    """
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        for table in ("properties", "lands"):
+            columns = {column["name"] for column in inspect(engine).get_columns(table)}
+            assert "listing_status_source" in columns
+
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO properties (source_email_id, title, listing_status) "
+                    "VALUES ('015-legacy', 'Legacy row', 'active')"
+                )
+            )
+            stored = connection.execute(
+                text(
+                    "SELECT listing_status_source FROM properties "
+                    "WHERE source_email_id = '015-legacy'"
+                )
+            ).scalar_one()
+        assert stored is None, "the SQL default is nothing; the model writes 'ingest'"
+
+        # The CHECK constraint is the one that keeps a typo out of the column
+        # the templates switch on.
+        with pytest.raises(SQLAlchemyError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE properties SET listing_status_source = 'guessed' "
+                        "WHERE source_email_id = '015-legacy'"
+                    )
+                )
+
+        for value in ("ingest", "email", "check", "manual"):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE properties SET listing_status_source = :value "
+                        "WHERE source_email_id = '015-legacy'"
+                    ),
+                    {"value": value},
+                )
+
+        # Re-running the file must not fail on the constraint it already added.
+        sql = (MIGRATIONS_DIR / f"{STATUS_SOURCE_MIGRATION}.sql").read_text(
+            encoding="utf-8"
+        )
+        with engine.begin() as connection:
+            connection.exec_driver_sql(sql)
     finally:
         engine.dispose()

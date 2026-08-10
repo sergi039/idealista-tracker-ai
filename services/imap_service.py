@@ -565,6 +565,9 @@ class IMAPService:
                                 existing_property.listing_removed_date = datetime.now(
                                     timezone.utc
                                 )
+                                # idealista's own removal mail, same as the
+                                # property ingester records.
+                                existing_property.listing_status_source = "email"
 
                                 if existing_property.is_favorite:
                                     snapshot = LandHistory.create_snapshot(

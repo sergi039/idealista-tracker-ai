@@ -71,6 +71,34 @@
                                     aria-label="Check status on Idealista">
                                 <i class="fas fa-rotate"></i>
                             </button>
+                            {# Setting the status by hand is back (owner decision,
+                               2026-08-10). It was removed when "Check status"
+                               could still answer; idealista now blocks this
+                               machine outright, so without this there is no way
+                               at all to record that a listing is gone. It is
+                               marked `manual` and, unlike a check, it does not
+                               stamp listing_last_checked. #}
+                            <div class="dropdown d-inline-block">
+                                <button type="button" id="set-status-btn"
+                                        class="btn btn-sm btn-outline-secondary detail-link-icon"
+                                        data-bs-toggle="dropdown" aria-expanded="false"
+                                        title="Set status by hand"
+                                        aria-label="Set status by hand">
+                                    <i class="fas fa-tag"></i>
+                                </button>
+                                <ul class="dropdown-menu" aria-labelledby="set-status-btn">
+                                    <li><h6 class="dropdown-header">Set status by hand</h6></li>
+                                    {% for _value, _icon in [('active', 'fa-rotate-left'), ('removed', 'fa-times-circle'), ('sold', 'fa-check-circle')] %}
+                                        <li>
+                                            <button class="dropdown-item{{ ' active' if (property.listing_status or 'active') == _value }}"
+                                                    type="button"
+                                                    onclick="setPropertyListingStatus({{ property.id }}, '{{ _value }}')">
+                                                <i class="fas {{ _icon }} me-2"></i>{{ _value }}
+                                            </button>
+                                        </li>
+                                    {% endfor %}
+                                </ul>
+                            </div>
                         </span>
                     </h1>
                     {# One line, not three (owner decision, 2026-08-09): the place,
@@ -80,13 +108,23 @@
                        either -- a removed or sold listing says so in the badge
                        here and in the banner below, and an active one makes no
                        claim at all. #}
+                    {# Where the status came from. A `removed` idealista mailed the
+                       owner and a `removed` somebody typed read identically
+                       before this, and with the scraper blocked the difference
+                       is most of what the reader has to go on. #}
+                    {% set _status_note = {
+                        'email': "Recorded from Idealista's own removal email.",
+                        'check': 'Recorded by a status check that read the listing page.',
+                        'manual': 'Set by hand.',
+                        'ingest': 'The default this listing was ingested with — never verified.',
+                    }.get(property.listing_status_source, 'Source not recorded.') %}
                     <div class="d-flex flex-wrap align-items-center gap-2 text-body-secondary small">
                         {% if property.listing_status == 'removed' %}
-                            <span class="badge bg-danger">
+                            <span class="badge bg-danger" title="{{ _status_note }}">
                                 <i class="fas fa-times-circle me-1"></i>REMOVED
                             </span>
                         {% elif property.listing_status == 'sold' %}
-                            <span class="badge bg-secondary">
+                            <span class="badge bg-secondary" title="{{ _status_note }}">
                                 <i class="fas fa-check-circle me-1"></i>SOLD
                             </span>
                         {% endif %}
@@ -186,9 +224,14 @@
                         This property has been sold
                     {% endif %}
                 </h5>
-                {% if property.listing_removed_date %}
-                    <small>Removed on {{ property.listing_removed_date.strftime('%d %B %Y') }}</small>
-                {% endif %}
+                <small>
+                    {% if property.listing_removed_date %}
+                        Removed on {{ property.listing_removed_date.strftime('%d %B %Y') }} —
+                    {% endif %}
+                    {# The banner has room to say it in words, which the badge
+                       above can only manage as a tooltip. #}
+                    {{ _status_note }}
+                </small>
             </div>
         </div>
     </div>
@@ -910,9 +953,18 @@
                             </span>
                         </div>
                         {# Provenance, not decoration: a `likely` from bare-earth terrain
-                           and a `likely` from a marketing phrase are not the same claim. #}
+                           and a `likely` from a marketing phrase are not the same claim.
+                           `read_verdict` answers the literal string "none" when no source
+                           computed anything, and printing that put the word "none" under
+                           "Sea view unknown" on 193 of the owner's listings -- a code
+                           leaking into the page, and one that reads like a verdict of its
+                           own. Say what it means instead. #}
                         <div class="small text-body-secondary mb-3">
-                            {{ sea_view_verdict.source }}{% if sea_view_verdict.reason %} &mdash; {{ sea_view_verdict.reason }}{% endif %}
+                            {% if sea_view_verdict.source and sea_view_verdict.source != 'none' %}
+                                {{ sea_view_verdict.source }}{% if sea_view_verdict.reason %} &mdash; {{ sea_view_verdict.reason }}{% endif %}
+                            {% else %}
+                                {{ t('sea_view_not_computed') }}
+                            {% endif %}
                             {% set geometry = sea_view_verdict.detail.get('geometry') or {} %}
                             {% if geometry.get('distance_m') %}
                                 <br><i class="fas fa-ruler-horizontal me-1"></i>{{ (geometry.distance_m / 1000)|round(1) }} km to the coastline
@@ -1039,6 +1091,33 @@
 
 {% block scripts %}
 <script>
+// Record a status the owner decided, which is not the same thing as one the
+// scraper observed: the endpoint marks it `manual` and leaves
+// listing_last_checked alone, so the header keeps saying when the listing was
+// last actually read. Reloads on success because the badge, the banner and the
+// removal date all change together.
+async function setPropertyListingStatus(propertyId, status) {
+    if (!confirm(`Set this listing to "${status}" by hand? Idealista is not consulted.`)) {
+        return;
+    }
+    try {
+        const response = await fetch(`/api/property/${propertyId}/set-status`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({status: status})
+        });
+        const data = await response.json().catch(() => null);
+        if (response.ok && data && data.success) {
+            window.location.reload();
+            return;
+        }
+        _notify((data && data.error) || 'Could not set the status — see the server logs.', 'error');
+    } catch (error) {
+        console.error('Error setting status:', error);
+        _notify('Could not set the status — see the server logs.', 'error');
+    }
+}
+
 // Ask Idealista whether this listing is still up and record the answer.
 // A blocked or failed fetch reports "error" and deliberately leaves the stored
 // status alone, so this must not claim "no change" -- say we could not verify

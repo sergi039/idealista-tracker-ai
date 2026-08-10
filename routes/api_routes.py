@@ -1660,7 +1660,11 @@ def set_land_status(land_id):
 
         old_status = land.listing_status
         land.listing_status = new_status
-        land.listing_last_checked = datetime.now(timezone.utc)
+        # Deliberately NOT listing_last_checked: nobody read the listing page.
+        # Stamping it here is what made the header say "Checked: today" about a
+        # status somebody typed -- the false confirmation of issue #136, in the
+        # one path that cannot even claim a fetch happened.
+        land.listing_status_source = "manual"
 
         if new_status in ("removed", "sold") and old_status == "active":
             land.listing_removed_date = datetime.now(timezone.utc)
@@ -1680,6 +1684,7 @@ def set_land_status(land_id):
                 "success": True,
                 "land_id": land_id,
                 "status": land.listing_status,
+                "status_source": land.listing_status_source,
                 "previous_status": old_status,
             }
         )
@@ -1717,7 +1722,8 @@ def set_property_status(property_id):
 
         old_status = prop.listing_status or "active"
         prop.listing_status = new_status
-        prop.listing_last_checked = datetime.now(timezone.utc)
+        # Deliberately NOT listing_last_checked -- see set_land_status above.
+        prop.listing_status_source = "manual"
 
         if new_status in ("removed", "sold") and old_status == "active":
             prop.listing_removed_date = datetime.now(timezone.utc)
@@ -1731,6 +1737,7 @@ def set_property_status(property_id):
                 "success": True,
                 "property_id": property_id,
                 "status": prop.listing_status,
+                "status_source": prop.listing_status_source,
             }
         )
 
