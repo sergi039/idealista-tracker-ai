@@ -1041,34 +1041,36 @@ def test_016_the_dedupe_serialization_lock_allows_only_one_execution_per_key(
         check_engine.dispose()
 
 
-def test_016_the_insert_disambiguation_blocks_until_the_original_transaction_commits(
+def test_016_a_lost_insert_ack_still_lets_a_retry_reuse_the_same_row(
     postgres_url, monkeypatch
 ):
-    """#190 review round 6: a bare, immediate re-read right after catching
-    an ambiguous insert-commit exception can race PostgreSQL's own
-    server-side resolution of that COMMIT -- the database can still be
-    finishing the commit after the client's connection has already
-    dropped, and a SELECT that starts before that resolution completes
-    will not see the row under MVCC, even though it is about to exist.
-    `_matches_our_own_insert`'s PostgreSQL branch must not just re-read; it
-    must first *block* on the same `pg_advisory_xact_lock` id the original
-    transaction took as `_dedupe_serialization`'s very first statement,
-    which PostgreSQL releases only at that transaction's own COMMIT or
-    ROLLBACK.
+    """Issue #204 removed the ~170-line insert-commit disambiguation layer
+    (#190 review rounds 5-7) that used to live here -- a re-read, then a
+    block on the original transaction's own `pg_advisory_xact_lock`, then a
+    bounded retry of the disambiguation itself. `_acquire_job_slot` now
+    raises `EnqueueOutcomeUnknown` directly on any ambiguous insert-commit
+    failure, without trying to find out whether the row landed.
 
-    Connection X plays "the transaction whose acknowledgement was lost": it
-    takes the lock and inserts the row, but does not commit yet -- exactly
-    the ambiguous, still-open state this disambiguation exists to wait out.
-    `_matches_our_own_insert` is called directly (a white-box check of the
-    function itself, against the real dialect) and must observably block
-    for as long as X's transaction stays open, then wake the instant X
-    commits and correctly see the row.
+    Proven here through the real `enqueue_job` code path (not a white-box
+    call into machinery that no longer exists) against a real PostgreSQL
+    server: the real `Session.commit` runs first, so the INSERT genuinely
+    commits server-side, and only then does this simulate the client being
+    told the commit failed anyway -- a connection dropped on the way back.
+    `_acquire_job_slot` must raise `EnqueueOutcomeUnknown` without
+    dispatching `fn()`, and correctness must not depend on resolving the
+    ambiguity: the row is a live, leased row under this `dedupe_key`, so
+    the very next `enqueue_job` call for the same key must find it through
+    `_find_live_job_id` and reuse it rather than insert a second one --
+    #176's "at most one execution per dedupe_key" guarantee holding across
+    a lost acknowledgement, on the real database this table is ever
+    actually deployed against.
     """
-    import threading
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session as SQLASession
 
     from app import create_app
     from migrations.runner import run_migrations
-    from services import background_jobs
+    from services.background_jobs import EnqueueOutcomeUnknown, enqueue_job
     from tests import setup_test_environment
 
     engine = create_engine(postgres_url)
@@ -1081,153 +1083,172 @@ def test_016_the_insert_disambiguation_blocks_until_the_original_transaction_com
     monkeypatch.setenv("DATABASE_URL", postgres_url)
     app = create_app()
 
-    key = "property_ai_analysis:904:claude"
-    job_id = "5" * 32
+    key = "property_ai_analysis:908:claude"
 
-    x_engine = create_engine(postgres_url)
-    x_conn = x_engine.connect()
-    try:
-        x_trans = x_conn.begin()
-        x_conn.execute(
-            text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": key}
-        )
-        x_conn.execute(
-            text(
-                "INSERT INTO background_jobs "
-                "(id, job_type, status, dedupe_key, lease_expires_at) "
-                "VALUES (:id, 'property_ai_analysis', 'queued', :key, "
-                "NOW() + INTERVAL '900 seconds')"
-            ),
-            {"id": job_id, "key": key},
-        )
+    real_commit = SQLASession.commit
+    state = {"raised_once": False}
 
-        result_holder: dict[str, object] = {}
-        finished = threading.Event()
-
-        def _call_disambiguation() -> None:
-            with app.app_context():
-                result_holder["value"] = background_jobs._matches_our_own_insert(
-                    job_id, key
-                )
-            finished.set()
-
-        thread = threading.Thread(target=_call_disambiguation)
-        thread.start()
-        try:
-            blocked = not finished.wait(timeout=0.5)
-            assert blocked, (
-                "disambiguation must block while the original transaction "
-                "is still open, not race ahead of it with an immediate read"
+    def _commit_that_lands_then_loses_its_ack(self, *args, **kwargs):
+        result = real_commit(self, *args, **kwargs)
+        if not state["raised_once"]:
+            state["raised_once"] = True
+            raise OperationalError(
+                "simulated dropped connection after commit", {}, Exception("boom")
             )
+        return result
 
-            x_trans.commit()
+    monkeypatch.setattr(SQLASession, "commit", _commit_that_lands_then_loses_its_ack)
 
-            thread.join(timeout=10)
-            assert not thread.is_alive(), (
-                "disambiguation never woke up after the commit"
-            )
-            assert result_holder.get("value") is True, (
-                "disambiguation must see the row once the original "
-                "transaction has actually committed"
-            )
-        finally:
-            thread.join(timeout=10)
-    finally:
-        x_conn.close()
-        x_engine.dispose()
+    calls = {"fn": 0}
 
+    def _fn():
+        calls["fn"] += 1
+        return {"success": True}
 
-def test_016_the_insert_disambiguation_wakes_to_no_row_after_a_rollback(
-    postgres_url, monkeypatch
-):
-    """The mirror of the test above: connection X takes the lock, inserts,
-    and then *rolls back* instead of committing -- the insert genuinely
-    never happened. `_matches_our_own_insert` must still block until that
-    resolution (a ROLLBACK releases the advisory lock exactly like a
-    COMMIT does), then correctly find no row and return `False`, so
-    `_acquire_job_slot` re-raises the original exception instead of
-    silently treating a real failure as a success.
-    """
-    import threading
+    with app.app_context():
+        with pytest.raises(EnqueueOutcomeUnknown) as exc_info:
+            enqueue_job(_fn, job_type="property_ai_analysis", app=app, dedupe_key=key)
 
-    from app import create_app
-    from migrations.runner import run_migrations
-    from services import background_jobs
-    from tests import setup_test_environment
+    assert state["raised_once"] is True, (
+        "the test did not exercise the ambiguous insert-commit path it was meant to"
+    )
+    assert calls["fn"] == 0, "an unconfirmed insert must never be dispatched"
 
-    engine = create_engine(postgres_url)
-    try:
-        run_migrations(engine)
-    finally:
-        engine.dispose()
-
-    setup_test_environment()
-    monkeypatch.setenv("DATABASE_URL", postgres_url)
-    app = create_app()
-
-    key = "property_ai_analysis:905:claude"
-    job_id = "6" * 32
-
-    x_engine = create_engine(postgres_url)
-    x_conn = x_engine.connect()
-    try:
-        x_trans = x_conn.begin()
-        x_conn.execute(
-            text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": key}
-        )
-        x_conn.execute(
-            text(
-                "INSERT INTO background_jobs "
-                "(id, job_type, status, dedupe_key, lease_expires_at) "
-                "VALUES (:id, 'property_ai_analysis', 'queued', :key, "
-                "NOW() + INTERVAL '900 seconds')"
-            ),
-            {"id": job_id, "key": key},
-        )
-
-        result_holder: dict[str, object] = {}
-        finished = threading.Event()
-
-        def _call_disambiguation() -> None:
-            with app.app_context():
-                result_holder["value"] = background_jobs._matches_our_own_insert(
-                    job_id, key
-                )
-            finished.set()
-
-        thread = threading.Thread(target=_call_disambiguation)
-        thread.start()
-        try:
-            blocked = not finished.wait(timeout=0.5)
-            assert blocked, (
-                "disambiguation must block while the original transaction is still open"
-            )
-
-            x_trans.rollback()
-
-            thread.join(timeout=10)
-            assert not thread.is_alive(), (
-                "disambiguation never woke up after the rollback"
-            )
-            assert result_holder.get("value") is False, (
-                "a rolled-back insert must never be mistaken for a landed one"
-            )
-        finally:
-            thread.join(timeout=10)
-    finally:
-        x_conn.close()
-        x_engine.dispose()
+    landed_job_id = exc_info.value.job_id
 
     check_engine = create_engine(postgres_url)
     try:
-        with check_engine.begin() as check_conn:
-            count = check_conn.execute(
-                text("SELECT count(*) FROM background_jobs WHERE id = :id"),
-                {"id": job_id},
-            ).scalar_one()
-        assert count == 0, "a rolled-back insert must leave no row behind"
+        with check_engine.begin() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT status FROM background_jobs "
+                    "WHERE id = :id AND dedupe_key = :key"
+                ),
+                {"id": landed_job_id, "key": key},
+            ).fetchone()
+        assert row is not None and row[0] == "queued", (
+            "the insert must have genuinely landed on the real server for "
+            "this to be the lost-ack scenario, not the negative control below"
+        )
     finally:
         check_engine.dispose()
+
+    # The correctness proof: a retry for the same dedupe_key, against the
+    # same real database, must find this exact row through
+    # _find_live_job_id rather than insert a second one.
+    with app.app_context():
+        second_job_id = enqueue_job(
+            _fn, job_type="property_ai_analysis", app=app, dedupe_key=key
+        )
+    assert second_job_id == landed_job_id, (
+        "a retry for the same dedupe_key must reuse the row the ambiguous "
+        "insert actually created, not create a second one"
+    )
+    assert calls["fn"] == 0, "reusing an existing queued row must not run fn() again"
+
+    check_engine = create_engine(postgres_url)
+    try:
+        with check_engine.begin() as connection:
+            count = connection.execute(
+                text("SELECT count(*) FROM background_jobs WHERE dedupe_key = :key"),
+                {"key": key},
+            ).scalar_one()
+        assert count == 1, "at most one row must exist for this dedupe_key"
+    finally:
+        check_engine.dispose()
+
+
+def test_016_an_insert_that_never_landed_leaves_nothing_for_a_retry_to_find(
+    postgres_url, monkeypatch
+):
+    """The mirror of the test above, on the same real server: when the
+    insert's commit genuinely never reaches PostgreSQL (not just loses its
+    acknowledgement), #204's simplified `_acquire_job_slot` still answers
+    `EnqueueOutcomeUnknown` -- it no longer tries to tell the two cases
+    apart, so both raise the same way -- but leaves no row behind, and a
+    later `enqueue_job` for the same key is free to insert and run a fresh
+    replacement rather than being permanently blocked by a failure the
+    database never actually saw.
+    """
+    import time as time_module
+
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session as SQLASession
+
+    from app import create_app
+    from migrations.runner import run_migrations
+    from services.background_jobs import EnqueueOutcomeUnknown, enqueue_job, get_job
+    from tests import setup_test_environment
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+    finally:
+        engine.dispose()
+
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    app = create_app()
+
+    key = "property_ai_analysis:909:claude"
+
+    real_commit = SQLASession.commit
+    state = {"raised_once": False}
+
+    def _commit_that_never_lands(self, *args, **kwargs):
+        if not state["raised_once"]:
+            state["raised_once"] = True
+            raise OperationalError("simulated failed commit", {}, Exception("boom"))
+        return real_commit(self, *args, **kwargs)
+
+    monkeypatch.setattr(SQLASession, "commit", _commit_that_never_lands)
+
+    calls = {"fn": 0}
+
+    def _fn():
+        calls["fn"] += 1
+        return {"success": True}
+
+    with app.app_context(), pytest.raises(EnqueueOutcomeUnknown):
+        enqueue_job(_fn, job_type="property_ai_analysis", app=app, dedupe_key=key)
+
+    assert state["raised_once"] is True, (
+        "the test did not exercise the insert-commit failure path it was meant to"
+    )
+
+    check_engine = create_engine(postgres_url)
+    try:
+        with check_engine.begin() as connection:
+            count = connection.execute(
+                text("SELECT count(*) FROM background_jobs WHERE dedupe_key = :key"),
+                {"key": key},
+            ).scalar_one()
+        assert count == 0, (
+            "an insert whose commit genuinely never reached the server must "
+            "leave no row behind"
+        )
+    finally:
+        check_engine.dispose()
+
+    # Nothing blocks the key afterwards -- a fresh enqueue_job must insert
+    # and run a real replacement, on the real ThreadPoolExecutor path this
+    # test never mocks (only SQLite's shared test connection needs that).
+    with app.app_context():
+        second_job_id = enqueue_job(
+            _fn, job_type="property_ai_analysis", app=app, dedupe_key=key
+        )
+
+    deadline = time_module.time() + 5
+    status = None
+    while time_module.time() < deadline:
+        with app.app_context():
+            job = get_job(second_job_id)
+            status = job["status"] if job else None
+        if status in ("success", "error"):
+            break
+        time_module.sleep(0.05)
+    assert status == "success", f"the replacement job never finished: {status}"
+    assert calls["fn"] == 1
 
 
 def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(

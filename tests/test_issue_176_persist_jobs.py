@@ -1246,32 +1246,49 @@ def test_a_write_that_genuinely_failed_is_not_mistaken_for_success(
     )
 
 
-# --- The insert's own commit can be ambiguous too (#190 review round 5) ---
+# --- The insert's own commit can be ambiguous too, simplified (#204) -----
+#
+# #190 review rounds 5-7 spent ~170 lines (plus ~125 of docstring) trying to
+# resolve that ambiguity -- re-reading the row, then blocking on the
+# original transaction's own advisory lock, then retrying the disambiguation
+# itself if even that failed -- so a caller whose insert had, in fact,
+# landed could continue transparently. Issue #204 removed that layer:
+# `_acquire_job_slot` now raises `EnqueueOutcomeUnknown` directly on any
+# ambiguous insert-commit failure, without trying to find out whether the
+# row landed. The tests below pin what replaces it: the caller always sees
+# an honest "unknown" outcome, never a fabricated success and never a 500
+# leaking internals, and #176's "at most one execution per dedupe_key"
+# guarantee still holds because the next call for the same key finds
+# whatever the ambiguous insert actually left behind through
+# `_find_live_job_id`.
 
 
-def test_an_insert_that_lands_but_loses_its_acknowledgement_still_runs_fn_once(
-    app, inline_executor, monkeypatch
+def test_a_lost_insert_ack_answers_unknown_and_a_retry_reuses_the_same_row(
+    app, monkeypatch
 ):
-    """Mirrors round 4's ambiguous-write fix, one step earlier: PostgreSQL
-    commits the fresh `queued` row's INSERT server-side, but this process
-    never finds out -- a connection dropped on the way back. The old code
-    only ever caught `IntegrityError` around this commit; anything else (an
-    `OperationalError`, the actual shape a dropped connection raises)
-    propagated straight out of `_acquire_job_slot` as a 500, *before*
-    `enqueue_job` ever registered ownership or dispatched `fn()`. The row
-    still landed as an orphaned `queued` insert nobody was running -- a
-    retry's own liveness check would find it live and defer to its id
-    forever, never calling `fn()`, stuck until its lease expired.
+    """The scenario #204 is about: PostgreSQL commits the fresh `queued`
+    row's INSERT server-side, but this process never finds out -- a
+    connection dropped on the way back, not a failed transaction. The old
+    code only ever caught `IntegrityError` around this commit and spent a
+    whole layer (#190 review rounds 5-7) disambiguating anything else
+    before deciding whether to continue transparently. `_acquire_job_slot`
+    no longer tries: it rolls back its own view of the transaction and
+    raises `EnqueueOutcomeUnknown` immediately, without dispatching `fn()`
+    for a job_id it cannot confirm it owns.
 
-    Simulated by monkeypatching `Session.commit` at the SQLAlchemy class
-    level -- nothing narrower is available for a plain `db.session.
-    commit()` call the way `_try_write` gave the round-4 fix a function to
-    wrap. The first call performs the *real* commit (so the insert
-    genuinely, verifiably lands) and then raises anyway, exactly what a
-    lost acknowledgement looks like.
+    Correctness does not depend on resolving the ambiguity here. The insert
+    genuinely landed (simulated below: the real commit runs, then raises
+    anyway -- exactly what a lost acknowledgement looks like), so it is a
+    live row with a live lease under this `dedupe_key` -- and the very next
+    `enqueue_job` call for that same key must find it through
+    `_find_live_job_id` and reuse it rather than insert a second one. That
+    is the "at most one execution per dedupe_key" guarantee (#176) proven
+    to hold across a lost acknowledgement.
     """
     from sqlalchemy.exc import OperationalError
     from sqlalchemy.orm import Session as SQLASession
+
+    from services.background_jobs import EnqueueOutcomeUnknown
 
     real_commit = SQLASession.commit
     state = {"raised_once": False}
@@ -1293,31 +1310,70 @@ def test_an_insert_that_lands_but_loses_its_acknowledgement_still_runs_fn_once(
         calls["fn"] += 1
         return {"success": True}
 
+    dedupe_key = "property_ai_analysis:906:claude"
+
     with app.app_context():
-        job_id = enqueue_job(_fn, job_type="property_ai_analysis", app=app)
-        job = get_job(job_id)
+        with pytest.raises(EnqueueOutcomeUnknown) as exc_info:
+            enqueue_job(
+                _fn, job_type="property_ai_analysis", app=app, dedupe_key=dedupe_key
+            )
 
-    assert state["raised_once"] is True, (
-        "the test did not exercise the ambiguous insert-commit path it was meant to"
-    )
-    assert calls["fn"] == 1, (
-        "fn() must run exactly once: an insert that actually landed must "
-        "still be picked up and dispatched, not left stuck as an "
-        "unrun orphaned queued row, and not run a second time either"
-    )
-    assert job["status"] == "success"
-    assert job["result"] == {"success": True}
+        assert state["raised_once"] is True, (
+            "the test did not exercise the ambiguous insert-commit path it was meant to"
+        )
+        assert calls["fn"] == 0, (
+            "an unconfirmed insert must never be dispatched -- ownership is "
+            "only registered once _acquire_job_slot returns normally"
+        )
+        with background_jobs._owned_job_ids_lock:
+            assert not background_jobs._owned_job_ids
+
+        landed_job_id = exc_info.value.job_id
+        landed_row = db.session.get(BackgroundJob, landed_job_id)
+        assert landed_row is not None and landed_row.status == "queued", (
+            "the insert must have genuinely landed for this to be the "
+            "lost-ack scenario -- otherwise this is the negative control below"
+        )
+
+        # The correctness proof: a retry for the same dedupe_key must find
+        # this exact row through _find_live_job_id, not create a second one.
+        second_job_id = enqueue_job(
+            _fn, job_type="property_ai_analysis", app=app, dedupe_key=dedupe_key
+        )
+
+        assert second_job_id == landed_job_id, (
+            "a retry for the same dedupe_key must reuse the row the "
+            "ambiguous insert actually created, not create a second one"
+        )
+        assert calls["fn"] == 0, (
+            "reusing an existing queued row must not run fn() again"
+        )
+
+        rows = BackgroundJob.query.filter_by(dedupe_key=dedupe_key).all()
+    assert len(rows) == 1, "at most one row must exist for this dedupe_key"
 
 
-def test_an_insert_that_genuinely_never_landed_still_raises(app, monkeypatch):
-    """Negative control: when the insert's commit genuinely never lands
-    (not just loses its acknowledgement), `_matches_our_own_insert` must
-    correctly find nothing, the original exception must propagate, and no
-    row must be left behind -- the disambiguation must not turn every
-    transient insert failure into a false success.
+def test_an_insert_that_genuinely_never_landed_leaves_nothing_behind(
+    app, inline_executor, monkeypatch
+):
+    """Negative control: when the insert's commit genuinely never lands (not
+    just loses its acknowledgement), `_acquire_job_slot` still answers
+    `EnqueueOutcomeUnknown` -- #204 no longer tries to distinguish this from
+    the lost-ack case above, so both raise the same way -- but no row is
+    left behind, and a later `enqueue_job` for the same key is free to
+    insert a fresh one rather than being blocked forever by a failure that
+    left nothing in the database.
+
+    Uses `inline_executor` (see this file's module docstring) because,
+    unlike the test above, the second `enqueue_job` call here genuinely
+    dispatches `fn()` -- nothing was left behind to defer to -- and this
+    suite's in-memory SQLite cannot safely take that on a second real
+    thread.
     """
     from sqlalchemy.exc import OperationalError
     from sqlalchemy.orm import Session as SQLASession
+
+    from services.background_jobs import EnqueueOutcomeUnknown
 
     real_commit = SQLASession.commit
     state = {"raised_once": False}
@@ -1333,30 +1389,49 @@ def test_an_insert_that_genuinely_never_landed_still_raises(app, monkeypatch):
     def _fn():
         return {"success": True}
 
-    with app.app_context(), pytest.raises(OperationalError):
-        enqueue_job(_fn, job_type="property_ai_analysis", app=app)
+    dedupe_key = "property_ai_analysis:907:claude"
+
+    with app.app_context(), pytest.raises(EnqueueOutcomeUnknown):
+        enqueue_job(
+            _fn, job_type="property_ai_analysis", app=app, dedupe_key=dedupe_key
+        )
 
     assert state["raised_once"] is True, (
         "the test did not exercise the insert-commit failure path it was meant to"
     )
     with app.app_context():
-        rows = BackgroundJob.query.filter_by(job_type="property_ai_analysis").all()
+        rows = BackgroundJob.query.filter_by(dedupe_key=dedupe_key).all()
     assert rows == [], (
         "an insert whose commit genuinely never landed must leave no row behind"
     )
 
+    # Nothing is blocking the key -- a later call must be free to insert a
+    # fresh row, not treat the earlier ambiguous failure as a permanent
+    # claim on it.
+    with app.app_context():
+        second_job_id = enqueue_job(
+            _fn, job_type="property_ai_analysis", app=app, dedupe_key=dedupe_key
+        )
+        rows = BackgroundJob.query.filter_by(dedupe_key=dedupe_key).all()
+    assert len(rows) == 1 and rows[0].id == second_job_id, (
+        "the earlier failed insert must not block a fresh one for the same key"
+    )
 
-def test_run_job_sync_also_recovers_from_an_ambiguous_insert_commit(app, monkeypatch):
-    """The disambiguation applies to the synchronous path too
-    (`run_job_sync`, used by `?sync=1` and `TESTING`) since it shares
-    `_acquire_job_slot` with the async path -- an ambiguous insert-commit
-    failure there must not answer 500 for work that, in fact, already
-    started (#190 review round 5).
+
+def test_run_job_sync_also_answers_unknown_on_an_ambiguous_insert_commit(
+    app, monkeypatch
+):
+    """`run_job_sync` shares `_acquire_job_slot` with the async path, so an
+    ambiguous insert-commit failure there raises `EnqueueOutcomeUnknown`
+    too -- not the transparent continuation the pre-#204 layer used to
+    produce, and not a 500 for work that might, in fact, already be queued
+    (`routes/api_routes.py` maps `EnqueueOutcomeUnknown` to 503 for both
+    the sync and async paths alike).
     """
     from sqlalchemy.exc import OperationalError
     from sqlalchemy.orm import Session as SQLASession
 
-    from services.background_jobs import run_job_sync
+    from services.background_jobs import EnqueueOutcomeUnknown, run_job_sync
 
     real_commit = SQLASession.commit
     state = {"raised_once": False}
@@ -1377,146 +1452,13 @@ def test_run_job_sync_also_recovers_from_an_ambiguous_insert_commit(app, monkeyp
         return {"success": True}
 
     with app.app_context():
-        job_id = run_job_sync(_fn, job_type="property_ai_analysis", app=app)
-        job = get_job(job_id)
+        with pytest.raises(EnqueueOutcomeUnknown):
+            run_job_sync(_fn, job_type="property_ai_analysis", app=app)
 
     assert state["raised_once"] is True
-    assert calls["fn"] == 1
-    assert job["status"] == "success"
-    assert job["result"] == {"success": True}
-
-
-# --- A failed disambiguation attempt is not the same as a clean "no row"
-# (#190 review round 7) --------------------------------------------------
-
-
-def test_a_disambiguation_attempt_that_fails_once_retries_and_still_dispatches(
-    app, inline_executor, monkeypatch
-):
-    """The disambiguation's own wait/re-read can itself fail -- a
-    `lock_timeout`, a `statement_timeout`, a cancelled query, a dropped
-    connection -- and that failure is not evidence the original insert
-    never happened. `_matches_our_own_insert` must retry a *failed
-    attempt* (not silently treat it as a clean negative) before concluding
-    anything.
-
-    Two independent ambiguities are stacked here: the insert's own commit
-    raises first (as in round 5/6), and then the *first* disambiguation
-    attempt raises too (the round-7 scenario) before a second attempt
-    succeeds cleanly and finds the row. fn() must still run exactly once.
-    """
-    from sqlalchemy.exc import OperationalError
-    from sqlalchemy.orm import Session as SQLASession
-
-    real_commit = SQLASession.commit
-    commit_raised_once = {"value": False}
-
-    def _commit_that_lands_then_loses_its_ack(self, *args, **kwargs):
-        result = real_commit(self, *args, **kwargs)
-        if not commit_raised_once["value"]:
-            commit_raised_once["value"] = True
-            raise OperationalError(
-                "simulated dropped connection after commit", {}, Exception("boom")
-            )
-        return result
-
-    monkeypatch.setattr(SQLASession, "commit", _commit_that_lands_then_loses_its_ack)
-
-    real_attempt = background_jobs._attempt_insert_disambiguation
-    disambiguation_calls = {"n": 0}
-
-    def _flaky_disambiguation(job_id, dedupe_key):
-        disambiguation_calls["n"] += 1
-        if disambiguation_calls["n"] == 1:
-            raise OperationalError(
-                "simulated lock_timeout during disambiguation", {}, Exception("boom")
-            )
-        return real_attempt(job_id, dedupe_key)
-
-    monkeypatch.setattr(
-        background_jobs, "_attempt_insert_disambiguation", _flaky_disambiguation
-    )
-
-    calls = {"fn": 0}
-
-    def _fn():
-        calls["fn"] += 1
-        return {"success": True}
-
-    with app.app_context():
-        job_id = enqueue_job(_fn, job_type="property_ai_analysis", app=app)
-        job = get_job(job_id)
-
-    assert disambiguation_calls["n"] == 2, (
-        "must retry after the first disambiguation attempt itself failed, "
-        "not give up or treat that failure as a clean 'no row'"
-    )
-    assert calls["fn"] == 1, "the job that actually landed must still be dispatched"
-    assert job["status"] == "success"
-    assert job["result"] == {"success": True}
-
-
-def test_a_disambiguation_that_always_fails_raises_an_explicit_unknown_outcome(
-    app, monkeypatch
-):
-    """When every disambiguation attempt itself fails -- not a clean read
-    finding no row, but the wait/read machinery failing outright each time
-    -- `_acquire_job_slot` must not fall back to re-raising the original
-    commit exception as if the insert had genuinely never happened (the
-    round-6 shape this closes). It must raise the dedicated
-    `EnqueueOutcomeUnknown` instead, and never register ownership for a
-    job_id this process could not confirm.
-
-    What happens next -- a later `enqueue_job` reaping the row once its
-    lease actually expires and dispatching a clean replacement -- is
-    already covered by this file's lease-model tests (e.g.
-    `test_an_expired_lease_is_reaped_instead_of_blocking_dedupe_forever`);
-    not duplicated here.
-    """
-    from sqlalchemy.exc import OperationalError
-    from sqlalchemy.orm import Session as SQLASession
-
-    from services.background_jobs import EnqueueOutcomeUnknown
-
-    real_commit = SQLASession.commit
-    commit_raised_once = {"value": False}
-
-    def _commit_that_lands_then_loses_its_ack(self, *args, **kwargs):
-        result = real_commit(self, *args, **kwargs)
-        if not commit_raised_once["value"]:
-            commit_raised_once["value"] = True
-            raise OperationalError(
-                "simulated dropped connection after commit", {}, Exception("boom")
-            )
-        return result
-
-    monkeypatch.setattr(SQLASession, "commit", _commit_that_lands_then_loses_its_ack)
-
-    def _always_fails(job_id, dedupe_key):
-        raise OperationalError(
-            "simulated lock_timeout during disambiguation", {}, Exception("boom")
-        )
-
-    monkeypatch.setattr(
-        background_jobs, "_attempt_insert_disambiguation", _always_fails
-    )
-
-    def _fn():
-        return {"success": True}
-
-    with app.app_context():
-        with pytest.raises(EnqueueOutcomeUnknown) as exc_info:
-            enqueue_job(_fn, job_type="property_ai_analysis", app=app)
-
-    assert exc_info.value.dedupe_key is None
-
-    # Ownership must never be registered when the outcome is unknown --
-    # nothing in this single-threaded test could have registered any other
-    # job either, so an empty set is exactly the claim.
+    assert calls["fn"] == 0, "an unconfirmed insert must not be run inline either"
     with background_jobs._owned_job_ids_lock:
-        assert not background_jobs._owned_job_ids, (
-            "a job whose enqueue outcome is unknown must never be registered as owned"
-        )
+        assert not background_jobs._owned_job_ids
 
 
 def test_a_dedupe_race_defers_to_a_replacement_that_already_finished(

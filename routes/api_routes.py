@@ -293,13 +293,14 @@ def _job_already_active_response(exc) -> tuple[Response, int]:
 
 def _enqueue_outcome_unknown_response(exc) -> tuple[Response, int]:
     """The 503 body every route answers with when `enqueue_job`/
-    `run_job_sync` raises `EnqueueOutcomeUnknown` (#190 review round 7): an
-    insert's commit failed ambiguously, and every attempt to find out
-    whether it actually landed also failed. This process genuinely does
-    not know whether the analysis was queued -- 503, not 500, since this is
-    the same shape as any other transient infrastructure failure, and
-    honest about the two real possibilities rather than claiming either
-    one.
+    `run_job_sync` raises `EnqueueOutcomeUnknown`: the insert's own commit
+    failed ambiguously (PostgreSQL may have committed it server-side and
+    only failed to acknowledge that), and `services/background_jobs.py`
+    does not try to resolve which it was (issue #204). This process
+    genuinely does not know whether the analysis was queued -- 503, not
+    500, since this is the same shape as any other transient infrastructure
+    failure, and honest about the two real possibilities rather than
+    claiming either one.
     """
     return jsonify(
         {
