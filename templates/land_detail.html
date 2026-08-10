@@ -1517,6 +1517,7 @@ async function checkListingStatus(landId, btn) {
             if (data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
                 if (icon) icon.className = 'fas fa-clock';
                 IdealistaApp.pollJob(data.job_id, {
+                    timeoutMs: IdealistaApp.JOB_POLL_TIMEOUTS.listingStatus,
                     onSuccess: (job) => settle(job && job.result ? job.result : null),
                     onError: () => settle(null)
                 });
@@ -2168,6 +2169,7 @@ function runClaudeAnalysis(landId) {
                 window.IdealistaApp.showNotification(data.message || 'Claude analysis queued', 'info', 3000);
             }
             IdealistaApp.pollJob(data.job_id, {
+                timeoutMs: IdealistaApp.JOB_POLL_TIMEOUTS.aiAnalysis,
                 onSuccess: (job) => {
                     const result = job && job.result ? job.result : {};
                     if (result.success) {
@@ -2476,6 +2478,7 @@ async function generateChatGPTAnalysis() {
             }
             await new Promise((resolve, reject) => {
                 IdealistaApp.pollJob(data.job_id, {
+                    timeoutMs: IdealistaApp.JOB_POLL_TIMEOUTS.aiAnalysis,
                     onSuccess: (job) => {
                         const result = job && job.result ? job.result : {};
                         if (result.success) {

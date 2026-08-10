@@ -213,6 +213,7 @@ window.IdealistaApp = {
                         if (response && response.status === 'queued' && response.job_id && IdealistaApp.pollJob) {
                             IdealistaApp.showNotification(response.message || 'Enrichment queued', 'info');
                             IdealistaApp.pollJob(response.job_id, {
+                                timeoutMs: IdealistaApp.JOB_POLL_TIMEOUTS.enrichment,
                                 onSuccess: (job) => {
                                     const result = job && job.result ? job.result : {};
                                     const ok = result.success !== false;
@@ -406,6 +407,7 @@ window.IdealistaApp = {
             if (resp.status === 202 && data && data.job_id && IdealistaApp.pollJob) {
                 return await new Promise((resolve, reject) => {
                     IdealistaApp.pollJob(data.job_id, {
+                        timeoutMs: IdealistaApp.JOB_POLL_TIMEOUTS.aiAnalysis,
                         onSuccess: (job) => {
                             const result = job && job.result ? job.result : {};
                             if (result.success) {
@@ -936,10 +938,28 @@ window.IdealistaApp = {
             });
     },
 
+    // How long the page is willing to follow a job, per kind of work. Each
+    // number comes from what the *server* allows that operation, not from how
+    // long it ought to take: the poller used to stop after the 120 s default
+    // while the AI call had 600 s, so a finished analysis was announced as a
+    // failure and the obvious next move - press it again - paid for a second
+    // run of work that was already done (#178).
+    JOB_POLL_TIMEOUTS: {
+        // services/property_ai_service.py asks the bridge for 600 s; the extra
+        // minute is the wait before a queued job actually starts.
+        aiAnalysis: 660000,
+        // Several Google calls plus Overpass behind the 5 s gate in utils/http.py.
+        enrichment: 300000,
+        // One listing fetch (15 s) plus the deliberate 1-4 s scraping pause.
+        listingStatus: 180000,
+    },
+
     pollJob: function(jobId, options = {}) {
         if (!jobId) return () => {};
 
         const intervalMs = options.intervalMs || 2000;
+        // Backstop only. Every caller passes its own budget; a job that has no
+        // stated budget is still not polled for ever.
         const timeoutMs = options.timeoutMs || 120000;
         const onUpdate = typeof options.onUpdate === 'function' ? options.onUpdate : null;
         const onSuccess = typeof options.onSuccess === 'function' ? options.onSuccess : null;
@@ -966,7 +986,14 @@ window.IdealistaApp = {
             if (stopped) return;
             if (Date.now() - startedAt > timeoutMs) {
                 stop();
-                if (onError) onError({ status: 'timeout', error: 'Timed out waiting for job' });
+                // Our budget ran out; the server was never told to stop and is
+                // most likely still writing the result. Report that, not a
+                // failure the server never declared.
+                if (onError) onError({
+                    status: 'timeout',
+                    stillRunning: true,
+                    error: 'Still running on the server. Reload the page in a moment to see the result.'
+                });
                 return;
             }
             try {
