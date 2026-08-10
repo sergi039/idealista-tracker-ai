@@ -976,24 +976,14 @@ def generate_openai_structured(land_id):
 
         land = db.get_or_404(Land, land_id)
 
-        # Optional: allow overwrite
-        request_data = request.get_json() if request.is_json else {}
-        force = bool(request_data.get("force"))
-
-        existing = (
-            AiAnalysisVariant.query.filter_by(land_id=land_id, provider="openai")
-            .order_by(AiAnalysisVariant.created_at.desc())
-            .first()
-        )
-        if existing and not force:
-            return jsonify(
-                {
-                    "success": True,
-                    "message": "ChatGPT analysis already exists",
-                    "analysis": existing.analysis,
-                    "model": existing.model,
-                }
-            )
+        # A press means recompute, here as on the universal path (#206 owner
+        # contract, #219). This endpoint used to answer a press with the stored
+        # analysis whenever the caller left `force` out — a finished run
+        # standing in for a new one, which is the shape the owner ruled out.
+        # Joining applies to a run still in flight, never to a finished row.
+        # `force` is gone with the branch it guarded; its only caller
+        # (`templates/land_detail.html`) always sent `true`, so nothing on the
+        # page changes and no extra analysis is paid for.
 
         def _run():
             land_local = db.session.get(Land, land_id)
@@ -1040,7 +1030,7 @@ def generate_openai_structured(land_id):
                 job = _run_sync(
                     _run,
                     job_type="land_openai_analysis",
-                    meta={"land_id": land.id, "force": force},
+                    meta={"land_id": land.id},
                     dedupe_key=dedupe_key,
                 )
             except JobAlreadyActive as exc:
@@ -1056,7 +1046,7 @@ def generate_openai_structured(land_id):
         job_id = _enqueue(
             _run,
             job_type="land_openai_analysis",
-            meta={"land_id": land.id, "force": force},
+            meta={"land_id": land.id},
             dedupe_key=dedupe_key,
         )
         return jsonify(
