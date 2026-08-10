@@ -140,6 +140,10 @@ def _create_historical_schema(engine):
             connection.execute(
                 text(f"ALTER TABLE {table} DROP COLUMN listing_status_source")  # noqa: S608
             )
+        # Migration 018 (issue #225) added lands.travel for the same reason:
+        # create_all() builds today's model, and the pre-ledger schema had no
+        # such column. Nothing in the model constrains it, so it drops cleanly.
+        connection.execute(text("ALTER TABLE lands DROP COLUMN travel"))
         # Migration 016 (issue #176) added background_jobs, a genuinely new
         # table with no pre-ledger equivalent -- unlike a new column on an
         # existing table, create_all() has nothing to trim it down from, so

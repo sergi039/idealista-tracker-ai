@@ -654,6 +654,11 @@ class Land(db.Model):
     )  # AI analysis and property details in JSON format
     ai_analysis = db.Column(JSON)  # Structured AI analysis with 5 blocks
     enhanced_description = db.Column(JSON)  # AI-enhanced professional description data
+    # How the last travel run went, in the `Property.travel` shape: api_status
+    # plus a per-target `google` / `estimate` / `unavailable` (#225). The
+    # travel_time_* columns above hold measurements only; an estimate lives
+    # here, labelled, instead of impersonating one.
+    travel = db.Column(JSON)
     score_total = db.Column(db.Numeric(5, 2))
     score_investment = db.Column(db.Numeric(5, 2))  # Investment-focused score (0-100)
     score_lifestyle = db.Column(db.Numeric(5, 2))  # Lifestyle-focused score (0-100)
