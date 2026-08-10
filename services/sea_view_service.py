@@ -29,6 +29,7 @@ billing that blocks #98 does not block this.
 import json
 import logging
 import math
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -99,6 +100,11 @@ COASTLINE_QUERY_RADIUS_M = (
 MAX_COASTLINE_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_COASTLINE_POINTS = 200_000
 COASTLINE_CHUNK_BYTES = 64 * 1024
+# Wall-clock ceiling on reading one body. `timeout=120` bounds each socket
+# read; this bounds their sum, so a server dripping a chunk every few seconds
+# cannot hold the connection indefinitely. A real 25 km reply (~220 KB)
+# arrives in seconds -- two minutes is generous, not tight.
+MAX_COASTLINE_READ_S = 120.0
 
 MIN_PROFILE_SAMPLES = 12
 MAX_PROFILE_SAMPLES = 60
@@ -309,12 +315,12 @@ def fetch_coastline_points(
     except requests.RequestException as exc:
         raise SeaViewSourceError(f"Overpass request failed: {exc}") from exc
 
-    if response.status_code != 200:
-        # Streamed and never read: dropped without `close()`, the connection
-        # stays checked out until garbage collection gets around to it.
-        response.close()
-        raise SeaViewSourceError(f"Overpass returned HTTP {response.status_code}")
-
+    # One `finally` owns closing the streamed response for every path from
+    # here on -- refusal, unreadable body, parse failure, success. Before this
+    # the invariant was scattered: each failure path closed for itself, and
+    # the parse-failure path relied on the body having been read to EOF for
+    # urllib3 to return the connection (#196).
+    #
     # Whatever goes wrong reading this body, the caller must see one exception
     # type. Anything else -- a TypeError from an unexpected node shape, a
     # RecursionError from a deeply nested body -- would escape
@@ -322,13 +328,23 @@ def fetch_coastline_points(
     # instead of degrading it honestly to `unknown`. The decode is inside the
     # wrapper for exactly that reason.
     try:
-        points = _parse_coastline_payload(json.loads(_read_bounded_body(response)))
-    except SeaViewSourceError:
-        raise
-    except Exception as exc:
-        raise SeaViewSourceError(
-            f"Overpass returned an unreadable body: {exc}"
-        ) from exc
+        if response.status_code != 200:
+            raise SeaViewSourceError(f"Overpass returned HTTP {response.status_code}")
+        try:
+            points = _parse_coastline_payload(json.loads(_read_bounded_body(response)))
+        except SeaViewSourceError:
+            raise
+        except Exception as exc:
+            raise SeaViewSourceError(
+                f"Overpass returned an unreadable body: {exc}"
+            ) from exc
+    finally:
+        try:
+            response.close()
+        except Exception:
+            # Cleanup must not replace the verdict-bearing exception (or a
+            # successful return) with a close() failure of its own.
+            logger.debug("Closing the Overpass response failed", exc_info=True)
 
     _cache_set(
         cell_lat, cell_lon, cache_type, points, timeout=COASTLINE_CACHE_TIMEOUT_S
@@ -337,51 +353,56 @@ def fetch_coastline_points(
 
 
 def _read_bounded_body(response) -> bytes:
-    """Read a response body, refusing one that is too large to hold.
+    """Read a response body, refusing one that is too large or too slow.
 
     Reading `response.content` would have already materialised the whole thing
     before any check could run, so the size limit has to be enforced while the
     body is still arriving. Both the advertised length and the bytes actually
     received are checked -- a header can lie.
-    """
-    try:
-        declared = response.headers.get("Content-Length") if response.headers else None
-        if declared is not None:
-            try:
-                declared_bytes = int(declared)
-            except ValueError:
-                # An unparseable header decides nothing; the read below does.
-                # Only the int() sits in the try -- a wider net would also have
-                # caught the refusal itself if its class ever grew a ValueError
-                # ancestry, silently demoting this check to the chunk path.
-                declared_bytes = None
-            if (
-                declared_bytes is not None
-                and declared_bytes > MAX_COASTLINE_RESPONSE_BYTES
-            ):
-                raise SeaViewSourceError(
-                    f"Overpass announced {declared} bytes, over the "
-                    f"{MAX_COASTLINE_RESPONSE_BYTES}-byte ceiling"
-                )
 
-        body = bytearray()
-        for chunk in response.iter_content(chunk_size=COASTLINE_CHUNK_BYTES):
-            if not chunk:
-                continue
-            # Check before extending, not after: appending first would put the
-            # oversized body in memory, which is the thing being prevented.
-            if len(body) + len(chunk) > MAX_COASTLINE_RESPONSE_BYTES:
-                raise SeaViewSourceError(
-                    f"Overpass sent more than {MAX_COASTLINE_RESPONSE_BYTES} bytes"
-                )
-            body.extend(chunk)
-        return bytes(body)
-    except BaseException:
-        # A streamed response abandoned before the end holds its socket. Every
-        # refusal path -- a lying header, the ceiling, a transport error from
-        # `iter_content` -- has to hand the connection back on its way out.
-        response.close()
-        raise
+    The wall-clock deadline exists because `timeout=120` on the request bounds
+    each socket read, not the whole body: a server dripping one chunk every
+    few seconds would pass every per-read timeout and still hold the
+    connection for as long as it liked (#196). The deadline is checked between
+    chunks, so the worst case is one per-read timeout past it.
+
+    Closing the response on failure is the caller's job -- the one `finally`
+    in `fetch_coastline_points` owns it for every path, rather than each
+    failure closing for itself.
+    """
+    declared = response.headers.get("Content-Length") if response.headers else None
+    if declared is not None:
+        try:
+            declared_bytes = int(declared)
+        except ValueError:
+            # An unparseable header decides nothing; the read below does.
+            # Only the int() sits in the try -- a wider net would also have
+            # caught the refusal itself if its class ever grew a ValueError
+            # ancestry, silently demoting this check to the chunk path.
+            declared_bytes = None
+        if declared_bytes is not None and declared_bytes > MAX_COASTLINE_RESPONSE_BYTES:
+            raise SeaViewSourceError(
+                f"Overpass announced {declared} bytes, over the "
+                f"{MAX_COASTLINE_RESPONSE_BYTES}-byte ceiling"
+            )
+
+    deadline = time.monotonic() + MAX_COASTLINE_READ_S
+    body = bytearray()
+    for chunk in response.iter_content(chunk_size=COASTLINE_CHUNK_BYTES):
+        if time.monotonic() > deadline:
+            raise SeaViewSourceError(
+                f"Overpass body still arriving after {MAX_COASTLINE_READ_S:g} s"
+            )
+        if not chunk:
+            continue
+        # Check before extending, not after: appending first would put the
+        # oversized body in memory, which is the thing being prevented.
+        if len(body) + len(chunk) > MAX_COASTLINE_RESPONSE_BYTES:
+            raise SeaViewSourceError(
+                f"Overpass sent more than {MAX_COASTLINE_RESPONSE_BYTES} bytes"
+            )
+        body.extend(chunk)
+    return bytes(body)
 
 
 def _parse_coastline_payload(payload: Any) -> List[Tuple[float, float]]:
@@ -890,9 +911,12 @@ def apply_to_property(prop, verdict: Dict[str, Any], commit: bool = True) -> Non
 
     A plain `refresh()` is not enough -- it is a read, so another session can
     still commit between it and ours. With `commit=True` the row is read under
-    `FOR UPDATE`, which holds until this function commits or rolls back; both
-    paths do one of the two, so the lock is never left dangling for whatever
-    the caller does next.
+    `FOR UPDATE`, and this function owns the transaction outright: every exit
+    ends it -- the write commits, the hand-set skip and the failure path roll
+    back. It can afford to, because the session is required to hold nothing
+    else (below), so a rollback discards only this function's own locked read.
+    Nothing survives past the return: no row lock, no open transaction for a
+    backfill to drag across the rows that follow (#196).
 
     With `commit=False` the caller owns the transaction, so no lock is taken:
     taking one on their behalf, for an interval this function cannot see the
@@ -914,7 +938,6 @@ def apply_to_property(prop, verdict: Dict[str, Any], commit: bool = True) -> Non
     except NoInspectionAvailable:
         state = None  # a plain object (a test double); nothing to lock
 
-    savepoint = None
     if state is not None and commit:
         # `db.session` is a scoped-session proxy, so comparing it to
         # `state.session` -- a real Session -- is always unequal. Ask the proxy
@@ -925,13 +948,15 @@ def apply_to_property(prop, verdict: Dict[str, Any], commit: bool = True) -> Non
                 "apply_to_property was asked to commit a property this session "
                 "does not hold; the write would not be persisted"
             )
-        # `begin_nested()` flushes before it opens the savepoint. That flush
-        # would write out anything else pending in the session -- including a
-        # stale `enrichment` assigned before this call, which would erase a
-        # hand-set verdict a moment before the locked read goes looking for it,
-        # and including an unrelated half-built object whose IntegrityError
-        # would surface from a place with no rollback. So this mode requires a
-        # clean session and says so instead of flushing on the caller's behalf.
+        # The locked `refresh()` below autoflushes, which would write out
+        # anything else pending in the session -- including a stale
+        # `enrichment` assigned before this call, which would erase a hand-set
+        # verdict a moment before the locked read goes looking for it, and
+        # including an unrelated half-built object whose IntegrityError would
+        # surface mid-lock. And since every exit ends the transaction, a
+        # caller's uncommitted work would be committed or discarded wholesale.
+        # So this mode requires a clean session and says so instead of
+        # flushing on the caller's behalf.
         #
         # In-place mutation of a JSON column is invisible to SQLAlchemy and
         # therefore *cannot* be detected here. This function owns the column
@@ -939,16 +964,19 @@ def apply_to_property(prop, verdict: Dict[str, Any], commit: bool = True) -> Non
         if db.session.new or db.session.dirty or db.session.deleted:
             raise RuntimeError(
                 "apply_to_property(commit=True) needs a session with nothing "
-                "pending: taking its savepoint would flush and commit whatever "
-                "else is in flight"
+                "pending: it ends the transaction on every exit, which would "
+                "commit or discard whatever else is in flight"
             )
 
     try:
         if commit and state is not None:
-            # Read the persisted row under a lock rather than trusting the copy
-            # in memory. The savepoint is what lets the lock be released on the
-            # skip path without discarding the rest of the transaction.
-            savepoint = db.session.begin_nested()
+            # Read the persisted row under a lock rather than trusting the
+            # copy in memory. No savepoint: it once scoped the skip path's
+            # rollback to "only what this function did", but with the
+            # clean-session requirement above there is nothing else in the
+            # transaction to protect, and rolling back to a savepoint left
+            # the outer transaction open across every hand-set row of a
+            # backfill (#196).
             db.session.refresh(prop, with_for_update=True)
 
         enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
@@ -966,11 +994,12 @@ def apply_to_property(prop, verdict: Dict[str, Any], commit: bool = True) -> Non
                 "Sea view for property %s is hand-set; leaving it alone",
                 getattr(prop, "id", None),
             )
-            if savepoint is not None:
-                # Nothing to write, but the FOR UPDATE is still held. Roll back
-                # to the savepoint: that releases the row lock without touching
-                # anything the caller had already done in this transaction.
-                savepoint.rollback()
+            if commit and state is not None:
+                # Nothing to write, but the FOR UPDATE is still held. End the
+                # transaction: the session holds nothing but this function's
+                # own locked read, so rolling back discards nothing and
+                # releases both the row lock and the transaction itself.
+                db.session.rollback()
             return
 
         environment.update(verdict)
