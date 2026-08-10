@@ -3,7 +3,7 @@ import os
 import re
 from datetime import datetime, timezone
 from email import message_from_bytes
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from imapclient import IMAPClient
 
@@ -228,31 +228,11 @@ class PropertyIMAPService:
         text = f"{subject}\n{body}\n{url or ''}"
         return "rent" if PropertyIMAPService._RENTAL_RE.search(text or "") else "sale"
 
-    def _classify(self, subject: str, body: str) -> Tuple[Optional[str], Optional[str]]:
-        text = f"{subject}\n{body}"
-        # Rules can be overridden per SearchProfile; this method will be called with
-        # the currently selected profile in get_idealista_emails().
-        rules = SettingsService.get_property_classification_rules()
-        for rule in rules:
-            pattern = rule.get("pattern")
-            if not pattern:
-                continue
-            try:
-                if re.search(pattern, text, re.IGNORECASE):
-                    return rule.get("category"), rule.get("subtype")
-            except re.error:
-                continue
-        return None, None
-
-    def _classify_with_rules(
-        self, subject: str, body: str, rules: List[Dict[str, Any]]
-    ) -> Tuple[Optional[str], Optional[str]]:
-        return self._classify_text_with_rules(f"{subject}\n{body}", rules)
-
-    def _classify_text_with_rules(
-        self, text: str, rules: List[Dict[str, Any]]
-    ) -> Tuple[Optional[str], Optional[str]]:
-        return PropertyClassificationService.classify_text(text or "", rules)
+    # `_classify`, `_classify_with_rules` and `_classify_text_with_rules` went
+    # with the last caller: each was a private re-implementation of the rule
+    # loop or of a text order, and one of them is exactly how the raw title
+    # (address and all) reached the rules. Classification lives in
+    # PropertyClassificationService.classify_sources().
 
     @staticmethod
     def _excluded_categories() -> set[str]:
@@ -416,17 +396,11 @@ class PropertyIMAPService:
                         global_rules = (
                             SettingsService.get_property_classification_rules()
                         )
-                        category, subtype = self._classify_text_with_rules(
-                            listing_title or "", rules=global_rules
+                        category, subtype = (
+                            PropertyClassificationService.classify_sources(
+                                listing_title, subject, body, global_rules
+                            )
                         )
-                        if not category:
-                            category, subtype = self._classify_text_with_rules(
-                                subject or "", rules=global_rules
-                            )
-                        if not category:
-                            category, subtype = self._classify_text_with_rules(
-                                body or "", rules=global_rules
-                            )
 
                         if category and category.strip().lower() in excluded_categories:
                             continue
@@ -454,20 +428,10 @@ class PropertyIMAPService:
                         # Re-classify using profile-specific rules (if any). This can override defaults.
                         rules = SearchProfileService.get_classification_rules(profile)
                         category_profile, subtype_profile = (
-                            self._classify_text_with_rules(
-                                listing_title or "", rules=rules
+                            PropertyClassificationService.classify_sources(
+                                listing_title, subject, body, rules
                             )
                         )
-                        if not category_profile:
-                            category_profile, subtype_profile = (
-                                self._classify_text_with_rules(
-                                    subject or "", rules=rules
-                                )
-                            )
-                        if not category_profile:
-                            category_profile, subtype_profile = (
-                                self._classify_text_with_rules(body or "", rules=rules)
-                            )
                         if category_profile:
                             category, subtype = category_profile, subtype_profile
 
