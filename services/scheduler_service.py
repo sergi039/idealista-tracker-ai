@@ -5,6 +5,7 @@ import tempfile
 from contextlib import contextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 import atexit
 from config import Config
 
@@ -152,12 +153,32 @@ def init_scheduler(app):
             replace_existing=True,
         )
 
+        # Issue #203: reconcile_orphaned_jobs() (services/background_jobs.py)
+        # used to run only once per create_app() plus a point sweep of one
+        # dedupe_key when enqueue_job meets it again -- so a job abandoned by
+        # a killed process (the deploy watcher recreating the container)
+        # could answer "running" for up to LEASE_TTL_SECONDS and then
+        # indefinitely afterward, until the next restart or a matching
+        # enqueue that might never come. This periodic sweep bounds that
+        # wait instead, on the same scheduler rather than a second one.
+        from services.background_jobs import RECONCILE_INTERVAL_S
+
+        scheduler.add_job(
+            func=run_background_jobs_reconciliation,
+            trigger=IntervalTrigger(seconds=RECONCILE_INTERVAL_S),
+            id="background_jobs_reconciliation",
+            name="Background Job Lease Reconciliation",
+            replace_existing=True,
+        )
+
         scheduler.start()
 
         logger.info(
-            "Scheduler initialized. Ingestion times=%s, listing_status_time=%s, timezone=%s",
+            "Scheduler initialized. Ingestion times=%s, listing_status_time=%s, "
+            "reconcile_interval_s=%s, timezone=%s",
             ingestion_times,
             listing_time,
+            RECONCILE_INTERVAL_S,
             timezone,
         )
         return scheduler
@@ -262,6 +283,49 @@ def run_listing_status_check():
 
         except Exception:
             logger.error("Listing status check failed", exc_info=True)
+            raise
+
+
+def run_background_jobs_reconciliation():
+    """Periodic sweep marking abandoned `background_jobs` rows `interrupted`
+    (issue #203).
+
+    Before this job existed, `reconcile_orphaned_jobs`
+    (services/background_jobs.py) ran only once per `create_app()`, plus a
+    point sweep of one `dedupe_key` when `enqueue_job` meets it again -- so a
+    job abandoned by a killed process (`tools/autopilot/deploy_watcher.sh`
+    recreating the container) had `/api/jobs/<id>` answer
+    `200 {"status": "running"}` for up to `LEASE_TTL_SECONDS`, and could stay
+    that way indefinitely afterward if no restart or matching enqueue ever
+    followed. This job runs on the same APScheduler the app already starts,
+    every `RECONCILE_INTERVAL_S` seconds (`init_scheduler`), and calls the
+    exact same function `create_app()` calls at startup. The predicate that
+    decides staleness lives entirely in `reconcile_orphaned_jobs` itself,
+    unchanged by having a second, periodic caller: a row's `lease_expires_at`
+    is judged only against the database's own clock, so a live job whose
+    owning process is still heartbeat-renewing its lease is never touched
+    here any more than it is at startup -- see that function's docstring for
+    why that is safe to call from anywhere, any number of times.
+
+    Same contract as the other scheduled jobs in this module: the whole body
+    runs inside the app context (reading the row count back is database work
+    too), and a failure is logged *and* re-raised so APScheduler cannot
+    report a dead sweep as a successful one (#14).
+    """
+    with job_app_context():
+        try:
+            from services.background_jobs import reconcile_orphaned_jobs
+
+            interrupted = reconcile_orphaned_jobs()
+            if interrupted:
+                logger.warning(
+                    "Periodic reconcile marked %d background job(s) as "
+                    "interrupted (lease expired, no live process)",
+                    interrupted,
+                )
+
+        except Exception:
+            logger.error("Periodic background job reconciliation failed", exc_info=True)
             raise
 
 
