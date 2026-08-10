@@ -1,5 +1,7 @@
 import logging
 import hashlib
+from datetime import datetime, timezone
+
 import requests
 from typing import Dict, Optional, List
 from config import Config
@@ -118,22 +120,42 @@ class TravelTimeService:
             )
 
             def _res_for(key: str) -> Optional[Dict]:
+                """A Distance Matrix answer, or an estimate that says so.
+
+                The haversine fallback used to be written into the very column
+                Google fills, so a straight line at an assumed speed was
+                indistinguishable from a drive time through Asturian mountains
+                (#225). It is still computed -- it is worth showing -- but it
+                carries its provenance from here on.
+                """
                 try:
                     idx = dest_keys.index(key)
                 except ValueError:
                     return None
                 res = results[idx] if idx < len(results) else None
                 if res:
-                    return res
-                return self._calculate_fallback_travel_time(
+                    return {**res, "source": "google"}
+                fallback = self._calculate_fallback_travel_time(
                     origin, dest_map.get(key, "")
                 )
+                if not fallback:
+                    return None
+                return {**fallback, "source": "estimate"}
 
-            oviedo_time = (_res_for("oviedo") or {}).get("time")
-            gijon_time = (_res_for("gijon") or {}).get("time")
+            resolved: Dict[str, Optional[Dict]] = {
+                key: _res_for(key) for key in dest_keys
+            }
+
+            def _measured(key: str) -> Optional[Dict]:
+                """Only a real measurement may reach a travel-time column."""
+                res = resolved.get(key)
+                return res if res and res.get("source") == "google" else None
+
+            oviedo_time = (_measured("oviedo") or {}).get("time")
+            gijon_time = (_measured("gijon") or {}).get("time")
 
             nearest_beach_data = None
-            beach_res = _res_for("beach")
+            beach_res = _measured("beach")
             if beach_res and nearest_places.get("beach"):
                 nearest_beach_data = {
                     "name": nearest_places["beach"].get("name"),
@@ -143,7 +165,7 @@ class TravelTimeService:
 
             def _facility_data(key: str) -> Optional[Dict]:
                 place = nearest_places.get(key)
-                res = _res_for(key)
+                res = _measured(key)
                 if not place or not res:
                     return None
                 return {
@@ -179,6 +201,53 @@ class TravelTimeService:
             if police_data is not None:
                 land.travel_time_police = police_data["time"]
                 land.distance_police = police_data["distance"]
+
+            # What this run actually learned, per target, so the page can tell a
+            # measurement from an estimate and from nothing at all. The same
+            # shape as `Property.travel["api_status"]`, one surface later.
+            targets: Dict[str, Dict] = {}
+            for key in dest_keys:
+                res = resolved.get(key)
+                if not res:
+                    targets[key] = {"source": "unavailable"}
+                    continue
+                targets[key] = {
+                    "source": res.get("source"),
+                    "time_min": res.get("time"),
+                    "distance_km": res.get("distance"),
+                }
+                place = nearest_places.get(key)
+                if place and place.get("name"):
+                    targets[key]["name"] = place.get("name")
+
+            sources = {entry["source"] for entry in targets.values()}
+            if sources == {"google"}:
+                api_status = "ok"
+            elif "google" in sources:
+                api_status = "degraded"
+            else:
+                api_status = "unavailable"
+
+            # A new dict rather than an in-place mutation: SQLAlchemy does not
+            # see a JSON column changed under it.
+            land.travel = {
+                "api_status": api_status,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "targets": targets,
+            }
+
+            measured_anything = "google" in sources
+
+            if not measured_anything:
+                # Caching a run that measured nothing would keep the next seven
+                # days from ever asking Google again.
+                db.session.commit()
+                logger.info(
+                    "Travel times for land %s: no measurement (api_status=%s)",
+                    land_id,
+                    api_status,
+                )
+                return True
 
             cache_enrichment_data(
                 lat,

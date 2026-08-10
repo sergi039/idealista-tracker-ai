@@ -1,0 +1,22 @@
+-- Where a legacy land's travel times came from (issue #225).
+-- PostgreSQL-only migration, like every migration in this directory.
+--
+-- `TravelTimeService` fell back to a haversine distance over an assumed speed
+-- whenever Google Distance Matrix was unavailable or a destination was missing
+-- from the response, and wrote that number into `travel_time_oviedo`,
+-- `travel_time_airport` and the rest -- the same columns a real measurement
+-- fills, with nothing telling them apart. Per issue #98 the Distance Matrix has
+-- been unavailable to this app, so the fallback is what actually ran.
+--
+-- This column is the `Property.travel` shape one surface later: a run records
+-- `api_status` ('ok' / 'degraded' / 'unavailable', the vocabulary #153 settled
+-- on) and a per-target entry saying `google`, `estimate` or `unavailable`. From
+-- now on a travel column holds a measurement or nothing, and the estimate lives
+-- here, labelled.
+--
+-- Existing rows stay NULL on purpose. The 168 legacy lands all carry travel
+-- times of unknown provenance, and stamping them 'google' or 'estimate' would
+-- be the same defect facing the other way: a claim nobody measured. NULL reads
+-- as "this run was never recorded", and the page says nothing about it.
+
+ALTER TABLE lands ADD COLUMN IF NOT EXISTS travel JSON;

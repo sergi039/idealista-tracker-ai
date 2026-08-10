@@ -623,7 +623,11 @@
         {% endif %}
 
         <!-- Travel Times to Cities & Beaches -->
-        {% if land.travel_time_oviedo or land.travel_time_gijon or land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital or land.travel_time_police or land.distance_airport or land.distance_train_station %}
+        {# `travel_run` is what the last enrichment actually learned (#225). The
+           card also opens on it alone: a run that measured nothing has
+           something to say, and saying it is the point. #}
+        {% set travel_run = land.travel if land.travel is mapping else none %}
+        {% if travel_run or land.travel_time_oviedo or land.travel_time_gijon or land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital or land.travel_time_police or land.distance_airport or land.distance_train_station %}
             <div class="card mb-4">
                 <div class="card-header">
                     <h6 class="card-title mb-0 compact-header" title="{{ t('travel_times_distances') }}">
@@ -631,6 +635,37 @@
                     </h6>
                 </div>
                 <div class="card-body">
+                    {# Every number above this line came from Google Distance Matrix.
+                       When the last run could not measure something, it says so here
+                       instead of filling the same badge with a straight-line guess. #}
+                    {% if travel_run and travel_run.get('api_status') != 'ok' %}
+                        {% set targets = travel_run.get('targets') or {} %}
+                        <div id="travel-measurement-note" class="alert {{ 'alert-warning' if travel_run.get('api_status') == 'degraded' else 'alert-secondary' }} py-2 px-3 small mb-3">
+                            <div class="fw-semibold mb-1">
+                                <i class="fas fa-circle-info me-1"></i>
+                                {% if travel_run.get('api_status') == 'unavailable' %}
+                                    Google Distance Matrix answered nothing on the last run.
+                                {% else %}
+                                    Google Distance Matrix answered only part of the last run.
+                                {% endif %}
+                            </div>
+                            {% for key, entry in targets.items() if entry.get('source') != 'google' %}
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span>{{ entry.get('name') or key|replace('_', ' ')|title }}</span>
+                                    <span>
+                                        {% if entry.get('source') == 'estimate' and entry.get('time_min') is not none %}
+                                            <span class="badge bg-secondary" title="Straight-line distance at an assumed speed, not a measured route">
+                                                ≈{{ entry.get('time_min') }}min estimated
+                                            </span>
+                                        {% else %}
+                                            <span class="badge bg-light text-dark">not measured</span>
+                                        {% endif %}
+                                    </span>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+
                     {% if reference_cities and reference_cities|length > 0 %}
                         <!-- Reference Cities (configurable) -->
                         {% for city in reference_cities %}
