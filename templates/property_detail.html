@@ -1193,6 +1193,7 @@ async function checkPropertyListingStatus(propertyId) {
             if (data && data.job_id && window.IdealistaApp && IdealistaApp.pollJob) {
                 if (icon) icon.className = 'fas fa-clock';
                 IdealistaApp.pollJob(data.job_id, {
+                    timeoutMs: IdealistaApp.JOB_POLL_TIMEOUTS.listingStatus,
                     onSuccess: (job) => settle(job && job.result ? job.result : null),
                     onError: () => settle(null)
                 });
@@ -1571,13 +1572,17 @@ function _notify(message, type) {
 /* A queued job reports through callbacks; the Enrich pass has to wait for it
    before it can spend money on the AI calls, so wrap it in a promise. A failed
    job resolves rather than rejects -- the caller decides what to do next. */
-function _pollJobPromise(jobId) {
+// `timeoutMs` is required, not defaulted: the three callers below run
+// operations with very different server-side budgets, and the one default that
+// fitted the shortest of them is what cut the AI analyses short (#178).
+function _pollJobPromise(jobId, timeoutMs) {
     return new Promise((resolve) => {
         if (!(window.IdealistaApp && typeof IdealistaApp.pollJob === 'function')) {
             resolve({ ok: false, result: {}, error: 'Job polling is unavailable' });
             return;
         }
         IdealistaApp.pollJob(jobId, {
+            timeoutMs: timeoutMs,
             onSuccess: (job) => {
                 const result = (job && job.result) ? job.result : {};
                 resolve({ ok: result.success !== false, result });
@@ -1606,7 +1611,8 @@ async function runGoogleEnrichment(propertyId) {
 
         if (resp.status === 202 && data && data.job_id) {
             _notify(data.message || 'Enrichment queued', 'info');
-            const outcome = await _pollJobPromise(data.job_id);
+            const outcome = await _pollJobPromise(
+                data.job_id, IdealistaApp.JOB_POLL_TIMEOUTS.enrichment);
             const result = outcome.result || {};
             return {
                 ok: outcome.ok,
@@ -1837,7 +1843,8 @@ async function runClaudeAnalysis(propertyId) {
 
         if (resp.status === 202 && data && data.job_id) {
             _notify(data.message || 'Claude analysis queued', 'info');
-            const outcome = await _pollJobPromise(data.job_id);
+            const outcome = await _pollJobPromise(
+                data.job_id, IdealistaApp.JOB_POLL_TIMEOUTS.aiAnalysis);
             const result = outcome.result || {};
             if (result.success) {
                 applyAnalysis(result.analysis);
@@ -2169,7 +2176,8 @@ async function generateChatGPTAnalysis(propertyId) {
 
         if (resp.status === 202 && data && data.job_id) {
             _notify(data.message || 'ChatGPT analysis queued', 'info');
-            const outcome = await _pollJobPromise(data.job_id);
+            const outcome = await _pollJobPromise(
+                data.job_id, IdealistaApp.JOB_POLL_TIMEOUTS.aiAnalysis);
             const result = outcome.result || {};
             if (result.success) {
                 applyAnalysis(result.analysis);
