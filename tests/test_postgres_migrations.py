@@ -58,6 +58,7 @@ CATCH_ALL_CONSTRAINT = "ck_search_profiles_default_has_no_search_key"
 BACKGROUND_JOBS_DEDUPE_INDEX = "ux_background_jobs_active_dedupe_key"
 BACKGROUND_JOBS_STATUS_CHECK = "ck_background_jobs_status_enum"
 PROPERTY_AI_VARIANT_MIGRATION = "017_property_ai_variant_unique"
+LAND_TRAVEL_MIGRATION = "018_add_land_travel_provenance"
 PROPERTY_VARIANT_UNIQUE_CONSTRAINT = (
     "ux_property_ai_analysis_variants_property_provider"
 )
@@ -268,6 +269,7 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
             STATUS_SOURCE_MIGRATION,
             BACKGROUND_JOBS_MIGRATION,
             PROPERTY_AI_VARIANT_MIGRATION,
+            LAND_TRAVEL_MIGRATION,
         ]
 
         # Two *identified* subscriptions may now share the label...
@@ -1443,7 +1445,10 @@ def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
                 {"pid": property_id},
             )
 
-        assert run_migrations(engine) == [PROPERTY_AI_VARIANT_MIGRATION]
+        assert run_migrations(engine) == [
+            PROPERTY_AI_VARIANT_MIGRATION,
+            LAND_TRAVEL_MIGRATION,
+        ]
 
         with engine.begin() as connection:
             rows = (
@@ -1623,7 +1628,10 @@ def test_017_deduplicates_existing_land_variants_and_adds_the_unique_constraint(
                 {"lid": land_id},
             )
 
-        assert run_migrations(engine) == [PROPERTY_AI_VARIANT_MIGRATION]
+        assert run_migrations(engine) == [
+            PROPERTY_AI_VARIANT_MIGRATION,
+            LAND_TRAVEL_MIGRATION,
+        ]
 
         with engine.begin() as connection:
             rows = (
