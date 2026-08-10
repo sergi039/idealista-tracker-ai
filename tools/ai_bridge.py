@@ -274,6 +274,52 @@ def _kill_process_group(proc: subprocess.Popen, grace: float) -> None:
         LOG.error("process group %s did not die after SIGKILL", pgid)
 
 
+# Every run in flight, so the bridge's own shutdown can find and kill them
+# (#206): `start_new_session=True` detaches each CLI into its own process
+# group precisely so a per-request timeout can signal it without touching the
+# bridge — but that detachment also means the bridge's own death (a redeploy
+# via `launchctl kickstart -k`) never reaches the child on its own. Popen
+# objects are tracked rather than bare pgids because `_kill_process_group`
+# reaps through `proc.wait()`, which only the object that owns the OS-level
+# child relationship can do safely; `proc.pid` doubles as the pgid since the
+# child was started with `start_new_session=True`. `subprocess.Popen.wait()`
+# is internally lock-guarded, so calling it from the signal handler's thread
+# while a worker thread is concurrently blocked inside `communicate()` on the
+# same object is safe.
+_INFLIGHT_LOCK = threading.Lock()
+_INFLIGHT_PROCS: set[subprocess.Popen] = set()
+
+
+def _track_run(proc: subprocess.Popen) -> None:
+    with _INFLIGHT_LOCK:
+        _INFLIGHT_PROCS.add(proc)
+
+
+def _untrack_run(proc: subprocess.Popen) -> None:
+    with _INFLIGHT_LOCK:
+        _INFLIGHT_PROCS.discard(proc)
+
+
+def _kill_inflight_runs() -> None:
+    """Kill every run's process group the bridge still remembers.
+
+    Called from the SIGTERM/SIGINT handler on the main thread. A worker
+    thread only ever holds `_INFLIGHT_LOCK` for the instant it takes to add
+    or discard one entry, so the lock is held just long enough to snapshot
+    the set and released before any killing starts: `_kill_process_group` can
+    block for up to `2 * KILL_GRACE_SECONDS` per run, and holding the lock for
+    that long would stall a worker thread that is simply trying to record its
+    own run finishing — not a deadlock, but exactly the kind of avoidable
+    stall this function exists to not cause.
+    """
+    with _INFLIGHT_LOCK:
+        procs = list(_INFLIGHT_PROCS)
+    if procs:
+        LOG.info("killing %d in-flight run(s) before shutdown", len(procs))
+    for proc in procs:
+        _kill_process_group(proc, KILL_GRACE_SECONDS)
+
+
 def _queue_floor(timeout: float) -> float:
     """The least budget worth starting a run with, once queueing has eaten in.
 
@@ -316,22 +362,32 @@ def _run(cmd: list[str], stdin_text: str, timeout: int) -> str:
             cwd=workdir(),
             start_new_session=True,
         )
-        # Re-read the clock: starting a process is not free, and that cost
-        # belongs inside the deadline rather than on top of it.
+        _track_run(proc)
         try:
-            stdout, stderr = proc.communicate(
-                stdin_text, timeout=max(0.0, deadline - time.monotonic())
-            )
-        except subprocess.TimeoutExpired:
-            _kill_process_group(proc, KILL_GRACE_SECONDS)
-            # Drain the pipes the killed process left behind.
+            # Re-read the clock: starting a process is not free, and that cost
+            # belongs inside the deadline rather than on top of it.
             try:
-                proc.communicate(timeout=KILL_GRACE_SECONDS)
-            except (subprocess.TimeoutExpired, ValueError):
-                pass
-            raise BridgeTimeout(
-                f"{cmd[0]} timed out after {budget:.0f}s of a {timeout}s budget"
-            ) from None
+                stdout, stderr = proc.communicate(
+                    stdin_text, timeout=max(0.0, deadline - time.monotonic())
+                )
+            except subprocess.TimeoutExpired:
+                _kill_process_group(proc, KILL_GRACE_SECONDS)
+                # Drain the pipes the killed process left behind.
+                try:
+                    proc.communicate(timeout=KILL_GRACE_SECONDS)
+                except (subprocess.TimeoutExpired, ValueError):
+                    pass
+                raise BridgeTimeout(
+                    f"{cmd[0]} timed out after {budget:.0f}s of a {timeout}s budget"
+                ) from None
+        finally:
+            # Every exit from this run — a normal finish, the timeout path
+            # above, or any other exception — must stop counting it as
+            # in-flight, or the bridge's own shutdown handler would try to
+            # kill a process group that no longer needs it (harmless, since
+            # _kill_process_group tolerates a dead target) while leaking
+            # entries for runs that finished cleanly.
+            _untrack_run(proc)
     finally:
         _RUN_SLOTS.release()
 
@@ -595,7 +651,32 @@ def main() -> int:
         CLAUDE_EFFORT,
         CODEX_EFFORT,
     )
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    shutting_down = threading.Event()
+
+    def _handle_shutdown_signal(signum: int, _frame: object) -> None:
+        # A second SIGTERM/SIGINT while the first is still being handled
+        # (e.g. launchd escalating) must not re-run the kill sweep or spawn a
+        # second shutdown thread.
+        if shutting_down.is_set():
+            return
+        shutting_down.set()
+        LOG.info("received signal %s, shutting down", signum)
+        _kill_inflight_runs()
+        # server.shutdown() blocks until serve_forever()'s loop notices the
+        # request and returns. This handler runs on the main thread, which is
+        # the same thread blocked inside serve_forever() below — calling
+        # shutdown() here would wait on a flag only that same loop iteration
+        # can set, which is a deadlock. A separate thread lets serve_forever()
+        # actually observe the request and return.
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
+    signal.signal(signal.SIGINT, _handle_shutdown_signal)
+
+    server.serve_forever()
+    LOG.info("ai-bridge stopped")
     return 0
 
 
