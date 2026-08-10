@@ -363,6 +363,40 @@ class TestAPartialAnswerIsNotAnAnswer:
             svc.fetch_coastline_points(COAST_LAT, COAST_LON)
         assert refused.closed
 
+    def test_a_parse_failure_still_releases_the_connection(self, monkeypatch):
+        """#196 A1: the parse-failure path used to rely on the body having
+        been read to EOF for urllib3 to hand the connection back; the one
+        `finally` in fetch_coastline_points now closes every path itself."""
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+
+        garbage = _FakeResponse(b"not json at all")
+        monkeypatch.setattr(svc.requests, "post", lambda url, **kwargs: garbage)
+        with pytest.raises(svc.SeaViewSourceError, match="unreadable"):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+        assert garbage.closed
+
+    def test_a_dripping_body_hits_the_total_deadline(self, monkeypatch):
+        """#196 A3: `timeout=120` bounds each socket read, never their sum, so
+        a server dripping one chunk every few seconds passed every per-read
+        timeout and held the connection for as long as it liked."""
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+        # A deadline already in the past: the very first chunk is late.
+        monkeypatch.setattr(svc, "MAX_COASTLINE_READ_S", -1.0)
+
+        class _Drips(_FakeResponse):
+            def __init__(self):
+                super().__init__(b"", headers={})
+
+            def iter_content(self, chunk_size=1):
+                yield b'{"elements"'
+                yield b": []}"
+
+        response = _Drips()
+        monkeypatch.setattr(svc.requests, "post", lambda url, **kwargs: response)
+        with pytest.raises(svc.SeaViewSourceError, match="still arriving"):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+        assert response.closed
+
     def test_a_transport_error_midstream_closes_and_degrades(self, monkeypatch):
         """...and a transport error out of `iter_content` left the socket open
         too, besides needing to surface as a SeaViewSourceError."""
@@ -983,12 +1017,14 @@ class TestManualOverrideEndToEnd:
         assert refreshed.enrichment["google"] == {"travel_state": "denied"}
         assert refreshed.environment["sea_view"] == svc.NO
 
-    def test_skipping_a_hand_set_row_does_not_park_a_row_lock(
+    def test_skipping_a_hand_set_row_ends_the_transaction(
         self, app, stored_property, monkeypatch
     ):
         """Third review round: the skip path took `FOR UPDATE` and returned
-        without commit or rollback, leaving the row locked until whatever the
-        caller did next -- a whole row away, in the backfill."""
+        without commit or rollback. #196 A2 went further: rolling back only a
+        savepoint released the row lock but left the outer transaction open,
+        so a backfill over consecutive hand-set rows dragged one idle
+        transaction across all of them."""
         from app import db
         from models import Property
 
@@ -1001,7 +1037,11 @@ class TestManualOverrideEndToEnd:
         svc.calculate_for_property(prop, use_ai=False, commit=True)
 
         assert db.session().get_nested_transaction() is None, (
-            "the skip path left its savepoint open, and with it the row lock"
+            "the skip path left a savepoint open, and with it the row lock"
+        )
+        assert not db.session().in_transaction(), (
+            "the skip path must end the transaction, not park it until the "
+            "next non-skip row"
         )
 
     def test_a_failed_commit_leaves_the_session_usable(
