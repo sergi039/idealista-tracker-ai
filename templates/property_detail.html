@@ -459,7 +459,7 @@
             </div>
         </div>
 
-        {% if property.score_investment or property.score_lifestyle %}
+        {% if property.score_investment is not none or property.score_lifestyle is not none %}
             <div class="card mb-3">
                 <div class="card-body p-3">
                     <div class="d-flex justify-content-between align-items-center mb-2">
@@ -468,7 +468,7 @@
                         </h6>
                     </div>
                     <div class="row g-2">
-                        {% if property.score_investment %}
+                        {% if property.score_investment is not none %}
                             <div class="col-6">
                                 <div class="d-flex justify-content-between align-items-center mb-1">
                                     <small class="text-warning fw-bold compact-text" title="{{ t('investment_score') }}">
@@ -478,7 +478,7 @@
                                 </div>
                             </div>
                         {% endif %}
-                        {% if property.score_lifestyle %}
+                        {% if property.score_lifestyle is not none %}
                             <div class="col-6">
                                 <div class="d-flex justify-content-between align-items-center mb-1">
                                     <small class="text-success fw-bold compact-text" title="{{ t('lifestyle_score') }}">
@@ -737,7 +737,7 @@
                                             {% set distance_km = value/1000 %}
                                             {% set travel_time_value = property.infrastructure_extended.get(base_key + '_travel_time') if property.infrastructure_extended else None %}
                                             <div class="d-flex align-items-center">
-                                                {% if travel_time_value %}
+                                                {% if travel_time_value is not none %}
                                                     <span class="badge bg-info me-1">
                                                         <i class="fas fa-car me-1"></i>{{ travel_time_value }}min
                                                     </span>
@@ -750,7 +750,7 @@
                                                 <span class="badge bg-info me-1">
                                                     <i class="fas fa-car me-1"></i>{{ value }}min
                                                 </span>
-                                                {% if distance_value %}
+                                                {% if distance_value is not none %}
                                                     <span class="badge bg-secondary">{{ "%.1f"|format(distance_value/1000) }}km</span>
                                                 {% endif %}
                                             </div>
@@ -780,7 +780,7 @@
             </div>
         {% endif %}
 
-        {% if property.transport or property.travel_time_airport or property.travel_time_train_station or property.travel_time_hospital or property.travel_time_police %}
+        {% if property.transport or property.travel_time_airport is not none or property.travel_time_train_station is not none or property.travel_time_hospital is not none or property.travel_time_police is not none %}
             <div class="card mb-4">
                 <div class="card-header">
                     <h6 class="card-title mb-0 compact-header" title="{{ t('transport') }}">
@@ -796,53 +796,53 @@
                                 <small class="text-muted ms-1">Not available</small>
                             </div>
                         </div>
-                    {% elif property.travel_time_airport %}
+                    {% elif property.travel_time_airport is not none %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold">Airport Distance</span>
                             <div class="d-flex align-items-center">
                                 <span class="badge bg-info me-1">
                                     <i class="fas fa-car me-1"></i>{{ property.travel_time_airport }}min
                                 </span>
-                                {% if property.distance_airport %}
+                                {% if property.distance_airport is not none %}
                                     <span class="badge bg-secondary">{{ property.distance_airport }}km</span>
                                 {% endif %}
                             </div>
                         </div>
                     {% endif %}
-                    {% if property.travel_time_train_station %}
+                    {% if property.travel_time_train_station is not none %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold">Train Station Distance</span>
                             <div class="d-flex align-items-center">
                                 <span class="badge bg-info me-1">
                                     <i class="fas fa-car me-1"></i>{{ property.travel_time_train_station }}min
                                 </span>
-                                {% if property.distance_train_station %}
+                                {% if property.distance_train_station is not none %}
                                     <span class="badge bg-secondary">{{ property.distance_train_station }}km</span>
                                 {% endif %}
                             </div>
                         </div>
                     {% endif %}
-                    {% if property.travel_time_hospital %}
+                    {% if property.travel_time_hospital is not none %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold">Hospital Distance</span>
                             <div class="d-flex align-items-center">
                                 <span class="badge bg-info me-1">
                                     <i class="fas fa-car me-1"></i>{{ property.travel_time_hospital }}min
                                 </span>
-                                {% if property.distance_hospital %}
+                                {% if property.distance_hospital is not none %}
                                     <span class="badge bg-secondary">{{ property.distance_hospital }}km</span>
                                 {% endif %}
                             </div>
                         </div>
                     {% endif %}
-                    {% if property.travel_time_police %}
+                    {% if property.travel_time_police is not none %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold">Police Station Distance</span>
                             <div class="d-flex align-items-center">
                                 <span class="badge bg-info me-1">
                                     <i class="fas fa-car me-1"></i>{{ property.travel_time_police }}min
                                 </span>
-                                {% if property.distance_police %}
+                                {% if property.distance_police is not none %}
                                     <span class="badge bg-secondary">{{ property.distance_police }}km</span>
                                 {% endif %}
                             </div>
@@ -989,7 +989,7 @@
                                     {% elif value is sameas false %}
                                         <i class="fas fa-times-circle text-danger"></i>
                                     {% else %}
-                                        <span class="text-muted small">{{ value if value else 'N/A' }}</span>
+                                        <span class="text-muted small">{{ value if value is not none and value != '' else 'N/A' }}</span>
                                     {% endif %}
                                 {% endif %}
                             </div>
@@ -1291,8 +1291,8 @@ function renderSimilarProperties(similarProperties) {
         const propId = prop.id ?? prop.property_id ?? null;
         const detailsHref = propId ? `/properties/${propId}` : '#';
 
-        const priceText = prop.price ? `€${Number(prop.price).toLocaleString()}` : 'Price N/A';
-        const areaText = prop.area ? `${Number(prop.area).toLocaleString()}m²` : 'Area N/A';
+        const priceText = prop.price != null ? `€${Number(prop.price).toLocaleString()}` : 'Price not stated';
+        const areaText = prop.area != null ? `${Number(prop.area).toLocaleString()}m²` : 'Area not stated';
         const scoreText = prop.score_total ? `${Number(prop.score_total).toFixed(1)}/100` : 'Not scored';
         const scoreClass = prop.score_total ? (prop.score_total >= 70 ? 'text-success' : prop.score_total >= 50 ? 'text-warning' : 'text-danger') : 'text-muted';
 
@@ -1311,7 +1311,7 @@ function renderSimilarProperties(similarProperties) {
                         <div class="d-flex flex-wrap gap-3 small text-muted mb-2">
                             <span><i class="fas fa-euro-sign me-1"></i>${priceText}</span>
                             <span><i class="fas fa-ruler-combined me-1"></i>${areaText}</span>
-                            <span><i class="fas fa-map-marker-alt me-1"></i>${prop.municipality || 'Location N/A'}</span>
+                            <span><i class="fas fa-map-marker-alt me-1"></i>${prop.municipality || 'Location not stated'}</span>
                         </div>
                     </div>
                     <div class="text-end">

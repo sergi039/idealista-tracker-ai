@@ -456,7 +456,7 @@
                 </div>
                 <div class="card-body">
                     <!-- Investment vs Lifestyle Scores -->
-                    {% if land.score_investment or land.score_lifestyle %}
+                    {% if land.score_investment is not none or land.score_lifestyle is not none %}
                         <div class="row mb-4">
                             {% if land.score_investment %}
                                 <div class="col-md-6 mb-3">
@@ -553,7 +553,7 @@
         </div>
         
         <!-- Compact Dual Scoring Analysis -->
-        {% if land.score_investment or land.score_lifestyle %}
+        {% if land.score_investment is not none or land.score_lifestyle is not none %}
             <div class="card mb-3">
                 <div class="card-body p-3">
                     <div class="d-flex justify-content-between align-items-center mb-2">
@@ -618,7 +618,7 @@
                             <span class="small fw-bold compact-text" title="{{ t('nearest_airport') }}"><i class="fas fa-plane me-1 text-primary"></i>{{ t('nearest_airport') }}</span>
                             <div>
                                 {% if land.travel_time_airport %}<span class="badge bg-info me-1">{{ land.travel_time_airport }}min</span>{% endif %}
-                                {% if land.distance_airport %}<span class="badge bg-secondary">{{ land.distance_airport }}km</span>{% endif %}
+                                {% if land.distance_airport is not none %}<span class="badge bg-secondary">{{ land.distance_airport }}km</span>{% endif %}
                             </div>
                         </div>
                     {% endif %}
@@ -627,8 +627,8 @@
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold compact-text" title="{{ t('train_station') }}"><i class="fas fa-train me-1 text-success"></i>{{ t('train_station') }}</span>
                             <div>
-                                {% if land.travel_time_train_station %}<span class="badge bg-info me-1">{{ land.travel_time_train_station }}min</span>{% endif %}
-                                {% if land.distance_train_station %}<span class="badge bg-secondary">{{ land.distance_train_station }}km</span>{% endif %}
+                                {% if land.travel_time_train_station is not none %}<span class="badge bg-info me-1">{{ land.travel_time_train_station }}min</span>{% endif %}
+                                {% if land.distance_train_station is not none %}<span class="badge bg-secondary">{{ land.distance_train_station }}km</span>{% endif %}
                             </div>
                         </div>
                     {% endif %}
@@ -637,8 +637,8 @@
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold compact-text" title="{{ t('hospital') }}"><i class="fas fa-hospital me-1 text-danger"></i>{{ t('hospital') }}</span>
                             <div>
-                                {% if land.travel_time_hospital %}<span class="badge bg-info me-1">{{ land.travel_time_hospital }}min</span>{% endif %}
-                                {% if land.distance_hospital %}<span class="badge bg-secondary">{{ land.distance_hospital }}km</span>{% endif %}
+                                {% if land.travel_time_hospital is not none %}<span class="badge bg-info me-1">{{ land.travel_time_hospital }}min</span>{% endif %}
+                                {% if land.distance_hospital is not none %}<span class="badge bg-secondary">{{ land.distance_hospital }}km</span>{% endif %}
                             </div>
                         </div>
                     {% endif %}
@@ -763,13 +763,6 @@
                                                     <span class="badge bg-info me-1">
                                                         <i class="fas fa-car me-1"></i>{{ travel_time_value }}min
                                                     </span>
-                                                    {% set walking_time = (travel_time_value * 4)|int %}
-                                                    {% if walking_time <= 15 %}
-                                                        <!-- Walking time (only if <= 15 min) -->
-                                                        <span class="badge bg-success me-1">
-                                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
-                                                        </span>
-                                                    {% endif %}
                                                 {% endif %}
                                                 <span class="badge bg-secondary">{{ "%.1f"|format(distance_km) }}km</span>
                                             </div>
@@ -780,13 +773,6 @@
                                                 <span class="badge bg-info me-1">
                                                     <i class="fas fa-car me-1"></i>{{ value }}min
                                                 </span>
-                                                {% set walking_time = (value * 4)|int %}
-                                                {% if walking_time <= 15 %}
-                                                    <!-- Walking time (only if <= 15 min) -->
-                                                    <span class="badge bg-success me-1">
-                                                        <i class="fas fa-walking me-1"></i>{{ walking_time }}min
-                                                    </span>
-                                                {% endif %}
                                                 {% if distance_value %}
                                                     <span class="badge bg-secondary">{{ "%.1f"|format(distance_value/1000) }}km</span>
                                                 {% endif %}
@@ -819,7 +805,7 @@
         {% endif %}
 
         <!-- Transport -->
-        {% if land.transport or land.travel_time_airport or land.travel_time_train_station or land.travel_time_hospital or land.travel_time_police %}
+        {% if land.transport or land.travel_time_airport is not none or land.travel_time_train_station is not none or land.travel_time_hospital is not none or land.travel_time_police is not none %}
             <div class="card mb-4">
                 <div class="card-header">
                     <h6 class="card-title mb-0 compact-header" title="{{ t('transport') }}">
@@ -836,77 +822,53 @@
                                 <small class="text-muted ms-1">Not available</small>
                             </div>
                         </div>
-                    {% elif land.travel_time_airport %}
+                    {% elif land.travel_time_airport is not none %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold">Airport Distance</span>
                             <div class="d-flex align-items-center">
                                 <span class="badge bg-info me-1">
                                     <i class="fas fa-car me-1"></i>{{ land.travel_time_airport }}min
                                 </span>
-                                {% if land.distance_airport %}
-                                    {% set walking_time = (land.travel_time_airport * 4)|int %}
-                                    {% if walking_time <= 15 %}
-                                        <span class="badge bg-success me-1">
-                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
-                                        </span>
-                                    {% endif %}
+                                {% if land.distance_airport is not none %}
                                     <span class="badge bg-secondary">{{ land.distance_airport }}km</span>
                                 {% endif %}
                             </div>
                         </div>
                     {% endif %}
-                    {% if land.travel_time_train_station %}
+                    {% if land.travel_time_train_station is not none %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold">Train Station Distance</span>
                             <div class="d-flex align-items-center">
                                 <span class="badge bg-info me-1">
                                     <i class="fas fa-car me-1"></i>{{ land.travel_time_train_station }}min
                                 </span>
-                                {% if land.distance_train_station %}
-                                    {% set walking_time = (land.travel_time_train_station * 4)|int %}
-                                    {% if walking_time <= 15 %}
-                                        <span class="badge bg-success me-1">
-                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
-                                        </span>
-                                    {% endif %}
+                                {% if land.distance_train_station is not none %}
                                     <span class="badge bg-secondary">{{ land.distance_train_station }}km</span>
                                 {% endif %}
                             </div>
                         </div>
                     {% endif %}
-                    {% if land.travel_time_hospital %}
+                    {% if land.travel_time_hospital is not none %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold">Hospital Distance</span>
                             <div class="d-flex align-items-center">
                                 <span class="badge bg-info me-1">
                                     <i class="fas fa-car me-1"></i>{{ land.travel_time_hospital }}min
                                 </span>
-                                {% if land.distance_hospital %}
-                                    {% set walking_time = (land.travel_time_hospital * 4)|int %}
-                                    {% if walking_time <= 15 %}
-                                        <span class="badge bg-success me-1">
-                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
-                                        </span>
-                                    {% endif %}
+                                {% if land.distance_hospital is not none %}
                                     <span class="badge bg-secondary">{{ land.distance_hospital }}km</span>
                                 {% endif %}
                             </div>
                         </div>
                     {% endif %}
-                    {% if land.travel_time_police %}
+                    {% if land.travel_time_police is not none %}
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="small fw-bold">Police Station Distance</span>
                             <div class="d-flex align-items-center">
                                 <span class="badge bg-info me-1">
                                     <i class="fas fa-car me-1"></i>{{ land.travel_time_police }}min
                                 </span>
-                                {% if land.distance_police %}
-                                    {% set walking_time = (land.travel_time_police * 4)|int %}
-                                    {% if walking_time <= 15 %}
-                                        <span class="badge bg-success me-1">
-                                            <i class="fas fa-walking me-1"></i>{{ walking_time }}min
-                                        </span>
-                                    {% endif %}
+                                {% if land.distance_police is not none %}
                                     <span class="badge bg-secondary">{{ land.distance_police }}km</span>
                                 {% endif %}
                             </div>
@@ -963,12 +925,6 @@
                                                 <span class="badge bg-info me-1">
                                                     <i class="fas fa-car me-1"></i>{{ land.transport[transport_type + '_travel_time'] }}min
                                                 </span>
-                                                {% set walking_time = (land.transport[transport_type + '_travel_time'] * 4)|int %}
-                                                {% if walking_time <= 15 %}
-                                                    <span class="badge bg-success me-1">
-                                                        <i class="fas fa-walking me-1"></i>{{ walking_time }}min
-                                                    </span>
-                                                {% endif %}
                                             {% endif %}
                                             {% if value < 1000 %}
                                                 <span class="badge bg-secondary">
@@ -1593,9 +1549,9 @@ function renderSimilarProperties(similarProperties) {
     }
     
     const propertyCards = similarProperties.map(prop => {
-        const priceText = prop.price ? `€${prop.price.toLocaleString()}` : 'Price N/A';
-        const areaText = prop.area ? `${prop.area.toLocaleString()}m²` : 'Area N/A';
-        const scoreText = prop.score_total ? `${prop.score_total.toFixed(1)}/100` : 'Not scored';
+        const priceText = prop.price != null ? `€${prop.price.toLocaleString()}` : 'Price not stated';
+        const areaText = prop.area != null ? `${prop.area.toLocaleString()}m²` : 'Area not stated';
+        const scoreText = prop.score_total != null ? `${prop.score_total.toFixed(1)}/100` : 'Not scored';
         const scoreClass = prop.score_total ? (prop.score_total >= 70 ? 'text-success' : prop.score_total >= 50 ? 'text-warning' : 'text-danger') : 'text-muted';
         
         const landTypeClass = prop.land_type === 'developed' ? 'bg-success' : 'bg-warning';
@@ -1612,7 +1568,7 @@ function renderSimilarProperties(similarProperties) {
                         <div class="d-flex flex-wrap gap-3 small text-muted mb-2">
                             <span><i class="fas fa-euro-sign me-1"></i>${priceText}</span>
                             <span><i class="fas fa-ruler-combined me-1"></i>${areaText}</span>
-                            <span><i class="fas fa-map-marker-alt me-1"></i>${prop.municipality || 'Location N/A'}</span>
+                            <span><i class="fas fa-map-marker-alt me-1"></i>${prop.municipality || 'Location not stated'}</span>
                         </div>
                     </div>
                     <div class="text-end">
@@ -1683,6 +1639,22 @@ function humanizeEnumLabel(value) {
 
     const humanTail = rawTail.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
     return humanTail ? `${humanHead} - ${humanTail}` : humanHead;
+}
+
+// One renderer for every AI metric, mirroring the property page (#170). A
+// model is allowed to answer "I cannot tell", and that has to read as
+// missing: `value || 'N/A'` followed by a literal unit produced "N/Ay", and
+// it swallowed a real 0 -- a plot that earns no rent yields 0%, which is a
+// measurement and not an absence.
+function formatMetricValue(value, suffix = '') {
+    if (value === null || value === undefined || value === '') return '—';
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return `${value}${suffix}`;
+    }
+    if (typeof value === 'string') {
+        return humanizeEnumLabel(value) || '—';
+    }
+    return String(value);
 }
 
 // Render structured AI analysis
@@ -1791,7 +1763,7 @@ function renderStructuredAIAnalysis(analysis) {
                     </div>
                     <div class="col-md-4">
                         <small class="text-muted d-block">Total Investment</small>
-                        <strong class="text-warning">${analysis.construction_value_estimation.total_investment || 'N/A'}</strong>
+                        <strong class="text-warning">${formatMetricValue(analysis.construction_value_estimation.total_investment)}</strong>
                     </div>
                 </div>
             </div>
@@ -1803,7 +1775,7 @@ function renderStructuredAIAnalysis(analysis) {
 	            <h6><i class="fas fa-chart-line text-warning"></i> Market Price Dynamics</h6>
 	            <div class="mb-2">
 	                <span class="badge ${getPriceTrendClass(analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend)}">${humanizeEnumLabel(analysis.market_price_dynamics.price_trend || analysis.market_price_dynamics.current_trend) || 'Unknown'} Trend</span>
-	                <span class="badge bg-info ms-1">${analysis.market_price_dynamics.annual_growth_rate || analysis.market_price_dynamics.annual_appreciation || 'N/A'}% annually</span>
+	                <span class="badge bg-info ms-1">${formatMetricValue(analysis.market_price_dynamics.annual_growth_rate ?? analysis.market_price_dynamics.annual_appreciation, '% annually')}</span>
 	            </div>
 	            <p class="mb-2">${analysis.market_price_dynamics.trend_analysis || 'No trend analysis available'}</p>
             ${analysis.market_price_dynamics.market_factors ? renderListItems(analysis.market_price_dynamics.market_factors, 'Market Factors:', 'primary') : ''}
@@ -1848,25 +1820,25 @@ function renderStructuredAIAnalysis(analysis) {
                             <div class="col-6">
                                 <small class="text-muted d-block">Rental Yield</small>
                                 <div class="d-flex align-items-center">
-                                    <strong class="${(analysis.rental_market_analysis.rental_yield && analysis.rental_market_analysis.rental_yield > 5) ? 'text-success' : (analysis.rental_market_analysis.rental_yield && analysis.rental_market_analysis.rental_yield > 4) ? 'text-warning' : 'text-danger'}">${analysis.rental_market_analysis.rental_yield || 'N/A'}%</strong>
+                                    <strong class="${(analysis.rental_market_analysis.rental_yield && analysis.rental_market_analysis.rental_yield > 5) ? 'text-success' : (analysis.rental_market_analysis.rental_yield && analysis.rental_market_analysis.rental_yield > 4) ? 'text-warning' : 'text-danger'}">${formatMetricValue(analysis.rental_market_analysis.rental_yield, '%')}</strong>
                                     <small class="text-muted ms-2">/year</small>
                                 </div>
                             </div>
                             <div class="col-6">
                                 <small class="text-muted d-block">Cap Rate</small>
                                 <div class="d-flex align-items-center">
-                                    <strong class="${(analysis.rental_market_analysis.cap_rate && analysis.rental_market_analysis.cap_rate > 4) ? 'text-success' : (analysis.rental_market_analysis.cap_rate && analysis.rental_market_analysis.cap_rate > 3) ? 'text-warning' : 'text-danger'}">${analysis.rental_market_analysis.cap_rate || 'N/A'}%</strong>
+                                    <strong class="${(analysis.rental_market_analysis.cap_rate && analysis.rental_market_analysis.cap_rate > 4) ? 'text-success' : (analysis.rental_market_analysis.cap_rate && analysis.rental_market_analysis.cap_rate > 3) ? 'text-warning' : 'text-danger'}">${formatMetricValue(analysis.rental_market_analysis.cap_rate, '%')}</strong>
                                 </div>
                             </div>
                         </div>
                         <div class="row">
                             <div class="col-6">
                                 <small class="text-muted d-block">Price/Rent Ratio</small>
-                                <strong class="${getPriceToRentClass(analysis.rental_market_analysis.price_to_rent_ratio)}">${analysis.rental_market_analysis.price_to_rent_ratio || 'N/A'}</strong>
+                                <strong class="${getPriceToRentClass(analysis.rental_market_analysis.price_to_rent_ratio)}">${formatMetricValue(analysis.rental_market_analysis.price_to_rent_ratio)}</strong>
                             </div>
                             <div class="col-6">
                                 <small class="text-muted d-block">Payback Period</small>
-                                <strong class="${getPaybackPeriodClass(analysis.rental_market_analysis.payback_period_years)}">${analysis.rental_market_analysis.payback_period_years || 'N/A'} years</strong>
+                                <strong class="${getPaybackPeriodClass(analysis.rental_market_analysis.payback_period_years)}">${formatMetricValue(analysis.rental_market_analysis.payback_period_years, ' years')}</strong>
                             </div>
 	                        </div>
 	                        <div class="mt-2">
