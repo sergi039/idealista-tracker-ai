@@ -237,11 +237,21 @@ def test_unusable_geometry_from_the_source_is_unavailable(app, monkeypatch):
 
     from services import sea_view_service as svs
 
+    # A streaming double: the client reads `headers`/`iter_content`, not
+    # `.json()`. The old `.json()`-only fake kept this test green for the
+    # wrong reason -- every attribute access exploded and was wrapped as an
+    # "unreadable body" refusal, so the way-without-geometry case it claims
+    # to cover was never actually parsed.
     class _Resp:
         status_code = 200
+        _body = b'{"elements": [{"type": "way", "geometry": []}]}'
+        headers = {"Content-Length": str(len(_body))}
 
-        def json(self):
-            return {"elements": [{"type": "way", "geometry": []}]}
+        def iter_content(self, chunk_size=1):
+            yield self._body
+
+        def close(self):
+            pass
 
     monkeypatch.setattr(svs.OVERPASS_GATE, "min_interval_s", 0)
     monkeypatch.setattr(svs, "_cache_get", lambda *a, **k: None)
