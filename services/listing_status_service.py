@@ -331,6 +331,11 @@ class ListingStatusService:
         Both shapes count: a row the service could not even try (no URL) and a
         fetch idealista refused, which `check_listing_status` reports as the
         observed status 'error'. Neither told us anything about the listing.
+
+        The first shape cannot reach the sweeps that use this -- both select on
+        `Land.url.isnot(None)` -- so a run cut short really is idealista saying
+        no, not a gap in our own data. It is counted anyway because a caller
+        that skips that filter would still be learning nothing per request.
         """
         if not result.get("success"):
             return True

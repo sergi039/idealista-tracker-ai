@@ -189,9 +189,14 @@ class TestThePageShowsWhereTheStatusCameFrom:
 
         body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
 
+        # The same sentence is also the badge's tooltip, so searching the whole
+        # page would pass on the tooltip alone. Cut to the banner first.
+        banner = body[body.index("no longer available on Idealista") :]
+        banner = banner[: banner.index("</div>")]
+
         # Jinja escapes the apostrophe in "Idealista's", so compare what the
         # template really emits rather than the source string.
-        assert str(escape(expected)) in body
+        assert str(escape(expected)) in banner
 
     def test_the_land_page_says_it_too(self, app, client):
         land = make_land(
@@ -201,8 +206,10 @@ class TestThePageShowsWhereTheStatusCameFrom:
         )
 
         body = client.get(f"/lands/{land.id}").get_data(as_text=True)
+        banner = body[body.index("no longer available on Idealista") :]
+        banner = banner[: banner.index("</div>")]
 
-        assert str(escape("Recorded from Idealista's own removal email.")) in body
+        assert str(escape("Recorded from Idealista's own removal email.")) in banner
 
 
 class TestABlockedSweepStopsInsteadOfGrinding:
