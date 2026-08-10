@@ -1,6 +1,6 @@
--- Enforce one AI-analysis variant per (property, provider) (#190 review,
--- blocker 3). PostgreSQL-only migration, like every migration in this
--- directory.
+-- Enforce one AI-analysis variant per (property, provider) and per
+-- (land, provider) (#190 review, blocker 3 and round-3 finding 4).
+-- PostgreSQL-only migration, like every migration in this directory.
 --
 -- routes/api_routes.py's property_ai_analysis writer was query-then-insert
 -- against a non-unique index (migration 010): find a row for
@@ -9,12 +9,17 @@
 -- background_jobs' dedupe_key entirely, since it never goes through
 -- enqueue_job -- could both see "no row" and both insert, leaving two
 -- variants racing for the same pair. Nothing in the database stopped it.
+-- The land-side writers (Claude and OpenAI analysis for the legacy Land
+-- model) had exactly the same query-then-insert shape against their own
+-- non-unique index (migration 004) and were still unfixed after the first
+-- round of this review -- ?sync=1 bypasses background_jobs' dedupe_key
+-- for both universal Property and legacy Land routes alike.
 --
 -- Deduplicate existing rows first (keep the newest per pair -- ties broken
 -- by the higher id, i.e. whichever was written last), then replace the old
 -- non-unique index with an actual UNIQUE constraint so the database itself
 -- refuses a second row for a pair that already has one. The application-side
--- fix (routes/api_routes.py) turns the writer into an update-or-insert that
+-- fix (routes/api_routes.py) turns each writer into an update-or-insert that
 -- recovers from a lost insert race instead of assuming "no row" means it is
 -- safe to add one.
 
@@ -36,5 +41,21 @@ DO $$ BEGIN
     ALTER TABLE property_ai_analysis_variants
         ADD CONSTRAINT ux_property_ai_analysis_variants_property_provider
         UNIQUE (property_id, provider);
+EXCEPTION WHEN duplicate_table THEN NULL;
+END $$;
+
+DELETE FROM ai_analysis_variants
+WHERE id NOT IN (
+    SELECT DISTINCT ON (land_id, provider) id
+    FROM ai_analysis_variants
+    ORDER BY land_id, provider, created_at DESC, id DESC
+);
+
+DROP INDEX IF EXISTS ix_ai_analysis_variants_land_provider;
+
+DO $$ BEGIN
+    ALTER TABLE ai_analysis_variants
+        ADD CONSTRAINT ux_ai_analysis_variants_land_provider
+        UNIQUE (land_id, provider);
 EXCEPTION WHEN duplicate_table THEN NULL;
 END $$;

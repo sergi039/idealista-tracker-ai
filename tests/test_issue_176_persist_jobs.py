@@ -448,14 +448,14 @@ def test_a_terminal_write_that_fails_recovers_via_a_fresh_session(
     real_try_write = background_jobs._try_write
     calls = {"terminal_attempts": 0}
 
-    def _flaky_try_write(session, job_id, fields):
+    def _flaky_try_write(session, job_id, expected_status, fields):
         if fields.get("status") != "success":
             # Let "mark running" through untouched.
-            return real_try_write(session, job_id, fields)
+            return real_try_write(session, job_id, expected_status, fields)
         calls["terminal_attempts"] += 1
         if calls["terminal_attempts"] <= background_jobs._TRANSITION_MAX_ATTEMPTS:
             return False
-        return real_try_write(session, job_id, fields)
+        return real_try_write(session, job_id, expected_status, fields)
 
     monkeypatch.setattr(background_jobs, "_try_write", _flaky_try_write)
 
@@ -786,3 +786,345 @@ def test_lease_ttl_constant_is_reasonable_for_the_longest_known_job_budget():
     assert LEASE_TTL_SECONDS > 660, (
         "the lease must outlive the longest job budget the client itself waits for"
     )
+
+
+# --- The heartbeat (#190 review round 3, finding 1) -----------------------
+
+
+def test_heartbeat_renewal_extends_the_lease_of_an_owned_job(app):
+    """`_renew_owned_leases` -- what the daemon thread calls every
+    HEARTBEAT_INTERVAL_S -- extends the lease of every job id currently
+    registered as owned by this process, proven directly rather than by
+    waiting for the real thread's timer."""
+    from services.background_jobs import (
+        _register_owned_job,
+        _renew_owned_leases,
+        _unregister_owned_job,
+    )
+
+    job_id = "h" * 32
+    _insert_row(
+        app,
+        id=job_id,
+        job_type="property_ai_analysis",
+        status="running",
+        lease_expires_at=_expired_lease(minutes=1),  # about to be reaped
+    )
+
+    _register_owned_job(job_id)
+    try:
+        with app.app_context():
+            renewed = _renew_owned_leases(app)
+        assert renewed == 1
+
+        with app.app_context():
+            row = db.session.get(BackgroundJob, job_id)
+            # SQLite round-trips a naive value regardless of what was
+            # written; compare on equal footing rather than assume tzinfo.
+            lease = row.lease_expires_at
+            now = (
+                datetime.now(timezone.utc).replace(tzinfo=None)
+                if lease.tzinfo is None
+                else datetime.now(timezone.utc)
+            )
+            assert lease > now, "the heartbeat must push the lease back into the future"
+    finally:
+        _unregister_owned_job(job_id)
+
+
+def test_renewal_is_a_noop_for_a_job_this_process_does_not_own(app):
+    """A job id never registered (or already unregistered) is left alone --
+    the heartbeat only ever touches ids this process currently owns."""
+    from services.background_jobs import _renew_owned_leases
+
+    job_id = "u" * 32
+    _insert_row(
+        app,
+        id=job_id,
+        job_type="property_ai_analysis",
+        status="running",
+        lease_expires_at=_expired_lease(minutes=1),
+    )
+
+    with app.app_context():
+        renewed = _renew_owned_leases(app)
+    assert renewed == 0, "a job id never registered as owned must not be touched"
+
+
+def test_a_job_queued_past_its_initial_lease_survives_while_its_owner_heartbeats(
+    tmp_path, monkeypatch
+):
+    """#190 review round 3, finding 1: `_EXECUTOR` has a fixed worker count
+    and an unbounded queue, so a job can sit queued behind slow work long
+    enough to outlive its own initial LEASE_TTL_SECONDS before a worker ever
+    starts it. Simulated here by an expired lease on a still-`queued` row
+    whose owning process nonetheless keeps renewing it (registered, then
+    heartbeat-ticked) -- a second, independent `create_app()` sharing the
+    same database must not reap it.
+    """
+    from services.background_jobs import (
+        _register_owned_job,
+        _renew_owned_leases,
+        _unregister_owned_job,
+    )
+
+    setup_test_environment()
+    db_path = tmp_path / "shared.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    owner_app = create_app()
+    with owner_app.app_context():
+        db.create_all()
+        queued_id = "q" * 32
+        db.session.add(
+            BackgroundJob(
+                id=queued_id,
+                job_type="property_ai_analysis",
+                status="queued",
+                # Already past its own initial TTL -- the queue was long.
+                lease_expires_at=_expired_lease(minutes=1),
+            )
+        )
+        db.session.commit()
+
+    # The owning process registers the job (as enqueue_job does at claim
+    # time) and its heartbeat ticks once (as the daemon thread would,
+    # HEARTBEAT_INTERVAL_S later) -- extending the lease past the moment
+    # the other process below checks it.
+    _register_owned_job(queued_id)
+    try:
+        with owner_app.app_context():
+            _renew_owned_leases(owner_app)
+
+        other_app = create_app()
+        with other_app.app_context():
+            assert get_job(queued_id)["status"] == "queued", (
+                "a heartbeat-renewed job must survive a different process's "
+                "reconcile_orphaned_jobs sweep, even while still only queued"
+            )
+    finally:
+        _unregister_owned_job(queued_id)
+        with owner_app.app_context():
+            db.drop_all()
+
+
+def test_a_job_without_a_heartbeat_owner_is_reaped(tmp_path, monkeypatch):
+    """The other half of finding 1: a job whose owning process is genuinely
+    gone -- never registered here at all -- has nothing renewing its lease,
+    and a second, independent `create_app()` correctly reaps it once
+    expired."""
+    setup_test_environment()
+    db_path = tmp_path / "shared.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    dead_app = create_app()
+    with dead_app.app_context():
+        db.create_all()
+        job_id = "z" * 32
+        db.session.add(
+            BackgroundJob(
+                id=job_id,
+                job_type="property_ai_analysis",
+                status="queued",
+                lease_expires_at=_expired_lease(minutes=1),
+            )
+        )
+        db.session.commit()
+
+    # No _register_owned_job call for job_id anywhere -- simulating the
+    # process that queued it having died before ever renewing anything.
+    other_app = create_app()
+    with other_app.app_context():
+        assert get_job(job_id)["status"] == "interrupted"
+        db.drop_all()
+
+
+# --- Compare-and-swap writes (#190 review round 3, finding 2) -------------
+
+
+def test_a_reap_mid_execution_prevents_a_late_write_from_resurrecting_it(
+    app, inline_executor
+):
+    """A job is genuinely `running` when something reaps the row out from
+    under it mid-execution (an administrative intervention, or a lease
+    sweep from another process racing an unusually delayed heartbeat) --
+    the worker's own subsequent "mark success" write must find the row no
+    longer `running` (a CAS miss), must not resurrect it, and must discard
+    its result rather than store it over the reap (#190 review round 3,
+    finding 2).
+    """
+
+    def _fn():
+        # Executes inside _run_job's already-open app context (inline
+        # executor, same thread) -- db.session here is exactly the session
+        # the subsequent CAS write will use, the same way a concurrent
+        # reaper in a different process would race it in production. The
+        # running row is looked up by status, not a captured id: with
+        # inline_executor, enqueue_job below runs this closure to
+        # completion *before it returns*, so no id could be captured first.
+        running_row = BackgroundJob.query.filter_by(status="running").one()
+        BackgroundJob.query.filter_by(id=running_row.id).update(
+            {
+                "status": "interrupted",
+                "error": "reaped mid-execution for this test",
+                "finished_at": datetime.now(timezone.utc),
+            },
+            synchronize_session=False,
+        )
+        db.session.commit()
+        return {"success": True, "should_never_be_stored": True}
+
+    with app.app_context():
+        job_id = enqueue_job(_fn, job_type="property_ai_analysis", app=app)
+
+    with app.app_context():
+        job = get_job(job_id)
+
+    assert job["status"] == "interrupted", (
+        "a late success write must never resurrect a row a reaper already terminalized"
+    )
+    assert job["error"] == "reaped mid-execution for this test"
+    assert job["result"] is None, "the discarded result must never be stored"
+
+
+def test_a_reap_before_mark_running_prevents_the_job_from_starting(app):
+    """The earlier CAS: if a row is reaped between enqueue and the worker's
+    own "mark running" write, that write must lose the CAS (status is no
+    longer `queued`), and the (potentially paid) job function must never
+    run at all.
+
+    Inserts the row directly (rather than via enqueue_job) and calls
+    _run_job directly, so the "already reaped before the worker starts"
+    state exists *before* _run_job's own "mark running" write runs --
+    enqueue_job with inline_executor would run the whole job to completion
+    in one call, leaving no such window to reap into.
+    """
+    from services.background_jobs import _run_job
+
+    ran = {"value": False}
+
+    def _fn():
+        ran["value"] = True
+        return {"success": True}
+
+    job_id = "r" * 32
+    _insert_row(
+        app,
+        id=job_id,
+        job_type="property_ai_analysis",
+        status="interrupted",
+        error="reaped before start",
+    )
+
+    with app.app_context():
+        _run_job(app, job_id, _fn)
+
+    assert ran["value"] is False, "a reaped job must never execute its (paid) closure"
+    with app.app_context():
+        assert get_job(job_id)["status"] == "interrupted"
+
+
+# --- At most one execution per race (#190 review round 3, finding 3) ------
+
+
+def test_a_dedupe_race_defers_to_a_replacement_that_already_finished(
+    app, inline_executor, monkeypatch
+):
+    """Reproduces the reviewer's exact sequence (#190 review round 3,
+    finding 3 / "F4-bis"): A and B both start racing for the same expired
+    J0. A wins the reap, inserts J1, and J1 finishes (inline executor)
+    before B's own retry runs. Without deferring to J1 regardless of its
+    (by-then terminal) status, B's insert would succeed cleanly once J1's
+    terminal status frees the partial unique index -- a second, paid
+    execution for the same dedupe_key.
+    """
+    from services.background_jobs import _baseline_snapshot
+
+    key = "property_ai_analysis:355:claude"
+    stale_id = "0" * 32
+    _insert_row(
+        app,
+        id=stale_id,
+        job_type="property_ai_analysis",
+        status="running",
+        dedupe_key=key,
+        lease_expires_at=_expired_lease(),
+    )
+
+    # "B" starts racing here, while only the stale J0 exists -- captured
+    # now, applied to B's own enqueue_job call below via monkeypatch, to
+    # reproduce the interleaving where B's attempt began before A's
+    # replacement was ever created.
+    with app.app_context():
+        b_baseline = _baseline_snapshot(db, key)
+
+    calls = {"a": 0, "b": 0}
+
+    def _a_fn():
+        calls["a"] += 1
+        return {"success": True, "who": "a"}
+
+    def _b_fn():
+        calls["b"] += 1
+        return {"success": True, "who": "b"}
+
+    # "A": reaps J0, inserts J1, and (inline executor) J1 runs to
+    # completion before B's call even begins.
+    with app.app_context():
+        a_id = enqueue_job(
+            _a_fn, job_type="property_ai_analysis", app=app, dedupe_key=key
+        )
+    with app.app_context():
+        assert get_job(a_id)["status"] == "success", "J1 must have already finished"
+
+    # "B" resumes its race using the baseline it captured before A acted.
+    monkeypatch.setattr(
+        background_jobs, "_baseline_snapshot", lambda *a, **kw: b_baseline
+    )
+    with app.app_context():
+        b_id = enqueue_job(
+            _b_fn, job_type="property_ai_analysis", app=app, dedupe_key=key
+        )
+
+    assert b_id == a_id, "B must defer to A's already-finished replacement"
+    assert calls == {"a": 1, "b": 0}, "B's own paid closure must never run"
+
+    with app.app_context():
+        rows_for_key = BackgroundJob.query.filter(
+            BackgroundJob.dedupe_key == key
+        ).count()
+    assert rows_for_key == 2, "exactly J0 (now interrupted) and J1 -- never a J2"
+
+
+def test_a_dedupe_race_still_allows_a_later_independent_resubmit(app, inline_executor):
+    """Negative control: once a race has genuinely settled (no baseline is
+    stale relative to a *fresh* call), a later, independent enqueue_job for
+    the same dedupe_key must still be allowed to run again -- the
+    supersede check must not permanently block retries, only concurrent
+    duplicates within one race window."""
+    key = "property_ai_analysis:355:claude"
+
+    with app.app_context():
+        first_id = enqueue_job(
+            lambda: {"success": True},
+            job_type="property_ai_analysis",
+            app=app,
+            dedupe_key=key,
+        )
+    with app.app_context():
+        assert get_job(first_id)["status"] == "success"
+
+    with app.app_context():
+        second_id = enqueue_job(
+            lambda: {"success": True, "second": True},
+            job_type="property_ai_analysis",
+            app=app,
+            dedupe_key=key,
+        )
+
+    assert second_id != first_id, (
+        "a fresh, non-racing call must be allowed to run again"
+    )
+    with app.app_context():
+        assert get_job(second_id)["status"] == "success"
+        assert get_job(second_id)["result"] == {"success": True, "second": True}

@@ -62,6 +62,8 @@ PROPERTY_VARIANT_UNIQUE_CONSTRAINT = (
     "ux_property_ai_analysis_variants_property_provider"
 )
 PROPERTY_VARIANT_OLD_INDEX = "ix_property_ai_analysis_variants_property_provider"
+LAND_VARIANT_UNIQUE_CONSTRAINT = "ux_ai_analysis_variants_land_provider"
+LAND_VARIANT_OLD_INDEX = "ix_ai_analysis_variants_land_provider"
 
 _DATABASE_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 
@@ -1044,6 +1046,180 @@ def test_017_two_concurrent_inserts_for_the_same_pair_leave_only_one_row(postgre
                     "WHERE property_id = :pid AND provider = 'claude'"
                 ),
                 {"pid": property_id},
+            ).scalar_one()
+        assert count == 1
+    finally:
+        engine.dispose()
+
+
+def test_017_deduplicates_existing_land_variants_and_adds_the_unique_constraint(
+    postgres_url, tmp_path
+):
+    """The land-side analogue of
+    test_017_deduplicates_existing_rows_and_adds_the_unique_constraint:
+    migration 004's non-unique index on `ai_analysis_variants` let two rows
+    exist for the same (land_id, provider) pair, and `?sync=1` bypassing
+    background_jobs' dedupe_key made that reachable for the legacy Land
+    routes exactly like it was for Property before blocker 3 (#190 review
+    round 3, finding 4)."""
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine, migrations_dir=_migrations_through(tmp_path, "016"))
+
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO lands (source_email_id, title) "
+                    "VALUES ('017-land', '017 test land')"
+                )
+            )
+            land_id = connection.execute(
+                text("SELECT id FROM lands WHERE source_email_id = '017-land'")
+            ).scalar_one()
+
+            connection.execute(
+                text(
+                    "INSERT INTO ai_analysis_variants "
+                    "(land_id, provider, model, analysis, created_at) "
+                    "VALUES (:lid, 'claude', 'model-old', '{}'::json, "
+                    "NOW() - INTERVAL '1 hour')"
+                ),
+                {"lid": land_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO ai_analysis_variants "
+                    "(land_id, provider, model, analysis, created_at) "
+                    "VALUES (:lid, 'claude', 'model-new', '{\"a\": 1}'::json, NOW())"
+                ),
+                {"lid": land_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO ai_analysis_variants "
+                    "(land_id, provider, model, analysis) "
+                    "VALUES (:lid, 'openai', 'other-model', '{}'::json)"
+                ),
+                {"lid": land_id},
+            )
+
+        assert run_migrations(engine) == [PROPERTY_AI_VARIANT_MIGRATION]
+
+        with engine.begin() as connection:
+            rows = (
+                connection.execute(
+                    text(
+                        "SELECT provider, model, analysis FROM ai_analysis_variants "
+                        "WHERE land_id = :lid ORDER BY provider"
+                    ),
+                    {"lid": land_id},
+                )
+                .mappings()
+                .all()
+            )
+
+        assert len(rows) == 2, "the duplicate 'claude' pair must collapse to one row"
+        by_provider = {row["provider"]: row for row in rows}
+        assert by_provider["claude"]["model"] == "model-new"
+        assert by_provider["claude"]["analysis"] == {"a": 1}
+        assert by_provider["openai"]["model"] == "other-model"
+
+        inspector = inspect(engine)
+        assert LAND_VARIANT_OLD_INDEX not in {
+            index["name"] for index in inspector.get_indexes("ai_analysis_variants")
+        }
+        assert LAND_VARIANT_UNIQUE_CONSTRAINT in {
+            constraint["name"]
+            for constraint in inspector.get_unique_constraints("ai_analysis_variants")
+        }
+
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO ai_analysis_variants "
+                        "(land_id, provider, model, analysis) "
+                        "VALUES (:lid, 'claude', 'attempt', '{}'::json)"
+                    ),
+                    {"lid": land_id},
+                )
+
+        sql = (MIGRATIONS_DIR / f"{PROPERTY_AI_VARIANT_MIGRATION}.sql").read_text(
+            encoding="utf-8"
+        )
+        with engine.begin() as connection:
+            connection.exec_driver_sql(sql)
+    finally:
+        engine.dispose()
+
+
+def test_017_two_concurrent_inserts_for_the_same_land_pair_leave_only_one_row(
+    postgres_url,
+):
+    """The land-side analogue of
+    test_017_two_concurrent_inserts_for_the_same_pair_leave_only_one_row --
+    an actual race between two connections, not just a sequential check."""
+    import threading
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO lands (source_email_id, title) "
+                    "VALUES ('017-land-race', '017 land race')"
+                )
+            )
+            land_id = connection.execute(
+                text("SELECT id FROM lands WHERE source_email_id = '017-land-race'")
+            ).scalar_one()
+
+        barrier = threading.Barrier(2)
+        outcomes: dict[str, str] = {}
+
+        def _attempt(label: str, model: str) -> None:
+            thread_engine = create_engine(postgres_url)
+            try:
+                barrier.wait(timeout=5)
+                try:
+                    with thread_engine.begin() as connection:
+                        connection.execute(
+                            text(
+                                "INSERT INTO ai_analysis_variants "
+                                "(land_id, provider, model, analysis) "
+                                "VALUES (:lid, 'claude', :model, '{}'::json)"
+                            ),
+                            {"lid": land_id, "model": model},
+                        )
+                    outcomes[label] = "ok"
+                except IntegrityError:
+                    outcomes[label] = "blocked"
+            finally:
+                thread_engine.dispose()
+
+        first = threading.Thread(target=_attempt, args=("first", "model-a"))
+        second = threading.Thread(target=_attempt, args=("second", "model-b"))
+        first.start()
+        second.start()
+        first.join(timeout=10)
+        second.join(timeout=10)
+
+        assert not first.is_alive() and not second.is_alive(), "a thread hung"
+        assert sorted(outcomes.values()) == ["blocked", "ok"], outcomes
+
+        with engine.begin() as connection:
+            count = connection.execute(
+                text(
+                    "SELECT count(*) FROM ai_analysis_variants "
+                    "WHERE land_id = :lid AND provider = 'claude'"
+                ),
+                {"lid": land_id},
             ).scalar_one()
         assert count == 1
     finally:

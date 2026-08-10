@@ -172,6 +172,124 @@ def _upsert_property_ai_variant(
             ) from exc
 
 
+# The unique constraint migration 017 also adds for the legacy Land model's
+# variants (#190 review round 3, finding 4).
+LAND_VARIANT_UNIQUE_CONSTRAINT = "ux_ai_analysis_variants_land_provider"
+_SQLITE_LAND_VARIANT_COLLISION = (
+    "UNIQUE constraint failed: ai_analysis_variants.land_id, "
+    "ai_analysis_variants.provider"
+)
+
+
+def _is_land_variant_collision(error: Exception) -> bool:
+    """The (land_id, provider) analogue of `_is_property_variant_collision`."""
+    if not isinstance(error, IntegrityError):
+        return False
+    orig = getattr(error, "orig", None)
+    if orig is None:
+        return False
+    constraint = getattr(getattr(orig, "diag", None), "constraint_name", None)
+    if constraint is not None:
+        return constraint == LAND_VARIANT_UNIQUE_CONSTRAINT
+    return str(orig).strip() == _SQLITE_LAND_VARIANT_COLLISION
+
+
+def _upsert_land_ai_variant(land_id: int, provider: str, *, model, analysis) -> None:
+    """Write the (land_id, provider) AI-analysis variant without the
+    query-then-insert race migration 017 closes off at the database level
+    for the legacy `Land` model too (#190 review round 3, finding 4) -- the
+    same update-or-insert-with-race-recovery pattern as
+    `_upsert_property_ai_variant`, against `AiAnalysisVariant` instead of
+    `PropertyAiAnalysisVariant`.
+
+    Commits internally, for the same reason `_upsert_property_ai_variant`
+    does: the recovery path needs its own rollback, and a caller with other
+    unrelated pending changes in the same session (land.ai_analysis, set
+    just before this is called) must not have those rolled back too.
+    """
+    from models import AiAnalysisVariant
+
+    stamp = datetime.now(timezone.utc)
+    fields = {"analysis": analysis, "model": model, "created_at": stamp}
+
+    updated = (
+        db.session.query(AiAnalysisVariant)
+        .filter_by(land_id=land_id, provider=provider)
+        .update(fields, synchronize_session=False)
+    )
+    if updated:
+        db.session.commit()
+        return
+
+    try:
+        db.session.add(
+            AiAnalysisVariant(
+                land_id=land_id, provider=provider, model=model, analysis=analysis
+            )
+        )
+        db.session.commit()
+    except IntegrityError as exc:
+        db.session.rollback()
+        if not _is_land_variant_collision(exc):
+            raise
+        recovered = (
+            db.session.query(AiAnalysisVariant)
+            .filter_by(land_id=land_id, provider=provider)
+            .update(fields, synchronize_session=False)
+        )
+        db.session.commit()
+        if not recovered:
+            raise RuntimeError(
+                "Lost the insert race for ai_analysis_variants "
+                f"(land_id={land_id}, provider={provider}) but the row that "
+                "won it could not be found to update"
+            ) from exc
+
+
+def _run_sync(job_fn, *, job_type: str, meta=None, dedupe_key=None):
+    """Runs `job_fn` inline through `background_jobs`' registry instead of
+    calling it directly (#190 review round 3, finding 4).
+
+    The sync path (`?sync=1`, and every request under `TESTING`) used to
+    call the paid closure with no `background_jobs` involvement at all --
+    bypassing dedupe_key entirely, so a sync call could run alongside a
+    live async job (or another sync call) for the exact same unit of work,
+    paying for it twice. This claims the same dedupe_key slot
+    `enqueue_job`'s async path does and runs `job_fn` in this thread via
+    `run_job_sync`, sharing its CAS transitions and its at-most-one-
+    execution-per-race guarantee.
+
+    Returns the finished job's dict (status/result/error) on success.
+    Raises `JobAlreadyActive` (propagated, not caught here) when the
+    dedupe_key is already claimed by another job -- the caller answers 409
+    with `.job_id` rather than running a second execution.
+    """
+    from services.background_jobs import get_job, run_job_sync
+
+    app_obj = current_app._get_current_object()
+    job_id = run_job_sync(
+        job_fn, job_type=job_type, meta=meta or {}, app=app_obj, dedupe_key=dedupe_key
+    )
+    return get_job(job_id)
+
+
+def _job_already_active_response(exc) -> tuple[Response, int]:
+    """The 409 body every sync route answers with when `_run_sync` raises
+    `JobAlreadyActive` -- the client polls `/api/jobs/<job_id>` for the run
+    that already claims this unit of work instead of the route paying for a
+    second one."""
+    return jsonify(
+        {
+            "success": False,
+            "error": (
+                "An equivalent analysis is already in progress or just "
+                "finished. Poll its job instead of retrying."
+            ),
+            "job_id": exc.job_id,
+        }
+    ), 409
+
+
 @api_bp.route("/jobs/<job_id>", methods=["GET"])
 def get_job_status(job_id: str):
     """Fetch status/result for a background job."""
@@ -547,34 +665,22 @@ def analyze_property_structured(land_id):
 
                 db.session.commit()
 
+                # _upsert_land_ai_variant is an update-or-insert that
+                # recovers from a lost race against the unique constraint
+                # migration 017 adds, rather than the old query-then-insert
+                # that let two concurrent writers both see "no row" and
+                # both insert (#190 review round 3, finding 4).
                 try:
-                    existing_variant = (
-                        AiAnalysisVariant.query.filter_by(
-                            land_id=land_id, provider="claude"
-                        )
-                        .order_by(AiAnalysisVariant.created_at.desc())
-                        .first()
+                    _upsert_land_ai_variant(
+                        land_id, "claude", model=model_used, analysis=final_analysis
                     )
-                    if existing_variant:
-                        existing_variant.analysis = final_analysis
-                        existing_variant.model = model_used
-                        existing_variant.created_at = datetime.now(timezone.utc)
-                    else:
-                        db.session.add(
-                            AiAnalysisVariant(
-                                land_id=land_id,
-                                provider="claude",
-                                model=model_used,
-                                analysis=final_analysis,
-                            )
-                        )
-                    db.session.commit()
                 except Exception as e:
                     logger.warning(
                         "Failed to store Claude analysis variant for land %s: %s",
                         land_id,
                         e,
                     )
+                    db.session.rollback()
 
                 return {
                     "success": True,
@@ -594,28 +700,50 @@ def analyze_property_structured(land_id):
                 "raw_analysis": result.get("raw_analysis") if result else None,
             }
 
+        # Claude is the only provider this endpoint calls (see the variant
+        # it writes above) -- fixed in the key so a resubmit after an
+        # interrupted run cannot race a still-active one for the same land
+        # (#176 acceptance criterion 4), and so a `?sync=1` call cannot run
+        # alongside a live async one for the same land (#190 review round
+        # 3, finding 4).
+        dedupe_key = f"land_ai_analysis:{land.id}:claude"
+
         if _should_run_sync():
-            result = _run()
-            if result.get("success"):
+            from services.background_jobs import JobAlreadyActive
+
+            try:
+                job = _run_sync(
+                    _run,
+                    job_type="land_ai_analysis",
+                    meta={"land_id": land.id, "is_enrichment": is_enrichment},
+                    dedupe_key=dedupe_key,
+                )
+            except JobAlreadyActive as exc:
+                return _job_already_active_response(exc)
+
+            result = job["result"] if job else None
+            if result and result.get("success"):
                 return jsonify(result)
-            error_msg = result.get("error", "Analysis failed")
+            error_msg = (
+                (result or {}).get("error")
+                or (job or {}).get("error")
+                or ("Analysis failed")
+            )
             status_code = (
                 503
                 if "overloaded" in error_msg.lower()
                 or "temporarily" in error_msg.lower()
                 else 500
             )
-            return jsonify(result), status_code
+            return jsonify(
+                result or {"success": False, "error": error_msg}
+            ), status_code
 
         job_id = _enqueue(
             _run,
             job_type="land_ai_analysis",
             meta={"land_id": land.id, "is_enrichment": is_enrichment},
-            # Claude is the only provider this endpoint calls (see the
-            # variant it writes below) -- fixed in the key so a resubmit
-            # after an interrupted run cannot race a still-active one for
-            # the same land (#176 acceptance criterion 4).
-            dedupe_key=f"land_ai_analysis:{land.id}:claude",
+            dedupe_key=dedupe_key,
         )
         return jsonify(
             {
@@ -726,21 +854,39 @@ def analyze_universal_property_structured(property_id: int):
                 "is_enrichment": is_enrichment,
             }
 
+        # The observed #176 failure: a redeploy interrupted this exact job
+        # for (property, provider), and resubmitting it must reuse the
+        # in-flight run rather than start a second one racing to write the
+        # same PropertyAiAnalysisVariant row. Also what keeps a `?sync=1`
+        # call from running alongside a live async one for the same pair
+        # (#190 review round 3, finding 4).
+        dedupe_key = f"property_ai_analysis:{prop.id}:{provider}"
+
         if _should_run_sync():
-            result = _run()
-            if result.get("success"):
+            from services.background_jobs import JobAlreadyActive
+
+            try:
+                job = _run_sync(
+                    _run,
+                    job_type="property_ai_analysis",
+                    meta={"property_id": prop.id, "provider": provider},
+                    dedupe_key=dedupe_key,
+                )
+            except JobAlreadyActive as exc:
+                return _job_already_active_response(exc)
+
+            result = job["result"] if job else None
+            if result and result.get("success"):
                 return jsonify(result)
-            return jsonify(result), 500
+            return jsonify(
+                result or {"success": False, "error": (job or {}).get("error")}
+            ), 500
 
         job_id = _enqueue(
             _run,
             job_type="property_ai_analysis",
             meta={"property_id": prop.id, "provider": provider},
-            # The observed #176 failure: a redeploy interrupted this exact
-            # job for (property, provider), and resubmitting it must reuse
-            # the in-flight run rather than start a second one racing to
-            # write the same PropertyAiAnalysisVariant row.
-            dedupe_key=f"property_ai_analysis:{prop.id}:{provider}",
+            dedupe_key=dedupe_key,
         )
         return jsonify(
             {
@@ -807,45 +953,48 @@ def generate_openai_structured(land_id):
             analysis = result.get("structured_analysis") or {}
             model = result.get("model")
 
-            existing_local = (
-                AiAnalysisVariant.query.filter_by(land_id=land_id, provider="openai")
-                .order_by(AiAnalysisVariant.created_at.desc())
-                .first()
-            )
-
-            if existing_local:
-                existing_local.analysis = analysis
-                existing_local.model = model
-                existing_local.created_at = datetime.now(timezone.utc)
-                variant = existing_local
-            else:
-                variant = AiAnalysisVariant(
-                    land_id=land_id,
-                    provider="openai",
-                    model=model,
-                    analysis=analysis,
-                )
-                db.session.add(variant)
-
-            db.session.commit()
+            # _upsert_land_ai_variant recovers from a lost insert race
+            # against the unique constraint migration 017 adds, rather than
+            # the old query-then-insert that let two concurrent writers
+            # both see "no row" and both insert (#190 review round 3,
+            # finding 4).
+            _upsert_land_ai_variant(land_id, "openai", model=model, analysis=analysis)
 
             return {
                 "success": True,
-                "analysis": variant.analysis,
-                "model": variant.model,
+                "analysis": analysis,
+                "model": model,
             }
 
+        # Keeps a `?sync=1` call from running alongside a live async one
+        # for the same land (#190 review round 3, finding 4).
+        dedupe_key = f"land_openai_analysis:{land.id}:openai"
+
         if _should_run_sync():
-            result = _run()
-            if result.get("success"):
+            from services.background_jobs import JobAlreadyActive
+
+            try:
+                job = _run_sync(
+                    _run,
+                    job_type="land_openai_analysis",
+                    meta={"land_id": land.id, "force": force},
+                    dedupe_key=dedupe_key,
+                )
+            except JobAlreadyActive as exc:
+                return _job_already_active_response(exc)
+
+            result = job["result"] if job else None
+            if result and result.get("success"):
                 return jsonify(result)
-            return jsonify(result), 500
+            return jsonify(
+                result or {"success": False, "error": (job or {}).get("error")}
+            ), 500
 
         job_id = _enqueue(
             _run,
             job_type="land_openai_analysis",
             meta={"land_id": land.id, "force": force},
-            dedupe_key=f"land_openai_analysis:{land.id}:openai",
+            dedupe_key=dedupe_key,
         )
         return jsonify(
             {

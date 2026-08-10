@@ -1124,7 +1124,21 @@ class MarketSettings(db.Model):
 
 
 class AiAnalysisVariant(db.Model):
-    """Stores alternative AI analyses per land (e.g., Claude vs ChatGPT)."""
+    """Stores alternative AI analyses per land (e.g., Claude vs ChatGPT).
+
+    At most one row per (land_id, provider) -- enforced by the database, not
+    just by the writer's own logic (#190 review round 3, finding 4;
+    migration 017). Before that migration this was a plain (non-unique)
+    `db.Index`, and both land-side writers in routes/api_routes.py
+    (`analyze_property_structured` for Claude, `generate_openai_structured`
+    for OpenAI) were query-then-insert: `?sync=1` racing an interrupted
+    job's async retry -- `?sync=1` bypasses `background_jobs`' dedupe_key
+    entirely -- could both see "no row for this pair" and both insert,
+    leaving two variants racing for the same land/provider. See
+    `routes.api_routes._upsert_land_ai_variant`, the update-or-insert writer
+    this constraint lets recover from a lost race instead of preventing it
+    silently.
+    """
 
     __tablename__ = "ai_analysis_variants"
 
@@ -1147,7 +1161,9 @@ class AiAnalysisVariant(db.Model):
     )
 
     __table_args__ = (
-        db.Index("ix_ai_analysis_variants_land_provider", "land_id", "provider"),
+        db.UniqueConstraint(
+            "land_id", "provider", name="ux_ai_analysis_variants_land_provider"
+        ),
     )
 
     def __repr__(self):

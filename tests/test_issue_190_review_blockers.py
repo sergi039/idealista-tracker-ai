@@ -44,6 +44,20 @@ real UNIQUE constraint (after deduplicating any rows that race already
 produced), and `routes.api_routes._upsert_property_ai_variant` replaces the
 query-then-insert with an update-or-insert that recovers from losing the
 race instead of assuming it never happens.
+
+Round 3, finding 4 -- `?sync=1` (and every request under `TESTING`) called
+the paid closure directly for all three AI-analysis routes, with zero
+`background_jobs` involvement: no dedupe_key check, so a sync call could run
+alongside a live async job (or another sync call) for the exact same unit of
+work. `services.background_jobs.run_job_sync` now claims the same dedupe_key
+slot `enqueue_job` does and runs the closure inline through the same CAS
+lifecycle, raising `JobAlreadyActive` (the route answers 409) when something
+else already claims it. The land-side writers (`AiAnalysisVariant`, used by
+both the Claude and OpenAI land routes) had the same query-then-insert shape
+against a non-unique index as blocker 3's property table and were still
+unfixed -- migration 017 was extended to deduplicate and constrain
+`ai_analysis_variants` too, with `routes.api_routes._upsert_land_ai_variant`
+as its writer.
 """
 
 import json
@@ -352,3 +366,221 @@ def test_upsert_property_ai_variant_recovers_from_a_lost_insert_race(app):
         "result, not silently drop it"
     )
     assert call_count["n"] == 1, "the patched zero-update must have fired exactly once"
+
+
+# --- Round 3, finding 4: land variants get the same guard as property ----
+
+
+def test_land_ai_variant_unique_constraint_blocks_a_direct_duplicate(app):
+    """The (land_id, provider) analogue of blocker 3's property-side fix --
+    migration 017 was extended in round 3 to cover `ai_analysis_variants`
+    (the legacy Land model) too, since `?sync=1` bypassed background_jobs
+    for the land Claude/OpenAI routes exactly the same way it did for
+    property before blocker 3."""
+    from models import AiAnalysisVariant
+
+    with app.app_context():
+        land = Land(source_email_id="finding4-direct", title="L")
+        db.session.add(land)
+        db.session.commit()
+
+        db.session.add(
+            AiAnalysisVariant(
+                land_id=land.id, provider="claude", model="m1", analysis={}
+            )
+        )
+        db.session.commit()
+
+        db.session.add(
+            AiAnalysisVariant(
+                land_id=land.id, provider="claude", model="m2", analysis={}
+            )
+        )
+        with pytest.raises(Exception):  # IntegrityError, wrapped by the dialect
+            db.session.commit()
+        db.session.rollback()
+
+
+def test_upsert_land_ai_variant_updates_the_existing_row_in_place(app):
+    from models import AiAnalysisVariant
+    from routes.api_routes import _upsert_land_ai_variant
+
+    with app.app_context():
+        land = Land(source_email_id="finding4-update", title="L")
+        db.session.add(land)
+        db.session.commit()
+        land_id = land.id
+
+        _upsert_land_ai_variant(land_id, "claude", model="m1", analysis={"a": 1})
+        _upsert_land_ai_variant(land_id, "claude", model="m2", analysis={"a": 2})
+
+        rows = AiAnalysisVariant.query.filter_by(
+            land_id=land_id, provider="claude"
+        ).all()
+
+    assert len(rows) == 1
+    assert rows[0].model == "m2"
+    assert rows[0].analysis == {"a": 2}
+
+
+def test_upsert_land_ai_variant_recovers_from_a_lost_insert_race(app):
+    """The land-side analogue of
+    test_upsert_property_ai_variant_recovers_from_a_lost_insert_race: this
+    call's own "does a row exist" check finds nothing, but a concurrent
+    writer fills the (land_id, provider) slot before this call's own
+    INSERT runs. _upsert_land_ai_variant must recover by updating the
+    winner rather than raising or leaving two rows.
+    """
+    from models import AiAnalysisVariant
+    from routes.api_routes import _upsert_land_ai_variant
+
+    with app.app_context():
+        land = Land(source_email_id="finding4-race", title="L")
+        db.session.add(land)
+        db.session.commit()
+        land_id = land.id
+
+        real_query = db.session.query
+        call_count = {"n": 0}
+
+        class _ZeroUpdateQuery:
+            def __init__(self, real):
+                self._real = real
+
+            def filter_by(self, **kwargs):
+                self._real = self._real.filter_by(**kwargs)
+                return self
+
+            def update(self, *args, **kwargs):
+                return 0
+
+        def _query(model, *args, **kwargs):
+            real = real_query(model, *args, **kwargs)
+            if model is AiAnalysisVariant and call_count["n"] == 0:
+                call_count["n"] += 1
+                return _ZeroUpdateQuery(real)
+            return real
+
+        db.session.query = _query
+        try:
+            db.session.add(
+                AiAnalysisVariant(
+                    land_id=land_id,
+                    provider="claude",
+                    model="winner",
+                    analysis={"winner": True},
+                )
+            )
+            db.session.commit()
+
+            _upsert_land_ai_variant(
+                land_id, "claude", model="mine", analysis={"mine": True}
+            )
+        finally:
+            db.session.query = real_query
+
+        rows = AiAnalysisVariant.query.filter_by(
+            land_id=land_id, provider="claude"
+        ).all()
+
+    assert len(rows) == 1
+    assert rows[0].analysis == {"mine": True}
+    assert call_count["n"] == 1
+
+
+# --- Round 3, finding 4: the sync path claims the same registry slot -----
+
+
+def test_run_job_sync_raises_when_a_live_job_already_claims_the_key(app):
+    """`?sync=1` and TESTING used to call the paid closure directly, with no
+    `background_jobs` involvement at all -- so a sync call could run
+    alongside a live async job for the exact same dedupe_key, paying for
+    the same work twice. `run_job_sync` must instead see the live row
+    `enqueue_job` would have written and refuse, raising `JobAlreadyActive`
+    rather than running its own closure (#190 review round 3, finding 4).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from models import BackgroundJob
+    from services.background_jobs import JobAlreadyActive, run_job_sync
+
+    key = "property_ai_analysis:900:claude"
+    with app.app_context():
+        db.session.add(
+            BackgroundJob(
+                id="l" * 32,
+                job_type="property_ai_analysis",
+                status="running",
+                dedupe_key=key,
+                lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            )
+        )
+        db.session.commit()
+
+        calls = []
+        with pytest.raises(JobAlreadyActive) as exc_info:
+            run_job_sync(
+                lambda: calls.append(1) or {"success": True},
+                job_type="property_ai_analysis",
+                app=app,
+                dedupe_key=key,
+            )
+
+    assert exc_info.value.job_id == "l" * 32
+    assert calls == [], "the sync closure must never run once refused"
+
+
+def test_run_job_sync_claims_and_runs_when_nothing_blocks_it(app):
+    """The plain, unblocked case: run_job_sync claims a fresh slot and runs
+    its closure inline, in the caller's own session (not a freshly-pushed
+    one -- see run_job_sync's docstring)."""
+    from services.background_jobs import get_job, run_job_sync
+
+    with app.app_context():
+        job_id = run_job_sync(
+            lambda: {"success": True, "via": "sync"},
+            job_type="property_ai_analysis",
+            app=app,
+            dedupe_key="property_ai_analysis:901:claude",
+        )
+        job = get_job(job_id)
+
+    assert job["status"] == "success"
+    assert job["result"] == {"success": True, "via": "sync"}
+
+
+def test_a_sync_request_is_refused_with_409_when_a_live_async_job_exists(app, client):
+    """HTTP-level proof for one representative route: a live job already
+    claims the same dedupe_key `analyze_universal_property_structured`
+    would compute, so a `?sync=1`-equivalent (TESTING) request must answer
+    409 with that job's id -- not run a second, paid analysis for the same
+    (property, provider) pair (#190 review round 3, finding 4)."""
+    from datetime import datetime, timedelta, timezone
+
+    from models import BackgroundJob, Property
+
+    with app.app_context():
+        prop = Property(source_email_id="finding4-409", title="P")
+        db.session.add(prop)
+        db.session.commit()
+        property_id = prop.id
+
+        live_job_id = "9" * 32
+        db.session.add(
+            BackgroundJob(
+                id=live_job_id,
+                job_type="property_ai_analysis",
+                status="running",
+                dedupe_key=f"property_ai_analysis:{property_id}:claude",
+                lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            )
+        )
+        db.session.commit()
+
+    resp = client.post(
+        f"/api/property/{property_id}/analyze/structured", json={"provider": "claude"}
+    )
+    assert resp.status_code == 409
+    body = resp.get_json()
+    assert body["success"] is False
+    assert body["job_id"] == live_job_id
