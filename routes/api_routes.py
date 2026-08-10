@@ -120,12 +120,17 @@ def _upsert_property_ai_variant(
     either leaving this run's result silently unwritten or letting a second
     row exist for the same pair.
 
-    Commits internally (possibly more than once, if it has to recover from
-    a race) rather than leaving that to the caller, since the recovery path
-    needs its own rollback and a caller with other unrelated pending changes
-    in the same session must not have those rolled back too; see the
-    `provider == "claude"` commit right before this is called in
-    analyze_universal_property_structured.
+    Stages every write -- never commits (#190 review round 4, finding 4).
+    The caller (a job function running inside `_execute_job`) commits once,
+    together with the terminal CAS write that records the job itself as
+    successful, so a reap racing this job's own execution rolls both back
+    together rather than letting this land after the job has already lost
+    ownership. The INSERT attempt runs inside a `SAVEPOINT`
+    (`Session.begin_nested()`): if it loses the race, only that savepoint
+    rolls back, not the rest of what the caller staged in the same
+    session (e.g. `prop_local.ai_analysis`, set just before this is called
+    in `analyze_universal_property_structured`) -- a plain `session.
+    rollback()` here would discard that too.
     """
     from models import PropertyAiAnalysisVariant
 
@@ -138,21 +143,19 @@ def _upsert_property_ai_variant(
         .update(fields, synchronize_session=False)
     )
     if updated:
-        db.session.commit()
         return
 
     try:
-        db.session.add(
-            PropertyAiAnalysisVariant(
-                property_id=property_id,
-                provider=provider,
-                model=model,
-                analysis=analysis,
+        with db.session.begin_nested():
+            db.session.add(
+                PropertyAiAnalysisVariant(
+                    property_id=property_id,
+                    provider=provider,
+                    model=model,
+                    analysis=analysis,
+                )
             )
-        )
-        db.session.commit()
     except IntegrityError as exc:
-        db.session.rollback()
         if not _is_property_variant_collision(exc):
             raise
         recovered = (
@@ -160,7 +163,6 @@ def _upsert_property_ai_variant(
             .filter_by(property_id=property_id, provider=provider)
             .update(fields, synchronize_session=False)
         )
-        db.session.commit()
         if not recovered:
             # The row that just won the race would have to be deleted in
             # this exact instant for this to happen. Fail loudly rather than
@@ -202,10 +204,12 @@ def _upsert_land_ai_variant(land_id: int, provider: str, *, model, analysis) -> 
     `_upsert_property_ai_variant`, against `AiAnalysisVariant` instead of
     `PropertyAiAnalysisVariant`.
 
-    Commits internally, for the same reason `_upsert_property_ai_variant`
-    does: the recovery path needs its own rollback, and a caller with other
-    unrelated pending changes in the same session (land.ai_analysis, set
-    just before this is called) must not have those rolled back too.
+    Stages every write -- never commits, for the same reason
+    `_upsert_property_ai_variant` doesn't (#190 review round 4, finding 4):
+    the caller commits once, together with the job's own terminal CAS
+    write. The INSERT attempt runs inside a `SAVEPOINT` so a lost race
+    rolls back only that attempt, not `land.ai_analysis`, set just before
+    this is called and still only staged, not committed.
     """
     from models import AiAnalysisVariant
 
@@ -218,18 +222,16 @@ def _upsert_land_ai_variant(land_id: int, provider: str, *, model, analysis) -> 
         .update(fields, synchronize_session=False)
     )
     if updated:
-        db.session.commit()
         return
 
     try:
-        db.session.add(
-            AiAnalysisVariant(
-                land_id=land_id, provider=provider, model=model, analysis=analysis
+        with db.session.begin_nested():
+            db.session.add(
+                AiAnalysisVariant(
+                    land_id=land_id, provider=provider, model=model, analysis=analysis
+                )
             )
-        )
-        db.session.commit()
     except IntegrityError as exc:
-        db.session.rollback()
         if not _is_land_variant_collision(exc):
             raise
         recovered = (
@@ -237,7 +239,6 @@ def _upsert_land_ai_variant(land_id: int, provider: str, *, model, analysis) -> 
             .filter_by(land_id=land_id, provider=provider)
             .update(fields, synchronize_session=False)
         )
-        db.session.commit()
         if not recovered:
             raise RuntimeError(
                 "Lost the insert race for ai_analysis_variants "
@@ -663,13 +664,22 @@ def analyze_property_structured(land_id):
                     land_local.ai_analysis = new_analysis
                     final_analysis = new_analysis
 
-                db.session.commit()
+                # Staged, not committed: _execute_job commits this together
+                # with the job's own terminal CAS write, once, so a reap
+                # racing this job's execution rolls both back together
+                # rather than letting land_local.ai_analysis land after the
+                # job has already lost ownership (#190 review round 4,
+                # finding 4).
 
                 # _upsert_land_ai_variant is an update-or-insert that
                 # recovers from a lost race against the unique constraint
                 # migration 017 adds, rather than the old query-then-insert
                 # that let two concurrent writers both see "no row" and
-                # both insert (#190 review round 3, finding 4).
+                # both insert (#190 review round 3, finding 4). It stages
+                # its own write too -- no commit or rollback here either,
+                # since its own SAVEPOINT-based recovery already leaves the
+                # session valid for whatever failed for a reason other than
+                # the recognized race.
                 try:
                     _upsert_land_ai_variant(
                         land_id, "claude", model=model_used, analysis=final_analysis
@@ -680,7 +690,6 @@ def analyze_property_structured(land_id):
                         land_id,
                         e,
                     )
-                    db.session.rollback()
 
                 return {
                     "success": True,
@@ -818,21 +827,26 @@ def analyze_universal_property_structured(property_id: int):
                 merged.update(new_analysis)
                 final = merged
 
-            # Claude remains the primary analysis stored on the Property record itself (legacy parity).
-            # Committed on its own, before the variant upsert below: that
-            # helper recovers from a lost insert race with its own
-            # rollback, and a rollback there must not also discard this
-            # unrelated change still pending in the same session (#190
-            # review, blocker 3).
+            # Claude remains the primary analysis stored on the Property
+            # record itself (legacy parity). Staged, not committed: the
+            # variant upsert below has its own SAVEPOINT-scoped recovery
+            # now (#190 review round 4, finding 4), so it no longer needs
+            # this change committed first to protect it from its own
+            # rollback -- _execute_job commits this together with the
+            # job's own terminal CAS write, once, so a reap racing this
+            # job's execution rolls both back together.
             if provider == "claude":
                 prop_local.ai_analysis = final
-                db.session.commit()
 
             # Store per-provider analysis for side-by-side comparison in the
             # UI. _upsert_property_ai_variant is an update-or-insert that
             # recovers from a lost race against the unique constraint
             # migration 017 adds, rather than the old query-then-insert that
             # let two concurrent writers both see "no row" and both insert.
+            # It stages its own write too -- no commit or rollback here
+            # either, since its own SAVEPOINT-based recovery already leaves
+            # the session valid for whatever failed for a reason other than
+            # the recognized race.
             try:
                 _upsert_property_ai_variant(
                     property_id, provider, model=result.get("model"), analysis=final
@@ -844,7 +858,6 @@ def analyze_universal_property_structured(property_id: int):
                     provider,
                     e,
                 )
-                db.session.rollback()
 
             return {
                 "success": True,

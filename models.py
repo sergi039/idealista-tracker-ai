@@ -3,7 +3,7 @@ import json
 
 from app import db
 from services.search_subscription_identity import SEARCH_KEY_LENGTH
-from sqlalchemy import CheckConstraint
+from sqlalchemy import CheckConstraint, func
 from sqlalchemy.types import JSON
 
 
@@ -1249,7 +1249,11 @@ class BackgroundJob(db.Model):
     live job dead, and reconciliation ran unconditionally on every
     `create_app()`, so a one-shot utility script sharing the database with
     the running web app would interrupt that app's genuinely in-flight job.
-    See `services/background_jobs.py`'s module docstring for the full model.
+    See `services/background_jobs.py`'s module docstring for the full model,
+    including the round-4 review's transactional advisory lock (a Python
+    `created_at` still shadowing the database's own default could let two
+    enqueuers order the same race differently) and the single-transaction
+    domain-write/terminal-CAS commit.
     """
 
     __tablename__ = "background_jobs"
@@ -1288,13 +1292,28 @@ class BackgroundJob(db.Model):
     meta = db.Column(JSON, nullable=False, default=dict)
     result = db.Column(JSON, nullable=True)
     error = db.Column(db.Text, nullable=True)
-    created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+    # server_default, not default=utcnow: a Python-side `default=` computes
+    # its value in this process and sends it explicitly with the INSERT,
+    # which would silently shadow the database's own DEFAULT NOW() (already
+    # in migrations/016_create_background_jobs_table.sql) and reintroduce a
+    # process clock into a decision the rest of this table deliberately
+    # keeps in SQL (#190 review round 4, finding 2 -- two enqueuers whose
+    # process clocks disagree, even by a little, could each believe their
+    # own row is the newest one). `server_default=func.now()` compiles to
+    # `now()` on PostgreSQL and `CURRENT_TIMESTAMP` on SQLite (verified),
+    # matching the migration's own DDL exactly, so a row's timestamp always
+    # comes from whichever database actually wrote it.
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
     started_at = db.Column(db.DateTime, nullable=True)
     finished_at = db.Column(db.DateTime, nullable=True)
     # Set to the *database's* now() + TTL at enqueue and renewed on every
-    # status transition (services.background_jobs._write_status). A row is
-    # only ever treated as dead when this has passed the database's own
-    # now() -- never compared against anything Python computed.
+    # status transition (services.background_jobs._write_status). Never had
+    # a Python-side default of its own to begin with -- every write site in
+    # services.background_jobs sets it explicitly via `_lease_expiry_expr`,
+    # a SQL expression -- so there was nothing to shadow here; listed for
+    # completeness alongside created_at above. A row is only ever treated as
+    # dead when this has passed the database's own now() -- never compared
+    # against anything Python computed.
     lease_expires_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
     def __repr__(self):

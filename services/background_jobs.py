@@ -100,6 +100,82 @@ a live async job (or another sync call) is refused rather than run twice:
 it raises `JobAlreadyActive`, and the route answers 409 with the id of
 whichever job already owns the key.
 
+## Serializing the enqueue race (round-4 review, findings 1 and 2)
+
+Round 3's baseline/supersession check closed the case where a competing
+caller's replacement had already finished by the time a loser checked --
+but a *check* is still not an *insert*, and nothing stopped another whole
+race from playing out in the gap between them: caller B could pass both the
+liveness and supersession checks, then caller A could reap the same
+expired row, insert its own replacement, run it to completion, and only
+*then* would B's own insert attempt run -- against a partial unique index
+that, by then, had nothing active left to block it (finding 1). Separately,
+`created_at` used to be a Python-side default (`default=utcnow` on the
+model): two callers whose process clocks disagreed, or that simply landed
+in the same millisecond, could each fail to recognize the other's row as
+"newer" (finding 2).
+
+`_dedupe_serialization` closes both by making the entire check -> reap ->
+insert sequence for one `dedupe_key` a single atomic unit: a PostgreSQL
+transaction-scoped advisory lock (`pg_advisory_xact_lock(hashtext(key))`),
+taken as the first statement, so no other caller racing the *same* key can
+observe this transaction's writes -- or make its own -- until it ends.
+SQLite (tests only) stands this in with a process-local `threading.Lock`
+per key. `created_at` is now a `server_default` (models.py), computed by
+whichever database actually runs the INSERT, never by this process's own
+clock; the baseline/supersession check from round 3 stays in place as
+defense in depth, not as the primary guarantee any more.
+
+## Domain writes and the terminal CAS share one transaction (round-4
+## review, finding 4)
+
+A job function (`fn`, one of the three AI-analysis closures in
+routes/api_routes.py) used to commit its own domain writes -- an AI
+analysis, a variant row -- independently of `_execute_job`'s own terminal
+CAS write. If a reap raced ahead of a still-running `fn()` (an unusually
+delayed heartbeat, an administrative intervention), `fn()`'s domain commit
+could still land *after* the reap, overwriting whatever a legitimate
+replacement job had already written for the same row -- even though the
+reaped job's own terminal CAS write correctly failed and recorded nothing
+extra.
+
+`fn()` now only *stages* its domain writes (`db.session.add`/`.update()`,
+never `.commit()`); `_execute_job` issues the terminal CAS UPDATE in that
+same session and commits once, covering both. If the CAS matches zero rows
+-- lost ownership, the same signal `_try_write` always used -- the whole
+transaction rolls back, and `fn()`'s staged domain writes disappear with
+it, exactly as if they had never run. `_upsert_property_ai_variant` and
+`_upsert_land_ai_variant` (routes/api_routes.py) no longer commit either;
+their own insert-vs-update race recovery runs inside a `SAVEPOINT`
+(`Session.begin_nested()`), so a collision there rolls back only the
+failed insert attempt, not the rest of what `fn()` staged.
+
+## An ambiguous commit failure is not automatically a lost race (round-4
+## review, finding 2)
+
+`_try_write`'s own commit can raise *after* PostgreSQL has already
+committed the write server-side -- a connection dropped on the way back,
+not a failed transaction. The old code could not tell that apart from a
+genuine failure: it returned `False`, a retry's own CAS then matched zero
+rows (the write, after all, already happened), and that looked exactly
+like "something else changed this row" -- lost ownership, `None`, stop.
+For the `queued` -> `running` transition specifically, that meant a job
+this process legitimately owned would never run: the async path left it
+stuck until its lease expired, and the sync path answered 500 for work
+that had, in fact, already started.
+
+`_try_write` now treats *any* non-matching write -- whether from a raised
+exception or a clean zero-row CAS -- as ambiguous rather than conclusive,
+and asks the database itself to settle it (`_matches_our_own_write`,
+through a brand-new session/connection, deliberately not the one whose
+commit is in question): if the row's status is already exactly the value
+this write was trying to record, with a lease that has not expired,
+nothing else could plausibly have written that -- only this module's own
+CAS writes ever set a job's status, and a reaper always writes a different
+one (`interrupted`) -- so it must have been this write, or an earlier
+attempt of it, landing invisibly. Only when the row shows something else
+has ownership genuinely been lost.
+
 ## What this does not solve, honestly
 
 If a job's own writes fail (every retry, and the fresh-session fallback) so
@@ -107,8 +183,16 @@ that neither `running` nor a terminal status is ever recorded, that row is
 genuinely indistinguishable from a live one until its lease expires --
 `LEASE_TTL_SECONDS` is the bound on how long that can last, not zero,
 because no lease system can know a writer is dead before its lease says so.
+The one exception is the combined domain-write/terminal-CAS commit
+(`_finalize_success`): if *that* commit truly fails (not just loses its
+acknowledgement -- see above), `fn()`'s already-computed result cannot be
+recovered by retrying, because retrying would redo only the status column,
+not the domain writes nothing tracks outside that one lost transaction. The
+job is honestly recorded `error` instead of silently claiming `success`
+over data that was never written.
 """
 
+import contextlib
 import logging
 import os
 import threading
@@ -297,10 +381,87 @@ def _ensure_heartbeat_started(app_obj) -> None:
             _heartbeat_thread.start()
 
 
+# --- Serializing the enqueue-time check -> reap -> insert sequence -------
+# (#190 review round 4, findings 1 and 2 -- see the module docstring)
+
+_sqlite_dedupe_locks: Dict[str, threading.Lock] = {}
+_sqlite_dedupe_locks_guard = threading.Lock()
+
+
+def _sqlite_dedupe_lock(dedupe_key: str) -> threading.Lock:
+    """A process-local lock per `dedupe_key`, standing in for PostgreSQL's
+    transactional advisory lock on SQLite -- tests only; this table's only
+    real deployment target is PostgreSQL, which is what actually needs the
+    lock. Created once per key, on demand; the registry is small and
+    bounded in practice (one entry per unit of work this process has ever
+    raced to enqueue), so it is never pruned.
+    """
+    with _sqlite_dedupe_locks_guard:
+        lock = _sqlite_dedupe_locks.get(dedupe_key)
+        if lock is None:
+            lock = threading.Lock()
+            _sqlite_dedupe_locks[dedupe_key] = lock
+        return lock
+
+
+@contextlib.contextmanager
+def _dedupe_serialization(db, dedupe_key: Optional[str]):
+    """Serializes the entire check -> reap -> insert sequence in
+    `_acquire_job_slot` for one `dedupe_key`, so no other caller racing the
+    *same* key can observe -- or create -- anything in between (see the
+    module docstring's "Serializing the enqueue race" section for why a
+    check-then-insert, even with round 3's baseline/supersession guard, was
+    not enough on its own).
+
+    PostgreSQL: `pg_advisory_xact_lock`, a transaction-scoped advisory
+    lock, taken as the very first statement of the transaction. SQLite
+    (tests only) has no advisory locks, so a process-local `threading.Lock`
+    per key stands in.
+
+    `dedupe_key=None` needs no lock: nothing can ever collide with a job
+    that was never asked to deduplicate against anything.
+    """
+    if dedupe_key is None:
+        yield
+        return
+
+    dialect = _dialect_name(db.session)
+    if dialect == "sqlite":
+        lock = _sqlite_dedupe_lock(dedupe_key)
+        lock.acquire()
+        try:
+            yield
+        finally:
+            lock.release()
+        return
+
+    db.session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": dedupe_key}
+    )
+    try:
+        yield
+    finally:
+        # pg_advisory_xact_lock releases automatically at the transaction's
+        # end -- but only once that end actually happens. Every path out of
+        # the `with` block above (an early return after a read-only check,
+        # a successful insert's own commit, or a caught IntegrityError's
+        # own rollback) must leave no transaction open here, or the lock --
+        # and the connection -- stays held for however long this caller
+        # keeps going before its next database call. rollback() is always
+        # a safe "close whatever is still open" in that role: it discards
+        # nothing when the block already committed or rolled back for
+        # itself, since there is nothing left pending by then.
+        db.session.rollback()
+
+
 # --- Claiming a dedupe_key: shared by the async and sync paths -----------
 
 
 def _insert_queued_row(db, job_id: str, *, job_type: str, meta, dedupe_key) -> None:
+    """Stages a fresh `queued` row -- does not commit. Called from inside
+    `_acquire_job_slot`'s own `_dedupe_serialization` block, which commits
+    once, together with whatever `_reap_expired_active_row` staged in the
+    same attempt (#190 review round 4, finding 1)."""
     from models import BackgroundJob
 
     db.session.add(
@@ -313,7 +474,6 @@ def _insert_queued_row(db, job_id: str, *, job_type: str, meta, dedupe_key) -> N
             lease_expires_at=_lease_expiry_expr(_dialect_name(db.session)),
         )
     )
-    db.session.commit()
 
 
 def _find_live_job_id(db, dedupe_key: str) -> Optional[str]:
@@ -376,15 +536,20 @@ def _find_superseding_row(
 
 def _reap_expired_active_row(db, dedupe_key: str) -> None:
     """If an active row for `dedupe_key` has an expired (or missing) lease,
-    atomically mark it `interrupted`.
+    stage marking it `interrupted` -- does not commit.
 
-    The UPDATE is a compare-and-swap: `WHERE id = :id AND status =
-    :seen_status AND (lease NULL or expired)`. Two concurrent callers can
-    both observe the same candidate row and both attempt this, but only one
-    UPDATE can actually match it -- the loser's `rowcount` is 0, which this
-    treats as "someone else handled it" rather than an error. A no-op, not
-    an error, when there is no active row for this key at all, or its lease
-    is still valid (nothing to reap).
+    Called from inside `_acquire_job_slot`'s own `_dedupe_serialization`
+    block (#190 review round 4, finding 1): every caller racing this
+    `dedupe_key` is already serialized by that lock, so the CAS predicate
+    below (`WHERE id = :id AND status = :seen_status AND (lease NULL or
+    expired)`) exists to guard against a *different* kind of concurrent
+    writer this lock does not cover -- the row's own owning worker, still
+    genuinely alive and renewing its lease or recording its own outcome
+    through `_write_status`, in a session this function never touches. A
+    no-op, not an error, when there is no active row for this key at all,
+    or its lease is still valid (nothing to reap). The caller (
+    `_acquire_job_slot`) commits this together with the insert that
+    follows it, as one atomic unit.
     """
     from models import BackgroundJob
 
@@ -422,7 +587,6 @@ def _reap_expired_active_row(db, dedupe_key: str) -> None:
             synchronize_session=False,
         )
     )
-    db.session.commit()
     if reaped:
         logger.warning(
             "Reaped expired lease on job %s (type=%s dedupe_key=%s)",
@@ -445,6 +609,13 @@ def _acquire_job_slot(
     Shared by `enqueue_job` (async) and `run_job_sync` (`?sync=1`,
     `TESTING`) so both obey the same invariant: at most one new execution
     per race for a `dedupe_key` (#190 review round 3, findings 3 and 4).
+
+    Every attempt below runs inside `_dedupe_serialization`: the liveness
+    check, the supersession check, the reap of an expired-but-still-active
+    row, and the insert are one atomic unit per `dedupe_key`, closing the
+    gap round 3's checks alone left open (#190 review round 4, finding 1 --
+    see the module docstring). The baseline/supersession check from round 3
+    is kept as defense in depth, not as the primary guarantee any more.
     """
     baseline_id, baseline_created_at = (
         _baseline_snapshot(db, dedupe_key) if dedupe_key is not None else (None, None)
@@ -453,31 +624,45 @@ def _acquire_job_slot(
 
     job_id = None
     for _attempt in range(1, _ENQUEUE_MAX_ATTEMPTS + 1):
-        if dedupe_key is not None:
-            live_id = _find_live_job_id(db, dedupe_key)
-            if live_id is not None:
-                return live_id, False
+        with _dedupe_serialization(db, dedupe_key):
+            if dedupe_key is not None:
+                live_id = _find_live_job_id(db, dedupe_key)
+                if live_id is not None:
+                    return live_id, False
 
-            superseding_id = _find_superseding_row(db, dedupe_key, baseline_created_at)
-            if superseding_id is not None:
-                return superseding_id, False
+                superseding_id = _find_superseding_row(
+                    db, dedupe_key, baseline_created_at
+                )
+                if superseding_id is not None:
+                    return superseding_id, False
 
-        job_id = uuid.uuid4().hex
-        try:
+                # Nothing live, nothing superseding -- so the partial
+                # unique index can only still be holding this key with an
+                # ACTIVE row whose lease has expired (a genuinely dead
+                # worker that was never reaped). Reap it now, still inside
+                # this key's lock: no concurrent caller for the *same* key
+                # can be running this section at the same time, so the
+                # reap and the insert that follows share one commit as a
+                # single atomic unit.
+                _reap_expired_active_row(db, dedupe_key)
+
+            job_id = uuid.uuid4().hex
             _insert_queued_row(
                 db, job_id, job_type=job_type, meta=meta, dedupe_key=dedupe_key
             )
-            return job_id, True
-        except IntegrityError:
-            db.session.rollback()
-            if dedupe_key is None:
-                raise  # the collision was on the primary key, not dedupe_key
-            # Nothing live and nothing superseding is holding the key --
-            # its lease just expired (reap it; a concurrent caller reaping
-            # first just means this UPDATE matches zero rows) or it
-            # finished between our checks above and this insert (benign).
-            # Either way, loop back and re-check rather than assuming which.
-            _reap_expired_active_row(db, dedupe_key)
+            try:
+                db.session.commit()
+                return job_id, True
+            except IntegrityError:
+                db.session.rollback()
+                if dedupe_key is None:
+                    raise  # the collision was on the primary key, not dedupe_key
+                # Should not happen while every caller for this key is
+                # serialized behind the same lock -- this is defense in
+                # depth against a hashtext() collision between two
+                # *different* keys sharing a lock id, not the primary
+                # guarantee -- so loop back, take the lock fresh, and
+                # re-check rather than assuming what happened.
 
     raise RuntimeError(
         f"Could not acquire a job slot for job_type={job_type!r} "
@@ -584,20 +769,80 @@ def run_job_sync(
     return job_id
 
 
+def _matches_our_own_write(job_id: str, fields: Dict[str, Any]) -> bool:
+    """True if `job_id`'s row, read through a brand-new session/connection,
+    already shows exactly the status a write was trying to record, with a
+    lease that has not expired.
+
+    The disambiguation `_try_write` needs for #190 review round 4, finding
+    2: a CAS that matches zero rows, or a commit that raised, is genuinely
+    ambiguous on its own -- it could mean this caller lost ownership to a
+    reaper, or it could mean the write actually landed and only its
+    acknowledgement was lost (a connection dropped on the way back, after
+    PostgreSQL had already committed). A fresh session/connection is
+    deliberate: the one whose commit is in question is exactly the session
+    whose view of the world might be unreliable here. Only this module's
+    own CAS writes ever set a job's status at all, and a reaper always
+    writes a different one (`interrupted`) -- so an exact match, with a
+    live lease, has no other explanation than "this write, or an earlier
+    attempt of it, landed".
+    """
+    from app import db as _db
+    from models import BackgroundJob
+
+    target_status = fields.get("status")
+    if target_status is None:
+        return False
+    try:
+        with Session(bind=_db.engine) as fresh_session:
+            row = (
+                fresh_session.query(BackgroundJob.id)
+                .filter(
+                    BackgroundJob.id == job_id,
+                    BackgroundJob.status == target_status,
+                    BackgroundJob.lease_expires_at.isnot(None),
+                    BackgroundJob.lease_expires_at >= _now_expr(),
+                )
+                .first()
+            )
+            return row is not None
+    except Exception:
+        logger.exception(
+            "Job %s: re-read to disambiguate an ambiguous write also failed", job_id
+        )
+        return False
+
+
 def _try_write(
     session, job_id: str, expected_status: str, fields: Dict[str, Any]
 ) -> Optional[bool]:
     """Compare-and-swap: `UPDATE ... WHERE id = :id AND status =
     :expected_status`, renewing the lease in the same statement.
 
-    Returns `True` if the CAS matched and committed, `False` if the write
-    itself failed and is worth retrying (a dropped connection, a lock held
-    too long), or `None` if the row's status was not `expected_status` --
-    something else (a reaper) already changed it, and this caller has lost
+    Returns `True` if the CAS matched and committed (or, per below, is
+    confirmed to have already landed), `False` if the write itself failed
+    and is worth retrying (a dropped connection, a lock held too long), or
+    `None` if the row's status was not `expected_status` -- something else
+    (a reaper) already changed it, and this caller has genuinely lost
     ownership. `None` is never retried and never overwritten: an
     `interrupted` row (or any other status a CAS miss reveals) is a
     terminal fact this worker no longer has standing to contest (#190
     review round 3, finding 2).
+
+    A CAS miss and a commit exception are both routed through
+    `_matches_our_own_write` before being treated as a loss (#190 review
+    round 4, finding 2): if the row already shows exactly what this write
+    was trying to record, an earlier attempt's own commit landed and only
+    its acknowledgement was lost -- not a lost race. Only when the row
+    genuinely shows something else is ownership treated as lost.
+
+    On a miss (whether disambiguated to `True` or left as `None`), this
+    also rolls back whatever else was staged in `session` -- a job
+    function's own domain writes, when this is the combined success write
+    -- rather than committing them anyway just because the CAS predicate
+    happened to match zero rows (#190 review round 4, finding 4): a lost
+    race must not let a `fn()` that is no longer this row's owner still
+    land its own domain data.
     """
     from models import BackgroundJob
 
@@ -609,23 +854,41 @@ def _try_write(
             .filter(BackgroundJob.id == job_id, BackgroundJob.status == expected_status)
             .update(full_fields, synchronize_session=False)
         )
-        session.commit()
-        if updated:
-            return True
+        if not updated:
+            session.rollback()
+            if _matches_our_own_write(job_id, fields):
+                logger.warning(
+                    "Job %s: %s already landed under an earlier attempt whose "
+                    "acknowledgement was lost; treating it as successful",
+                    job_id,
+                    fields,
+                )
+                return True
+            logger.warning(
+                "Job %s lost ownership before recording %s (expected status=%r)",
+                job_id,
+                fields,
+                expected_status,
+            )
+            return None
 
-        logger.warning(
-            "Job %s lost ownership before recording %s (expected status=%r)",
-            job_id,
-            fields,
-            expected_status,
-        )
-        return None
+        session.commit()
+        return True
     except Exception:
         logger.exception("Job %s failed to record %s", job_id, fields)
         try:
             session.rollback()
         except Exception:
             logger.exception("Job %s could not roll back after a failed write", job_id)
+            return False
+        if _matches_our_own_write(job_id, fields):
+            logger.warning(
+                "Job %s: %s already landed despite a commit exception; "
+                "treating it as successful",
+                job_id,
+                fields,
+            )
+            return True
         return False
 
 
@@ -654,6 +917,14 @@ def _write_status(job_id: str, *, expected_status: str, **fields) -> Optional[bo
     scoped session specifically. If even that fails, the row keeps whatever
     lease it last had and expires on schedule -- `LEASE_TTL_SECONDS` bounds
     how long that can last, not zero.
+
+    Used for the status-only transitions (`queued` -> `running`, and any
+    write recording `error`) -- retrying, and falling back to a fresh
+    session, is safe for these because there is nothing else staged in the
+    session that a rollback or a session swap could silently drop. The
+    combined success write, which *does* have a job function's own staged
+    domain writes riding along, uses `_finalize_success` instead -- see its
+    own docstring for why it deliberately does not retry.
     """
     from app import db as _db
 
@@ -693,23 +964,54 @@ def _write_status(job_id: str, *, expected_status: str, **fields) -> Optional[bo
     return False
 
 
+def _finalize_success(job_id: str, result: Any) -> Optional[bool]:
+    """Records a job's success in the *same* transaction as whatever `fn()`
+    staged without committing -- an AI analysis, a variant row -- and
+    commits once, covering both (#190 review round 4, finding 4; see the
+    module docstring's "Domain writes and the terminal CAS share one
+    transaction" section).
+
+    Deliberately does not retry and has no fresh-session fallback the way
+    `_write_status` does: a failed commit here means rolling back to keep
+    the CAS atomic with `fn()`'s staged writes (`_try_write` already does
+    this on any miss), and retrying could only redo the status column --
+    `fn()`'s own staged changes are gone the instant that rollback runs,
+    nothing tracks them to redo, and a "successful" retry that quietly
+    skipped them would be a worse bug than the one this fixes: a job
+    reporting success over domain data that was never written.
+    `_try_write`'s own ambiguity check (round 4, finding 2) already covers
+    the one case a retry would otherwise have been needed for -- a commit
+    that landed but whose acknowledgement was lost.
+    """
+    from app import db as _db
+
+    return _try_write(
+        _db.session,
+        job_id,
+        expected_status="running",
+        fields={"status": "success", "result": result, "finished_at": _now()},
+    )
+
+
 def _execute_job(job_id: str, fn: Callable[[], Any]) -> None:
     """Run `fn`, recording start/success/error against `job_id` via CAS
     transitions, and unregistering `job_id` from the heartbeat's owned set
     on every exit path.
 
     Assumes an app context is already active -- `db.session` (inside
-    `_write_status`) resolves to whichever one is current; this does not
-    push one of its own. That is deliberate: `run_job_sync` calls this
-    directly, still inside the *caller's* (a route handler's) own app
-    context, so `fn`'s reads/writes land in the same session the route
-    itself uses -- the same class of bug blocker 2 fixed for the
-    land/Claude route (a mutation committed through a *different* session
-    than the one a request goes on to read from), just at the
-    enqueue/run-inline boundary instead of inside one route's own closure.
-    `_run_job` is the async entry point that pushes a fresh context, since
-    a worker thread starts with none of its own.
+    `_write_status`/`_finalize_success`) resolves to whichever one is
+    current; this does not push one of its own. That is deliberate:
+    `run_job_sync` calls this directly, still inside the *caller's* (a
+    route handler's) own app context, so `fn`'s reads/writes land in the
+    same session the route itself uses -- the same class of bug blocker 2
+    fixed for the land/Claude route (a mutation committed through a
+    *different* session than the one a request goes on to read from), just
+    at the enqueue/run-inline boundary instead of inside one route's own
+    closure. `_run_job` is the async entry point that pushes a fresh
+    context, since a worker thread starts with none of its own.
     """
+    from app import db as _db
+
     try:
         outcome = _write_status(
             job_id, expected_status="queued", status="running", started_at=_now()
@@ -729,6 +1031,18 @@ def _execute_job(job_id: str, fn: Callable[[], Any]) -> None:
             # finding 4). Log it here so that stays true for both paths --
             # the DB row only gets str(exc).
             logger.exception("Job %s: fn() raised", job_id)
+            # Whatever fn() staged before raising -- a partial domain write
+            # -- must not reach the database either: the same principle
+            # finding 4 established for the success path applies just as
+            # much to a failure. This also leaves a known-good transaction
+            # state for the error write that follows, rather than one
+            # PostgreSQL may already have aborted.
+            try:
+                _db.session.rollback()
+            except Exception:
+                logger.exception(
+                    "Job %s: rolling back after fn() raised also failed", job_id
+                )
             _write_status(
                 job_id,
                 expected_status="running",
@@ -737,18 +1051,16 @@ def _execute_job(job_id: str, fn: Callable[[], Any]) -> None:
                 finished_at=_now(),
             )
         else:
-            outcome = _write_status(
-                job_id,
-                expected_status="running",
-                status="success",
-                result=result,
-                finished_at=_now(),
-            )
+            outcome = _finalize_success(job_id, result)
             if outcome is False:
                 # A transient failure, not a lost race (that's `None`,
                 # handled by simply not writing again below) -- still try
                 # once more to at least flag failure honestly rather than
-                # leaving the row silently "running".
+                # leaving the row silently "running". fn()'s own staged
+                # domain writes are already gone by now (_try_write rolled
+                # back before returning False), so this is a status-only
+                # write -- _write_status's retry/fresh-session fallback is
+                # safe here for exactly that reason.
                 _write_status(
                     job_id,
                     expected_status="running",

@@ -872,6 +872,175 @@ def test_016_two_concurrent_reaps_of_the_same_expired_row_leave_one_winner(
         engine.dispose()
 
 
+def test_016_the_dedupe_serialization_lock_allows_only_one_execution_per_key(
+    postgres_url, monkeypatch
+):
+    """#190 review round 4, finding 1, proven against real PostgreSQL and
+    the actual Python code, not raw SQL: two threads, two independent
+    connections (two `create_app()` instances sharing this database), racing
+    `services.background_jobs.enqueue_job` for the same `dedupe_key`.
+
+    Reproduces the reviewer's exact interleaving: B's own liveness and
+    supersession checks find nothing (nothing exists for the key yet), and
+    then -- a deterministic pause forced right where `_acquire_job_slot`
+    hands off from "checks passed" to "insert" -- B is suspended before
+    ever inserting. Only then does A run its *entire* cycle: insert,
+    execute, reach a terminal status. B is released afterwards and resumes
+    with checks it never redid.
+
+    Without `pg_advisory_xact_lock` actually serializing the two callers,
+    this is exactly the shape round 3's baseline/supersession checks alone
+    did not close: by the time B wakes up, A's row is terminal, so the
+    partial unique index no longer blocks a second insert, and B would
+    insert (and run) a real second execution. With the lock, B cannot even
+    reach its own checks until A's entire transaction -- which the pause
+    sits inside, still holding the lock -- has ended, so A is the one
+    forced to wait instead; either way, at most one execution results. The
+    pause is released unconditionally after a bounded wait for A, so this
+    cannot hang under the correct (lock-holding) behaviour it is meant to
+    prove.
+    """
+    import threading
+    import time as time_module
+
+    from app import create_app
+    from migrations.runner import run_migrations
+    from services import background_jobs
+    from services.background_jobs import enqueue_job, get_job
+    from tests import setup_test_environment
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+    finally:
+        engine.dispose()
+
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    app_a = create_app()
+    app_b = create_app()
+
+    key = "property_ai_analysis:902:claude"
+    calls: dict[str, int] = {"a": 0, "b": 0}
+    outcomes: dict[str, str] = {}
+    errors: dict[str, BaseException] = {}
+
+    real_reap = background_jobs._reap_expired_active_row
+    b_paused = threading.Event()
+    let_b_continue = threading.Event()
+    # background_jobs is one module shared by both threads, so patching
+    # _reap_expired_active_row itself would pause *whichever* thread
+    # reaches it first -- not necessarily B. A thread-local flag scopes the
+    # pause to B's own call specifically, regardless of which thread
+    # happens to execute the (still globally patched) wrapper.
+    _pause_here = threading.local()
+
+    def _paused_reap(db_module, dedupe_key):
+        # _acquire_job_slot calls this unconditionally, still inside
+        # _dedupe_serialization's `with` block, right after the liveness/
+        # supersession checks and right before the insert that follows --
+        # the exact hand-off point finding 1 is about.
+        if getattr(_pause_here, "active", False):
+            b_paused.set()
+            let_b_continue.wait(timeout=10)
+        return real_reap(db_module, dedupe_key)
+
+    def _b():
+        def _fn():
+            calls["b"] += 1
+            return {"success": True, "who": "b"}
+
+        try:
+            _pause_here.active = True
+            with app_b.app_context():
+                outcomes["b"] = enqueue_job(
+                    _fn, job_type="property_ai_analysis", app=app_b, dedupe_key=key
+                )
+        except BaseException as exc:  # noqa: BLE001 -- surfaced via `errors`
+            errors["b"] = exc
+
+    background_jobs._reap_expired_active_row = _paused_reap
+
+    def _a():
+        def _fn():
+            calls["a"] += 1
+            return {"success": True, "who": "a"}
+
+        try:
+            with app_a.app_context():
+                outcomes["a"] = enqueue_job(
+                    _fn, job_type="property_ai_analysis", app=app_a, dedupe_key=key
+                )
+        except BaseException as exc:  # noqa: BLE001
+            errors["a"] = exc
+
+    thread_b = threading.Thread(target=_b)
+    thread_b.start()
+    assert b_paused.wait(timeout=5), "B never reached its own pause point"
+
+    # A runs its entire cycle now, on its own thread, while B is suspended
+    # mid check-to-insert. This must not be a blocking call on *this*
+    # thread: under the correct (lock-holding) behaviour, A itself blocks
+    # waiting for B's held advisory lock, and only this thread -- not A's
+    # -- is what eventually releases B below; calling enqueue_job for A
+    # directly here would deadlock against that.
+    thread_a = threading.Thread(target=_a)
+    thread_a.start()
+
+    # Give A a bounded window to run (and, if nothing is holding it back,
+    # finish) before releasing B -- if the lock is holding A back instead
+    # (the correct behaviour), this simply elapses with A still blocked,
+    # which is fine: the assertions below only check the final outcome,
+    # not which of the two actually ran first.
+    deadline = time_module.time() + 2
+    while time_module.time() < deadline:
+        if "a" in outcomes:
+            with app_a.app_context():
+                if get_job(outcomes["a"])["status"] in ("success", "error"):
+                    break
+        time_module.sleep(0.02)
+
+    let_b_continue.set()
+    thread_a.join(timeout=10)
+    thread_b.join(timeout=10)
+    background_jobs._reap_expired_active_row = real_reap
+
+    assert not thread_a.is_alive() and not thread_b.is_alive(), "a thread hung"
+    assert not errors, f"a racing enqueue_job call raised: {errors}"
+
+    assert outcomes["a"] == outcomes["b"], (
+        f"both callers must agree on exactly one winning job: {outcomes}"
+    )
+
+    winning_id = outcomes["a"]
+    deadline = time_module.time() + 5
+    status = None
+    while time_module.time() < deadline:
+        with app_a.app_context():
+            status = get_job(winning_id)["status"]
+        if status in ("success", "error"):
+            break
+        time_module.sleep(0.05)
+    assert status == "success", f"the winning job never finished: {status}"
+
+    assert calls["a"] + calls["b"] == 1, (
+        f"fn() must run exactly once between the two racing callers: {calls}"
+    )
+
+    # The migration engine above was disposed right after run_migrations;
+    # open a fresh one for this final check.
+    check_engine = create_engine(postgres_url)
+    try:
+        with check_engine.begin() as connection:
+            count = connection.execute(
+                text("SELECT count(*) FROM background_jobs WHERE dedupe_key = :key"),
+                {"key": key},
+            ).scalar_one()
+        assert count == 1, "exactly one row must exist for the dedupe_key, never two"
+    finally:
+        check_engine.dispose()
+
+
 def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
     postgres_url, tmp_path
 ):

@@ -434,26 +434,35 @@ def test_a_failing_job_is_recorded_as_error_not_left_queued(app, inline_executor
 # strand a job -----------------------------------------------------------
 
 
-def test_a_terminal_write_that_fails_recovers_via_a_fresh_session(
+def test_a_running_mark_that_fails_recovers_via_a_fresh_session(
     app, inline_executor, monkeypatch
 ):
-    """Simulates the first commit(s) of the terminal transition failing.
+    """Simulates the first commit(s) of the "mark running" transition
+    failing.
 
     `_write_status` retries `_TRANSITION_MAX_ATTEMPTS` times against the
     normal session, then falls back once to a brand-new `Session`. This
     fails every attempt against the normal session and lets only the
-    fresh-session fallback through, proving the row reaches `success`
-    rather than staying `running` forever.
+    fresh-session fallback through, proving the row reaches `running` (and
+    then `fn()` actually runs) rather than staying `queued` forever.
+
+    Targets the "mark running" transition specifically, not the terminal
+    "success" write: since #190 review round 4, finding 4, the success
+    write goes through `_finalize_success`, which deliberately does not
+    retry or fall back to a fresh session (a job function's own staged
+    domain writes could not survive either recovery path) -- see
+    `test_a_success_write_that_fails_does_not_retry_and_records_an_honest_error`
+    below for that write's own, different, contract.
     """
     real_try_write = background_jobs._try_write
-    calls = {"terminal_attempts": 0}
+    calls = {"running_attempts": 0}
 
     def _flaky_try_write(session, job_id, expected_status, fields):
-        if fields.get("status") != "success":
-            # Let "mark running" through untouched.
+        if fields.get("status") != "running":
+            # Let the terminal write through untouched.
             return real_try_write(session, job_id, expected_status, fields)
-        calls["terminal_attempts"] += 1
-        if calls["terminal_attempts"] <= background_jobs._TRANSITION_MAX_ATTEMPTS:
+        calls["running_attempts"] += 1
+        if calls["running_attempts"] <= background_jobs._TRANSITION_MAX_ATTEMPTS:
             return False
         return real_try_write(session, job_id, expected_status, fields)
 
@@ -468,12 +477,51 @@ def test_a_terminal_write_that_fails_recovers_via_a_fresh_session(
 
     # _TRANSITION_MAX_ATTEMPTS failures against the normal session, then one
     # more call that is the fresh-session fallback succeeding.
-    assert calls["terminal_attempts"] == background_jobs._TRANSITION_MAX_ATTEMPTS + 1
+    assert calls["running_attempts"] == background_jobs._TRANSITION_MAX_ATTEMPTS + 1
     assert job["status"] == "success", (
-        "the row must not stay 'running' forever when the normal session's "
-        "commit is broken -- the fresh-session fallback must recover it"
+        "the row must not stay 'queued' forever when the normal session's "
+        "commit is broken -- the fresh-session fallback must recover it, "
+        "and fn() must then actually run"
     )
     assert job["result"] == {"success": True}
+
+
+def test_a_success_write_that_fails_does_not_retry_and_records_an_honest_error(
+    app, inline_executor, monkeypatch
+):
+    """#190 review round 4, finding 4: the combined success write
+    (`_finalize_success`) does not retry or fall back to a fresh session
+    the way a status-only write does -- `fn()`'s own staged domain writes
+    would not survive either recovery path (a fresh session never sees
+    them at all; a retry's own rollback discards them, and nothing tracks
+    them to redo). A transient failure here is recorded as an honest
+    `error` instead, through the ordinary status-only fallback write
+    (which *does* retry, since there is nothing but a status column at
+    stake by then) -- never silently claimed as `success` over domain data
+    that was never actually written.
+    """
+    real_try_write = background_jobs._try_write
+
+    def _fail_only_the_success_write(session, job_id, expected_status, fields):
+        if fields.get("status") == "success":
+            return False
+        return real_try_write(session, job_id, expected_status, fields)
+
+    monkeypatch.setattr(background_jobs, "_try_write", _fail_only_the_success_write)
+
+    def _fn():
+        return {"success": True}
+
+    with app.app_context():
+        job_id = enqueue_job(_fn, job_type="property_ai_analysis", app=app)
+        job = get_job(job_id)
+
+    assert job["status"] == "error", (
+        "a failed combined success write must not be silently retried into "
+        "a false success -- it must honestly record an error instead"
+    )
+    assert "run it again" in job["error"].lower()
+    assert job["result"] is None, "no result must be recorded alongside the error"
 
 
 def test_a_terminal_write_that_always_fails_leaves_the_row_running_but_reapable(
@@ -644,80 +692,76 @@ def test_process_clock_skew_does_not_affect_the_reap_decision(app, monkeypatch):
         assert get_job(existing_id)["status"] == "running"
 
 
-def test_a_losing_reap_falls_back_to_the_winners_replacement_id(app, monkeypatch):
-    """Deterministic simulation of losing the reap race for one dedupe_key.
+def test_the_dedupe_lock_blocks_a_concurrent_caller_for_the_same_key(
+    app, inline_executor
+):
+    """#190 review round 4, finding 1: the check -> reap -> insert sequence
+    in `_acquire_job_slot` must actually be serialized per `dedupe_key`,
+    not just look race-free by construction. This is what closed the gap a
+    round-3 test (`test_a_losing_reap_falls_back_to_the_winners_replacement_
+    id`, before this round) used to pin instead: with a real lock in place,
+    that test's exact scenario -- a caller retrying *past* a concurrent
+    winner's reap-and-insert -- can no longer happen at all, because no
+    second caller can even be inside the check/reap/insert section for the
+    same key while the first is.
 
-    A genuine two-thread version of this belongs against real PostgreSQL,
-    not this suite's in-memory SQLite -- see
-    tests/test_postgres_migrations.py::
-    test_016_two_concurrent_reaps_of_the_same_expired_row_leave_one_winner,
-    which proves the underlying compare-and-swap UPDATE really does let only
-    one of two concurrent connections win it. This test instead pins the
-    *retry-loop logic* deterministically: by the time this caller's own
-    reap-and-retry runs, a concurrent caller has already reaped the expired
-    row and inserted its own replacement -- simulated with a monkeypatch
-    that performs exactly those two steps in place of a lone reap. This
-    caller's own retried insert then collides with that replacement, and
-    must fall back to returning its id rather than raising an
-    IntegrityError or creating a second, competing row (#190 review round
-    2, finding 4).
+    Proven directly against `_dedupe_serialization`'s SQLite branch (a
+    process-local `threading.Lock` per key -- see the module docstring's
+    "Serializing the enqueue race" section): only one thread ever touches
+    the database at a time here -- the second is fully blocked acquiring
+    the lock itself, never issuing any SQL -- so this is safe against the
+    shared-`StaticPool`-connection corruption the rest of this file's
+    docstring warns real concurrent database access would risk.
+    `inline_executor` keeps it that way even across `enqueue_job`'s own
+    async dispatch: the worker thread's `fn()` runs to completion inline,
+    inside that same one thread, rather than handing off to a second, real
+    `_EXECUTOR` thread that would also touch the database. The equivalent
+    proof against PostgreSQL's `pg_advisory_xact_lock`, with two real
+    threads and two real connections racing `enqueue_job` itself, is
+    `tests/test_postgres_migrations.py::
+    test_016_the_dedupe_serialization_lock_allows_only_one_execution_per_key`.
     """
-    from services.background_jobs import _insert_queued_row, _reap_expired_active_row
+    import threading
+
+    from services.background_jobs import _sqlite_dedupe_lock
 
     key = "property_ai_analysis:355:claude"
-    stale_id = "6" * 32
-    _insert_row(
-        app,
-        id=stale_id,
-        job_type="property_ai_analysis",
-        status="running",
-        dedupe_key=key,
-        lease_expires_at=_expired_lease(),
-    )
+    lock = _sqlite_dedupe_lock(key)
 
-    winner_id = "6" * 31 + "w"
+    finished = threading.Event()
 
-    def _reap_as_a_concurrent_winner_would(db_module, dedupe_key):
-        # What a *different*, faster caller winning the race would have
-        # already done to the database by the time this caller's own reap
-        # attempt runs: reap the expired row, then insert its replacement.
-        _reap_expired_active_row(db_module, dedupe_key)
-        _insert_queued_row(
-            db_module,
-            winner_id,
-            job_type="property_ai_analysis",
-            meta=None,
-            dedupe_key=dedupe_key,
+    def _worker():
+        with app.app_context():
+            enqueue_job(
+                lambda: {"success": True},
+                job_type="property_ai_analysis",
+                app=app,
+                dedupe_key=key,
+            )
+        finished.set()
+
+    lock.acquire()
+    try:
+        thread = threading.Thread(target=_worker)
+        thread.start()
+        finished_while_locked = finished.wait(timeout=0.3)
+        assert not finished_while_locked, (
+            "a concurrent enqueue_job for the same dedupe_key must block on "
+            "the lock, not run straight through it"
         )
+    finally:
+        lock.release()
 
-    monkeypatch.setattr(
-        background_jobs, "_reap_expired_active_row", _reap_as_a_concurrent_winner_would
-    )
-
-    with app.app_context():
-        returned_id = enqueue_job(
-            lambda: {"success": True},
-            job_type="property_ai_analysis",
-            app=app,
-            dedupe_key=key,
-        )
-
-    assert returned_id == winner_id, (
-        "the loser must fall back to the id the concurrent winner already "
-        "inserted, not raise and not queue a second replacement"
-    )
+    thread.join(timeout=5)
+    assert not thread.is_alive(), "the worker must finish once the lock is released"
+    assert finished.is_set()
 
     with app.app_context():
         active_rows = BackgroundJob.query.filter(
             BackgroundJob.dedupe_key == key,
-            BackgroundJob.status.in_(("queued", "running")),
+            BackgroundJob.status.in_(("queued", "running", "success")),
         ).all()
-        stale_job = get_job(stale_id)
-
-    assert [row.id for row in active_rows] == [winner_id], (
-        "exactly one active replacement must exist, not two"
-    )
-    assert stale_job["status"] == "interrupted"
+    assert len(active_rows) == 1, "exactly one job must exist for the key"
 
 
 def test_after_both_terminal_writes_fail_a_lease_expiry_reaps_and_redispatches(
@@ -1024,6 +1068,184 @@ def test_a_reap_before_mark_running_prevents_the_job_from_starting(app):
         assert get_job(job_id)["status"] == "interrupted"
 
 
+# --- Domain writes and the terminal CAS share one transaction (#190 review
+# round 4, finding 4) --------------------------------------------------------
+
+
+def test_a_reap_via_a_separate_connection_discards_fns_staged_domain_write(
+    tmp_path, monkeypatch
+):
+    """A reaped job that is still alive inside `fn()` must not let its
+    staged domain writes (an AI analysis, a variant row) reach the database
+    just because `fn()` itself returned normally -- the terminal CAS still
+    has to match for any of it to land (#190 review round 4, finding 4).
+
+    Needs two genuinely independent connections to simulate honestly: a
+    reap arriving through a *different* session (a different process, in
+    production) is invisible to `fn()`'s own session until that session
+    looks again, which only this suite's file-backed-SQLite pattern (round
+    3's heartbeat tests use the same one) can provide -- the shared
+    in-memory `StaticPool` connection the rest of this file uses would make
+    the "different connection" fiction incoherent (both sessions would
+    really be the same one transaction).
+
+    `job_app` plays the worker actually executing `fn()`; `reaper_app`
+    plays whatever reaps the row out from under it -- an administrative
+    intervention, or a lease sweep from a different process -- while
+    `fn()`'s own domain write is still only staged, never committed.
+    """
+    from models import Property
+
+    setup_test_environment()
+    db_path = tmp_path / "shared.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    job_app = create_app()
+    with job_app.app_context():
+        db.create_all()
+        job_id = "d" * 32
+        db.session.add(
+            BackgroundJob(
+                id=job_id,
+                job_type="property_ai_analysis",
+                status="queued",
+                # A valid, unexpired lease: create_app()'s own reconciliation
+                # sweep runs on every call (including reaper_app's, below)
+                # and would otherwise mark a lease-less row interrupted
+                # immediately -- before fn() ever gets a chance to run its
+                # own simulated reap through a different connection.
+                lease_expires_at=_future_lease(),
+            )
+        )
+        db.session.add(
+            Property(id=1, title="original", price=1, area=1, source_email_id="e1")
+        )
+        db.session.commit()
+
+    reaper_app = create_app()
+
+    def _fn():
+        prop = db.session.get(Property, 1)
+        prop.title = "should never be persisted"
+        # Staged, not committed -- exactly what the real AI-analysis
+        # closures do post-fix (routes/api_routes.py). A genuinely
+        # different connection reaps the row right now, independently of
+        # this one, and commits that on its own.
+        with reaper_app.app_context():
+            BackgroundJob.query.filter_by(id=job_id).update(
+                {
+                    "status": "interrupted",
+                    "error": "reaped by a different connection",
+                },
+                synchronize_session=False,
+            )
+            db.session.commit()
+        return {"success": True, "should_never_be_stored": True}
+
+    from services.background_jobs import _execute_job
+
+    with job_app.app_context():
+        _execute_job(job_id, _fn)
+
+    with job_app.app_context():
+        job = get_job(job_id)
+        prop = db.session.get(Property, 1)
+
+        assert job["status"] == "interrupted"
+        assert job["error"] == "reaped by a different connection"
+        assert job["result"] is None
+        assert prop.title == "original", (
+            "fn()'s staged domain write must never reach the database once "
+            "the terminal CAS lost the race to an independent reap"
+        )
+        db.drop_all()
+
+
+# --- An ambiguous commit failure is not a lost race (#190 review round 4,
+# finding 2) ----------------------------------------------------------------
+
+
+def test_a_write_that_lands_but_loses_its_acknowledgement_still_runs_fn_once(
+    app, inline_executor, monkeypatch
+):
+    """PostgreSQL commits the "mark running" write server-side, but this
+    process never finds out about it -- a connection dropped on the way
+    back, the exact shape of #190 review round 4, finding 2. The old code
+    could not tell that apart from a genuine failure: it returned `False`,
+    a retry's own CAS then matched zero rows (the write, after all, had
+    already happened), and that looked exactly like a lost race -- the job
+    would never run at all, stuck until its lease expired.
+
+    Simulated here by wrapping `_try_write`: the first call performs the
+    *real* write (so it genuinely, verifiably lands) and then reports it as
+    failed anyway -- exactly what a lost acknowledgement looks like from
+    `_write_status`'s side. The retry that follows calls through to the
+    real `_try_write` again, unwrapped behaviour this time, so it is the
+    actual `_matches_our_own_write` logic under test recognizing that the
+    row already shows exactly what this write was trying to record.
+    """
+    real_try_write = background_jobs._try_write
+    state = {"pretended_failure_once": False}
+
+    def _land_then_pretend_to_fail(session, job_id, expected_status, fields):
+        outcome = real_try_write(session, job_id, expected_status, fields)
+        if (
+            fields.get("status") == "running"
+            and outcome is True
+            and not state["pretended_failure_once"]
+        ):
+            state["pretended_failure_once"] = True
+            return False  # the write landed; report it as if it had not
+        return outcome
+
+    monkeypatch.setattr(background_jobs, "_try_write", _land_then_pretend_to_fail)
+
+    calls = {"fn": 0}
+
+    def _fn():
+        calls["fn"] += 1
+        return {"success": True}
+
+    with app.app_context():
+        job_id = enqueue_job(_fn, job_type="property_ai_analysis", app=app)
+        job = get_job(job_id)
+
+    assert state["pretended_failure_once"] is True, (
+        "the test did not exercise the ambiguous-write path it was meant to"
+    )
+    assert calls["fn"] == 1, (
+        "fn() must run exactly once: not skipped (treating the ambiguous "
+        "write as a lost race) and not run twice (treating it as a clean "
+        "retry from scratch)"
+    )
+    assert job["status"] == "success"
+    assert job["result"] == {"success": True}
+
+
+def test_a_write_that_genuinely_failed_is_not_mistaken_for_success(
+    app, inline_executor, monkeypatch
+):
+    """Negative control: when a write genuinely never reaches the database
+    (not just loses its acknowledgement), `_matches_our_own_write` must
+    correctly find nothing and let the failure stand -- the disambiguation
+    round 4's finding 2 added must not turn every transient failure into a
+    false success.
+    """
+    monkeypatch.setattr(background_jobs, "_try_write", lambda *a, **kw: False)
+
+    def _fn():
+        return {"success": True}
+
+    with app.app_context():
+        job_id = enqueue_job(_fn, job_type="property_ai_analysis", app=app)
+        job = get_job(job_id)
+
+    assert job["status"] == "queued", (
+        "a write that truly never landed must not be reinterpreted as a "
+        "success just because it failed"
+    )
+
+
 # --- At most one execution per race (#190 review round 3, finding 3) ------
 
 
@@ -1037,6 +1259,16 @@ def test_a_dedupe_race_defers_to_a_replacement_that_already_finished(
     (by-then terminal) status, B's insert would succeed cleanly once J1's
     terminal status frees the partial unique index -- a second, paid
     execution for the same dedupe_key.
+
+    J0's own `created_at` is set explicitly, safely in the past: it is now
+    a `server_default` (models.py, #190 review round 4, finding 2) rather
+    than a Python-computed value, and SQLite's `CURRENT_TIMESTAMP` only has
+    second-level resolution -- J0 and J1 could otherwise tie under a fast
+    test, which would make `_find_superseding_row`'s `created_at >
+    baseline` comparison this test is pinning fail to see J1 as newer at
+    all. Real PostgreSQL timestamps have microsecond resolution, so this is
+    a test-environment-only concern, the same category the module
+    docstring already documents for SQLite's shared connection.
     """
     from services.background_jobs import _baseline_snapshot
 
@@ -1048,6 +1280,7 @@ def test_a_dedupe_race_defers_to_a_replacement_that_already_finished(
         job_type="property_ai_analysis",
         status="running",
         dedupe_key=key,
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
         lease_expires_at=_expired_lease(),
     )
 
