@@ -22,19 +22,34 @@ _NUMBER_COMMA_GROUP = r"(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?![\
 # which grammar matched. Parse with _parse_number_groups().
 _PRICE_NUMBER = rf"(?:{_NUMBER_DOT_GROUP}|{_NUMBER_COMMA_GROUP})"
 
+# A `€` carrying a per-unit suffix is a unit price, never an asking price, and
+# every alert email states both: "99,000 € 309 €/m²". Without this exclusion the
+# per-m² figure was read as a second price, which made `extract_price_change()`
+# call an ordinary new-listing email a price change (two amounts = old + new)
+# and `extract_price()` return its "new price" -- so a €99,000 house was stored,
+# scored and analysed as €309 (issue #220). The suffix sits after the currency
+# sign, where idealista puts it, and covers "€/m²", "€/m2", "€ / m2" and the
+# monthly form a rental carries.
+_PER_UNIT_SUFFIX = r"(?!\s*/\s*(?:m[²2]|mes\b|month\b))"
+
+# One amount in euros. Every "this is a price" regex below is built from it, so
+# the exclusion cannot be forgotten in one of them.
+_PRICE_AMOUNT = rf"{_PRICE_NUMBER}\s*€{_PER_UNIT_SUFFIX}"
+
 # Price patterns (supports Spanish/English thousand separators, decimal
 # endings, and plain digits with no separator at all, e.g. "59000 €").
 _PRICE_PATTERNS = [
-    rf"(?:Price|Precio):?\s*{_PRICE_NUMBER}\s*€",
-    rf"{_PRICE_NUMBER}\s*€",
+    rf"(?:Price|Precio):?\s*{_PRICE_AMOUNT}",
+    _PRICE_AMOUNT,
 ]
 
 # Price change patterns: extract (old, new) from "from X€ to Y€" / "de X€ a Y€".
 # Groups 1-4 are the old price (dot_int, dot_dec, comma_int, comma_dec);
-# groups 5-8 are the new price, in the same layout.
+# groups 5-8 are the new price, in the same layout. The lookahead adds no
+# capture group, so those positions are unchanged.
 _PRICE_CHANGE_PATTERNS = [
-    rf"\bfrom\s+{_PRICE_NUMBER}\s*€\s+to\s+{_PRICE_NUMBER}\s*€",
-    rf"\bde\s+{_PRICE_NUMBER}\s*€\s+a\s+{_PRICE_NUMBER}\s*€",
+    rf"\bfrom\s+{_PRICE_AMOUNT}\s+to\s+{_PRICE_AMOUNT}",
+    rf"\bde\s+{_PRICE_AMOUNT}\s+a\s+{_PRICE_AMOUNT}",
 ]
 
 # Area patterns (m² / m2; no minimum size threshold -- this extractor covers
@@ -210,13 +225,13 @@ def extract_price_change(text: str) -> Tuple[Optional[float], Optional[float]]:
     # HTML formatting fallback: old price is struck through, new price follows.
     try:
         strike_re = re.compile(
-            rf"(?is)(?:<s[^>]*>|<del[^>]*>|text-decoration\s*:\s*line-through[^>]*>)\s*{_PRICE_NUMBER}\s*€",
+            rf"(?is)(?:<s[^>]*>|<del[^>]*>|text-decoration\s*:\s*line-through[^>]*>)\s*{_PRICE_AMOUNT}",
         )
         strike_match = strike_re.search(text)
         if strike_match:
             old_price = _parse_number_groups(strike_match.groups())
             tail_plain = _strip_html(text[strike_match.end() :])
-            m = re.search(rf"{_PRICE_NUMBER}\s*€", tail_plain)
+            m = re.search(_PRICE_AMOUNT, tail_plain)
             if m:
                 new_price = _parse_number_groups(m.groups())
                 if old_price is not None and new_price is not None:
@@ -234,8 +249,11 @@ def extract_price_change(text: str) -> Tuple[Optional[float], Optional[float]]:
         if old_price is not None and new_price is not None:
             return old_price, new_price
 
+    # Two amounts in one body are read as old + new. That inference is only
+    # safe once per-m² figures are excluded: with them counted, every ordinary
+    # listing email held "two prices" and was reported as a price change.
     all_prices: list[tuple[int, float]] = []
-    for m in re.finditer(rf"{_PRICE_NUMBER}\s*€", plain):
+    for m in re.finditer(_PRICE_AMOUNT, plain):
         parsed = _parse_number_groups(m.groups())
         if parsed is None:
             continue
@@ -246,6 +264,23 @@ def extract_price_change(text: str) -> Tuple[Optional[float], Optional[float]]:
         return all_prices[0][1], all_prices[-1][1]
 
     return None, None
+
+
+def extract_price_per_m2(text: str) -> Optional[float]:
+    """The unit price the listing itself states, e.g. `309` from `309 €/m²`.
+
+    The counterpart of what `_PER_UNIT_SUFFIX` keeps out of `extract_price()`.
+    It is what tells a row damaged by issue #220 (its stored price *is* this
+    figure) from a row that merely parses differently now, which is the whole
+    safety rule of `utils/repair_prices.py`.
+    """
+    if not text:
+        return None
+    plain = _strip_html(text)
+    match = re.search(rf"{_PRICE_NUMBER}\s*€\s*/\s*m[²2]", plain)
+    if not match:
+        return None
+    return _parse_number_groups(match.groups())
 
 
 def extract_area_m2(text: str) -> Optional[float]:
