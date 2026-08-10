@@ -268,13 +268,25 @@ class OpenAIService:
         # AI_ANALYSIS_TIMEOUT_SECONDS (#206 item 3), shared with
         # services/property_ai_service.py rather than each spelling out its
         # own literal.
-        result = subscription_transport.complete(
-            prompt,
-            provider="openai",
-            system="Return only a single JSON object. No prose, no code fences.",
-            model=self.model,
-            timeout=Config.AI_ANALYSIS_TIMEOUT_SECONDS,
-        )
+        try:
+            result = subscription_transport.complete(
+                prompt,
+                provider="openai",
+                system="Return only a single JSON object. No prose, no code fences.",
+                model=self.model,
+                timeout=Config.AI_ANALYSIS_TIMEOUT_SECONDS,
+            )
+        except subscription_transport.SubscriptionTransportError as exc:
+            # A 503 (bridge busy) and a 504 (ran out of time) are worth a
+            # retry; anything else is a genuine failure (#206 item 5). This
+            # used to propagate straight past this function -- the caller's
+            # job runner (services/background_jobs.py) still caught it, but
+            # only far enough to record `str(exc)` -- the bridge's own
+            # "bridge returned 503: ..." wording -- as the job's error, which
+            # is exactly the undifferentiated message this mapping replaces.
+            logger.error("OpenAI analysis via subscription bridge failed: %s", exc)
+            failure_kind, message = subscription_transport.describe_failure(exc)
+            return {"status": "failed", "error": message, "failure_kind": failure_kind}
         logger.info(
             "OpenAI analysis via subscription bridge finished in %.1fs",
             (datetime.now(timezone.utc) - started).total_seconds(),

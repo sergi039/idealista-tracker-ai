@@ -17,7 +17,7 @@ import logging
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from config import Config
 
@@ -27,7 +27,46 @@ DEFAULT_TIMEOUT_SECONDS = 300
 
 
 class SubscriptionTransportError(RuntimeError):
-    """The bridge could not serve the request."""
+    """The bridge could not serve the request.
+
+    `status` carries the bridge's HTTP status code when there is one (a
+    genuine HTTP response, i.e. `urllib.error.HTTPError`) so a caller can
+    tell "the bridge is busy" (503) and "we ran out of time" (504) apart
+    from "the CLI is broken" (502 and everything else) without parsing the
+    message (#206 item 5). It is `None` for failures that never reached the
+    bridge at all -- unreachable host, missing configuration.
+    """
+
+    def __init__(self, message: str, *, status: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+# tools/ai_bridge.py's own comment: "A timeout and a busy bridge are not the
+# same failure as a CLI that answered with an error, and the caller should
+# be able to tell them apart without reading the message." This is that
+# read, kept in the one module that already owns the status code so neither
+# service using it has to repeat the 503/504 literals.
+_RETRYABLE_STATUS_MESSAGES: Dict[int, Tuple[str, str]] = {
+    503: (
+        "bridge_busy",
+        "The AI bridge is busy running another analysis. Try again shortly.",
+    ),
+    504: ("timeout", "The analysis did not finish within its time budget. Try again."),
+}
+
+
+def describe_failure(exc: "SubscriptionTransportError") -> Tuple[str, str]:
+    """Map a transport failure to `(failure_kind, message)`.
+
+    `failure_kind` is machine-readable ("bridge_busy" / "timeout" /
+    "failed") so the UI can style a retryable outcome differently from a
+    genuine one instead of matching against prose.
+    """
+    mapped = _RETRYABLE_STATUS_MESSAGES.get(exc.status)
+    if mapped:
+        return mapped
+    return "failed", "AI analysis service is temporarily unavailable"
 
 
 def _post(path: str, payload: Dict[str, Any], timeout: int) -> Dict[str, Any]:
@@ -59,7 +98,7 @@ def _post(path: str, payload: Dict[str, Any], timeout: int) -> Dict[str, Any]:
     except urllib.error.HTTPError as exc:
         detail = exc.read(8192).decode("utf-8", "replace")
         raise SubscriptionTransportError(
-            f"bridge returned {exc.code}: {detail[:500]}"
+            f"bridge returned {exc.code}: {detail[:500]}", status=exc.code
         ) from exc
     except urllib.error.URLError as exc:
         raise SubscriptionTransportError(

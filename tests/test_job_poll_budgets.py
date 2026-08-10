@@ -97,9 +97,18 @@ def test_every_poll_call_states_its_own_budget(path):
 
 
 def test_the_promise_helper_requires_a_budget():
-    """The three callers of `_pollJobPromise` have different budgets."""
+    """The three callers of `_pollJobPromise` have different budgets.
+
+    #206 item 5 added a third, optional `onUpdate` parameter (for the
+    queued/analysing status text) after `timeoutMs` -- this only checks the
+    signature's prefix, not the full parameter list, so that stays a
+    non-defaulted required argument regardless.
+    """
     source = (ROOT / "templates" / "property_detail.html").read_text(encoding="utf-8")
-    assert "function _pollJobPromise(jobId, timeoutMs)" in source
+    assert "function _pollJobPromise(jobId, timeoutMs" in source
+    assert "function _pollJobPromise(jobId, timeoutMs = " not in source, (
+        "timeoutMs must not gain a default"
+    )
     assert "_pollJobPromise(data.job_id)" not in source, (
         "a caller still relies on a defaulted budget"
     )

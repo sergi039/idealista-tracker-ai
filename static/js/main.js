@@ -1045,6 +1045,21 @@ window.IdealistaApp = {
         return stop;
     },
 
+    // Job status -> waiting-room copy for a pane whose spinner used to say
+    // "This may take 1-5 minutes" (#195). That was honest when a run took
+    // 4m50s; after #202/#214 real runs are 19-41s, and a duration promise
+    // still cannot bound a run that "legitimately varies" (#206 item 5) --
+    // so this reports the job's own `status` (already carried by every
+    // pollJob callback) instead of guessing at a number. Returns null for
+    // any status this doesn't have copy for (including before the first
+    // poll response), so a caller's own default keeps showing until then.
+    describeJobStatus: function(job) {
+        const status = job && job.status;
+        if (status === 'queued') return 'Queued — waiting for a free run slot…';
+        if (status === 'running') return 'Analysing…';
+        return null;
+    },
+
     showNotification: function(message, type = 'info', durationMs = 3000) {
         // Ephemeral "toast" notifications (no close button, do not take layout space).
         const alertClass =
