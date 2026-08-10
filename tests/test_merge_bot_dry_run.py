@@ -53,6 +53,10 @@ def _run_merge_bot(tmp_path: Path, *args: str, journal: str = ""):
                 esac
                 ;;
             merge-base) exit 0 ;;
+            # merge_bot measures the diff before spending a reviewer attempt on
+            # it (issue #182). This stub answers with something small, so these
+            # tests stay about the attempt bookkeeping rather than about size.
+            diff) printf 'diff --git a/x b/x\n+one line\n' ;;
             ls-remote)
                 printf '%s\trefs/heads/main\n' "$TEST_BASE_SHA"
                 ;;
