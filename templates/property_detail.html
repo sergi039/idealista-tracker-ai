@@ -559,6 +559,46 @@
                     </div>
                 </div>
 
+                {# What a target reads as, in one place for both loops below.
+
+                   It exists because `tdata.distance_km` on a dict *without* that
+                   key is Undefined, not None, and `Undefined is not none` is
+                   true -- so a target that recorded a refusal (`status:
+                   not_found`, no place, no duration, no distance) sailed past
+                   the guard and reached `format()`, raising UndefinedError and
+                   taking the whole page down. `property_detail` catches that and
+                   redirects to the list, so 34 of the owner's 356 properties
+                   simply looked as though they did not exist. `.get()` reads a
+                   missing key as None, which is what the guards already assume.
+
+                   A refusal is now shown rather than skipped: "not found" is
+                   Google answering that there is no such place near the listing,
+                   "not measured" is the lookup never answering. Those are not
+                   the same, and neither is an absence of travel time (#98). #}
+                {% macro travel_readout(tdata) -%}
+                    {# `is mapping`, not `or {}`: a target that is a bare string
+                       would otherwise reach .get() and raise the same
+                       UndefinedError this macro exists to stop. The same test
+                       guards `travel` and `travel_targets` above. #}
+                    {% set data = tdata if tdata is mapping else {} %}
+                    {% set duration = data.get('duration_min') %}
+                    {# Zero is a measurement, here as much as for duration: a
+                       supermarket across the street reads 0.0km, not blank. #}
+                    {% set distance_km = data.get('distance_km') if data.get('distance_km') is not none
+                                         else (data.get('distance_m') / 1000) if data.get('distance_m') is not none else None %}
+                    {% if duration is not none %}<span class="badge bg-info me-1">{{ duration }}min</span>{% endif %}
+                    {% if distance_km is not none %}<span class="badge bg-secondary">{{ '%.1f'|format(distance_km) }}km</span>{% endif %}
+                    {% if duration is none and distance_km is none %}
+                        {% if data.get('status') == 'not_found' %}
+                            <span class="badge bg-light text-dark"
+                                  title="Google found no such place near this listing{% if data.get('reason') %} ({{ data.get('reason') }}){% endif %}">not found</span>
+                        {% elif data.get('status') == 'unavailable' %}
+                            <span class="badge bg-warning text-dark"
+                                  title="The lookup did not answer, so nothing was measured{% if data.get('reason') %} ({{ data.get('reason') }}){% endif %}">not measured</span>
+                        {% endif %}
+                    {% endif %}
+                {%- endmacro %}
+
                 {% set travel = property.travel if property.travel is mapping else {} %}
                 {% set travel_targets = travel.get('targets') if travel is mapping else {} %}
                 {% set travel_targets = travel_targets if travel_targets is mapping else {} %}
@@ -570,19 +610,11 @@
                     {% if custom_targets and custom_targets|length > 0 %}
                         {% for target in custom_targets %}
                             {% set tdata = travel_targets.get(target.key) if travel_targets is mapping else {} %}
-                            {% set distance_km = tdata.distance_km if tdata and tdata.distance_km is not none else (tdata.distance_m / 1000) if tdata and tdata.distance_m else None %}
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 <span class="small fw-bold compact-text" title="{{ target.label or target.key }}">
                                     <i class="fas fa-city me-1 text-warning"></i>{{ target.label or target.key }}
                                 </span>
-                                <div>
-                                    {% if tdata and tdata.duration_min %}
-                                        <span class="badge bg-info me-1">{{ tdata.duration_min }}min</span>
-                                    {% endif %}
-                                    {% if distance_km is not none %}
-                                        <span class="badge bg-secondary">{{ '%.1f'|format(distance_km) }}km</span>
-                                    {% endif %}
-                                </div>
+                                <div class="text-nowrap">{{ travel_readout(tdata) }}</div>
                             </div>
                         {% endfor %}
                         <hr class="my-2">
@@ -603,9 +635,12 @@
                     {% for hub_key, hub_label, hub_icon in hub_defs %}
                         {% set tdata = travel_targets.get(hub_key) if travel_targets is mapping else {} %}
                         {% if tdata and not (tdata.kind == 'preset' and (tdata.enabled is defined) and (tdata.enabled == false)) %}
-                            {% set distance_km = tdata.distance_km if tdata.distance_km is not none else (tdata.distance_m / 1000) if tdata.distance_m else None %}
-                            {% if tdata.duration_min is not none or distance_km is not none %}
-                                {% set place_name = (tdata.place or {}).get('name') %}
+                            {# The row renders when the readout has something to
+                               say -- a measurement or a refusal. A target the
+                               owner disabled says nothing and stays hidden. #}
+                            {% set readout = travel_readout(tdata) %}
+                            {% if readout|trim %}
+                                {% set place_name = (tdata.get('place') or {}).get('name') %}
                                 <div class="d-flex justify-content-between align-items-start mb-2">
                                     <span class="small fw-bold compact-text" title="{{ hub_label }}">
                                         <i class="fas {{ hub_icon }} me-1 text-primary"></i>{{ hub_label }}
@@ -618,14 +653,7 @@
                                             <span class="d-block fw-normal text-body-secondary">{{ place_name }}</span>
                                         {% endif %}
                                     </span>
-                                    <div class="text-nowrap">
-                                        {% if tdata.duration_min is not none %}
-                                            <span class="badge bg-info me-1">{{ tdata.duration_min }}min</span>
-                                        {% endif %}
-                                        {% if distance_km is not none %}
-                                            <span class="badge bg-secondary">{{ '%.1f'|format(distance_km) }}km</span>
-                                        {% endif %}
-                                    </div>
+                                    <div class="text-nowrap">{{ readout }}</div>
                                 </div>
                             {% endif %}
                         {% endif %}
