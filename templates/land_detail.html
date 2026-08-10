@@ -60,6 +60,31 @@
                                     aria-label="Check status on Idealista">
                                 <i class="fas fa-rotate"></i>
                             </button>
+                            {# Setting the status by hand, same as the property
+                               page (owner decision, 2026-08-10): idealista blocks
+                               this machine, so without it there is no way to
+                               record that a listing is gone. #}
+                            <div class="dropdown d-inline-block">
+                                <button type="button" id="set-status-btn"
+                                        class="btn btn-sm btn-outline-secondary detail-link-icon"
+                                        data-bs-toggle="dropdown" aria-expanded="false"
+                                        title="Set status by hand"
+                                        aria-label="Set status by hand">
+                                    <i class="fas fa-tag"></i>
+                                </button>
+                                <ul class="dropdown-menu" aria-labelledby="set-status-btn">
+                                    <li><h6 class="dropdown-header">Set status by hand</h6></li>
+                                    {% for _value, _icon in [('active', 'fa-rotate-left'), ('removed', 'fa-times-circle'), ('sold', 'fa-check-circle')] %}
+                                        <li>
+                                            <button class="dropdown-item{{ ' active' if (land.listing_status or 'active') == _value }}"
+                                                    type="button"
+                                                    onclick="setListingStatus({{ land.id }}, '{{ _value }}')">
+                                                <i class="fas {{ _icon }} me-2"></i>{{ _value }}
+                                            </button>
+                                        </li>
+                                    {% endfor %}
+                                </ul>
+                            </div>
                         </span>
                     </h1>
                     {# One line: the place, the coordinate and when the listing was
@@ -67,13 +92,21 @@
                        the coordinate -- an unrecorded or approximate one is why a
                        sea-view verdict can come back unknown, so it is not
                        decoration. #}
+                    {# Where the status came from, same four sources as the
+                       property page. #}
+                    {% set _status_note = {
+                        'email': "Recorded from Idealista's own removal email.",
+                        'check': 'Recorded by a status check that read the listing page.',
+                        'manual': 'Set by hand.',
+                        'ingest': 'The default this listing was ingested with — never verified.',
+                    }.get(land.listing_status_source, 'Source not recorded.') %}
                     <div class="d-flex flex-wrap align-items-center gap-2 text-body-secondary small">
                         {% if land.listing_status == 'removed' %}
-                            <span class="badge bg-danger">
+                            <span class="badge bg-danger" title="{{ _status_note }}">
                                 <i class="fas fa-times-circle me-1"></i>REMOVED
                             </span>
                         {% elif land.listing_status == 'sold' %}
-                            <span class="badge bg-secondary">
+                            <span class="badge bg-secondary" title="{{ _status_note }}">
                                 <i class="fas fa-check-circle me-1"></i>SOLD
                             </span>
                         {% endif %}
@@ -133,9 +166,12 @@
                         This property has been sold
                     {% endif %}
                 </h5>
-                {% if land.listing_removed_date %}
-                    <small>Removed on {{ land.listing_removed_date.strftime('%d %B %Y') }}</small>
-                {% endif %}
+                <small>
+                    {% if land.listing_removed_date %}
+                        Removed on {{ land.listing_removed_date.strftime('%d %B %Y') }} —
+                    {% endif %}
+                    {{ _status_note }}
+                </small>
             </div>
         </div>
     </div>
@@ -1377,9 +1413,32 @@ async function toggleFavorite(landId) {
 }
 
 // Manually set listing status
-// setListingStatus() went with the Mark Status dropdown (2026-08-09): the same
-// hand-set override the property page lost, and the one thing the check below
-// cannot correct. /api/land/<id>/set-status is untouched.
+// Record a status the owner decided, which is not one the scraper observed:
+// the endpoint marks it `manual` and leaves listing_last_checked alone, so the
+// header keeps saying when the listing was last actually read. Back on the page
+// since 2026-08-10 -- idealista blocks this machine, so a check cannot answer
+// and this is the only way to record that a listing is gone.
+async function setListingStatus(landId, status) {
+    if (!confirm(`Set this listing to "${status}" by hand? Idealista is not consulted.`)) {
+        return;
+    }
+    try {
+        const response = await fetch(`/api/land/${landId}/set-status`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({status: status})
+        });
+        const data = await response.json().catch(() => null);
+        if (response.ok && data && data.success) {
+            window.location.reload();
+            return;
+        }
+        showTransientAlert(null, 'error', (data && data.error) || 'Could not set the status — see the server logs.');
+    } catch (error) {
+        console.error('Error setting status:', error);
+        showTransientAlert(null, 'error', 'Could not set the status — see the server logs.');
+    }
+}
 
 // Check listing status on Idealista. The button comes from the call site: it
 // used to be looked up by the id of the one that lived inside the removed/sold

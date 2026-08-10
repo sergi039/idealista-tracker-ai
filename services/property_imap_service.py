@@ -618,6 +618,11 @@ class PropertyIMAPService:
 
                             prop.listing_status = "removed"
                             prop.listing_removed_date = datetime.now(timezone.utc)
+                            # idealista said so itself, in mail addressed to the
+                            # owner. With the scraper blocked this is the only
+                            # source that observes anything, so the page has to
+                            # be able to tell it apart from a hand-set status.
+                            prop.listing_status_source = "email"
                             updated += 1
                             expired_count += 1
 

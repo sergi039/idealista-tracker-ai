@@ -357,17 +357,46 @@ class TestGeocodedAddressAccessor:
 
 
 class TestTheManualStatusOverrideIsGone:
-    """ "Check status" asks Idealista. The dropdown next to it set the status by
-    hand, which the scraper then could not correct."""
+    """The status form was removed on 2026-08-09 because "Check status" asked
+    Idealista and a hand-set status was the one thing that check could not
+    correct.
 
-    def test_the_form_is_gone(self, client, listing):
+    Idealista now blocks this machine outright -- measured 2026-08-10: its home
+    page answers 403 with a DataDome block, with or without browser headers --
+    so no check can correct anything, and without a manual path there is no way
+    to record that a listing is gone. The owner asked for it back (2026-08-10).
+
+    What did *not* come back is the shape that made it dangerous: it is not a
+    form posting to a page route, it is marked `manual` in
+    `listing_status_source`, and it does not stamp `listing_last_checked`, so it
+    can no longer read back as an observation.
+    """
+
+    def test_the_old_form_and_its_page_route_stayed_gone(self, client, listing):
         body = client.get(f"/properties/{listing}").get_data(as_text=True)
-        assert "Set status" not in body
-        assert 'aria-label="Set listing status"' not in body
+        assert 'aria-label="Set listing status"' not in body, "the old select"
+        assert "></i>Set status" not in body, "the old labelled submit"
 
-    def test_the_endpoint_is_gone_too(self, client, listing):
         resp = client.post(f"/properties/{listing}/set-status", data={"status": "sold"})
-        assert resp.status_code == 404
+        assert resp.status_code == 404, "the page route is still gone"
+
+    def test_the_control_is_one_dropdown_beside_the_map_icons(self, client, listing):
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        icons = body[body.index('class="detail-link-icons') :]
+        icons = icons[: icons.index("</h1>")]
+        assert body.count('id="set-status-btn"') == 1
+        assert 'id="set-status-btn"' in icons
+        for value in ("active", "removed", "sold"):
+            assert f"setPropertyListingStatus({listing}, '{value}')" in icons
+
+    def test_it_posts_to_the_json_api_and_says_idealista_is_not_asked(
+        self, client, listing
+    ):
+        body = client.get(f"/properties/{listing}").get_data(as_text=True)
+        handler = body[body.index("async function setPropertyListingStatus") :]
+        handler = handler[: handler.index("// Ask Idealista")]
+        assert "/api/property/${propertyId}/set-status" in handler
+        assert "Idealista is not consulted" in handler
 
     def test_check_status_stayed(self, client, listing):
         body = client.get(f"/properties/{listing}").get_data(as_text=True)
