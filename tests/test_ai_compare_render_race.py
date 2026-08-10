@@ -18,56 +18,12 @@ Two layers are pinned, on both detail pages:
 """
 
 import json
-import os
-import re
-import shutil
-import subprocess
-import tempfile
 
 import pytest
 
-NODE = shutil.which("node")
-TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
+from tests.js_harness import function_source, read_template, run_node
+
 TEMPLATES = ["property_detail.html", "land_detail.html"]
-
-
-def _read_template(template_name: str) -> str:
-    with open(os.path.join(TEMPLATES_DIR, template_name), "r", encoding="utf-8") as f:
-        return f.read()
-
-
-def _extract_inline_script(template_name: str) -> str:
-    """The template's single <script> block, with the Jinja-templated
-    `window.X = {{ ... }}` bootstrap assignments neutralized -- the only lines
-    inside it that are not valid standalone JS. Same trick as
-    tests/test_issue_23_xss_and_prompt_injection.py."""
-    html = _read_template(template_name)
-    start = html.index("<script>") + len("<script>")
-    end = html.index("</script>", start)
-    script = html[start:end]
-
-    fixed_lines = []
-    for line in script.splitlines():
-        if ("{{" in line or "{%" in line) and re.match(r"^\s*window\.\w+\s*=", line):
-            name = re.match(r"^\s*(window\.\w+)\s*=", line).group(1)
-            fixed_lines.append(f"{name} = null;")
-        else:
-            fixed_lines.append(line)
-    return "\n".join(fixed_lines)
-
-
-def _function_source(source: str, name: str) -> str:
-    """Return one top-level `async function name(...) {...}` by brace matching."""
-    start = source.index(f"function {name}(")
-    depth = 0
-    for pos in range(source.index("{", start), len(source)):
-        if source[pos] == "{":
-            depth += 1
-        elif source[pos] == "}":
-            depth -= 1
-            if depth == 0:
-                return source[start : pos + 1]
-    raise AssertionError(f"unbalanced braces in {name}")
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +34,7 @@ def _function_source(source: str, name: str) -> str:
 @pytest.mark.parametrize("template_name", TEMPLATES)
 class TestTheTableIsNotClearedBeforeTheAnswerArrives:
     def test_the_clear_happens_after_the_request(self, template_name):
-        body = _function_source(_read_template(template_name), "refreshAiComparison")
+        body = function_source(read_template(template_name), "refreshAiComparison")
         fetch_at = body.index("await fetch(")
 
         for clear in ("tbody.innerHTML = ''", "tbody.textContent = ''"):
@@ -89,8 +45,8 @@ class TestTheTableIsNotClearedBeforeTheAnswerArrives:
             )
 
     def test_a_run_token_drops_a_run_that_is_no_longer_the_newest(self, template_name):
-        source = _read_template(template_name)
-        body = _function_source(source, "refreshAiComparison")
+        source = read_template(template_name)
+        body = function_source(source, "refreshAiComparison")
 
         assert "let _aiCompareRun = 0;" in source
         assert "const run = ++_aiCompareRun;" in body
@@ -150,91 +106,6 @@ def _payload(investment_rating: str, risk_level: str) -> dict:
     }
 
 
-# The stub DOM: enough of it that the real render code runs unchanged, and a
-# document fragment that behaves like one (appending it moves its children).
-_DOM_STUB = """
-'use strict';
-class FakeNode {
-    constructor(tag) {
-        this.tagName = tag;
-        this.childNodes = [];
-        this.style = {};
-        this.className = '';
-        this.__text = '';
-        this.__isFragment = false;
-    }
-    appendChild(child) {
-        if (child && child.__isFragment) {
-            for (const c of child.childNodes) this.childNodes.push(c);
-            child.childNodes = [];
-        } else {
-            this.childNodes.push(child);
-        }
-        return child;
-    }
-    set textContent(value) {
-        if (value === '') this.childNodes = [];
-        this.__text = String(value);
-    }
-    get textContent() { return this.__text; }
-    set innerHTML(value) {
-        if (value === '') this.childNodes = [];
-        this.__html = String(value);
-    }
-    get innerHTML() { return this.__html || ''; }
-}
-
-const ELEMENTS = {};
-global.window = {};
-global.document = {
-    addEventListener: function () {},
-    getElementById: function (id) {
-        if (!ELEMENTS[id]) ELEMENTS[id] = new FakeNode(id);
-        return ELEMENTS[id];
-    },
-    createElement: function (tag) { return new FakeNode(tag); },
-    createDocumentFragment: function () {
-        const frag = new FakeNode('#fragment');
-        frag.__isFragment = true;
-        return frag;
-    },
-};
-
-// Every fetch parks until the driver resolves it, so the two refreshes really
-// do overlap instead of running one after the other.
-const PENDING = [];
-global.fetch = function () {
-    return new Promise(function (resolve) { PENDING.push(resolve); });
-};
-const respond = (index, payload) => PENDING[index]({
-    json: () => Promise.resolve(payload),
-});
-const rowsOf = (id) => document.getElementById(id).childNodes.map(
-    (tr) => tr.childNodes.map((td) => td.textContent)
-);
-"""
-
-
-def _run_node(template_name: str, driver_js: str) -> dict:
-    if NODE is None:
-        pytest.skip(
-            "node executable not found; the JS-level render-race regression is "
-            "skipped (this repo's CI only provisions Python)"
-        )
-
-    harness = f"{_DOM_STUB}\n{_extract_inline_script(template_name)}\n{driver_js}\n"
-    fd, path = tempfile.mkstemp(suffix=".js")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(harness)
-        proc = subprocess.run([NODE, path], capture_output=True, text=True, timeout=30)
-    finally:
-        os.unlink(path)
-
-    assert proc.returncode == 0, f"{template_name}: node failed:\n{proc.stderr}"
-    return json.loads(proc.stdout.strip().splitlines()[-1])
-
-
 _OLD = _payload("BELOW_AVERAGE", "LOW")
 _NEW = _payload("EXCELLENT", "HIGH")
 
@@ -256,7 +127,7 @@ class TestOverlappingRefreshesUnderNode:
             "  console.log(JSON.stringify({ rows: rowsOf('ai-compare-tbody') }));\n"
             "});\n"
         )
-        return _run_node(template_name, driver)
+        return run_node(template_name, driver)
 
     def test_two_overlapping_refreshes_leave_one_copy(self, template_name):
         rows = self._overlap(template_name)["rows"]
@@ -290,7 +161,7 @@ class TestOverlappingRefreshesUnderNode:
             "  }));\n"
             "});\n"
         )
-        result = _run_node(template_name, driver)
+        result = run_node(template_name, driver)
 
         labels = [row[0] for row in result["rows"] if row]
         assert "Investment rating" in labels

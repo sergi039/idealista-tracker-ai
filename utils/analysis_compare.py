@@ -115,6 +115,24 @@ def _truncate(value: Any, max_len: int = 120) -> Optional[str]:
     return text[: max_len - 1] + "…"
 
 
+def _join_top(value: Any, limit: int = 3, max_len: int = 160) -> Optional[str]:
+    """The first few entries of a list field as one line, or `None`.
+
+    A provider that answered with a sentence where the schema asked for a list
+    still answered, so it is read as one item: reporting nothing would say the
+    provider was silent when it was not. Anything that is neither a list nor a
+    string is not an answer.
+    """
+    if isinstance(value, str):
+        items: List[Any] = [value]
+    elif isinstance(value, list):
+        items = value
+    else:
+        return None
+    text = " • ".join(str(x) for x in items[:limit] if x is not None)
+    return _truncate(text, max_len) or None
+
+
 def _best_use(a: Dict[str, Any]) -> Optional[str]:
     """The ideas section is named per schema, so read whichever one is present."""
     for section in ("development_ideas", "usage_ideas", "renovation_ideas"):
@@ -136,18 +154,15 @@ def extract_highlights(analysis: Any) -> Dict[str, Any]:
     if not a:
         return {}
 
-    key_drivers = _pick(a, "investment_potential", "key_drivers")
-    if isinstance(key_drivers, list):
-        key_drivers_text = " • ".join(str(x) for x in key_drivers[:3] if x is not None)
-    else:
-        key_drivers_text = None
-
     highlights: Dict[str, Any] = {
         "price_verdict": _pick(a, "price_analysis", "verdict"),
         "price_summary": _truncate(_pick(a, "price_analysis", "summary"), 140),
         "investment_potential_rating": _pick(a, "investment_potential", "rating"),
         "risk_level": _pick(a, "investment_potential", "risk_level"),
-        "key_drivers": _truncate(key_drivers_text, 160),
+        "key_drivers": _join_top(_pick(a, "investment_potential", "key_drivers")),
+        # The reasons behind `risk_level`. Without them the comparison states
+        # "Medium" against "High" and never says what the two disagree about.
+        "key_risks": _join_top(_pick(a, "risks_analysis", "major_risks")),
         "best_use": _truncate(_best_use(a), 140),
         "market_trend": _pick(a, "market_price_dynamics", "price_trend"),
     }
@@ -160,6 +175,7 @@ def extract_highlights(analysis: Any) -> Dict[str, Any]:
             "investment_potential_rating",
             "risk_level",
             "key_drivers",
+            "key_risks",
             "best_use",
             "market_trend",
         ]

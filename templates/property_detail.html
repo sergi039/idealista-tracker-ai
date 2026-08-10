@@ -1445,6 +1445,12 @@ function formatMetricValue(value, suffix = '') {
     return String(value);
 }
 
+/* The prompt asks each provider for LOW|MEDIUM|HIGH and defines none of the
+   three, so the value is a judgement and the two providers are not calibrated
+   against each other. Wherever the page shows it — the panel badge and the
+   comparison row — it says so, in one wording. */
+const RISK_LEVEL_NOTE = "Each provider's own judgement; the scale is not calibrated between providers.";
+
 // Render structured AI analysis (legacy schema; tolerant to missing keys)
 function renderStructuredAIAnalysis(analysis) {
     if (!analysis || typeof analysis !== 'object') {
@@ -1474,6 +1480,20 @@ function renderStructuredAIAnalysis(analysis) {
     const investment = analysis.investment_potential || {};
     const investmentRating = investment.rating || 'UNKNOWN';
     const riskLevel = investment.risk_level || 'UNKNOWN';
+
+    /* Risk section: what the "Risk: X" badge is actually based on. Every
+       provider is asked for it on every listing and it was stored all along —
+       the page simply never rendered it, so the badge and the comparison row
+       stated a verdict with nothing behind it (#209). */
+    const risks = analysis.risks_analysis || {};
+    /* A provider that answered with a sentence where the schema asked for a
+       list still answered; dropping it would report silence. */
+    const riskItems = (value) => Array.isArray(value)
+        ? value
+        : (typeof value === 'string' && value.trim() ? [value] : []);
+    const riskDetail = ['major_risks', 'minor_issues', 'advantages'].some(
+        (key) => riskItems(risks[key]).length > 0
+    ) || !!risks.mitigation;
 
     // Rental analysis section
     const rental = analysis.rental_market_analysis || {};
@@ -1514,6 +1534,25 @@ function renderStructuredAIAnalysis(analysis) {
                         </div>
                         <p class="mb-0 small">${investment.summary || investment.forecast || 'No investment potential analysis available'}</p>
                         ${renderListItems(investment.key_drivers, 'Key drivers', 'primary')}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Risk Assessment: the reasons behind the Risk badge above -->
+            <div class="col-12">
+                <div class="card border-0 bg-body-tertiary">
+                    <div class="card-body p-3">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <h6 class="mb-0"><i class="fas fa-triangle-exclamation me-2"></i>Risk Assessment</h6>
+                            <span class="badge bg-warning text-dark">Risk: ${humanizeEnumLabel(riskLevel)}</span>
+                        </div>
+                        <p class="mb-2 small text-body-secondary">${RISK_LEVEL_NOTE}</p>
+                        ${riskDetail ? `
+                            ${renderListItems(riskItems(risks.major_risks), 'Major risks', 'danger')}
+                            ${renderListItems(riskItems(risks.minor_issues), 'Minor issues', 'warning')}
+                            ${renderListItems(riskItems(risks.advantages), 'Advantages', 'success')}
+                            ${risks.mitigation ? `<p class="mb-0 small"><span class="fw-semibold">Mitigation:</span> ${risks.mitigation}</p>` : ''}
+                        ` : `<p class="mb-0 small">This provider listed no specific risks for this listing.</p>`}
                     </div>
                 </div>
             </div>
@@ -1972,11 +2011,20 @@ async function refreshAiComparison() {
         // Same rule as the panels above; one implementation, not two.
         const _formatMetricValue = formatMetricValue;
 
-        const _appendRow = (parent, label, claudeVal, gptVal, baselineVal) => {
+        const _appendRow = (parent, label, claudeVal, gptVal, baselineVal, note) => {
             const tr = document.createElement('tr');
             const td0 = document.createElement('td');
             td0.className = 'fw-semibold';
             td0.textContent = label;
+            /* A row whose value is a word needs the word explained next to it,
+               not in a legend the reader has to find. textContent, so a note is
+               never a markup sink. */
+            if (note) {
+                const hint = document.createElement('div');
+                hint.className = 'small fw-normal text-body-secondary';
+                hint.textContent = note;
+                td0.appendChild(hint);
+            }
             const td1 = document.createElement('td');
             td1.textContent = claudeVal;
             const td2 = document.createElement('td');
@@ -2033,7 +2081,8 @@ async function refreshAiComparison() {
             'Risk level',
             claudeGenerated ? _formatMetricValue(ch.risk_level) : MISSING,
             gptGenerated ? _formatMetricValue(gh.risk_level) : MISSING,
-            MISSING
+            MISSING,
+            RISK_LEVEL_NOTE
         );
         _appendRow(
             rows,
@@ -2093,6 +2142,16 @@ async function refreshAiComparison() {
             'Key drivers',
             claudeGenerated ? _formatMetricValue(ch.key_drivers) : MISSING,
             gptGenerated ? _formatMetricValue(gh.key_drivers) : MISSING,
+            MISSING
+        );
+        /* The other half of the risk row: what each provider says the risk
+           actually is. Without it "Medium" against "High" is two words and no
+           disagreement anyone can read. */
+        _appendRow(
+            rows,
+            'Key risks',
+            claudeGenerated ? _formatMetricValue(ch.key_risks) : MISSING,
+            gptGenerated ? _formatMetricValue(gh.key_risks) : MISSING,
             MISSING
         );
         _appendRow(
