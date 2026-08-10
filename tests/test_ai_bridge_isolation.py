@@ -229,35 +229,89 @@ def test_runs_are_bounded(bridge, tmp_path, monkeypatch):
     assert time.monotonic() - started >= 1.0
 
 
+@pytest.mark.parametrize(
+    ("timeout", "expected"),
+    [
+        # A short call granted a slot at once keeps its whole budget.
+        (2, 1.5),
+        (1, 0.5),
+        (0.4, 0.0),
+        # A long call that queued its way down under MIN_RUN_SECONDS is refused.
+        (8, 5.0),
+        (600, 5.0),
+    ],
+)
+def test_the_queue_floor_never_rejects_a_call_that_did_not_queue(
+    bridge, timeout, expected
+):
+    """Only time spent queueing may push a run under the floor."""
+    assert bridge._queue_floor(timeout) == pytest.approx(expected)
+
+
+def test_a_queued_call_below_the_minimum_is_refused_not_started(bridge, monkeypatch):
+    """4.1 s left of an 8 s budget is under the 5 s minimum: refuse it.
+
+    At the production floor, not a lowered one.
+    """
+    monkeypatch.setattr(bridge, "MAX_CONCURRENT_RUNS", 1)
+    slots = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(bridge, "_RUN_SLOTS", slots)
+
+    held = threading.Event()
+
+    def hold_the_slot():
+        slots.acquire()
+        held.set()
+        time.sleep(3.9)
+        slots.release()
+
+    holder = threading.Thread(target=hold_the_slot)
+    holder.start()
+    try:
+        assert held.wait(5)
+        with pytest.raises(bridge.BridgeBusy):
+            # Never reaches a CLI: this argv would fail loudly if it did.
+            bridge._run(["/nonexistent/cli"], "", 8)
+    finally:
+        holder.join()
+
+
 def test_the_budget_covers_queueing_and_running_together(bridge, tmp_path, monkeypatch):
     """One budget, not one per stage.
 
     Waiting a full timeout for a slot and then granting a full timeout to the
     run lets a call live for two budgets, while the HTTP client gives up after
-    one — leaving a paid CLI running with nobody to receive its answer.
+    one — leaving a paid CLI running with nobody to receive its answer. The
+    floor is lowered here deliberately: this test is about the deadline, and
+    the floor is covered at its production value by the test above.
     """
     monkeypatch.setenv("AI_BRIDGE_WORKDIR", str(tmp_path / "cold"))
     monkeypatch.setattr(bridge, "MAX_CONCURRENT_RUNS", 1)
-    monkeypatch.setattr(bridge, "_RUN_SLOTS", threading.BoundedSemaphore(1))
     monkeypatch.setattr(bridge, "MIN_RUN_SECONDS", 0.5)
     monkeypatch.setattr(bridge, "KILL_GRACE_SECONDS", 1.0)
+    slots = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(bridge, "_RUN_SLOTS", slots)
 
-    holder = threading.Thread(
-        target=lambda: bridge._run(
-            [sys.executable, "-c", "import time; time.sleep(3)"], "", 30
-        )
-    )
+    held = threading.Event()
+
+    def hold_the_slot():
+        slots.acquire()
+        held.set()
+        time.sleep(3)
+        slots.release()
+
+    holder = threading.Thread(target=hold_the_slot)
     holder.start()
     try:
-        time.sleep(0.2)
+        assert held.wait(5)
         started = time.monotonic()
-        with pytest.raises(bridge.BridgeError):
+        with pytest.raises(bridge.BridgeTimeout):
             bridge._run([sys.executable, "-c", "import time; time.sleep(30)"], "", 4)
         elapsed = time.monotonic() - started
     finally:
         holder.join()
 
-    # ~2.8 s queued + the rest of the 4 s budget. Two budgets would be ~6.8 s.
+    # ~3 s queued plus the rest of the 4 s budget. Two budgets would be ~7 s.
     assert elapsed < 5.5, f"the call took {elapsed:.1f}s, more than its 4s budget"
 
 
@@ -412,6 +466,7 @@ BILLED_PATH_VARS = [
     "ANTHROPIC_BASE_URL",
     "CLAUDE_CODE_USE_BEDROCK",
     "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_API_KEY",
     "OPENAI_API_KEY",
     "CODEX_API_KEY",
     "AWS_BEARER_TOKEN_BEDROCK",
@@ -435,22 +490,32 @@ def test_the_subprocess_never_sees_a_billed_auth_path(
     assert printed.strip() == "None"
 
 
-def test_the_subscription_session_still_reaches_the_cli(bridge, monkeypatch, tmp_path):
-    """Stripping provider variables must not strip the OAuth session with them."""
+# The subscription's own credentials, which share a prefix with the billed
+# variables above. CLAUDE_CODE_OAUTH_TOKEN is what `claude setup-token` issues
+# and it requires a subscription; CODEX_ACCESS_TOKEN is its codex counterpart.
+# Sweeping them away would leave a CLI with no auth at all on a host with no
+# stored session — a subscription outage dressed as isolation.
+SUBSCRIPTION_VARS = {
+    "CODEX_HOME": "/tmp/codex-home",
+    "CLAUDE_CONFIG_DIR": "/tmp/claude-config",
+    "CLAUDE_CODE_OAUTH_TOKEN": "subscription-oauth-value",
+    "CODEX_ACCESS_TOKEN": "subscription-access-value",
+}
+
+
+@pytest.mark.parametrize("variable", sorted(SUBSCRIPTION_VARS))
+def test_the_subscription_credentials_still_reach_the_cli(
+    bridge, monkeypatch, tmp_path, variable
+):
+    """Stripping billed paths must not strip the subscription's own auth."""
     monkeypatch.setenv("AI_BRIDGE_WORKDIR", str(tmp_path / "cold"))
-    monkeypatch.setenv("CODEX_HOME", "/tmp/codex-home")
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/claude-config")
+    monkeypatch.setenv(variable, SUBSCRIPTION_VARS[variable])
     printed = bridge._run(
-        [
-            sys.executable,
-            "-c",
-            "import os; print(os.environ.get('CODEX_HOME'), "
-            "os.environ.get('CLAUDE_CONFIG_DIR'))",
-        ],
+        [sys.executable, "-c", f"import os; print(os.environ.get({variable!r}))"],
         "",
         30,
     )
-    assert printed.strip() == "/tmp/codex-home /tmp/claude-config"
+    assert printed.strip() == SUBSCRIPTION_VARS[variable]
 
 
 def test_an_unknown_provider_variable_is_stripped_by_default(

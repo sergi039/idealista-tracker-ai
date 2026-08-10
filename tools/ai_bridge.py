@@ -84,6 +84,8 @@ KILL_GRACE_SECONDS = float(os.environ.get("AI_BRIDGE_KILL_GRACE", "5"))
 # Below this much of the budget left after queueing, starting a CLI only buys a
 # timeout: report a busy bridge instead of a run that cannot finish.
 MIN_RUN_SECONDS = float(os.environ.get("AI_BRIDGE_MIN_RUN_SECONDS", "5"))
+# Slack that keeps an immediately-granted slot from looking like a queue wait.
+QUEUE_FLOOR_GRACE_SECONDS = 0.5
 
 # Provider credentials and endpoint overrides never reach a CLI. See _cli_env.
 # The prefixes are the net; these names are the ones whose presence is worth
@@ -95,6 +97,7 @@ CREDENTIAL_ENV_NAMES = frozenset(
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_BASE_URL",
+        "CLAUDE_CODE_API_KEY",
         "CLAUDE_CODE_USE_BEDROCK",
         "CLAUDE_CODE_USE_VERTEX",
         "OPENAI_API_KEY",
@@ -102,7 +105,20 @@ CREDENTIAL_ENV_NAMES = frozenset(
         "AWS_BEARER_TOKEN_BEDROCK",
     }
 )
-AUTH_ENV_KEEP = frozenset({"CODEX_HOME", "CLAUDE_CONFIG_DIR"})
+# The subscription's own credentials. Sharing a prefix with the billed
+# variables above is exactly why they need naming: `CLAUDE_CODE_OAUTH_TOKEN`
+# (what `claude setup-token` issues, and it *requires* a subscription) and
+# `CODEX_ACCESS_TOKEN` are how a headless host authenticates without a key, so
+# sweeping them away would leave a CLI with no auth at all wherever no stored
+# session exists. Both are read by the installed binaries.
+AUTH_ENV_KEEP = frozenset(
+    {
+        "CODEX_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CODEX_ACCESS_TOKEN",
+    }
+)
 
 # The CLIs live outside the login shell's PATH when launched from a LaunchAgent.
 EXTRA_PATH = os.pathsep.join(
@@ -258,6 +274,18 @@ def _kill_process_group(proc: subprocess.Popen, grace: float) -> None:
         LOG.error("process group %s did not die after SIGKILL", pgid)
 
 
+def _queue_floor(timeout: float) -> float:
+    """The least budget worth starting a run with, once queueing has eaten in.
+
+    Capped just under the request's own budget, because only time spent
+    queueing can push the remainder below it: a caller that asked for a short
+    timeout and got a slot at once must still get its run, while a call that
+    waited its way down to a remainder it cannot answer in is refused instead
+    of started.
+    """
+    return max(0.0, min(MIN_RUN_SECONDS, timeout - QUEUE_FLOOR_GRACE_SECONDS))
+
+
 def _run(cmd: list[str], stdin_text: str, timeout: int) -> str:
     """Run one CLI to completion, or kill its whole process tree trying.
 
@@ -273,11 +301,7 @@ def _run(cmd: list[str], stdin_text: str, timeout: int) -> str:
         )
     try:
         budget = deadline - time.monotonic()
-        # Only queueing can push the budget below the floor, so the floor is
-        # capped at half the request's own budget: a caller who asked for a
-        # short timeout and got a slot immediately still gets its run.
-        floor = min(MIN_RUN_SECONDS, timeout / 2)
-        if budget < floor:
+        if budget < _queue_floor(timeout):
             raise BridgeBusy(
                 f"a slot came free with {budget:.1f}s of the {timeout}s budget "
                 "left, too little to answer in"
@@ -292,8 +316,12 @@ def _run(cmd: list[str], stdin_text: str, timeout: int) -> str:
             cwd=workdir(),
             start_new_session=True,
         )
+        # Re-read the clock: starting a process is not free, and that cost
+        # belongs inside the deadline rather than on top of it.
         try:
-            stdout, stderr = proc.communicate(stdin_text, timeout=budget)
+            stdout, stderr = proc.communicate(
+                stdin_text, timeout=max(0.0, deadline - time.monotonic())
+            )
         except subprocess.TimeoutExpired:
             _kill_process_group(proc, KILL_GRACE_SECONDS)
             # Drain the pipes the killed process left behind.
