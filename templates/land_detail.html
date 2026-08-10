@@ -2224,7 +2224,7 @@ function _formatMetricValue(value, suffix='') {
     return String(value);
 }
 
-function _appendRow(tbody, label, claudeVal, gptVal, baselineVal) {
+function _appendRow(parent, label, claudeVal, gptVal, baselineVal) {
     const tr = document.createElement('tr');
     const td0 = document.createElement('td');
     td0.className = 'fw-semibold';
@@ -2240,18 +2240,24 @@ function _appendRow(tbody, label, claudeVal, gptVal, baselineVal) {
     tr.appendChild(td1);
     tr.appendChild(td2);
     tr.appendChild(td3);
-    tbody.appendChild(tr);
+    parent.appendChild(tr);
 }
 
-function _appendSection(tbody, title) {
+function _appendSection(parent, title) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
     td.colSpan = 4;
     td.className = 'text-body-secondary small fw-semibold pt-3';
     td.textContent = title;
     tr.appendChild(td);
-    tbody.appendChild(tr);
+    parent.appendChild(tr);
 }
+
+/* One refresh owns the table at a time; see the same guard on the property
+   page. Clearing the tbody before awaiting the response meant two overlapping
+   runs -- the ChatGPT run finishing while the page-load one is still in
+   flight -- both appended, drawing every section twice. */
+let _aiCompareRun = 0;
 
 async function refreshAiComparison() {
     const statusEl = document.getElementById('ai-compare-status');
@@ -2264,13 +2270,17 @@ async function refreshAiComparison() {
 
     if (!statusEl || !tableEl || !tbody) return;
 
+    const run = ++_aiCompareRun;
     statusEl.textContent = 'Loading…';
-    tableEl.style.display = 'none';
-    tbody.textContent = '';
 
     try {
         const resp = await fetch(`/api/analysis/compare/{{ land.id }}`);
         const data = await resp.json();
+
+        /* A slower older run must not overwrite the newest answer. Nothing
+           below awaits, so from here the render runs to completion. */
+        if (run !== _aiCompareRun) return;
+
         if (!data.success) {
             statusEl.textContent = data.error || 'Failed to load comparison';
             return;
@@ -2293,39 +2303,43 @@ async function refreshAiComparison() {
         const claudeGenerated = (claude?.schema?.found || 0) > 0;
         const gptGenerated = (gpt?.schema?.found || 0) > 0;
 
+        /* Built off-DOM and swapped in as one piece below, so no overlapping
+           run can append onto rows another one already drew. */
+        const rows = document.createDocumentFragment();
+
         const c = claude?.metrics || {};
         const g = gpt?.metrics || {};
 
         _appendRow(
-            tbody,
+            rows,
             'Investment rating',
             claudeGenerated ? _formatMetricValue(c.investment_rating) : MISSING,
             gptGenerated ? _formatMetricValue(g.investment_rating) : MISSING,
             _formatMetricValue(expected.investment_rating)
         );
         _appendRow(
-            tbody,
+            rows,
             'Rental yield',
             claudeGenerated ? _formatMetricValue(c.rental_yield, '%') : MISSING,
             gptGenerated ? _formatMetricValue(g.rental_yield, '%') : MISSING,
             _formatMetricValue(expected.rental_yield, '%')
         );
         _appendRow(
-            tbody,
+            rows,
             'Cap rate',
             claudeGenerated ? _formatMetricValue(c.cap_rate, '%') : MISSING,
             gptGenerated ? _formatMetricValue(g.cap_rate, '%') : MISSING,
             _formatMetricValue(expected.cap_rate, '%')
         );
         _appendRow(
-            tbody,
+            rows,
             'Price / rent ratio',
             claudeGenerated ? _formatMetricValue(c.price_to_rent_ratio) : MISSING,
             gptGenerated ? _formatMetricValue(g.price_to_rent_ratio) : MISSING,
             _formatMetricValue(expected.price_to_rent_ratio)
         );
         _appendRow(
-            tbody,
+            rows,
             'Payback (years)',
             claudeGenerated ? _formatMetricValue(c.payback_period_years) : MISSING,
             gptGenerated ? _formatMetricValue(g.payback_period_years) : MISSING,
@@ -2335,51 +2349,54 @@ async function refreshAiComparison() {
         const ch = claude?.highlights || {};
         const gh = gpt?.highlights || {};
 
-        _appendSection(tbody, 'Qualitative highlights (often differ)');
+        _appendSection(rows, 'Qualitative highlights (often differ)');
         _appendRow(
-            tbody,
+            rows,
             'Price summary',
             claudeGenerated ? _formatMetricValue(ch.price_summary) : MISSING,
             gptGenerated ? _formatMetricValue(gh.price_summary) : MISSING,
             MISSING
         );
         _appendRow(
-            tbody,
+            rows,
             'Key drivers',
             claudeGenerated ? _formatMetricValue(ch.key_drivers) : MISSING,
             gptGenerated ? _formatMetricValue(gh.key_drivers) : MISSING,
             MISSING
         );
         _appendRow(
-            tbody,
+            rows,
             'Best use',
             claudeGenerated ? _formatMetricValue(ch.best_use) : MISSING,
             gptGenerated ? _formatMetricValue(gh.best_use) : MISSING,
             MISSING
         );
 
-        _appendSection(tbody, 'Schema + baseline match');
+        _appendSection(rows, 'Schema + baseline match');
         _appendRow(
-            tbody,
+            rows,
             'Schema completeness',
             claudeGenerated ? `${claude?.schema?.found || 0}/${claude?.schema?.total || 0}` : MISSING,
             gptGenerated ? `${gpt?.schema?.found || 0}/${gpt?.schema?.total || 0}` : MISSING,
             MISSING
         );
         _appendRow(
-            tbody,
+            rows,
             'Numeric fidelity (vs baseline)',
             claudeGenerated ? _formatMetricValue(claude?.fidelity_score, '/100') : MISSING,
             gptGenerated ? _formatMetricValue(gpt?.fidelity_score, '/100') : MISSING,
             MISSING
         );
         _appendRow(
-            tbody,
+            rows,
             'Overall score (baseline)',
             claudeGenerated ? _formatMetricValue(claude?.overall_score, '/100') : MISSING,
             gptGenerated ? _formatMetricValue(gpt?.overall_score, '/100') : MISSING,
             MISSING
         );
+
+        tbody.innerHTML = '';
+        tbody.appendChild(rows);
 
         const claudeModel = data.claude_model || 'unknown';
         if (claudeModelLabel) claudeModelLabel.textContent = `Powered by Claude (${claudeModel})`;
@@ -2405,6 +2422,7 @@ async function refreshAiComparison() {
 
         tableEl.style.display = '';
     } catch (e) {
+        if (run !== _aiCompareRun) return;
         statusEl.textContent = `Failed to load comparison: ${e}`;
     }
 }
