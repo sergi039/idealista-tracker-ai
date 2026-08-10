@@ -152,6 +152,20 @@ config_key_is_clone_scope() {
     esac
 }
 
+# A config key as it is spelled inside a fingerprint line: backslash doubled,
+# then tab written as \t. Backslash first, always - doing it the other way
+# would turn a real tab into \t and then into \\t, which decodes back to a
+# backslash and a t. git cannot put a newline in a key (its own `--list -z`
+# framing separates key from value with one), so there is nothing else to
+# escape. The inverse lives in config_changed_keys(), where a key has to
+# become real again before it is handed to `git config`.
+config_encode_key() {
+    local encoded="$1"
+    encoded="${encoded//\\/\\\\}"
+    encoded="${encoded//$'\t'/\\t}"
+    printf '%s' "$encoded"
+}
+
 # Writes to $2 one sorted "<key><TAB><n><TAB><value>" line per entry of the
 # config file $1, minus the branch keys, and to "$2.order" the same keys in
 # the order the file lists them. `--file` does not follow include.*
@@ -172,7 +186,12 @@ config_key_is_clone_scope() {
 #   * a valueless key ("bare", which reads as true) renders as `-` and an
 #     empty one ("bare =") as `=`, because git tells them apart;
 #   * backslash and newline are escaped rather than translated, so no value
-#     can be spelled two ways or smuggle a line break into the record.
+#     can be spelled two ways or smuggle a line break into the record;
+#   * the key is escaped the same way, because git allows a tab inside a
+#     subsection name ([includeIf "gitdir:a<TAB>b"]) and a raw one would
+#     split the record in the wrong place - the fingerprint would then name
+#     a key that does not exist (`includeif.gitdir:a`), and the repair would
+#     write *that* instead of the key the gate actually touched.
 #
 # Returns non-zero if git cannot read the file, rather than reporting it as
 # empty: two "empty" fingerprints compare equal, which would turn an
@@ -192,22 +211,9 @@ config_fingerprint() {
     : >"${out}.order" || return 1
     while IFS= read -r -d '' entry; do
         entry_key="${entry%%$'\n'*}"
-        # A tab separates key from value in every record below, and git does
-        # allow one inside a subsection name ([includeIf "gitdir:a<TAB>b"]).
-        # Such a key would split in the wrong place and let two different
-        # configs render identically, so refuse to judge instead: exiting the
-        # subshell fails the whole pipeline, which the caller treats as
-        # "cannot compare this file".
-        #
-        # The cost is a clone that owns such a key seeing every push refused
-        # once anything touches its config, branch bookkeeping included. That
-        # is the deliberate side to fail on, and the message says exactly
-        # which key and why; teaching the renderer to escape tabs would mean
-        # decoding them again before handing a key to `git config`, in the
-        # one comparison that must not be subtly wrong.
-        case "$entry_key" in
-            *$'\t'*) exit 1 ;;
-        esac
+        # Classify on the real key, before it is encoded: the patterns in
+        # config_key_is_branch_bookkeeping() describe what git writes, not
+        # what this renderer writes.
         if config_key_is_branch_bookkeeping "$entry_key"; then
             continue
         fi
@@ -217,7 +223,7 @@ config_fingerprint() {
         esac
         entry_value="${entry_value//\\/\\\\}"
         entry_value="${entry_value//$'\n'/\\n}"
-        printf '%s\t%s\n' "$entry_key" "$entry_value"
+        printf '%s\t%s\n' "$(config_encode_key "$entry_key")" "$entry_value"
     done <"$raw" |
         CANARY_ORDER="${out}.order" awk 'BEGIN { FS = "\t"; OFS = "\t"; order = ENVIRON["CANARY_ORDER"] }
             { print $1 >order; print $1, ++seen[$1], substr($0, length($1) + 2) }' |
@@ -237,6 +243,11 @@ config_fingerprint() {
 # Writes to $3 the sorted names of the keys whose fingerprint lines differ
 # between fingerprint files $1 and $2. Returns non-zero if that could not be
 # computed, so a broken comparison is never mistaken for "nothing changed".
+#
+# The names come out *decoded*: everything downstream hands them to
+# `git config`, which wants the key git itself reported. Decoding needs a
+# left-to-right scan, so it happens here in awk rather than in the shell,
+# and it is the only place that undoes config_encode_key().
 config_changed_keys() {
     # FILENAME, not the usual FNR == NR: with an empty "before" file that
     # idiom calls every "after" row a "before" row, and an added core.bare
@@ -247,11 +258,26 @@ config_changed_keys() {
         END {
             for (line in before) if (!(line in after)) changed[key(line)] = 1
             for (line in after) if (!(line in before)) changed[key(line)] = 1
-            for (name in changed) if (name != "") print name
+            for (name in changed) if (name != "") print decode(name)
         }
         function key(line,    tab) {
             tab = index(line, "\t")
             return tab > 1 ? substr(line, 1, tab - 1) : ""
+        }
+        function decode(s,    out, i, n, c) {
+            out = ""
+            n = length(s)
+            for (i = 1; i <= n; i++) {
+                c = substr(s, i, 1)
+                if (c == "\\" && i < n) {
+                    i++
+                    c = substr(s, i, 1)
+                    out = out (c == "t" ? "\t" : c)
+                } else {
+                    out = out c
+                }
+            }
+            return out
         }
     ' "$1" "$2" | LC_ALL=C sort >"$3"
     local pipe_status="${PIPESTATUS[*]}"
@@ -271,8 +297,11 @@ config_changed_keys() {
 # sequences, so a legal subsection name like [includeIf "gitdir:C:\new"]
 # would arrive with a newline in it and match nothing at all. Every awk in
 # this file passes shell values the same way, for the same reason.
+#
+# The caller holds a real key and the file holds encoded ones, so the key is
+# encoded here rather than every line decoded there.
 config_fingerprint_key() {
-    CANARY_KEY="$2" awk -F '\t' '$1 == ENVIRON["CANARY_KEY"]' "$1"
+    CANARY_KEY="$(config_encode_key "$2")" awk -F '\t' '$1 == ENVIRON["CANARY_KEY"]' "$1"
 }
 
 # Prints "yes" when key $2 has a valueless entry in fingerprint file $1 -
@@ -285,7 +314,7 @@ config_fingerprint_key() {
 # and a wrong "no" here is what flips the entry. A failed run prints nothing,
 # which the caller reads as "could not tell" and leaves the key alone.
 config_key_valueless_state() {
-    CANARY_KEY="$2" awk -F '\t' '
+    CANARY_KEY="$(config_encode_key "$2")" awk -F '\t' '
         $1 == ENVIRON["CANARY_KEY"] && $3 == "-" { found = 1 }
         END { print(found ? "yes" : "no") }
     ' "$1"
@@ -417,10 +446,9 @@ if [ -n "$config_snapshot" ] && ! cmp -s "$config_snapshot" "$shared_config"; th
         if ! config_fingerprint "$config_snapshot" "${diff_dir}/before" ||
             ! config_fingerprint "$shared_config" "${diff_dir}/after"; then
             echo
-            echo "pre-push: FATAL: ${shared_config} changed during this gate run and cannot"
-            echo "pre-push: be compared: either 'git config --list' cannot read it, or a key"
-            echo "pre-push: has a tab in its subsection name, which this check cannot tell"
-            echo "pre-push: apart from another key. Nothing was changed back; read it by hand."
+            echo "pre-push: FATAL: ${shared_config} changed during this gate run and"
+            echo "pre-push: 'git config --list' cannot read it - it is probably corrupt."
+            echo "pre-push: Nothing was changed back; repair it by hand before pushing."
             overall_rc=1
             rm -rf "$diff_dir"
             diff_dir=""
