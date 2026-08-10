@@ -222,24 +222,45 @@ class ListingStatusService:
         record.listing_status_source = "check"
         current = record.listing_status or "active"
 
-        if status in ("removed", "sold") and current == "active":
-            if removed_date_str:
-                try:
-                    record.listing_removed_date = datetime.strptime(
-                        removed_date_str, "%d/%m/%Y"
-                    )
-                except ValueError:
-                    record.listing_removed_date = datetime.now(timezone.utc)
-            else:
-                record.listing_removed_date = datetime.now(timezone.utc)
+        # Every observation that differs from the stored value is applied.
+        # Enumerating only active<->terminal left `sold` -> `removed` (and the
+        # reverse) discarded while the stamps above had already been written, so
+        # the page kept the old verdict, dated today, credited to the very check
+        # that contradicted it -- the false confirmation of #136, in the one
+        # transition it did not cover (#224).
+        if status == current:
+            return False, None
 
-            record.listing_status = status
-            return True, "deactivated"
-
-        if status == "active" and current in ("removed", "sold"):
+        if status == "active":
             record.listing_status = "active"
             record.listing_removed_date = None
             return True, "relisted"
+
+        if status in ("removed", "sold"):
+            observed_date = None
+            if removed_date_str:
+                try:
+                    observed_date = datetime.strptime(removed_date_str, "%d/%m/%Y")
+                except ValueError:
+                    observed_date = datetime.now(timezone.utc)
+
+            if current == "active":
+                # It left the market now; the page's own date wins if it gives one.
+                record.listing_removed_date = observed_date or datetime.now(
+                    timezone.utc
+                )
+                transition = "deactivated"
+            else:
+                # Already off the market: keep the earlier, better date unless
+                # the page states one, and never invent a second removal date.
+                if observed_date is not None:
+                    record.listing_removed_date = observed_date
+                elif record.listing_removed_date is None:
+                    record.listing_removed_date = datetime.now(timezone.utc)
+                transition = "restated"
+
+            record.listing_status = status
+            return True, transition
 
         return False, None
 
@@ -261,13 +282,14 @@ class ListingStatusService:
         )
 
         if changed:
-            # Create history record for favorites
-            if land.is_favorite:
-                event = (
-                    "removed_from_listing"
-                    if transition == "deactivated"
-                    else "relisted"
-                )
+            # Create history record for favorites. `restated` (sold <-> removed)
+            # is a change of wording about a listing that was already off the
+            # market, so it is neither of the two events the history models —
+            # recording it as a relisting would be worse than not recording it.
+            event = {"deactivated": "removed_from_listing", "relisted": "relisted"}.get(
+                transition
+            )
+            if land.is_favorite and event:
                 db.session.add(LandHistory.create_snapshot(land, event))
                 logger.info("Created %s snapshot for favorite land %s", event, land.id)
 
