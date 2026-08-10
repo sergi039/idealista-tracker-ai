@@ -291,6 +291,28 @@ def _job_already_active_response(exc) -> tuple[Response, int]:
     ), 409
 
 
+def _enqueue_outcome_unknown_response(exc) -> tuple[Response, int]:
+    """The 503 body every route answers with when `enqueue_job`/
+    `run_job_sync` raises `EnqueueOutcomeUnknown` (#190 review round 7): an
+    insert's commit failed ambiguously, and every attempt to find out
+    whether it actually landed also failed. This process genuinely does
+    not know whether the analysis was queued -- 503, not 500, since this is
+    the same shape as any other transient infrastructure failure, and
+    honest about the two real possibilities rather than claiming either
+    one.
+    """
+    return jsonify(
+        {
+            "success": False,
+            "error": (
+                "Could not confirm whether this analysis was queued. It "
+                "may have started anyway -- wait a few minutes, or try "
+                "again."
+            ),
+        }
+    ), 503
+
+
 @api_bp.route("/jobs/<job_id>", methods=["GET"])
 def get_job_status(job_id: str):
     """Fetch status/result for a background job."""
@@ -601,6 +623,8 @@ def migrate_lands_to_properties():
 def analyze_property_structured(land_id):
     """Analyze property using Anthropic Claude AI with structured 5-block format"""
     try:
+        from services.background_jobs import EnqueueOutcomeUnknown
+
         land = db.get_or_404(Land, land_id)
 
         # Get existing analysis from request for enrichment
@@ -765,6 +789,11 @@ def analyze_property_structured(land_id):
 
     except HTTPException:
         raise
+    except EnqueueOutcomeUnknown as exc:
+        logger.error(
+            "Enqueue outcome unknown for land %s: %s", land_id, exc, exc_info=True
+        )
+        return _enqueue_outcome_unknown_response(exc)
     except Exception:
         logger.error(
             "Structured AI analysis failed for land %s", land_id, exc_info=True
@@ -783,6 +812,7 @@ def analyze_universal_property_structured(property_id: int):
     """Analyze a universal Property with a category-aware structured JSON schema."""
     try:
         from models import Property
+        from services.background_jobs import EnqueueOutcomeUnknown
         from services.property_ai_service import PropertyAIService
 
         prop = db.get_or_404(Property, property_id)
@@ -912,6 +942,14 @@ def analyze_universal_property_structured(property_id: int):
 
     except HTTPException:
         raise
+    except EnqueueOutcomeUnknown as exc:
+        logger.error(
+            "Enqueue outcome unknown for property %s: %s",
+            property_id,
+            exc,
+            exc_info=True,
+        )
+        return _enqueue_outcome_unknown_response(exc)
     except Exception:
         logger.error(
             "Structured AI analysis failed for property %s", property_id, exc_info=True
@@ -929,6 +967,7 @@ def analyze_universal_property_structured(property_id: int):
 def generate_openai_structured(land_id):
     """Generate structured AI analysis with OpenAI (ChatGPT) and store it for comparison."""
     try:
+        from services.background_jobs import EnqueueOutcomeUnknown
         from services.openai_service import get_openai_service
 
         land = db.get_or_404(Land, land_id)
@@ -1020,6 +1059,11 @@ def generate_openai_structured(land_id):
 
     except HTTPException:
         raise
+    except EnqueueOutcomeUnknown as exc:
+        logger.error(
+            "Enqueue outcome unknown for land %s: %s", land_id, exc, exc_info=True
+        )
+        return _enqueue_outcome_unknown_response(exc)
     except Exception:
         logger.error(
             "OpenAI structured analysis failed for land %s", land_id, exc_info=True

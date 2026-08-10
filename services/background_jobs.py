@@ -203,6 +203,32 @@ the commit had returned normally, so the caller still registers ownership
 and dispatches `fn()`. No row under that id at all means the insert
 genuinely never happened, and the original exception propagates.
 
+## The disambiguation's own failure is a third outcome, not `False`
+## (round-7 review)
+
+Round 6 gave the insert-commit disambiguation a deterministic wait (block
+on the original transaction's own advisory lock) instead of a bare
+re-read -- but the wait, or the re-read that follows it, can itself fail:
+a `lock_timeout`, a `statement_timeout`, a cancelled query, a connection
+dropped a second time. The round-6 code caught that the same way it caught
+"no row found" -- both fell through to the original commit exception being
+re-raised as if the insert had genuinely never happened. That conflates two
+different things: a clean read that found nothing is real evidence; a
+failed read is no evidence at all. Re-raising on a failed read could
+resurrect a genuinely orphaned, undispatched row for up to `LEASE_TTL_SECONDS`
+even though the original insert may have landed just fine.
+
+`_attempt_insert_disambiguation` now raises on its own infrastructure
+failures instead of swallowing them into `False`, and `_matches_our_own_insert`
+retries a *failed attempt* (not a clean negative result) up to
+`_DISAMBIGUATION_UNKNOWN_MAX_ATTEMPTS` times, each with a fresh session. If
+every attempt fails, it raises `EnqueueOutcomeUnknown` instead of guessing
+-- `_acquire_job_slot` lets that propagate uncaught, so `enqueue_job`/
+`run_job_sync` never registers ownership for a job_id this process could
+not confirm belongs to it. `KeyboardInterrupt`/`SystemExit` are never
+caught by any of this (they do not subclass `Exception`), so they still
+abort the process exactly as they would anywhere else.
+
 ## What this does not solve, honestly
 
 If a job's own writes fail (every retry, and the fresh-session fallback) so
@@ -217,6 +243,14 @@ recovered by retrying, because retrying would redo only the status column,
 not the domain writes nothing tracks outside that one lost transaction. The
 job is honestly recorded `error` instead of silently claiming `success`
 over data that was never written.
+
+`EnqueueOutcomeUnknown` (round 7) is the same honest bound applied one
+layer earlier: when even *disambiguating* an ambiguous insert commit fails
+every time it is tried, this process genuinely cannot say whether the job
+was accepted. It does not guess. If the insert really did land, the row's
+own lease is what eventually frees it -- `LEASE_TTL_SECONDS` again, not
+zero -- for a later `enqueue_job`/`run_job_sync` call to reap and replace,
+the same recovery path any other abandoned row already takes.
 """
 
 import contextlib
@@ -256,13 +290,21 @@ _TRANSITION_RETRY_DELAY_S = 0.05
 # docstring); three leaves margin without risking a real bug looping forever.
 _ENQUEUE_MAX_ATTEMPTS = 3
 
-# _matches_our_own_insert's bound on how many times it re-reads when there is
-# no advisory lock to block on (dedupe_key is None -- #190 review round 6).
-# Deliberately the same shape as _TRANSITION_MAX_ATTEMPTS/
+# _attempt_insert_disambiguation's bound on how many times it re-reads when
+# there is no advisory lock to block on (dedupe_key is None -- #190 review
+# round 6). Deliberately the same shape as _TRANSITION_MAX_ATTEMPTS/
 # _TRANSITION_RETRY_DELAY_S: a short, bounded retry for a residual,
 # non-critical path, not a substitute for the deterministic lock-wait the
 # PostgreSQL + dedupe_key branch uses instead.
 _INSERT_DISAMBIGUATION_MAX_ATTEMPTS = 3
+
+# _matches_our_own_insert's bound on how many times it retries the *whole*
+# disambiguation attempt (the lock-wait, or the re-read) when that attempt
+# itself fails -- a lock_timeout, a statement_timeout, a cancelled query, a
+# dropped connection (#190 review round 7). A failure here is not evidence
+# of anything about the original insert; it is unknown, and unknown is not
+# the same as false.
+_DISAMBIGUATION_UNKNOWN_MAX_ATTEMPTS = 3
 
 # How long a lease lasts past its last renewal before a row is presumed
 # abandoned. The longest known job budget is the AI analysis call: up to
@@ -631,10 +673,119 @@ def _reap_expired_active_row(db, dedupe_key: str) -> None:
         )
 
 
+class EnqueueOutcomeUnknown(Exception):
+    """Raised by `_matches_our_own_insert` when an insert's commit failed
+    ambiguously *and* every attempt to disambiguate it also failed -- a
+    `lock_timeout`, a `statement_timeout`, a cancelled query, a dropped
+    connection, during the disambiguation's own wait or re-read (#190
+    review round 7).
+
+    A failure of the *disambiguation itself* is not evidence that the
+    insert never happened -- treating it as such (the round-6 shape this
+    replaces) would re-raise the original commit exception as if nothing
+    landed, when in fact the original transaction could have committed
+    just fine while this process could not confirm it. The caller
+    (`_acquire_job_slot`) never registers ownership when this propagates:
+    whatever this job_id refers to, this process has no standing to claim
+    it. Recovery is bounded the same way an unrecorded status write already
+    is (see the module docstring's "What this does not solve" section): if
+    the insert really did land, its row's lease will simply expire and a
+    later `enqueue_job`/`run_job_sync` call will reap and replace it, same
+    as any other abandoned row.
+    """
+
+    def __init__(self, job_id: str, dedupe_key: Optional[str]):
+        self.job_id = job_id
+        self.dedupe_key = dedupe_key
+        super().__init__(
+            f"job_id={job_id!r} dedupe_key={dedupe_key!r}: could not determine "
+            "whether this job was accepted -- it was either never queued, or "
+            "it will be reaped once its lease expires"
+        )
+
+
+def _attempt_insert_disambiguation(job_id: str, dedupe_key: Optional[str]) -> bool:
+    """One attempt at answering "did `job_id`'s insert actually land?" --
+    `True`/`False` if the attempt itself completed cleanly, or propagates
+    whatever exception the attempt's own wait/re-read raised.
+
+    Deliberately does not catch anything: `_matches_our_own_insert` is what
+    decides how many times to retry a *failed attempt* versus trusting a
+    *clean* `False`. Conflating the two here -- swallowing this function's
+    own infrastructure failures into a bare `False` -- is exactly the round
+    -7 finding: an ambiguous insert whose disambiguation then also failed
+    would be reported as "genuinely never happened" and re-raised, even
+    though the original transaction could have committed just fine.
+
+    - **PostgreSQL, `dedupe_key` given** (every real call site has one --
+      see `_matches_our_own_insert`'s docstring): blocks on
+      `pg_advisory_xact_lock(hashtext(dedupe_key))`, the same lock id the
+      original transaction took as `_dedupe_serialization`'s first
+      statement, which PostgreSQL releases only at that transaction's own
+      COMMIT or ROLLBACK. Deterministic -- no sleep, no retry count.
+    - **PostgreSQL, `dedupe_key` is `None`**: nothing took a lock for this
+      attempt, so nothing to block on -- a short, bounded retry
+      (`_INSERT_DISAMBIGUATION_MAX_ATTEMPTS`) narrows the race without
+      closing it deterministically. None of the three real AI-analysis
+      call sites ever omit `dedupe_key`.
+    - **SQLite** (tests only): `commit()` is synchronous and in-process, so
+      the "server still resolving after the client gave up" window this
+      function otherwise exists for never opens at all -- one unconditional
+      re-read is exactly correct. Must never try to acquire the
+      per-`dedupe_key` `threading.Lock` `_dedupe_serialization` uses for
+      SQLite: it is already held by this *same* thread for the whole
+      failing attempt, and that lock is not reentrant.
+    """
+    from app import db as _db
+    from models import BackgroundJob
+
+    def _row_exists(session) -> bool:
+        row = (
+            session.query(BackgroundJob.id)
+            .filter(
+                BackgroundJob.id == job_id,
+                BackgroundJob.status == "queued",
+                BackgroundJob.lease_expires_at.isnot(None),
+                BackgroundJob.lease_expires_at >= _now_expr(),
+            )
+            .first()
+        )
+        return row is not None
+
+    dialect = _dialect_name(_db.session)
+
+    if dialect == "sqlite":
+        with Session(bind=_db.engine) as fresh_session:
+            return _row_exists(fresh_session)
+
+    if dedupe_key is not None:
+        with Session(bind=_db.engine) as fresh_session:
+            # Blocks until the original transaction has released this
+            # exact advisory lock. Not explicitly committed: closing this
+            # session at the end of the `with` block rolls back its own
+            # (read-only, aside from the lock acquisition) transaction,
+            # which releases the lock just as well as a commit would.
+            fresh_session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+                {"key": dedupe_key},
+            )
+            return _row_exists(fresh_session)
+
+    for attempt in range(_INSERT_DISAMBIGUATION_MAX_ATTEMPTS):
+        with Session(bind=_db.engine) as fresh_session:
+            if _row_exists(fresh_session):
+                return True
+        if attempt < _INSERT_DISAMBIGUATION_MAX_ATTEMPTS - 1:
+            time.sleep(_TRANSITION_RETRY_DELAY_S)
+    return False
+
+
 def _matches_our_own_insert(job_id: str, dedupe_key: Optional[str]) -> bool:
     """True if `job_id` -- the id `_acquire_job_slot` just tried to insert
     as a fresh `queued` row -- already exists with status `queued` and a
-    lease that has not expired.
+    lease that has not expired. False if a *clean* attempt found no such
+    row. Raises `EnqueueOutcomeUnknown` if every attempt to answer that
+    question itself failed.
 
     The insert-path counterpart to `_matches_our_own_write` (#190 review
     round 5): PostgreSQL can commit an INSERT server-side and still fail to
@@ -654,102 +805,44 @@ def _matches_our_own_insert(job_id: str, dedupe_key: Optional[str]) -> bool:
     detail, not anything this module controls -- and a SELECT issued right
     after catching the exception can start, under MVCC, *before* that
     resolution finishes, seeing nothing even though the row is about to
-    exist. Polling or sleeping to paper over that would just trade one
-    unbounded assumption for another; this instead waits on the one thing
-    that can only unblock once the original transaction has genuinely
-    ended:
+    exist. `_attempt_insert_disambiguation` waits on the one thing that can
+    only unblock once the original transaction has genuinely ended (see
+    its own docstring for the three dialect/key branches).
 
-    - **PostgreSQL, `dedupe_key` given** (every real call site has one --
-      see below): the original transaction took
-      `pg_advisory_xact_lock(hashtext(dedupe_key))` as the very first
-      statement of `_dedupe_serialization`, before ever attempting its
-      insert, and PostgreSQL releases that lock only at that transaction's
-      own COMMIT or ROLLBACK -- never earlier, and never because the
-      client's connection happened to drop. A fresh session's *blocking*
-      acquire of the same lock id therefore cannot return until that
-      transaction has genuinely ended, one way or the other; only then is
-      the re-read that follows no longer racing anything. Deterministic --
-      no sleep, no retry count, no timing assumption. (A concurrent,
-      unrelated caller for the *same* key may acquire this lock before or
-      after this call does; either order is safe -- see the module
-      docstring's "Serializing the enqueue race" section. Whichever of the
-      two ends up seeing the row live simply defers to it instead of
-      dispatching, and the other is the one that actually owns it.)
-    - **PostgreSQL, `dedupe_key` is `None`**: nothing took a lock for this
-      attempt (`_dedupe_serialization` is a no-op without a key), so there
-      is nothing to block on. None of the three real AI-analysis call
-      sites (`land_ai_analysis`, `property_ai_analysis`,
-      `land_openai_analysis`) ever omit `dedupe_key` -- this is a
-      residual, non-critical path for job types that never deduplicate at
-      all. A short, bounded retry (`_INSERT_DISAMBIGUATION_MAX_ATTEMPTS`)
-      narrows the same race without closing it deterministically; that
-      residual window is accepted honestly here, not silently.
-    - **SQLite** (tests only -- this table's only real deployment target
-      is PostgreSQL): `commit()` is synchronous and in-process, so no
-      "the server is still resolving after the client gave up" window
-      exists at all -- the original, unconditional one-shot re-read stays
-      exactly correct, completely unchanged by this round. This branch
-      must also never try to acquire the per-`dedupe_key`
-      `threading.Lock` `_dedupe_serialization` uses for SQLite: that lock
-      is already held, by this *same* thread, for the entire duration of
-      the attempt whose commit is currently failing -- a plain
-      `threading.Lock` is not reentrant, and acquiring it a second time
-      from its own holder deadlocks immediately. The PostgreSQL branch
-      above has no such risk: it takes its lock in the *database*, from a
-      brand-new session/connection, and the original transaction's own
-      hold on it is either already released or about to be -- never held
-      by this code path itself.
+    A round-7 review sharpened it once more: waiting or re-reading can
+    itself fail -- a `lock_timeout`, a `statement_timeout`, a cancelled
+    query, a dropped connection, this time during the *disambiguation's
+    own* attempt. That failure is evidence of nothing: it is not the same
+    as a clean read that found no row, and treating it that way would
+    re-raise the original commit exception as if the insert had genuinely
+    never happened, even when it might have landed just fine. This
+    function retries a failed *attempt* up to
+    `_DISAMBIGUATION_UNKNOWN_MAX_ATTEMPTS` times with a fresh session each
+    time; if every attempt fails, it raises `EnqueueOutcomeUnknown` instead
+    of guessing `False` -- see that exception's own docstring for what the
+    caller does with it, and the module docstring's "What this does not
+    solve" section for the bound on how long that unknown state can last.
     """
-    from app import db as _db
-    from models import BackgroundJob
-
-    def _row_exists(session) -> bool:
-        row = (
-            session.query(BackgroundJob.id)
-            .filter(
-                BackgroundJob.id == job_id,
-                BackgroundJob.status == "queued",
-                BackgroundJob.lease_expires_at.isnot(None),
-                BackgroundJob.lease_expires_at >= _now_expr(),
+    last_exc: Optional[BaseException] = None
+    for attempt in range(1, _DISAMBIGUATION_UNKNOWN_MAX_ATTEMPTS + 1):
+        try:
+            return _attempt_insert_disambiguation(job_id, dedupe_key)
+        except Exception as exc:
+            last_exc = exc
+            logger.exception(
+                "job_id=%s: disambiguation attempt %d/%d itself failed -- "
+                "not the same as finding no row (%s)",
+                job_id,
+                attempt,
+                _DISAMBIGUATION_UNKNOWN_MAX_ATTEMPTS,
+                "retrying"
+                if attempt < _DISAMBIGUATION_UNKNOWN_MAX_ATTEMPTS
+                else "giving up",
             )
-            .first()
-        )
-        return row is not None
-
-    try:
-        dialect = _dialect_name(_db.session)
-
-        if dialect == "sqlite":
-            with Session(bind=_db.engine) as fresh_session:
-                return _row_exists(fresh_session)
-
-        if dedupe_key is not None:
-            with Session(bind=_db.engine) as fresh_session:
-                # Blocks until the original transaction has released this
-                # exact advisory lock -- see the docstring above. Not
-                # explicitly committed: closing this session at the end of
-                # the `with` block rolls back its own (read-only, aside
-                # from the lock acquisition) transaction, which releases
-                # the lock just as well as a commit would.
-                fresh_session.execute(
-                    text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
-                    {"key": dedupe_key},
-                )
-                return _row_exists(fresh_session)
-
-        for attempt in range(_INSERT_DISAMBIGUATION_MAX_ATTEMPTS):
-            with Session(bind=_db.engine) as fresh_session:
-                if _row_exists(fresh_session):
-                    return True
-            if attempt < _INSERT_DISAMBIGUATION_MAX_ATTEMPTS - 1:
+            if attempt < _DISAMBIGUATION_UNKNOWN_MAX_ATTEMPTS:
                 time.sleep(_TRANSITION_RETRY_DELAY_S)
-        return False
-    except Exception:
-        logger.exception(
-            "job_id=%s: re-read to disambiguate an ambiguous insert commit also failed",
-            job_id,
-        )
-        return False
+
+    raise EnqueueOutcomeUnknown(job_id, dedupe_key) from last_exc
 
 
 def _acquire_job_slot(
@@ -831,6 +924,15 @@ def _acquire_job_slot(
                 # ambiguous status-write failure -- re-read, through a
                 # brand-new session, by the id this attempt generated for
                 # itself immediately before the insert.
+                #
+                # _matches_our_own_insert can itself raise
+                # EnqueueOutcomeUnknown (#190 review round 7) when even
+                # disambiguating this failed every time it tried -- that
+                # propagates straight out of this function, deliberately
+                # uncaught here: it must reach the caller (enqueue_job/
+                # run_job_sync) *before* is_new is ever returned as True,
+                # so ownership is never registered for a job_id this
+                # process could not confirm it actually owns.
                 try:
                     db.session.rollback()
                 except Exception:

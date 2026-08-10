@@ -33,6 +33,31 @@ caught and fixed for this PR only after these tests initially passed against
 the *reverted*, pre-fix code -- see the git history/PR description for how
 that was found.
 
+The two blocker-2 tests below originally forced the real async path -- the
+genuine `ThreadPoolExecutor` `services.background_jobs._EXECUTOR`, a
+module-level singleton shared by *every* test in the whole 1500+-test
+session, including a daemon heartbeat thread started the first time any test
+anywhere calls `enqueue_job`/`run_job_sync` and never stopped again. CI
+observed one of them stuck at `{"status": "queued", "started_at": None}`
+until its own poll timeout gave up -- the worker was never dispatched, or
+never reached its own "mark running" write, in a run where this suite's
+other 1500+ tests had already been submitting and completing work through
+that same shared executor and the same shared heartbeat thread for minutes.
+That is exactly the class of nondeterminism `_ImmediateExecutor`/
+`inline_executor` already exists to remove from `tests/
+test_issue_176_persist_jobs.py`'s own tests (see that module's docstring).
+It removes it here too, for these two tests specifically, without weakening
+what they prove: Flask-SQLAlchemy scopes `db.session` by **app-context
+identity**, not by OS thread -- `_run_job` pushes its own
+`app_obj.app_context()` regardless of which thread calls it, and a nested
+context on the *same* thread resolves to a genuinely different session
+object than the one the request already had open (verified directly:
+`id(db.session())` differs before and after pushing a second, nested
+context on one thread). The bug blocker 2 fixed was a session-identity bug,
+never a thread-identity one; forcing the closure to run inline only removes
+the *incidental* concurrency this suite could never fully control anyway,
+not the property under test.
+
 Blocker 3 -- `PropertyAiAnalysisVariant`'s (property_id, provider) pair was
 protected by a plain (non-unique) index, and the writer in
 `analyze_universal_property_structured` was query-then-insert: find a row,
@@ -68,7 +93,22 @@ from sqlalchemy import text
 
 from app import create_app, db
 from models import Land, Property, PropertyAiAnalysisVariant
+from services import background_jobs
 from tests import setup_test_environment
+
+
+class _ImmediateExecutor:
+    """Runs a submitted callable synchronously, in the caller's thread.
+
+    The same stand-in `tests/test_issue_176_persist_jobs.py` uses for the
+    real `ThreadPoolExecutor` -- `enqueue_job` still calls
+    `_EXECUTOR.submit(_run_job, ...)` exactly as it does in production, this
+    just resolves it inline instead of scheduling it onto a second, real
+    thread this suite cannot otherwise control the timing of.
+    """
+
+    def submit(self, fn, *args, **kwargs):
+        fn(*args, **kwargs)
 
 
 @pytest.fixture
@@ -86,6 +126,12 @@ def app():
 @pytest.fixture
 def client(app):
     return app.test_client()
+
+
+@pytest.fixture
+def inline_executor(monkeypatch):
+    """Make enqueue_job's worker run synchronously for this test only."""
+    monkeypatch.setattr(background_jobs, "_EXECUTOR", _ImmediateExecutor())
 
 
 def _poll_job(client, job_id, timeout=10.0):

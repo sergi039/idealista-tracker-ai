@@ -1386,7 +1386,137 @@ def test_run_job_sync_also_recovers_from_an_ambiguous_insert_commit(app, monkeyp
     assert job["result"] == {"success": True}
 
 
-# --- At most one execution per race (#190 review round 3, finding 3) ------
+# --- A failed disambiguation attempt is not the same as a clean "no row"
+# (#190 review round 7) --------------------------------------------------
+
+
+def test_a_disambiguation_attempt_that_fails_once_retries_and_still_dispatches(
+    app, inline_executor, monkeypatch
+):
+    """The disambiguation's own wait/re-read can itself fail -- a
+    `lock_timeout`, a `statement_timeout`, a cancelled query, a dropped
+    connection -- and that failure is not evidence the original insert
+    never happened. `_matches_our_own_insert` must retry a *failed
+    attempt* (not silently treat it as a clean negative) before concluding
+    anything.
+
+    Two independent ambiguities are stacked here: the insert's own commit
+    raises first (as in round 5/6), and then the *first* disambiguation
+    attempt raises too (the round-7 scenario) before a second attempt
+    succeeds cleanly and finds the row. fn() must still run exactly once.
+    """
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session as SQLASession
+
+    real_commit = SQLASession.commit
+    commit_raised_once = {"value": False}
+
+    def _commit_that_lands_then_loses_its_ack(self, *args, **kwargs):
+        result = real_commit(self, *args, **kwargs)
+        if not commit_raised_once["value"]:
+            commit_raised_once["value"] = True
+            raise OperationalError(
+                "simulated dropped connection after commit", {}, Exception("boom")
+            )
+        return result
+
+    monkeypatch.setattr(SQLASession, "commit", _commit_that_lands_then_loses_its_ack)
+
+    real_attempt = background_jobs._attempt_insert_disambiguation
+    disambiguation_calls = {"n": 0}
+
+    def _flaky_disambiguation(job_id, dedupe_key):
+        disambiguation_calls["n"] += 1
+        if disambiguation_calls["n"] == 1:
+            raise OperationalError(
+                "simulated lock_timeout during disambiguation", {}, Exception("boom")
+            )
+        return real_attempt(job_id, dedupe_key)
+
+    monkeypatch.setattr(
+        background_jobs, "_attempt_insert_disambiguation", _flaky_disambiguation
+    )
+
+    calls = {"fn": 0}
+
+    def _fn():
+        calls["fn"] += 1
+        return {"success": True}
+
+    with app.app_context():
+        job_id = enqueue_job(_fn, job_type="property_ai_analysis", app=app)
+        job = get_job(job_id)
+
+    assert disambiguation_calls["n"] == 2, (
+        "must retry after the first disambiguation attempt itself failed, "
+        "not give up or treat that failure as a clean 'no row'"
+    )
+    assert calls["fn"] == 1, "the job that actually landed must still be dispatched"
+    assert job["status"] == "success"
+    assert job["result"] == {"success": True}
+
+
+def test_a_disambiguation_that_always_fails_raises_an_explicit_unknown_outcome(
+    app, monkeypatch
+):
+    """When every disambiguation attempt itself fails -- not a clean read
+    finding no row, but the wait/read machinery failing outright each time
+    -- `_acquire_job_slot` must not fall back to re-raising the original
+    commit exception as if the insert had genuinely never happened (the
+    round-6 shape this closes). It must raise the dedicated
+    `EnqueueOutcomeUnknown` instead, and never register ownership for a
+    job_id this process could not confirm.
+
+    What happens next -- a later `enqueue_job` reaping the row once its
+    lease actually expires and dispatching a clean replacement -- is
+    already covered by this file's lease-model tests (e.g.
+    `test_an_expired_lease_is_reaped_instead_of_blocking_dedupe_forever`);
+    not duplicated here.
+    """
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session as SQLASession
+
+    from services.background_jobs import EnqueueOutcomeUnknown
+
+    real_commit = SQLASession.commit
+    commit_raised_once = {"value": False}
+
+    def _commit_that_lands_then_loses_its_ack(self, *args, **kwargs):
+        result = real_commit(self, *args, **kwargs)
+        if not commit_raised_once["value"]:
+            commit_raised_once["value"] = True
+            raise OperationalError(
+                "simulated dropped connection after commit", {}, Exception("boom")
+            )
+        return result
+
+    monkeypatch.setattr(SQLASession, "commit", _commit_that_lands_then_loses_its_ack)
+
+    def _always_fails(job_id, dedupe_key):
+        raise OperationalError(
+            "simulated lock_timeout during disambiguation", {}, Exception("boom")
+        )
+
+    monkeypatch.setattr(
+        background_jobs, "_attempt_insert_disambiguation", _always_fails
+    )
+
+    def _fn():
+        return {"success": True}
+
+    with app.app_context():
+        with pytest.raises(EnqueueOutcomeUnknown) as exc_info:
+            enqueue_job(_fn, job_type="property_ai_analysis", app=app)
+
+    assert exc_info.value.dedupe_key is None
+
+    # Ownership must never be registered when the outcome is unknown --
+    # nothing in this single-threaded test could have registered any other
+    # job either, so an empty set is exactly the claim.
+    with background_jobs._owned_job_ids_lock:
+        assert not background_jobs._owned_job_ids, (
+            "a job whose enqueue outcome is unknown must never be registered as owned"
+        )
 
 
 def test_a_dedupe_race_defers_to_a_replacement_that_already_finished(
