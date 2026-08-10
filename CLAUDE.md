@@ -110,7 +110,8 @@ computed — an approximate coordinate, or a source that refused. `unknown` is
 never folded into `no`, and the filter never counts it as a match. Geometry
 alone stops at `likely` on purpose: Copernicus EU-DEM is a *bare-earth* model,
 so trees and buildings are invisible to it. A hand-set verdict on the property
-page outranks both and survives recalculation. Both sources are free and
+page outranks both: a recalculation reads the row under a lock and leaves a
+hand-set one untouched. Both sources are free and
 keyless — OpenStreetMap coastline, EU-DEM 25 m via OpenTopoData — so Google
 billing is not involved. Fill it with `python -m utils.backfill_sea_view`;
 `enrichment.environment.sea_view` is where it lands, and mirrored `Land` rows

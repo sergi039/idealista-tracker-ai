@@ -17,6 +17,8 @@ but that it never dresses an unknown up as an answer:
 Every external source is mocked; nothing here touches the network.
 """
 
+import json
+
 import pytest
 
 from services import sea_view_service as svc
@@ -57,6 +59,32 @@ class _FakeProperty:
 # water. Only the relative geometry matters to these tests.
 COAST_LAT, COAST_LON = 43.5623, -6.1450
 INLAND_LAT, INLAND_LON = 43.3635, -5.7082
+
+
+class _FakeResponse:
+    """The slice of `requests.Response` the coastline reader actually uses.
+
+    It streams, so a double that only offers `.content` would let a bug in the
+    size ceiling pass unnoticed.
+    """
+
+    def __init__(self, body: bytes, status_code: int = 200, headers=None):
+        self.status_code = status_code
+        # `headers={}` means "no Content-Length at all" -- `or` would replace
+        # it with an honest default and the chunk-path tests would never get
+        # past the declared-length check.
+        self.headers = (
+            {"Content-Length": str(len(body))} if headers is None else headers
+        )
+        self._body = body
+        self.closed = False
+
+    def iter_content(self, chunk_size=1):
+        for start in range(0, len(self._body), chunk_size):
+            yield self._body[start : start + chunk_size]
+
+    def close(self):
+        self.closed = True
 
 
 def _coastline(*points):
@@ -117,16 +145,9 @@ class TestOutgoingRequests:
     def test_the_coastline_request_sends_it(self, monkeypatch):
         captured = {}
 
-        class _Response:
-            status_code = 200
-
-            @staticmethod
-            def json():
-                return {"elements": []}
-
         def _post(url, **kwargs):
             captured.update(kwargs)
-            return _Response()
+            return _FakeResponse(b'{"elements": []}')
 
         monkeypatch.setattr(svc.requests, "post", _post)
         svc.fetch_coastline_points(43.0, -6.0)
@@ -190,6 +211,233 @@ class TestOutgoingRequests:
 
         assert gates == [svc.ELEVATION_GATE]
         assert gates[0] is not svc.OVERPASS_GATE
+
+
+class TestAPartialAnswerIsNotAnAnswer:
+    """Independent review (Codex, 2026-08-09) on the merged change.
+
+    Overpass reports a query that ran out of time or memory as HTTP 200 with a
+    top-level `remark` and whatever it collected. Reading that as an empty
+    result wrote a truncated answer to the database as a computed `no` -- the
+    #98 mistake with a different source. Worse, it was then cached for 30 days.
+    """
+
+    def _responder(self, payload):
+        return lambda url, **kwargs: _FakeResponse(json.dumps(payload).encode())
+
+    def test_a_remark_is_a_refusal_not_an_empty_coast(self, monkeypatch):
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+        monkeypatch.setattr(
+            svc.requests,
+            "post",
+            self._responder(
+                {
+                    "elements": [],
+                    "remark": "runtime error: Query timed out in 'query' at line 1",
+                }
+            ),
+        )
+        with pytest.raises(svc.SeaViewSourceError):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+
+    def test_ways_without_geometry_are_a_refusal(self, monkeypatch):
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+        monkeypatch.setattr(
+            svc.requests,
+            "post",
+            self._responder({"elements": [{"type": "way", "geometry": None}]}),
+        )
+        with pytest.raises(svc.SeaViewSourceError):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+
+    def test_an_empty_remark_is_still_a_remark(self, monkeypatch):
+        """Third review round: `if remark:` let `{"remark": ""}` through, and a
+        reply that carries the field at all is a reply about a query that did
+        not finish."""
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+        monkeypatch.setattr(
+            svc.requests, "post", self._responder({"remark": "", "elements": []})
+        )
+        with pytest.raises(svc.SeaViewSourceError):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            [],
+            "not an object",
+            {"elements": [{"geometry": [{"lat": {}, "lon": 1}]}]},
+            {"elements": [{"geometry": [{"lat": "north", "lon": 1}]}]},
+            {"elements": [{"geometry": [{"lat": float("nan"), "lon": 1}]}]},
+        ],
+    )
+    def test_every_unreadable_body_raises_one_exception_type(
+        self, monkeypatch, payload
+    ):
+        """Third review round: `float({})` raised TypeError straight through
+        `evaluate_geometry`'s SeaViewSourceError handler, aborting the row
+        instead of degrading it to `unknown`. Parameterised so one shape
+        failing cannot hide the others."""
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+        monkeypatch.setattr(svc.requests, "post", self._responder(payload))
+        with pytest.raises(svc.SeaViewSourceError):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+
+    def test_a_body_over_the_ceiling_is_refused_before_it_is_parsed(self, monkeypatch):
+        """Fourth review round: the reply is untrusted input however well known
+        the endpoint, and nothing bounded what was parsed or kept."""
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+        monkeypatch.setattr(svc, "MAX_COASTLINE_RESPONSE_BYTES", 64)
+
+        huge = _FakeResponse(b'{"elements": []}' + b" " * 200)
+        monkeypatch.setattr(svc.requests, "post", lambda url, **kwargs: huge)
+        with pytest.raises(svc.SeaViewSourceError, match="ceiling"):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+
+    def test_one_oversized_chunk_is_refused_before_it_is_appended(self, monkeypatch):
+        """Sixth review round: the ceiling was checked after extending the
+        buffer, so a single chunk larger than it landed in memory first."""
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+        monkeypatch.setattr(svc, "MAX_COASTLINE_RESPONSE_BYTES", 64)
+
+        class _OneBigChunk(_FakeResponse):
+            def __init__(self):
+                super().__init__(b"x" * 200, headers={})
+
+            def iter_content(self, chunk_size=1):
+                yield self._body  # one chunk, whatever was asked for
+
+        response = _OneBigChunk()
+        monkeypatch.setattr(svc.requests, "post", lambda url, **kwargs: response)
+        with pytest.raises(svc.SeaViewSourceError, match="more than"):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+        assert response.closed, "the oversized response should be closed"
+
+    def test_too_many_points_are_refused_rather_than_truncated(self, monkeypatch):
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+        monkeypatch.setattr(svc, "MAX_COASTLINE_POINTS", 3)
+        monkeypatch.setattr(
+            svc.requests,
+            "post",
+            self._responder(
+                {
+                    "elements": [
+                        {"geometry": [{"lat": 43.5, "lon": -6.1} for _ in range(10)]}
+                    ]
+                }
+            ),
+        )
+        with pytest.raises(svc.SeaViewSourceError, match="more than"):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+
+    def test_a_boolean_coordinate_is_refused(self, monkeypatch):
+        """`float(True)` is 1.0, which would have sailed through as a latitude."""
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+        monkeypatch.setattr(
+            svc.requests,
+            "post",
+            self._responder({"elements": [{"geometry": [{"lat": True, "lon": 0}]}]}),
+        )
+        with pytest.raises(svc.SeaViewSourceError, match="boolean"):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+
+    def test_a_deeply_nested_body_is_a_source_error_not_a_recursion_error(
+        self, monkeypatch
+    ):
+        """Fourth review round: `response.json()` sat outside the wrapper, so a
+        RecursionError escaped as itself."""
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+
+        nested = _FakeResponse((b"[" * 4000) + b"0" + (b"]" * 4000))
+        monkeypatch.setattr(svc.requests, "post", lambda url, **kwargs: nested)
+        with pytest.raises(svc.SeaViewSourceError):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+
+    def test_a_reply_with_no_elements_array_is_a_refusal(self, monkeypatch):
+        """Second review round: `payload.get("elements") or []` turned a body
+        with no `elements` at all into a cacheable "no coastline"."""
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+        monkeypatch.setattr(svc.requests, "post", self._responder({}))
+        with pytest.raises(svc.SeaViewSourceError):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+
+    def test_a_malformed_elements_shape_raises_a_source_error(self, monkeypatch):
+        """...and iterating a dict yielded its keys, so a string reached
+        `.get()` and the AttributeError escaped the source-error handling."""
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+        for payload in (
+            {"elements": {"type": "way"}},
+            {"elements": [None]},
+            {"elements": [{"geometry": {"lat": 1}}]},
+        ):
+            monkeypatch.setattr(svc.requests, "post", self._responder(payload))
+            with pytest.raises(svc.SeaViewSourceError):
+                svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+
+    def test_a_node_missing_one_coordinate_is_a_refusal(self, monkeypatch):
+        """`out geom` returns complete nodes, so half a coordinate means the
+        answer is not what was asked for. Skipping the node would shorten the
+        coastline and move the nearest shore (#143 made this a hard refusal)."""
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+        monkeypatch.setattr(
+            svc.requests,
+            "post",
+            self._responder(
+                {
+                    "elements": [
+                        {
+                            "geometry": [
+                                {"lat": 43.5, "lon": None},
+                                {"lat": 43.6, "lon": -6.1},
+                            ]
+                        }
+                    ]
+                }
+            ),
+        )
+        with pytest.raises(svc.SeaViewSourceError, match="without coordinates"):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+
+    def test_a_genuinely_empty_result_is_still_allowed_to_mean_no_coast(
+        self, monkeypatch
+    ):
+        """The one shape that may become `no`: Overpass answered, in full, and
+        there is nothing there."""
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+        monkeypatch.setattr(svc.requests, "post", self._responder({"elements": []}))
+        assert svc.fetch_coastline_points(INLAND_LAT, INLAND_LON) == []
+
+    def test_a_truncated_answer_never_reaches_a_verdict(self, monkeypatch):
+        def _partial(lat, lon, session=None):
+            raise svc.SeaViewSourceError("Overpass returned a partial result: timeout")
+
+        monkeypatch.setattr(svc, "fetch_coastline_points", _partial)
+        result = svc.evaluate_geometry(COAST_LAT, COAST_LON, "precise", use_cache=False)
+        assert result["state"] == svc.UNKNOWN
+
+
+class TestTheGeometryCacheKeepsAccuracyApart:
+    """Also from the independent review: the cached verdict was keyed on
+    coordinates alone, so a `likely` computed for a surveyed address could be
+    served for a municipality centroid that happened to round to the same
+    point -- which is exactly the confusion the approximate rule exists to
+    prevent."""
+
+    def test_a_precise_verdict_is_not_served_for_an_approximate_point(
+        self, monkeypatch, app
+    ):
+        monkeypatch.setattr(
+            svc, "fetch_coastline_points", _coastline((COAST_LAT + 0.02, COAST_LON))
+        )
+        monkeypatch.setattr(svc, "fetch_elevations", _flat_profile(120.0, 10.0))
+
+        with app.app_context():
+            precise = svc.evaluate_geometry(COAST_LAT, COAST_LON, "precise")
+            assert precise["state"] == svc.LIKELY
+
+            approximate = svc.evaluate_geometry(COAST_LAT, COAST_LON, "approximate")
+            assert approximate["state"] == svc.UNKNOWN
+            assert approximate["reason"] == "approximate_coordinates"
 
 
 class TestApproximateCoordinates:
@@ -260,16 +508,9 @@ class TestCoastlineIsFetchedPerCell:
     def test_the_query_is_issued_for_the_cell_centre(self, monkeypatch):
         captured = {}
 
-        class _Response:
-            status_code = 200
-
-            @staticmethod
-            def json():
-                return {"elements": []}
-
         def _post(url, **kwargs):
             captured["query"] = kwargs["data"]["data"]
-            return _Response()
+            return _FakeResponse(b'{"elements": []}')
 
         monkeypatch.setattr(svc.requests, "post", _post)
         # Pacing moved to the gate shared with the amenity query (#152).
@@ -555,9 +796,16 @@ class TestManualOverrideEndToEnd:
         assert prop.environment["sea_view"] == svc.YES
         assert prop.environment["sea_view_detail"]["source"] == "manual"
 
-    def test_a_hand_set_verdict_is_not_overwritten_by_a_recalculation(
+    def test_a_recalculation_leaves_a_hand_set_row_completely_alone(
         self, app, stored_property, monkeypatch
     ):
+        """The stored row is not touched at all, not merely not flipped.
+
+        Writing the computed opinion back beside the manual one would mean
+        another read-modify-write of the whole JSON column from a stale read --
+        the defect the second review round named. The computed opinion is still
+        available to the caller; it just does not go to the database.
+        """
         from app import db
         from models import Property
 
@@ -566,12 +814,15 @@ class TestManualOverrideEndToEnd:
         )
         monkeypatch.setattr(svc, "fetch_coastline_points", _coastline())
 
+        before = dict(db.session.get(Property, stored_property).environment)
+
         prop = db.session.get(Property, stored_property)
-        svc.calculate_for_property(prop, use_ai=False, commit=True)
+        returned = svc.calculate_for_property(prop, use_ai=False, commit=True)
 
         refreshed = db.session.get(Property, stored_property)
-        assert refreshed.environment["sea_view"] == svc.YES
-        assert refreshed.environment["sea_view_detail"]["computed_state"] == svc.NO
+        assert refreshed.environment == before
+        # ...while the caller still gets to see what the model would have said.
+        assert returned["sea_view_detail"]["computed_state"] == svc.NO
 
     def test_an_unknown_value_is_not_silently_promoted(self, app, stored_property):
         from app import db
@@ -583,6 +834,171 @@ class TestManualOverrideEndToEnd:
         )
         prop = db.session.get(Property, stored_property)
         assert prop.environment["sea_view"] == svc.UNKNOWN
+
+    def test_a_verdict_set_during_the_calculation_is_not_overwritten(
+        self, app, stored_property, monkeypatch
+    ):
+        """Independent review (Codex, 2026-08-09): `enrichment` is one JSON
+        column, so a verdict computed from a row read minutes ago overwrites
+        everything written since. Evaluation takes seconds of external calls,
+        and the environment endpoint fits comfortably inside that window."""
+        from app import db
+        from models import Property
+
+        monkeypatch.setattr(svc, "fetch_coastline_points", _coastline())
+        prop = db.session.get(Property, stored_property)
+
+        # Computed before the owner touches it -- as a backfill would.
+        verdict = svc.evaluate_property(prop, use_ai=False)
+        assert verdict["sea_view"] == svc.NO
+
+        # ...and the owner sets it by hand while that was being worked out.
+        app.test_client().post(
+            f"/api/property/{stored_property}/environment", json={"sea_view": "yes"}
+        )
+
+        svc.apply_to_property(prop, verdict, commit=True)
+
+        refreshed = db.session.get(Property, stored_property)
+        assert refreshed.environment["sea_view"] == svc.YES
+        assert refreshed.environment["sea_view_detail"]["source"] == "manual"
+
+    def test_a_stale_write_does_not_take_the_rest_of_the_column_with_it(
+        self, app, stored_property, monkeypatch
+    ):
+        """The same read-modify-write also carried unrelated keys -- travel
+        state, geocoding provenance -- back to whatever they were when the row
+        was read."""
+        from app import db
+        from models import Property
+
+        monkeypatch.setattr(svc, "fetch_coastline_points", _coastline())
+        prop = db.session.get(Property, stored_property)
+        verdict = svc.evaluate_property(prop, use_ai=False)
+
+        # Something else writes a different part of the same column meanwhile.
+        db.session.execute(
+            db.text(
+                "UPDATE properties SET enrichment = :value WHERE id = :id"
+            ).bindparams(
+                value='{"google": {"travel_state": "denied"}}', id=stored_property
+            )
+        )
+        db.session.commit()
+
+        svc.apply_to_property(prop, verdict, commit=True)
+
+        refreshed = db.session.get(Property, stored_property)
+        assert refreshed.enrichment["google"] == {"travel_state": "denied"}
+        assert refreshed.environment["sea_view"] == svc.NO
+
+    def test_skipping_a_hand_set_row_does_not_park_a_row_lock(
+        self, app, stored_property, monkeypatch
+    ):
+        """Third review round: the skip path took `FOR UPDATE` and returned
+        without commit or rollback, leaving the row locked until whatever the
+        caller did next -- a whole row away, in the backfill."""
+        from app import db
+        from models import Property
+
+        app.test_client().post(
+            f"/api/property/{stored_property}/environment", json={"sea_view": "yes"}
+        )
+        monkeypatch.setattr(svc, "fetch_coastline_points", _coastline())
+
+        prop = db.session.get(Property, stored_property)
+        svc.calculate_for_property(prop, use_ai=False, commit=True)
+
+        assert db.session().get_nested_transaction() is None, (
+            "the skip path left its savepoint open, and with it the row lock"
+        )
+
+    def test_a_failed_commit_leaves_the_session_usable(
+        self, app, stored_property, monkeypatch
+    ):
+        """Fourth review round: a commit that raises left the transaction --
+        and the row lock -- open, so every later row in the backfill loop
+        failed on a poisoned session."""
+        from app import db
+        from models import Property
+
+        prop = db.session.get(Property, stored_property)
+        real_commit = db.session.commit
+
+        def _explode():
+            raise RuntimeError("connection lost")
+
+        monkeypatch.setattr(db.session, "commit", _explode)
+        with pytest.raises(RuntimeError, match="connection lost"):
+            svc.apply_to_property(
+                prop, {"sea_view": svc.NO, "sea_view_detail": {}}, commit=True
+            )
+
+        monkeypatch.setattr(db.session, "commit", real_commit)
+        assert db.session().get_nested_transaction() is None
+        # The next row still works, which is the point.
+        again = db.session.get(Property, stored_property)
+        svc.apply_to_property(
+            again, {"sea_view": svc.LIKELY, "sea_view_detail": {}}, commit=True
+        )
+        assert db.session.get(Property, stored_property).environment["sea_view"] == (
+            svc.LIKELY
+        )
+
+    def test_a_dirty_session_is_refused_rather_than_flushed(self, app, stored_property):
+        """Fifth review round: `begin_nested()` flushes before it opens the
+        savepoint. A stale `enrichment` assigned before the call would be
+        written out -- erasing a hand-set verdict a moment before the locked
+        read goes looking for it -- and an unrelated half-built object would
+        raise IntegrityError from a place with no rollback."""
+        from app import db
+        from models import Property
+
+        prop = db.session.get(Property, stored_property)
+        other = Property(source_email_id="pending_row", title="Pending")
+        db.session.add(other)
+
+        with pytest.raises(RuntimeError, match="nothing pending"):
+            svc.apply_to_property(
+                prop, {"sea_view": svc.NO, "sea_view_detail": {}}, commit=True
+            )
+        db.session.rollback()
+
+    def test_an_expunged_property_is_refused_rather_than_silently_dropped(
+        self, app, stored_property
+    ):
+        """Fourth review round: an expunged object has `state.session is None`,
+        so it skipped the membership check and the write went nowhere."""
+        from app import db
+        from models import Property
+
+        prop = db.session.get(Property, stored_property)
+        db.session.expunge(prop)
+        with pytest.raises(RuntimeError, match="does not hold"):
+            svc.apply_to_property(
+                prop, {"sea_view": svc.NO, "sea_view_detail": {}}, commit=True
+            )
+
+    def test_a_property_from_another_session_is_refused(self, app, stored_property):
+        """...and writing to one would have committed nothing at all, silently."""
+        from app import db
+        from models import Property
+
+        other = (
+            db.create_scoped_session() if hasattr(db, "create_scoped_session") else None
+        )
+        if other is None:
+            from sqlalchemy.orm import Session
+
+            other = Session(bind=db.engine)
+        try:
+            foreign = other.get(Property, stored_property)
+            with pytest.raises(RuntimeError, match="does not hold"):
+                svc.apply_to_property(
+                    foreign, {"sea_view": svc.NO, "sea_view_detail": {}}, commit=True
+                )
+        finally:
+            other.close()
 
     def test_a_boolean_from_the_older_form_still_works(self, app, stored_property):
         from app import db
