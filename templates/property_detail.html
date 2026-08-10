@@ -1911,6 +1911,13 @@ async function runClaudeAnalysis(propertyId) {
     }
 }
 
+/* One refresh owns the table at a time. Enrich fires three of them — after
+   Claude, after ChatGPT and again after both — and the Refresh button can
+   start another at any moment. The old code emptied the tbody *before*
+   awaiting the response, so overlapping runs each cleared an empty table and
+   then appended to a full one, drawing every section twice. */
+let _aiCompareRun = 0;
+
 async function refreshAiComparison() {
     const statusEl = document.getElementById('ai-compare-status');
     const tableEl = document.getElementById('ai-compare-table');
@@ -1923,13 +1930,17 @@ async function refreshAiComparison() {
 
     if (!statusEl || !tableEl || !tbody) return;
 
+    const run = ++_aiCompareRun;
     statusEl.textContent = 'Loading…';
-    tableEl.style.display = 'none';
-    tbody.innerHTML = '';
 
     try {
         const resp = await fetch(`/api/property/{{ property.id }}/analysis/compare`);
         const data = await resp.json();
+
+        /* A slower older run must not overwrite the newest answer, and it must
+           not touch the table it no longer owns. Nothing below awaits, so from
+           here the render runs to completion without interleaving. */
+        if (run !== _aiCompareRun) return;
 
         if (!data || data.success !== true) {
             throw new Error(data?.error || 'Comparison failed');
@@ -1961,7 +1972,7 @@ async function refreshAiComparison() {
         // Same rule as the panels above; one implementation, not two.
         const _formatMetricValue = formatMetricValue;
 
-        const _appendRow = (tbodyEl, label, claudeVal, gptVal, baselineVal) => {
+        const _appendRow = (parent, label, claudeVal, gptVal, baselineVal) => {
             const tr = document.createElement('tr');
             const td0 = document.createElement('td');
             td0.className = 'fw-semibold';
@@ -1979,18 +1990,22 @@ async function refreshAiComparison() {
                 td3.textContent = baselineVal;
                 tr.appendChild(td3);
             }
-            tbodyEl.appendChild(tr);
+            parent.appendChild(tr);
         };
 
-        const _appendSection = (tbodyEl, title) => {
+        const _appendSection = (parent, title) => {
             const tr = document.createElement('tr');
             const td = document.createElement('td');
             td.colSpan = baselineAvailable ? 4 : 3;
             td.className = 'text-body-secondary small fw-semibold pt-3';
             td.textContent = title;
             tr.appendChild(td);
-            tbodyEl.appendChild(tr);
+            parent.appendChild(tr);
         };
+
+        /* Built off-DOM and swapped in as one piece below, so no overlapping
+           run can append onto rows another one already drew. */
+        const rows = document.createDocumentFragment();
 
         const ch = claude?.highlights || {};
         const gh = gpt?.highlights || {};
@@ -1998,99 +2013,99 @@ async function refreshAiComparison() {
         /* The verdicts come first: they are what both providers always answer,
            and on a listing where neither model would price the rent they are
            the whole of the comparison. */
-        _appendSection(tbody, 'Verdicts');
+        _appendSection(rows, 'Verdicts');
         _appendRow(
-            tbody,
+            rows,
             'Price verdict',
             claudeGenerated ? _formatMetricValue(ch.price_verdict) : MISSING,
             gptGenerated ? _formatMetricValue(gh.price_verdict) : MISSING,
             MISSING
         );
         _appendRow(
-            tbody,
+            rows,
             'Investment potential',
             claudeGenerated ? _formatMetricValue(ch.investment_potential_rating) : MISSING,
             gptGenerated ? _formatMetricValue(gh.investment_potential_rating) : MISSING,
             MISSING
         );
         _appendRow(
-            tbody,
+            rows,
             'Risk level',
             claudeGenerated ? _formatMetricValue(ch.risk_level) : MISSING,
             gptGenerated ? _formatMetricValue(gh.risk_level) : MISSING,
             MISSING
         );
         _appendRow(
-            tbody,
+            rows,
             'Market trend',
             claudeGenerated ? _formatMetricValue(ch.market_trend) : MISSING,
             gptGenerated ? _formatMetricValue(gh.market_trend) : MISSING,
             MISSING
         );
         _appendRow(
-            tbody,
+            rows,
             'Investment rating',
             claudeGenerated ? _formatMetricValue(c.investment_rating) : MISSING,
             gptGenerated ? _formatMetricValue(g.investment_rating) : MISSING,
             _formatMetricValue(expected.investment_rating)
         );
 
-        _appendSection(tbody, 'Rental figures');
+        _appendSection(rows, 'Rental figures');
         _appendRow(
-            tbody,
+            rows,
             'Rental yield',
             claudeGenerated ? _formatMetricValue(c.rental_yield, '%') : MISSING,
             gptGenerated ? _formatMetricValue(g.rental_yield, '%') : MISSING,
             _formatMetricValue(expected.rental_yield, '%')
         );
         _appendRow(
-            tbody,
+            rows,
             'Cap rate',
             claudeGenerated ? _formatMetricValue(c.cap_rate, '%') : MISSING,
             gptGenerated ? _formatMetricValue(g.cap_rate, '%') : MISSING,
             _formatMetricValue(expected.cap_rate, '%')
         );
         _appendRow(
-            tbody,
+            rows,
             'Price / rent ratio',
             claudeGenerated ? _formatMetricValue(c.price_to_rent_ratio) : MISSING,
             gptGenerated ? _formatMetricValue(g.price_to_rent_ratio) : MISSING,
             _formatMetricValue(expected.price_to_rent_ratio)
         );
         _appendRow(
-            tbody,
+            rows,
             'Payback (years)',
             claudeGenerated ? _formatMetricValue(c.payback_period_years) : MISSING,
             gptGenerated ? _formatMetricValue(g.payback_period_years) : MISSING,
             _formatMetricValue(expected.payback_period_years)
         );
 
-        _appendSection(tbody, 'Qualitative highlights (often differ)');
+        _appendSection(rows, 'Qualitative highlights (often differ)');
         _appendRow(
-            tbody,
+            rows,
             'Price summary',
             claudeGenerated ? _formatMetricValue(ch.price_summary) : MISSING,
             gptGenerated ? _formatMetricValue(gh.price_summary) : MISSING,
             MISSING
         );
         _appendRow(
-            tbody,
+            rows,
             'Key drivers',
             claudeGenerated ? _formatMetricValue(ch.key_drivers) : MISSING,
             gptGenerated ? _formatMetricValue(gh.key_drivers) : MISSING,
             MISSING
         );
         _appendRow(
-            tbody,
+            rows,
             'Best use',
             claudeGenerated ? _formatMetricValue(ch.best_use) : MISSING,
             gptGenerated ? _formatMetricValue(gh.best_use) : MISSING,
             MISSING
         );
 
-        _appendSection(tbody, baselineAvailable ? 'Schema + baseline match' : 'Schema + coverage');
+        _appendSection(rows, baselineAvailable ? 'Schema + baseline match' : 'Schema + coverage');
         _appendRow(
-            tbody,
+            rows,
             'Schema completeness',
             claudeGenerated ? `${claude?.schema?.found || 0}/${claude?.schema?.total || 0}` : MISSING,
             gptGenerated ? `${gpt?.schema?.found || 0}/${gpt?.schema?.total || 0}` : MISSING,
@@ -2101,7 +2116,7 @@ async function refreshAiComparison() {
            null four times scores 0/4 here, and that is about the answer, not
            about the page. */
         _appendRow(
-            tbody,
+            rows,
             'Rental figures given',
             claudeGenerated ? `${claude?.numeric_coverage?.found ?? 0}/${claude?.numeric_coverage?.total ?? 0}` : MISSING,
             gptGenerated ? `${gpt?.numeric_coverage?.found ?? 0}/${gpt?.numeric_coverage?.total ?? 0}` : MISSING,
@@ -2109,7 +2124,7 @@ async function refreshAiComparison() {
         );
         if (baselineAvailable) {
             _appendRow(
-                tbody,
+                rows,
                 'Numeric fidelity (vs baseline)',
                 claudeGenerated ? _formatMetricValue(claude?.fidelity_score, '/100') : MISSING,
                 gptGenerated ? _formatMetricValue(gpt?.fidelity_score, '/100') : MISSING,
@@ -2117,12 +2132,15 @@ async function refreshAiComparison() {
             );
         }
         _appendRow(
-            tbody,
+            rows,
             baselineAvailable ? 'Overall score (baseline)' : 'Overall score (schema + coverage)',
             claudeGenerated ? _formatMetricValue(claude?.overall_score, '/100') : MISSING,
             gptGenerated ? _formatMetricValue(gpt?.overall_score, '/100') : MISSING,
             MISSING
         );
+
+        tbody.innerHTML = '';
+        tbody.appendChild(rows);
 
         const claudeModel = data.claude_model || 'unknown';
         if (claudeModelLabel) claudeModelLabel.textContent = `Powered by Claude (${claudeModel})`;
@@ -2163,6 +2181,7 @@ async function refreshAiComparison() {
         statusEl.textContent = statusParts.join(' • ');
         tableEl.style.display = '';
     } catch (e) {
+        if (run !== _aiCompareRun) return;
         statusEl.textContent = `Failed to load comparison: ${e}`;
     }
 }
