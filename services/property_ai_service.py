@@ -438,7 +438,11 @@ class PropertyAIService:
 
     def _analyze_openai(self, prompt: str) -> Dict[str, Any]:
         if not self.bridge_configured:
-            return {"status": "failed", "error": "AI_BRIDGE_TOKEN is not configured"}
+            return {
+                "status": "failed",
+                "error": "AI_BRIDGE_TOKEN is not configured",
+                "failure_kind": "failed",
+            }
 
         try:
             result = subscription_transport.complete(
@@ -450,17 +454,19 @@ class PropertyAIService:
             )
         except subscription_transport.SubscriptionTransportError as exc:
             logger.error("OpenAI analysis via subscription bridge failed: %s", exc)
-            return {
-                "status": "failed",
-                "error": "AI analysis service is temporarily unavailable",
-            }
+            failure_kind, message = subscription_transport.describe_failure(exc)
+            return {"status": "failed", "error": message, "failure_kind": failure_kind}
 
         cleaned = _clean_json_text(result.get("text", ""))
         try:
             analysis_data = json.loads(cleaned)
         except ValueError:
             logger.error("OpenAI returned a non-JSON analysis payload")
-            return {"status": "failed", "error": "AI analysis returned malformed data"}
+            return {
+                "status": "failed",
+                "error": "AI analysis returned malformed data",
+                "failure_kind": "failed",
+            }
         return {
             "status": "success",
             "structured_analysis": analysis_data,
@@ -469,7 +475,11 @@ class PropertyAIService:
 
     def _analyze_claude(self, prompt: str) -> Dict[str, Any]:
         if not self.bridge_configured:
-            return {"status": "failed", "error": "AI_BRIDGE_TOKEN is not configured"}
+            return {
+                "status": "failed",
+                "error": "AI_BRIDGE_TOKEN is not configured",
+                "failure_kind": "failed",
+            }
 
         try:
             result = subscription_transport.complete(
@@ -486,9 +496,17 @@ class PropertyAIService:
                 "structured_analysis": analysis_data,
                 "model": self.anthropic_model,
             }
+        except subscription_transport.SubscriptionTransportError as exc:
+            # Caught separately from the blanket handler below so a bridge
+            # failure keeps its distinct, retryable-or-not classification
+            # (#206 item 5) instead of collapsing into the generic message.
+            logger.error("Claude analysis via subscription bridge failed: %s", exc)
+            failure_kind, message = subscription_transport.describe_failure(exc)
+            return {"status": "failed", "error": message, "failure_kind": failure_kind}
         except Exception:
             logger.error("Claude analysis failed", exc_info=True)
             return {
                 "status": "failed",
                 "error": "AI analysis service is temporarily unavailable",
+                "failure_kind": "failed",
             }

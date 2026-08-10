@@ -1658,7 +1658,7 @@ function _notify(message, type) {
 // `timeoutMs` is required, not defaulted: the three callers below run
 // operations with very different server-side budgets, and the one default that
 // fitted the shortest of them is what cut the AI analyses short (#178).
-function _pollJobPromise(jobId, timeoutMs) {
+function _pollJobPromise(jobId, timeoutMs, onUpdate) {
     return new Promise((resolve) => {
         if (!(window.IdealistaApp && typeof IdealistaApp.pollJob === 'function')) {
             resolve({ ok: false, result: {}, error: 'Job polling is unavailable' });
@@ -1666,6 +1666,7 @@ function _pollJobPromise(jobId, timeoutMs) {
         }
         IdealistaApp.pollJob(jobId, {
             timeoutMs: timeoutMs,
+            onUpdate: onUpdate,
             onSuccess: (job) => {
                 const result = (job && job.result) ? job.result : {};
                 resolve({ ok: result.success !== false, result });
@@ -1677,6 +1678,21 @@ function _pollJobPromise(jobId, timeoutMs) {
             })
         });
     });
+}
+
+/* #195/#206 item 5: the spinner used to promise a duration range; this
+   updates the waiting-room line from the job's own status (queued/running)
+   instead. `statusTextId` is the <small> written into the spinner markup
+   below. */
+function _wireJobStatusText(statusTextId) {
+    return (job) => {
+        const text = window.IdealistaApp && typeof IdealistaApp.describeJobStatus === 'function'
+            ? IdealistaApp.describeJobStatus(job)
+            : null;
+        if (!text) return;
+        const el = document.getElementById(statusTextId);
+        if (el) el.textContent = text;
+    };
 }
 
 async function runGoogleEnrichment(propertyId) {
@@ -1884,6 +1900,7 @@ async function runClaudeAnalysis(propertyId) {
     const placeholder = document.getElementById(placeholderId);
     if (placeholder) placeholder.style.display = 'none';
 
+    const statusTextId = 'ai-claude-status-text';
     if (target) {
         target.innerHTML = `
             <div class="text-center">
@@ -1891,7 +1908,7 @@ async function runClaudeAnalysis(propertyId) {
                     <span class="visually-hidden">Loading...</span>
                 </div>
                 <p class="text-muted mb-1">Claude is analyzing this property…</p>
-                <small class="text-body-secondary">This may take 1-5 minutes</small>
+                <small class="text-body-secondary" id="${statusTextId}">Starting…</small>
             </div>
         `;
     }
@@ -1907,13 +1924,20 @@ async function runClaudeAnalysis(propertyId) {
         refreshAiComparison();
     };
 
-    const handleFailure = (message, statusCode) => {
+    // failureKind is the machine-readable field property_ai_service.py now
+    // returns alongside `error` (#206 item 5): 'bridge_busy'/'timeout' mean
+    // retry is worth it, 'failed' means it genuinely broke. Only the latter
+    // gets the alarming (danger/red) styling -- everything else, including
+    // an unclassified failure (network error, rate limit), keeps the
+    // existing calmer (warning) styling rather than crying wolf on a guess.
+    const handleFailure = (message, statusCode, failureKind) => {
         if (target) target.innerHTML = previousHtml;
         if (statusCode === 429) {
             showTransientAlert(alertsId, 'warning', `Rate limit reached. Try again in 20 seconds.`, 4500);
-        } else {
-            showTransientAlert(alertsId, 'warning', message || 'Claude request failed.', 4500);
+            return;
         }
+        const alertType = failureKind === 'failed' ? 'danger' : 'warning';
+        showTransientAlert(alertsId, alertType, message || 'Claude request failed.', 4500);
     };
 
     try {
@@ -1927,18 +1951,18 @@ async function runClaudeAnalysis(propertyId) {
         if (resp.status === 202 && data && data.job_id) {
             _notify(data.message || 'Claude analysis queued', 'info');
             const outcome = await _pollJobPromise(
-                data.job_id, IdealistaApp.JOB_POLL_TIMEOUTS.aiAnalysis);
+                data.job_id, IdealistaApp.JOB_POLL_TIMEOUTS.aiAnalysis, _wireJobStatusText(statusTextId));
             const result = outcome.result || {};
             if (result.success) {
                 applyAnalysis(result.analysis);
                 return { ok: true, status: resp.status };
             }
-            handleFailure(result.error || outcome.error || 'Claude analysis failed');
+            handleFailure(result.error || outcome.error || 'Claude analysis failed', undefined, result.failure_kind);
             return { ok: false, status: resp.status };
         }
 
         if (!resp.ok || !data || data.success !== true) {
-            handleFailure((data && data.error) ? data.error : 'Claude request failed.', resp.status);
+            handleFailure((data && data.error) ? data.error : 'Claude request failed.', resp.status, data && data.failure_kind);
             return { ok: false, status: resp.status };
         }
 
@@ -2257,6 +2281,7 @@ async function generateChatGPTAnalysis(propertyId) {
 
         const target = document.getElementById(targetId);
         const previousHtml = target ? target.innerHTML : '';
+        const statusTextId = 'ai-chatgpt-status-text';
         if (target) {
             target.innerHTML = `
                 <div class="text-center">
@@ -2264,7 +2289,7 @@ async function generateChatGPTAnalysis(propertyId) {
                         <span class="visually-hidden">Loading...</span>
                     </div>
                     <p class="text-muted mb-1">ChatGPT is analyzing this property…</p>
-                    <small class="text-body-secondary">This may take 1-5 minutes</small>
+                    <small class="text-body-secondary" id="${statusTextId}">Starting…</small>
                 </div>
             `;
         }
@@ -2287,30 +2312,33 @@ async function generateChatGPTAnalysis(propertyId) {
             refreshAiComparison();
         };
 
-        const handleFailure = (message, statusCode) => {
+        // See runClaudeAnalysis's handleFailure for why only failureKind ===
+        // 'failed' gets the alarming styling (#206 item 5).
+        const handleFailure = (message, statusCode, failureKind) => {
             if (target) target.innerHTML = previousHtml;
             if (statusCode === 429) {
                 showTransientAlert(alertsId, 'warning', `Rate limit reached. Try again in 20 seconds.`, 4500);
-            } else {
-                showTransientAlert(alertsId, 'warning', message || 'ChatGPT request failed.', 4500);
+                return;
             }
+            const alertType = failureKind === 'failed' ? 'danger' : 'warning';
+            showTransientAlert(alertsId, alertType, message || 'ChatGPT request failed.', 4500);
         };
 
         if (resp.status === 202 && data && data.job_id) {
             _notify(data.message || 'ChatGPT analysis queued', 'info');
             const outcome = await _pollJobPromise(
-                data.job_id, IdealistaApp.JOB_POLL_TIMEOUTS.aiAnalysis);
+                data.job_id, IdealistaApp.JOB_POLL_TIMEOUTS.aiAnalysis, _wireJobStatusText(statusTextId));
             const result = outcome.result || {};
             if (result.success) {
                 applyAnalysis(result.analysis);
                 return { ok: true, status: resp.status };
             }
-            handleFailure(result.error || outcome.error || 'ChatGPT analysis failed');
+            handleFailure(result.error || outcome.error || 'ChatGPT analysis failed', undefined, result.failure_kind);
             return { ok: false, status: resp.status };
         }
 
         if (!data || data.success !== true) {
-            handleFailure((data && data.error) ? data.error : 'ChatGPT request failed.', resp.status);
+            handleFailure((data && data.error) ? data.error : 'ChatGPT request failed.', resp.status, data && data.failure_kind);
             return { ok: false, status: resp.status };
         }
 

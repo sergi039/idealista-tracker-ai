@@ -844,6 +844,9 @@ def analyze_universal_property_structured(property_id: int):
                     "success": False,
                     "error": (result.get("error") if isinstance(result, dict) else None)
                     or "Analysis failed",
+                    "failure_kind": result.get("failure_kind")
+                    if isinstance(result, dict)
+                    else None,
                 }
 
             new_analysis = result.get("structured_analysis") or {}
@@ -1001,7 +1004,14 @@ def generate_openai_structured(land_id):
             result = service.analyze_property_structured(land_local)
 
             if not result or result.get("status") != "success":
-                return {"success": False, "error": "OpenAI analysis failed"}
+                return {
+                    "success": False,
+                    "error": (result.get("error") if isinstance(result, dict) else None)
+                    or "OpenAI analysis failed",
+                    "failure_kind": result.get("failure_kind")
+                    if isinstance(result, dict)
+                    else None,
+                }
 
             analysis = result.get("structured_analysis") or {}
             model = result.get("model")
