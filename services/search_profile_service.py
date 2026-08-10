@@ -28,13 +28,29 @@ IDENTITY_RESOLUTION_ATTEMPTS = 3
 # (the "All profiles" <option value=""> in the filter form submits this).
 PROFILE_ALL_SENTINEL = "all"
 
-# Google's `airport` place type is not "airport" as anyone shopping for a house
-# means it. Measured across the owner's 188 geocoded listings, the nearest hit
-# was a helipad for 107 of them -- hospital helipads included -- and some other
-# business that merely carries the tag for 59 more; only 22 named an actual
-# airport. "Nearest airport: 10 min" for a plot 40 km from Asturias Airport is
-# worse than no number, and it is a scoring input, so the obvious wrong answers
-# are refused here rather than measured and displayed.
+# Google's `airport` and `hospital` place types are not those words as anyone
+# shopping for a house means them. Across the owner's 188 geocoded listings the
+# nearest `airport` was a helipad for 107 -- hospital helipads included -- and
+# an unrelated business for 59; the nearest `hospital` is named "hospital" for
+# only 12, and is a private clinic, a dentist or a vet for the rest.
+#
+# A deny-list cannot fix that, and a trial run proved it: refusing "Campo de
+# Vuelo Capitan M RIVERA" simply promoted "Grupo 21", the next business
+# carrying the tag. So the place has to *say* what it is (owner decision,
+# 2026-08-10). A target with no qualifying place nearby is reported as not
+# found, which scores as absent rather than as zero -- "no airport within
+# reach" is the true answer for an inland plot, and it beats a confident
+# ten-minute drive to a glue supplier.
+_AIRPORT_REQUIRE_NAMES = [
+    "airport",
+    "aeropuerto",
+    "aeroport",
+    "aeroporto",
+    "aéroport",
+]
+# `Helipuerto` does not contain `aeropuerto`, so requiring the name is already
+# enough to drop the 107 helipads; these stay as a second line of defence for
+# a place that manages to carry both words.
 _AIRPORT_REJECT_NAMES = [
     "helipuerto",
     "heliport",
@@ -43,9 +59,6 @@ _AIRPORT_REJECT_NAMES = [
     "helideck",
     "aeroclub",
     "aero club",
-    "aeródromo",
-    "aerodromo",
-    "campo de vuelo",
 ]
 # A place that is primarily a contractor, a hotel or a restaurant is not an
 # airport whatever Google tagged it with.
@@ -61,10 +74,41 @@ _AIRPORT_REJECT_TYPES = [
     "hospital",
 ]
 
+# A hospital, a health centre or a public outpatient clinic. A cosmetic-surgery
+# practice is none of those, and a trial run put one forward as the "nearest
+# hospital" for two listings.
+_HOSPITAL_REQUIRE_NAMES = [
+    "hospital",
+    "centro de salud",
+    "centro de saúde",
+    "centro de saude",
+    "ambulatorio",
+    "policlínic",
+    "policlinic",
+]
+_HOSPITAL_REJECT_NAMES = [
+    "veterinar",
+    "dental",
+    "odontolog",
+    "estétic",
+    "estetic",
+    "fisioterap",
+    "óptic",
+    "optica",
+    "podolog",
+    "psicolog",
+    # "Helipuerto Hospital Universitario de Cabueñes" carries the word
+    # "hospital" and is a landing pad, not a place anyone is driven to.
+    "helipuerto",
+    "heliport",
+    "helipad",
+]
+
 TRAVEL_PRESET_DEFS: Dict[str, Dict[str, Any]] = {
     "airport": {
         "label": "Nearest airport",
         "place_types": ["airport"],
+        "require_name_patterns": _AIRPORT_REQUIRE_NAMES,
         "reject_name_patterns": _AIRPORT_REJECT_NAMES,
         "reject_types": _AIRPORT_REJECT_TYPES,
     },
@@ -72,7 +116,12 @@ TRAVEL_PRESET_DEFS: Dict[str, Dict[str, Any]] = {
         "label": "Nearest train station",
         "place_types": ["train_station"],
     },
-    "hospital": {"label": "Nearest hospital", "place_types": ["hospital"]},
+    "hospital": {
+        "label": "Nearest hospital",
+        "place_types": ["hospital"],
+        "require_name_patterns": _HOSPITAL_REQUIRE_NAMES,
+        "reject_name_patterns": _HOSPITAL_REJECT_NAMES,
+    },
     "police": {"label": "Nearest police station", "place_types": ["police"]},
     "supermarket": {"label": "Nearest supermarket", "place_types": ["supermarket"]},
     "school": {"label": "Nearest school", "place_types": ["school"]},
