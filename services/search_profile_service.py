@@ -104,6 +104,30 @@ _HOSPITAL_REJECT_NAMES = [
     "helipad",
 ]
 
+# The supermarket preset takes the opposite approach to airport and hospital,
+# and the data is why. Requiring the name to say "supermercado" would refuse
+# Mercadona, Lidl and Alimerka, and a list of chains would need feeding
+# forever. Google's tag is broadly right here: 324 of the owner's 356 listings
+# resolve to an actual grocery shop, local `convenience_store` ones included.
+#
+# What it gets wrong is two narrow things, and both are identifiable. A petrol
+# station with a shop carries `gas_station` in its types -- "bp" was the
+# nearest "supermarket" for 21 listings -- and a butcher or fishmonger says so
+# in its name, for 11 more.
+_SUPERMARKET_REJECT_TYPES = ["gas_station"]
+_SUPERMARKET_REJECT_NAMES = [
+    "pescad",
+    "carnicer",
+    "fruter",
+    "panader",
+    "pasteler",
+    "estanco",
+    "farmacia",
+    "ferreter",
+    "licorer",
+    "herbolar",
+]
+
 TRAVEL_PRESET_DEFS: Dict[str, Dict[str, Any]] = {
     "airport": {
         "label": "Nearest airport",
@@ -123,7 +147,12 @@ TRAVEL_PRESET_DEFS: Dict[str, Dict[str, Any]] = {
         "reject_name_patterns": _HOSPITAL_REJECT_NAMES,
     },
     "police": {"label": "Nearest police station", "place_types": ["police"]},
-    "supermarket": {"label": "Nearest supermarket", "place_types": ["supermarket"]},
+    "supermarket": {
+        "label": "Nearest supermarket",
+        "place_types": ["supermarket"],
+        "reject_name_patterns": _SUPERMARKET_REJECT_NAMES,
+        "reject_types": _SUPERMARKET_REJECT_TYPES,
+    },
     "school": {"label": "Nearest school", "place_types": ["school"]},
 }
 

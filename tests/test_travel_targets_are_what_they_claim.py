@@ -100,12 +100,73 @@ class TestThePresetRefusesWhatIsNotAnAirport:
 
         assert not rules.rejects(_place(name, ["airport", "establishment"]))
 
-    @pytest.mark.parametrize(
-        "preset", ["school", "supermarket", "police", "train_station"]
-    )
+    @pytest.mark.parametrize("preset", ["school", "police", "train_station"])
     def test_presets_without_rules_are_unchanged(self, preset):
-        """Only `airport` and `hospital` had a false-positive problem."""
+        """These three resolve correctly and keep their cache keys."""
         assert _place_rules(TRAVEL_PRESET_DEFS[preset]) is None
+
+
+class TestTheSupermarketIsAShopAndNotAPetrolStation:
+    """The supermarket preset refuses by type and name, and requires nothing.
+
+    Requiring the name to say "supermercado" would throw away Mercadona, Lidl
+    and Alimerka, and a list of chains needs feeding forever. Google's tag is
+    broadly right here -- 324 of the owner's 356 listings resolve to a real
+    grocery shop. It is wrong in two narrow, identifiable ways: a petrol
+    station with a shop ("bp" was the nearest supermarket for 21 listings)
+    carries `gas_station`, and a butcher or fishmonger says so in its name
+    (11 more).
+    """
+
+    def test_a_petrol_station_shop_is_refused_by_its_type(self):
+        rules = _place_rules(TRAVEL_PRESET_DEFS["supermarket"])
+        # Verbatim from the owner's database.
+        bp = _place(
+            "bp",
+            [
+                "gas_station",
+                "cafe",
+                "supermarket",
+                "grocery_or_supermarket",
+                "food",
+                "store",
+                "establishment",
+            ],
+        )
+
+        assert rules.rejects(bp)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Pescados GINER",
+            "Carnicería y Administración de Lotería Marisa",
+            "Frutería La Huerta",
+            "Panadería Pastelería Rosal",
+        ],
+    )
+    def test_a_specialty_shop_is_refused_by_its_name(self, name):
+        rules = _place_rules(TRAVEL_PRESET_DEFS["supermarket"])
+
+        assert rules.rejects(_place(name, ["supermarket", "food", "store"]))
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Supermercados Alimerka",
+            "Mercadona",
+            "Lidl",
+            "masymas supermercados",
+            "Eroski City",
+            # A local grocery Google files as a convenience store: still a shop.
+            "Alimentos El Arco, S. A.",
+        ],
+    )
+    def test_a_real_shop_is_taken_whatever_it_is_called(self, name):
+        rules = _place_rules(TRAVEL_PRESET_DEFS["supermarket"])
+        types = ["convenience_store", "supermarket", "grocery_or_supermarket", "store"]
+
+        assert not rules.rejects(_place(name, types))
 
 
 class TestThePlaceHasToSayWhatItIs:
