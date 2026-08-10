@@ -576,10 +576,16 @@
                    "not measured" is the lookup never answering. Those are not
                    the same, and neither is an absence of travel time (#98). #}
                 {% macro travel_readout(tdata) -%}
-                    {% set data = tdata or {} %}
+                    {# `is mapping`, not `or {}`: a target that is a bare string
+                       would otherwise reach .get() and raise the same
+                       UndefinedError this macro exists to stop. The same test
+                       guards `travel` and `travel_targets` above. #}
+                    {% set data = tdata if tdata is mapping else {} %}
                     {% set duration = data.get('duration_min') %}
+                    {# Zero is a measurement, here as much as for duration: a
+                       supermarket across the street reads 0.0km, not blank. #}
                     {% set distance_km = data.get('distance_km') if data.get('distance_km') is not none
-                                         else (data.get('distance_m') / 1000) if data.get('distance_m') else None %}
+                                         else (data.get('distance_m') / 1000) if data.get('distance_m') is not none else None %}
                     {% if duration is not none %}<span class="badge bg-info me-1">{{ duration }}min</span>{% endif %}
                     {% if distance_km is not none %}<span class="badge bg-secondary">{{ '%.1f'|format(distance_km) }}km</span>{% endif %}
                     {% if duration is none and distance_km is none %}

@@ -85,7 +85,9 @@ MEASURED_STATION = {
     "mode": "driving",
     "label": "Nearest train station",
     "status": "ok",
-    "place": {"name": "Foz"},
+    # Deliberately not the municipality: asserting on "Foz" would have passed
+    # on the header alone and proved nothing about the place-name path.
+    "place": {"name": "Estación de Burela"},
     "duration_min": 21,
     "distance_km": 21.5,
 }
@@ -109,7 +111,7 @@ class TestTheRefusalDoesNotBreakThePage:
 
         assert "21min" in body
         assert "21.5km" in body
-        assert "Foz" in body
+        assert "Estación de Burela" in body, "the measured place, named"
 
     def test_a_distance_in_metres_still_converts(self, app, client):
         """The other branch of the guard that was reading Undefined."""
@@ -138,8 +140,12 @@ class TestTheRefusalIsShown:
 
         body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
 
-        assert "not found" in body
-        assert "no_candidate_within_radius" in body, "the reason, on hover"
+        # The rendered badge, not the raw string: the page also serialises the
+        # whole travel blob into a script variable, so a bare search for the
+        # status or the reason passes without anything being displayed.
+        assert ">not found</span>" in body
+        assert 'title="Google found no such place near this listing' in body
+        assert "(no_candidate_within_radius)" in body, "the reason, on hover"
 
     def test_unavailable_is_not_the_same_as_not_found(self, app, client):
         """A lookup that never answered measured nothing; saying "not found"
@@ -159,11 +165,17 @@ class TestTheRefusalIsShown:
 
         body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
 
-        assert "not measured" in body
-        assert "quota_exhausted" in body
+        assert ">not measured</span>" in body
+        assert 'title="The lookup did not answer, so nothing was measured' in body
+        assert "(quota_exhausted)" in body
 
     def test_a_disabled_target_stays_hidden(self, app, client):
-        """The owner switched it off; that is not a refusal to report."""
+        """The owner switched it off; that is not a refusal to report.
+
+        The record carries `not_found` on purpose: with `status: disabled` the
+        macro renders nothing anyway, so the test would stay green even if the
+        `enabled == false` guard were deleted. This shape pins the guard.
+        """
         prop = make_property(
             "disabled",
             {
@@ -171,12 +183,54 @@ class TestTheRefusalIsShown:
                     "kind": "preset",
                     "enabled": False,
                     "label": "Nearest airport",
-                    "status": "disabled",
+                    "status": "not_found",
+                    "reason": "no_candidate_within_radius",
                 }
             },
         )
 
         body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
 
-        assert "not found" not in body
-        assert "not measured" not in body
+        assert ">not found</span>" not in body
+        assert 'title="Google found no such place near this listing' not in body
+
+    def test_the_barest_refusal_record_is_enough(self, app, client):
+        """Nothing but a status and a reason -- no kind, enabled, mode or label.
+
+        The richer fixtures above could have been carrying the row past a guard
+        that reads one of those keys; this one cannot.
+        """
+        prop = make_property(
+            "bare", {"airport": {"status": "not_found", "reason": "no_candidate"}}
+        )
+
+        resp = client.get(f"/properties/{prop.id}")
+
+        assert resp.status_code == 200
+        assert ">not found</span>" in resp.get_data(as_text=True)
+
+    def test_a_target_that_is_not_even_a_dict_cannot_break_the_page(self, app, client):
+        """Defensive: the same shape test that guards `travel` above."""
+        prop = make_property("junk", {"airport": "not_found"})
+
+        assert client.get(f"/properties/{prop.id}").status_code == 200
+
+    def test_zero_distance_is_a_measurement_not_a_blank(self, app, client):
+        prop = make_property(
+            "zero",
+            {
+                "supermarket": {
+                    "kind": "preset",
+                    "enabled": True,
+                    "label": "Nearest supermarket",
+                    "status": "ok",
+                    "duration_min": 0,
+                    "distance_m": 0,
+                }
+            },
+        )
+
+        body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
+
+        assert "0min" in body
+        assert "0.0km" in body
