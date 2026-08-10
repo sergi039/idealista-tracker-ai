@@ -212,6 +212,39 @@
                                     <span class="text-body-secondary">Not specified</span>
                                 {% endif %}
                             </div>
+                            {# The recorded price change, same as the property page
+                               and the list. Without it the tile reads as the asking
+                               price the listing arrived with, while the title --
+                               the subject line of the email -- still shows the
+                               first figure. #}
+                            {% if land.previous_price and land.price_change_amount %}
+                                <div class="price-change-card mt-1">
+                                    {% if land.price_change_amount|float < 0 %}
+                                        <small class="text-success d-flex align-items-center">
+                                            <i class="fas fa-arrow-down me-1"></i>
+                                            <span class="fw-bold">-{{ "{:,.0f}".format(-(land.price_change_amount|float)) }}€</span>
+                                            {% if land.price_change_percentage %}
+                                                <span class="ms-1">({{ "%.1f"|format(land.price_change_percentage|float) }}%)</span>
+                                            {% endif %}
+                                        </small>
+                                    {% else %}
+                                        <small class="text-danger d-flex align-items-center">
+                                            <i class="fas fa-arrow-up me-1"></i>
+                                            <span class="fw-bold">+{{ "{:,.0f}".format(land.price_change_amount|float) }}€</span>
+                                            {% if land.price_change_percentage %}
+                                                <span class="ms-1">(+{{ "%.1f"|format(land.price_change_percentage|float) }}%)</span>
+                                            {% endif %}
+                                        </small>
+                                    {% endif %}
+                                    {# The tile is narrow, so the date must wrap as
+                                       a whole rather than splitting into
+                                       "2026-02-" and "18". #}
+                                    <small class="text-body-secondary">
+                                        <span class="text-nowrap">was {{ "{:,.0f}".format(land.previous_price|float) }}€</span>{% if land.price_changed_date %}
+                                        <span class="text-nowrap">{{ land.price_changed_date.strftime('%Y-%m-%d') }}</span>{% endif %}
+                                    </small>
+                                </div>
+                            {% endif %}
                         </div>
                     </div>
                     <div class="col-6 col-lg-3">
@@ -292,9 +325,11 @@
                                     <small class="text-muted d-block mb-1">Key Highlights:</small>
                                     <div id="highlights-list"></div>
                                 </div>
-                                <div class="mt-2" id="price-info-section" style="display: none;">
-                                    <small class="text-success">💰 <span id="price-info-text"></span></small>
-                                </div>
+                                {# The "Current price" line that stood here is gone
+                                   with the code that filled it: it printed the AI
+                                   blob's frozen figure, which no price-drop email
+                                   ever updates. The Price tile above says it, and
+                                   says the change too. #}
                             </div>
                             
                             <!-- Original Description -->
