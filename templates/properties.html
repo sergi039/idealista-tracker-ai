@@ -519,7 +519,7 @@
                         {% else %}
                             <span id="unassigned-count-note" class="text-body-secondary small">&mdash; {{ unassigned_count }} with no subscription not shown
                                 (<a id="unassigned-count-link"
-                                    href="{{ url_for('main.properties', **dict(base_args, profile_id='unassigned', page=1)) }}">show them</a>)</span>
+                                    href="{{ url_for('main.properties', **dict(base_args, profile_id='unassigned', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">show them</a>)</span>
                         {% endif %}
                     {% endif %}
                     {% if not selected_profile_id and profile_selection.withholds_profile_travel %}
@@ -950,8 +950,10 @@
                         <div class="col-md-4 text-center">
                             <div class="d-inline-flex align-items-center">
                                 <span class="text-muted me-2 small">Show:</span>
+                                {# A bigger page starts at the first one: keeping `page` meant
+                                   page 6 of 25 became page 6 of 100, which is past the end. #}
                                 <select class="form-select form-select-sm" style="width: auto;"
-                                        onchange="window.location.href=updateUrlParameter(window.location.href, 'per_page', this.value)">
+                                        onchange="window.location.href=updateUrlParameter(updateUrlParameter(window.location.href, 'per_page', this.value), 'page', 1)">
                                     <option value="10" {{ 'selected' if current_filters.per_page == 10 }}>10</option>
                                     <option value="25" {{ 'selected' if current_filters.per_page == 25 }}>25</option>
                                     <option value="50" {{ 'selected' if current_filters.per_page == 50 }}>50</option>
