@@ -945,9 +945,20 @@ window.IdealistaApp = {
     // failure and the obvious next move - press it again - paid for a second
     // run of work that was already done (#178).
     JOB_POLL_TIMEOUTS: {
-        // services/property_ai_service.py asks the bridge for 600 s; the extra
-        // minute is the wait before a queued job actually starts.
-        aiAnalysis: 660000,
+        // Derived from config.py's AI_ANALYSIS_TIMEOUT_SECONDS (180 s), the
+        // single source both services/property_ai_service.py and
+        // services/openai_service.py ask the bridge for (#206 item 3):
+        //   180 s analysis timeout
+        // + 25 s AI_BRIDGE_SOCKET_MARGIN_SECONDS (the bridge's own worst-case
+        //        kill sequence plus real TCP/thread/JSON overhead;
+        //        services/subscription_transport.py)
+        // +  60 s allowance for this app's own background-job queueing
+        //         before a worker even picks the job up
+        // = 265 s. (Was 660 s when the analysis timeout itself was 600 s,
+        // sized for the #201 defect that tools/ai_bridge.py's cold-start
+        // isolation already fixed -- see AI_ANALYSIS_TIMEOUT_SECONDS's own
+        // comment in config.py for the measurements behind 180 s.)
+        aiAnalysis: 265000,
         // Several Google calls plus Overpass behind the 5 s gate in utils/http.py.
         enrichment: 300000,
         // One listing fetch (15 s) plus the deliberate 1-4 s scraping pause.

@@ -44,6 +44,48 @@ class Config:
     )
     AI_BRIDGE_TOKEN = os.environ.get("AI_BRIDGE_TOKEN")
 
+    # The single definition of the AI analysis timeout (#206 item 3). Used as
+    # the `timeout` handed to services/subscription_transport.py's
+    # `complete()` by both services/property_ai_service.py and
+    # services/openai_service.py, which used to each spell out `timeout=600`
+    # independently. 600 s was sized for the #201 defect -- an inherited
+    # "ultra" reasoning effort spawning research sub-agents, 4m50s per
+    # listing -- that tools/ai_bridge.py's cold-start isolation already
+    # fixed. Measured since: the first two real analyses through production
+    # took 41.1 s (codex) and 19.4 s (claude), and a later run took 26.0 s.
+    # 180 s keeps roughly 4-9x headroom over every measured real run while
+    # cutting the worst case a stuck request holds a run slot for from ten
+    # minutes to three.
+    AI_ANALYSIS_TIMEOUT_SECONDS = int(
+        os.environ.get("AI_ANALYSIS_TIMEOUT_SECONDS") or "180"
+    )
+
+    # tools/ai_bridge.py's own KILL_GRACE_SECONDS, read here under the same
+    # name so both sides of the timeout math see the same number: the
+    # bridge's LaunchAgent and this app's Docker container source the same
+    # .env file. Do not hardcode a copy of "5" here -- an operator raising
+    # AI_BRIDGE_KILL_GRACE on the host must raise this side's margin too, or
+    # a slow kill sequence turns into a generic "bridge unreachable" instead
+    # of the 504 the bridge worked to produce.
+    AI_BRIDGE_KILL_GRACE_SECONDS = float(os.environ.get("AI_BRIDGE_KILL_GRACE") or "5")
+
+    # Real slack for TCP connect/handshake, thread scheduling and JSON
+    # (de)serialization on both ends. The old `timeout + 15` in
+    # subscription_transport.py was exactly `3 * KILL_GRACE_SECONDS` at the
+    # default grace and nothing else -- zero margin for anything but the
+    # bridge's own kill sequence.
+    AI_BRIDGE_REQUEST_MARGIN_SECONDS = 10.0
+
+    # services/subscription_transport.py adds this on top of whatever
+    # `timeout` a caller asks the bridge for, so the HTTP socket always
+    # outlives the bridge's own worst case for that same request: up to
+    # 3 * AI_BRIDGE_KILL_GRACE_SECONDS (SIGTERM wait, post-SIGKILL wait, pipe
+    # drain -- see tools/ai_bridge.py's `_kill_process_group`), plus the real
+    # margin above.
+    AI_BRIDGE_SOCKET_MARGIN_SECONDS = (
+        3 * AI_BRIDGE_KILL_GRACE_SECONDS + AI_BRIDGE_REQUEST_MARGIN_SECONDS
+    )
+
     # Claude (via the claude CLI)
     ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-5"
 

@@ -83,7 +83,17 @@ KILL_GRACE_SECONDS = float(os.environ.get("AI_BRIDGE_KILL_GRACE", "5"))
 
 # Below this much of the budget left after queueing, starting a CLI only buys a
 # timeout: report a busy bridge instead of a run that cannot finish.
-MIN_RUN_SECONDS = float(os.environ.get("AI_BRIDGE_MIN_RUN_SECONDS", "5"))
+#
+# Measured (#206 item 4): the fastest synthetic codex run (above) was 9.8 s,
+# but that is a warm CLI answering a trivial stub prompt. Through production,
+# the first two real analyses took 41.1 s (codex) and 19.4 s (claude), and a
+# later run measured 26.0 s. 5 s was below all of them, so a call that queued
+# down to "5 s left" was granted a slot anyway and started a run that could
+# not possibly finish -- holding one of only two slots for the rest of its
+# budget plus up to 3 * KILL_GRACE_SECONDS of kill and drain on top. The floor
+# is set just above the slowest real run observed (41.1 s) so a slot is only
+# granted when there is a realistic chance the run finishes in it.
+MIN_RUN_SECONDS = float(os.environ.get("AI_BRIDGE_MIN_RUN_SECONDS", "45"))
 # Slack that keeps an immediately-granted slot from looking like a queue wait.
 QUEUE_FLOOR_GRACE_SECONDS = 0.5
 
@@ -445,6 +455,35 @@ def complete_claude(prompt: str, system: str, model: str, timeout: int) -> dict:
     }
 
 
+def _strip_json_fence(text: str) -> str:
+    """Drop a leading/trailing ``` fence, mirroring `_clean_json_text` in
+    `services/property_ai_service.py` (also duplicated in
+    `services/openai_service.py`).
+
+    The bridge is a standalone host-side script (see the module docstring)
+    that cannot import the Flask app's services, so this is a deliberate,
+    minimal duplicate rather than a shared import -- kept tiny so the two
+    stay easy to compare by eye. It exists only to decide whether a message
+    *looks like* JSON; the app still does its own fence-stripping before the
+    real `json.loads`.
+    """
+    stripped = (text or "").strip()
+    if stripped.startswith("```"):
+        lines = stripped.split("\n")[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+    return stripped
+
+
+def _parses_as_json(text: str) -> bool:
+    try:
+        json.loads(_strip_json_fence(text))
+    except ValueError:
+        return False
+    return True
+
+
 def complete_codex(prompt: str, system: str, model: str, timeout: int) -> dict:
     if _which("codex") is None:
         raise BridgeError("codex CLI not found on host")
@@ -480,6 +519,7 @@ def complete_codex(prompt: str, system: str, model: str, timeout: int) -> dict:
     full_prompt = f"{system}\n\n{prompt}" if system else prompt
 
     answer = ""
+    last_message = ""
     usage: dict = {}
     completed = False
     for line in _run(cmd, full_prompt, timeout).splitlines():
@@ -495,12 +535,22 @@ def complete_codex(prompt: str, system: str, model: str, timeout: int) -> dict:
             event.get("type") == "item.completed"
             and item.get("type") == "agent_message"
         ):
-            # The *last* agent message is the answer. Concatenating every one
-            # of them, as this did before, turns a preamble plus a JSON object
-            # into something that parses as neither.
+            # The answer is the *last* agent message whose text parses as
+            # JSON (#206 item 2), fenced or not. Concatenating every message,
+            # as this did before, turned a preamble plus a JSON object into
+            # something that parsed as neither. Keeping unconditionally the
+            # last message fixed that but opened the mirror case: codex
+            # emitting the JSON answer and then a closing remark ("Done.",
+            # "Let me know if you need anything else.") made the remark win
+            # and silently discarded the analysis. `last_message` is the
+            # fallback for a stream where nothing parsed -- that failure
+            # still needs to surface upstream (the app's own json.loads
+            # fails on it) rather than being masked by refusing to answer.
             text = str(item.get("text") or "").strip()
             if text:
-                answer = text
+                last_message = text
+                if _parses_as_json(text):
+                    answer = text
         elif event.get("type") == "turn.completed":
             usage = event.get("usage") or {}
             completed = True
@@ -511,6 +561,9 @@ def complete_codex(prompt: str, system: str, model: str, timeout: int) -> dict:
         # A stream that stopped without turn.completed was cut off. Returning
         # whatever text arrived would report a partial answer as a whole one.
         raise BridgeError("codex stream ended without turn.completed")
+
+    if not answer:
+        answer = last_message
 
     _log_usage("codex", usage)
     return {

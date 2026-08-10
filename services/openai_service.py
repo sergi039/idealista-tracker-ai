@@ -264,13 +264,16 @@ class OpenAIService:
         # One call through the host bridge: the Codex CLI carries the ChatGPT
         # subscription, so none of the API-only parameter negotiation
         # (max_tokens vs max_completion_tokens, response_format, temperature)
-        # applies here any more.
+        # applies here any more. The timeout is config.py's single
+        # AI_ANALYSIS_TIMEOUT_SECONDS (#206 item 3), shared with
+        # services/property_ai_service.py rather than each spelling out its
+        # own literal.
         result = subscription_transport.complete(
             prompt,
             provider="openai",
             system="Return only a single JSON object. No prose, no code fences.",
             model=self.model,
-            timeout=600,
+            timeout=Config.AI_ANALYSIS_TIMEOUT_SECONDS,
         )
         logger.info(
             "OpenAI analysis via subscription bridge finished in %.1fs",

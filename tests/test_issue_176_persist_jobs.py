@@ -825,9 +825,10 @@ def test_after_both_terminal_writes_fail_a_lease_expiry_reaps_and_redispatches(
 
 def test_lease_ttl_constant_is_reasonable_for_the_longest_known_job_budget():
     """Pins the TTL against the client-visible AI-analysis budget
-    (static/js/main.js JOB_POLL_TIMEOUTS.aiAnalysis = 660000 ms) so a change
-    to one is a deliberate decision about the other, not a silent drift."""
-    assert LEASE_TTL_SECONDS > 660, (
+    (static/js/main.js JOB_POLL_TIMEOUTS.aiAnalysis = 265000 ms, #206 item 3)
+    so a change to one is a deliberate decision about the other, not a silent
+    drift."""
+    assert LEASE_TTL_SECONDS > 265, (
         "the lease must outlive the longest job budget the client itself waits for"
     )
 

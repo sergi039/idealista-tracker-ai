@@ -1,7 +1,8 @@
 """The page must follow a job for as long as the server may work on it.
 
-`pollJob` defaulted to 120 s while `services/property_ai_service.py` asks the
-bridge for 600 s, and no caller ever overrode it. A long analysis was therefore
+`pollJob` defaulted to 120 s while `services/property_ai_service.py` asked the
+bridge for 600 s (now `config.py`'s `AI_ANALYSIS_TIMEOUT_SECONDS`, 180 s --
+#206 item 3), and no caller ever overrode it. A long analysis was therefore
 announced as failed while the server was still writing it — and the natural
 response, pressing the button again, queued a second *paid* run of work that
 was already done.
@@ -30,7 +31,10 @@ POLL_SITES = (
 
 # Every budget the page may use, and the server-side limit each one answers to.
 EXPECTED_BUDGETS = {
-    "aiAnalysis": 660000,  # property_ai_service.py asks the bridge for 600 s
+    # config.py AI_ANALYSIS_TIMEOUT_SECONDS (180s) + AI_BRIDGE_SOCKET_MARGIN_
+    # SECONDS (25s) + a 60s allowance for the app's own job-queueing (#206
+    # item 3; see the comment on JOB_POLL_TIMEOUTS in static/js/main.js).
+    "aiAnalysis": 265000,
     "enrichment": 300000,
     "listingStatus": 180000,
 }
