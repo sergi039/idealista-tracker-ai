@@ -249,6 +249,11 @@ class Property(db.Model):
     )  # 'active', 'removed', 'sold', 'unknown'
     listing_removed_date = db.Column(db.DateTime)
     listing_last_checked = db.Column(db.DateTime)
+    # How the status above was decided: 'ingest' (the default a new row carries,
+    # never verified), 'email' (idealista's own removal notice), 'check' (the
+    # scraper read the listing page) or 'manual' (the owner). NULL on rows that
+    # predate the column -- nothing was backfilled, because nothing recorded it.
+    listing_status_source = db.Column(db.String(16), default="ingest")
 
     created_at = db.Column(db.DateTime, default=utcnow)
     email_date = db.Column(db.DateTime)
@@ -315,6 +320,7 @@ class Property(db.Model):
             "listing_last_checked": self.listing_last_checked.isoformat()
             if self.listing_last_checked
             else None,
+            "listing_status_source": self.listing_status_source,
             "email_date": self.email_date.isoformat() if self.email_date else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
@@ -698,6 +704,8 @@ class Land(db.Model):
     listing_last_checked = db.Column(
         db.DateTime
     )  # Last time we checked the listing status
+    # Same four values as Property.listing_status_source, same NULL meaning.
+    listing_status_source = db.Column(db.String(16), default="ingest")
 
     created_at = db.Column(db.DateTime, default=utcnow)
     email_date = db.Column(db.DateTime)  # Date when the email was received
@@ -750,6 +758,7 @@ class Land(db.Model):
             "listing_last_checked": self.listing_last_checked.isoformat()
             if self.listing_last_checked
             else None,
+            "listing_status_source": self.listing_status_source,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

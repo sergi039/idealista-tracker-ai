@@ -286,6 +286,9 @@ class LandToPropertyMigrationService:
                 prop.listing_status = land.listing_status or "active"
                 prop.listing_removed_date = land.listing_removed_date
                 prop.listing_last_checked = land.listing_last_checked
+                # The mirror copies how the status was decided rather than
+                # claiming the mirroring itself decided it.
+                prop.listing_status_source = land.listing_status_source
                 prop.email_date = land.email_date
                 prop.created_at = land.created_at
                 prop.updated_at = land.updated_at

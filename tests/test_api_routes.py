@@ -203,13 +203,20 @@ class TestPropertyStatus:
         data = json.loads(response.data)
         assert data["success"] is True
         assert data["status"] == "removed"
+        assert data["status_source"] == "manual"
 
         with app.app_context():
             refreshed = db.session.get(Property, prop_id)
             assert refreshed is not None
             assert refreshed.listing_status == "removed"
-            assert refreshed.listing_last_checked is not None
             assert refreshed.listing_removed_date is not None
+            assert refreshed.listing_status_source == "manual"
+            # Setting a status by hand is not a check (2026-08-10). This used to
+            # stamp listing_last_checked, which the header then read back as
+            # "Checked: today" about a listing nobody had read off idealista --
+            # the false confirmation of issue #136, in the one path that cannot
+            # even claim a fetch happened.
+            assert refreshed.listing_last_checked is None
 
         response2 = client.post(
             f"/api/property/{prop_id}/set-status", json={"status": "active"}

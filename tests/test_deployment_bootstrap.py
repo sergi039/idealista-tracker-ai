@@ -131,6 +131,15 @@ def _create_historical_schema(engine):
             connection.execute(
                 text(f"CREATE INDEX {index} ON search_profiles ({column})")  # noqa: S608
             )
+        # Migration 015 added listing_status_source to both listing tables, so
+        # create_all() produces a column the pre-ledger schema never had. Unlike
+        # 013's additions this one can simply be dropped: the CHECK constraint
+        # naming it lives in the PostgreSQL migration, not in the model, so
+        # SQLite has nothing to refuse.
+        for table in ("properties", "lands"):
+            connection.execute(
+                text(f"ALTER TABLE {table} DROP COLUMN listing_status_source")  # noqa: S608
+            )
 
 
 def test_the_stated_historical_table_matches_the_runners_fingerprint(tmp_path):
