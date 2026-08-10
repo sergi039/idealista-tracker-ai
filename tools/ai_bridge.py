@@ -407,7 +407,9 @@ def _run(cmd: list[str], stdin_text: str, timeout: int) -> str:
     return stdout
 
 
-def complete_claude(prompt: str, system: str, model: str, timeout: int) -> dict:
+def complete_claude(
+    prompt: str, system: str, model: str, timeout: int, schema: dict | None = None
+) -> dict:
     if _which("claude") is None:
         raise BridgeError("claude CLI not found on host")
 
@@ -436,6 +438,11 @@ def complete_claude(prompt: str, system: str, model: str, timeout: int) -> dict:
         cmd += ["--model", model]
     if system:
         cmd += ["--system-prompt", system]
+    if schema:
+        # claude takes the schema itself, not a file (issue #218). A request
+        # without one omits the flag entirely, which is exactly today's
+        # invocation -- see complete_codex for the file-based codex side.
+        cmd += ["--json-schema", json.dumps(schema)]
 
     payload = json.loads(_run(cmd, prompt, timeout) or "{}")
     if payload.get("is_error"):
@@ -443,8 +450,17 @@ def complete_claude(prompt: str, system: str, model: str, timeout: int) -> dict:
 
     usage = payload.get("usage") or {}
     _log_usage("claude", usage)
+    # `result` is normally a string; under --json-schema it may already be
+    # decoded to an object. str() on a dict would emit Python repr (single
+    # quotes) instead of JSON, breaking the caller's json.loads, so a
+    # structured result is re-serialised instead of stringified.
+    raw_result = payload.get("result")
+    if isinstance(raw_result, (dict, list)):
+        text = json.dumps(raw_result)
+    else:
+        text = str(raw_result or "")
     return {
-        "text": str(payload.get("result") or ""),
+        "text": text,
         "usage": {
             "input_tokens": usage.get("input_tokens"),
             "output_tokens": usage.get("output_tokens"),
@@ -484,7 +500,30 @@ def _parses_as_json(text: str) -> bool:
     return True
 
 
-def complete_codex(prompt: str, system: str, model: str, timeout: int) -> dict:
+def _write_schema_file(schema: dict) -> str:
+    """Write a JSON Schema to a private temp file for `codex exec --output-schema`.
+
+    Unlike claude, codex takes a *path*, not the schema itself (issue #218).
+    `mkstemp` gives an owner-only (0600), uniquely-named file with no
+    collision risk between the up-to-`MAX_CONCURRENT_RUNS` runs that can be
+    in flight together, and it lives outside `workdir()` on purpose: that
+    directory is documented and tested (`test_workdir_is_empty_and_outside_
+    any_repository`) to be empty, and codex's own read-only sandbox has no
+    reason to see a stray schema file while it works.
+    """
+    fd, path = tempfile.mkstemp(prefix="ai-bridge-schema-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(schema, fh)
+    except Exception as exc:
+        os.unlink(path)
+        raise BridgeError(f"failed to write output schema: {exc}") from exc
+    return path
+
+
+def complete_codex(
+    prompt: str, system: str, model: str, timeout: int, schema: dict | None = None
+) -> dict:
     if _which("codex") is None:
         raise BridgeError("codex CLI not found on host")
 
@@ -518,52 +557,72 @@ def complete_codex(prompt: str, system: str, model: str, timeout: int) -> dict:
     # Codex has no system-prompt flag; prepend it to the user turn instead.
     full_prompt = f"{system}\n\n{prompt}" if system else prompt
 
-    answer = ""
-    last_message = ""
-    usage: dict = {}
-    completed = False
-    for line in _run(cmd, full_prompt, timeout).splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        item = event.get("item") or {}
-        if (
-            event.get("type") == "item.completed"
-            and item.get("type") == "agent_message"
-        ):
-            # The answer is the *last* agent message whose text parses as
-            # JSON (#206 item 2), fenced or not. Concatenating every message,
-            # as this did before, turned a preamble plus a JSON object into
-            # something that parsed as neither. Keeping unconditionally the
-            # last message fixed that but opened the mirror case: codex
-            # emitting the JSON answer and then a closing remark ("Done.",
-            # "Let me know if you need anything else.") made the remark win
-            # and silently discarded the analysis. `last_message` is the
-            # fallback for a stream where nothing parsed -- that failure
-            # still needs to surface upstream (the app's own json.loads
-            # fails on it) rather than being masked by refusing to answer.
-            text = str(item.get("text") or "").strip()
-            if text:
-                last_message = text
-                if _parses_as_json(text):
-                    answer = text
-        elif event.get("type") == "turn.completed":
-            usage = event.get("usage") or {}
-            completed = True
-        elif event.get("type") == "turn.failed":
-            raise BridgeError(f"codex turn failed: {str(event)[:500]}")
+    schema_path: str | None = None
+    if schema:
+        schema_path = _write_schema_file(schema)
+        cmd += ["--output-schema", schema_path]
 
-    if not completed:
-        # A stream that stopped without turn.completed was cut off. Returning
-        # whatever text arrived would report a partial answer as a whole one.
-        raise BridgeError("codex stream ended without turn.completed")
+    try:
+        answer = ""
+        last_message = ""
+        usage: dict = {}
+        completed = False
+        for line in _run(cmd, full_prompt, timeout).splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            item = event.get("item") or {}
+            if (
+                event.get("type") == "item.completed"
+                and item.get("type") == "agent_message"
+            ):
+                # The answer is the *last* agent message whose text parses as
+                # JSON (#206 item 2), fenced or not. Concatenating every message,
+                # as this did before, turned a preamble plus a JSON object into
+                # something that parsed as neither. Keeping unconditionally the
+                # last message fixed that but opened the mirror case: codex
+                # emitting the JSON answer and then a closing remark ("Done.",
+                # "Let me know if you need anything else.") made the remark win
+                # and silently discarded the analysis. `last_message` is the
+                # fallback for a stream where nothing parsed -- that failure
+                # still needs to surface upstream (the app's own json.loads
+                # fails on it) rather than being masked by refusing to answer.
+                # This heuristic is deliberately unchanged by --output-schema
+                # (issue #218): a CLI that ignores or rejects the schema must
+                # still produce today's behaviour, not a hard failure.
+                text = str(item.get("text") or "").strip()
+                if text:
+                    last_message = text
+                    if _parses_as_json(text):
+                        answer = text
+            elif event.get("type") == "turn.completed":
+                usage = event.get("usage") or {}
+                completed = True
+            elif event.get("type") == "turn.failed":
+                raise BridgeError(f"codex turn failed: {str(event)[:500]}")
 
-    if not answer:
-        answer = last_message
+        if not completed:
+            # A stream that stopped without turn.completed was cut off.
+            # Returning whatever text arrived would report a partial answer
+            # as a whole one.
+            raise BridgeError("codex stream ended without turn.completed")
+
+        if not answer:
+            answer = last_message
+    finally:
+        # Must survive every exit from the run above: the happy path, a
+        # BridgeTimeout raised out of `_run`, a turn.failed BridgeError, and
+        # the truncated-stream BridgeError -- all of them unwind through this
+        # `finally` before leaving complete_codex.
+        if schema_path is not None:
+            try:
+                os.unlink(schema_path)
+            except OSError:
+                pass
 
     _log_usage("codex", usage)
     return {
@@ -650,6 +709,16 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(400, {"error": "prompt is required"})
             return
 
+        # Optional and additive (issue #218): absent or null behaves exactly
+        # as before this field existed. A present-but-malformed value is
+        # rejected rather than silently ignored -- this endpoint has exactly
+        # one caller (services/subscription_transport.py), so a shape other
+        # than "object" or "absent" means that caller has a bug worth seeing.
+        schema = request.get("schema")
+        if schema is not None and not isinstance(schema, dict):
+            self._reply(400, {"error": "schema must be a JSON object or null"})
+            return
+
         timeout = min(int(request.get("timeout") or DEFAULT_TIMEOUT), 900)
         started = time.monotonic()
         try:
@@ -658,6 +727,7 @@ class Handler(BaseHTTPRequestHandler):
                 str(request.get("system") or ""),
                 str(request.get("model") or ""),
                 timeout,
+                schema,
             )
         except BridgeError as exc:
             # A timeout and a busy bridge are not the same failure as a CLI

@@ -540,7 +540,7 @@ def test_failures_map_to_distinct_statuses(bridge, monkeypatch, error, expected_
     """A caller must tell "we gave up waiting" from "the CLI answered badly"."""
     monkeypatch.setattr(bridge, "TOKEN", "test-token")
 
-    def failing(prompt, system, model, timeout):
+    def failing(prompt, system, model, timeout, schema=None):
         raise getattr(bridge, error)("boom")
 
     monkeypatch.setitem(bridge.PROVIDERS, "claude", failing)
