@@ -1014,6 +1014,15 @@ window.IdealistaApp = {
                     if (onError) onError(job);
                     return;
                 }
+                if (job.status === 'interrupted') {
+                    // The process that was running this job was replaced by a
+                    // redeploy before it finished (#176); it will never
+                    // resolve on its own, so stop polling and report the
+                    // server's own explanation rather than "still running".
+                    stop();
+                    if (onError) onError(job);
+                    return;
+                }
                 schedule();
             } catch (err) {
                 stop();

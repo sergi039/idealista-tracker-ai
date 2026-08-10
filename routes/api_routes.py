@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from flask import Blueprint, Response, current_app, jsonify, request
+from sqlalchemy.exc import IntegrityError
 
 # get_or_404 raises HTTPException, and the blanket `except Exception` handlers
 # below would answer 500 for it: every one of them re-raises it first so an
@@ -48,11 +49,268 @@ def _should_run_sync(allow_request_override: bool = True) -> bool:
     return request.args.get("sync") in ("1", "true", "yes", "on")
 
 
-def _enqueue(job_fn, *, job_type: str, meta=None) -> str:
+def _enqueue(job_fn, *, job_type: str, meta=None, dedupe_key=None) -> str:
     from services.background_jobs import enqueue_job
 
     app_obj = current_app._get_current_object()
-    return enqueue_job(job_fn, job_type=job_type, meta=meta or {}, app=app_obj)
+    return enqueue_job(
+        job_fn,
+        job_type=job_type,
+        meta=meta or {},
+        app=app_obj,
+        dedupe_key=dedupe_key,
+    )
+
+
+# The unique constraint migration 017 adds (#190 review, blocker 3). Named so
+# `_is_property_variant_collision` can recognize it from PostgreSQL's
+# structured diagnostics.
+PROPERTY_VARIANT_UNIQUE_CONSTRAINT = (
+    "ux_property_ai_analysis_variants_property_provider"
+)
+# What SQLite says when that same constraint (declared as a UniqueConstraint
+# on the model) refuses a row -- it has no structured diagnostics, so the
+# message is matched in full. See services/search_profile_service.py's
+# _is_keyless_name_collision for the same idiom against a different table.
+_SQLITE_PROPERTY_VARIANT_COLLISION = (
+    "UNIQUE constraint failed: property_ai_analysis_variants.property_id, "
+    "property_ai_analysis_variants.provider"
+)
+
+
+def _is_property_variant_collision(error: Exception) -> bool:
+    """Whether `error` is the (property_id, provider) unique constraint
+    refusing a second row for a pair that already has one -- the expected,
+    fully-recovered shape of the #190 review's blocker 3 insert race.
+
+    Narrow on purpose, the same way _is_keyless_name_collision is: an
+    unrelated IntegrityError (a dropped connection, a foreign-key violation)
+    must keep its own report rather than being silently treated as "someone
+    else already wrote this". property_ai_analysis_variants only has the one
+    unique constraint plus a FK to properties(id) that cannot fail here (the
+    property was already loaded via get_or_404 earlier in the request), which
+    keeps the false-positive risk low, but the check still names the
+    constraint rather than assuming any IntegrityError here is the race.
+    """
+    if not isinstance(error, IntegrityError):
+        return False
+    orig = getattr(error, "orig", None)
+    if orig is None:
+        return False
+    constraint = getattr(getattr(orig, "diag", None), "constraint_name", None)
+    if constraint is not None:
+        return constraint == PROPERTY_VARIANT_UNIQUE_CONSTRAINT
+    return str(orig).strip() == _SQLITE_PROPERTY_VARIANT_COLLISION
+
+
+def _upsert_property_ai_variant(
+    property_id: int, provider: str, *, model, analysis
+) -> None:
+    """Write the (property_id, provider) AI-analysis variant without the
+    query-then-insert race migration 017 closes off at the database level
+    (#190 review, blocker 3).
+
+    An UPDATE first -- the common case, since a variant usually already
+    exists after a property's first successful analysis for that provider.
+    If none matched, INSERT. If that INSERT loses a race to a concurrent
+    writer (an interrupted job's async retry alongside a `?sync=1` request,
+    which bypasses background_jobs' dedupe_key entirely because it never
+    goes through enqueue_job), the unique constraint turns the race into an
+    IntegrityError this recovers from by updating the winner -- instead of
+    either leaving this run's result silently unwritten or letting a second
+    row exist for the same pair.
+
+    Stages every write -- never commits (#190 review round 4, finding 4).
+    The caller (a job function running inside `_execute_job`) commits once,
+    together with the terminal CAS write that records the job itself as
+    successful, so a reap racing this job's own execution rolls both back
+    together rather than letting this land after the job has already lost
+    ownership. The INSERT attempt runs inside a `SAVEPOINT`
+    (`Session.begin_nested()`): if it loses the race, only that savepoint
+    rolls back, not the rest of what the caller staged in the same
+    session (e.g. `prop_local.ai_analysis`, set just before this is called
+    in `analyze_universal_property_structured`) -- a plain `session.
+    rollback()` here would discard that too.
+    """
+    from models import PropertyAiAnalysisVariant
+
+    stamp = datetime.now(timezone.utc)
+    fields = {"analysis": analysis, "model": model, "created_at": stamp}
+
+    updated = (
+        db.session.query(PropertyAiAnalysisVariant)
+        .filter_by(property_id=property_id, provider=provider)
+        .update(fields, synchronize_session=False)
+    )
+    if updated:
+        return
+
+    try:
+        with db.session.begin_nested():
+            db.session.add(
+                PropertyAiAnalysisVariant(
+                    property_id=property_id,
+                    provider=provider,
+                    model=model,
+                    analysis=analysis,
+                )
+            )
+    except IntegrityError as exc:
+        if not _is_property_variant_collision(exc):
+            raise
+        recovered = (
+            db.session.query(PropertyAiAnalysisVariant)
+            .filter_by(property_id=property_id, provider=provider)
+            .update(fields, synchronize_session=False)
+        )
+        if not recovered:
+            # The row that just won the race would have to be deleted in
+            # this exact instant for this to happen. Fail loudly rather than
+            # claim success silently over a result that was never stored.
+            raise RuntimeError(
+                "Lost the insert race for property_ai_analysis_variants "
+                f"(property_id={property_id}, provider={provider}) but the "
+                "row that won it could not be found to update"
+            ) from exc
+
+
+# The unique constraint migration 017 also adds for the legacy Land model's
+# variants (#190 review round 3, finding 4).
+LAND_VARIANT_UNIQUE_CONSTRAINT = "ux_ai_analysis_variants_land_provider"
+_SQLITE_LAND_VARIANT_COLLISION = (
+    "UNIQUE constraint failed: ai_analysis_variants.land_id, "
+    "ai_analysis_variants.provider"
+)
+
+
+def _is_land_variant_collision(error: Exception) -> bool:
+    """The (land_id, provider) analogue of `_is_property_variant_collision`."""
+    if not isinstance(error, IntegrityError):
+        return False
+    orig = getattr(error, "orig", None)
+    if orig is None:
+        return False
+    constraint = getattr(getattr(orig, "diag", None), "constraint_name", None)
+    if constraint is not None:
+        return constraint == LAND_VARIANT_UNIQUE_CONSTRAINT
+    return str(orig).strip() == _SQLITE_LAND_VARIANT_COLLISION
+
+
+def _upsert_land_ai_variant(land_id: int, provider: str, *, model, analysis) -> None:
+    """Write the (land_id, provider) AI-analysis variant without the
+    query-then-insert race migration 017 closes off at the database level
+    for the legacy `Land` model too (#190 review round 3, finding 4) -- the
+    same update-or-insert-with-race-recovery pattern as
+    `_upsert_property_ai_variant`, against `AiAnalysisVariant` instead of
+    `PropertyAiAnalysisVariant`.
+
+    Stages every write -- never commits, for the same reason
+    `_upsert_property_ai_variant` doesn't (#190 review round 4, finding 4):
+    the caller commits once, together with the job's own terminal CAS
+    write. The INSERT attempt runs inside a `SAVEPOINT` so a lost race
+    rolls back only that attempt, not `land.ai_analysis`, set just before
+    this is called and still only staged, not committed.
+    """
+    from models import AiAnalysisVariant
+
+    stamp = datetime.now(timezone.utc)
+    fields = {"analysis": analysis, "model": model, "created_at": stamp}
+
+    updated = (
+        db.session.query(AiAnalysisVariant)
+        .filter_by(land_id=land_id, provider=provider)
+        .update(fields, synchronize_session=False)
+    )
+    if updated:
+        return
+
+    try:
+        with db.session.begin_nested():
+            db.session.add(
+                AiAnalysisVariant(
+                    land_id=land_id, provider=provider, model=model, analysis=analysis
+                )
+            )
+    except IntegrityError as exc:
+        if not _is_land_variant_collision(exc):
+            raise
+        recovered = (
+            db.session.query(AiAnalysisVariant)
+            .filter_by(land_id=land_id, provider=provider)
+            .update(fields, synchronize_session=False)
+        )
+        if not recovered:
+            raise RuntimeError(
+                "Lost the insert race for ai_analysis_variants "
+                f"(land_id={land_id}, provider={provider}) but the row that "
+                "won it could not be found to update"
+            ) from exc
+
+
+def _run_sync(job_fn, *, job_type: str, meta=None, dedupe_key=None):
+    """Runs `job_fn` inline through `background_jobs`' registry instead of
+    calling it directly (#190 review round 3, finding 4).
+
+    The sync path (`?sync=1`, and every request under `TESTING`) used to
+    call the paid closure with no `background_jobs` involvement at all --
+    bypassing dedupe_key entirely, so a sync call could run alongside a
+    live async job (or another sync call) for the exact same unit of work,
+    paying for it twice. This claims the same dedupe_key slot
+    `enqueue_job`'s async path does and runs `job_fn` in this thread via
+    `run_job_sync`, sharing its CAS transitions and its at-most-one-
+    execution-per-race guarantee.
+
+    Returns the finished job's dict (status/result/error) on success.
+    Raises `JobAlreadyActive` (propagated, not caught here) when the
+    dedupe_key is already claimed by another job -- the caller answers 409
+    with `.job_id` rather than running a second execution.
+    """
+    from services.background_jobs import get_job, run_job_sync
+
+    app_obj = current_app._get_current_object()
+    job_id = run_job_sync(
+        job_fn, job_type=job_type, meta=meta or {}, app=app_obj, dedupe_key=dedupe_key
+    )
+    return get_job(job_id)
+
+
+def _job_already_active_response(exc) -> tuple[Response, int]:
+    """The 409 body every sync route answers with when `_run_sync` raises
+    `JobAlreadyActive` -- the client polls `/api/jobs/<job_id>` for the run
+    that already claims this unit of work instead of the route paying for a
+    second one."""
+    return jsonify(
+        {
+            "success": False,
+            "error": (
+                "An equivalent analysis is already in progress or just "
+                "finished. Poll its job instead of retrying."
+            ),
+            "job_id": exc.job_id,
+        }
+    ), 409
+
+
+def _enqueue_outcome_unknown_response(exc) -> tuple[Response, int]:
+    """The 503 body every route answers with when `enqueue_job`/
+    `run_job_sync` raises `EnqueueOutcomeUnknown` (#190 review round 7): an
+    insert's commit failed ambiguously, and every attempt to find out
+    whether it actually landed also failed. This process genuinely does
+    not know whether the analysis was queued -- 503, not 500, since this is
+    the same shape as any other transient infrastructure failure, and
+    honest about the two real possibilities rather than claiming either
+    one.
+    """
+    return jsonify(
+        {
+            "success": False,
+            "error": (
+                "Could not confirm whether this analysis was queued. It "
+                "may have started anyway -- wait a few minutes, or try "
+                "again."
+            ),
+        }
+    ), 503
 
 
 @api_bp.route("/jobs/<job_id>", methods=["GET"])
@@ -365,6 +623,8 @@ def migrate_lands_to_properties():
 def analyze_property_structured(land_id):
     """Analyze property using Anthropic Claude AI with structured 5-block format"""
     try:
+        from services.background_jobs import EnqueueOutcomeUnknown
+
         land = db.get_or_404(Land, land_id)
 
         # Get existing analysis from request for enrichment
@@ -373,25 +633,43 @@ def analyze_property_structured(land_id):
         is_enrichment = existing_analysis is not None
 
         def _run():
+            # #190 review, blocker 2: the async path runs this closure on a
+            # ThreadPoolExecutor thread, inside its own app context -- a
+            # different Flask-SQLAlchemy scoped session than the one that
+            # loaded `land` above. Mutating that request-session object and
+            # committing through this thread's own session does not flush
+            # the mutation (the object was never part of this session's unit
+            # of work); by the time the request's own session tears down,
+            # `land.ai_analysis` was silently never persisted. Capturing only
+            # `land_id` and reloading here -- the same pattern
+            # `analyze_universal_property_structured` and
+            # `generate_openai_structured` already use -- keeps every read
+            # and write inside one session.
+            land_local = db.session.get(Land, land_id)
+            if land_local is None:
+                return {"success": False, "error": "Land not found"}
+
             from services.anthropic_service import get_anthropic_service
 
             anthropic_service = get_anthropic_service()
 
             property_data = {
-                "id": land.id,
-                "title": land.title,
-                "price": float(land.price) if land.price else None,
-                "area": float(land.area) if land.area else None,
-                "municipality": land.municipality,
-                "land_type": land.land_type,
-                "score_total": float(land.score_total) if land.score_total else None,
-                "description": land.description,
-                "travel_time_nearest_beach": land.travel_time_nearest_beach,
-                "nearest_beach_name": land.nearest_beach_name,
-                "travel_time_oviedo": land.travel_time_oviedo,
-                "travel_time_gijon": land.travel_time_gijon,
-                "travel_time_airport": land.travel_time_airport,
-                "infrastructure_basic": land.infrastructure_basic or {},
+                "id": land_local.id,
+                "title": land_local.title,
+                "price": float(land_local.price) if land_local.price else None,
+                "area": float(land_local.area) if land_local.area else None,
+                "municipality": land_local.municipality,
+                "land_type": land_local.land_type,
+                "score_total": float(land_local.score_total)
+                if land_local.score_total
+                else None,
+                "description": land_local.description,
+                "travel_time_nearest_beach": land_local.travel_time_nearest_beach,
+                "nearest_beach_name": land_local.nearest_beach_name,
+                "travel_time_oviedo": land_local.travel_time_oviedo,
+                "travel_time_gijon": land_local.travel_time_gijon,
+                "travel_time_airport": land_local.travel_time_airport,
+                "infrastructure_basic": land_local.infrastructure_basic or {},
                 "existing_analysis": existing_analysis,
             }
 
@@ -404,36 +682,32 @@ def analyze_property_structured(land_id):
                 if is_enrichment and existing_analysis and new_analysis:
                     merged_analysis = dict(existing_analysis)
                     merged_analysis.update(new_analysis)
-                    land.ai_analysis = merged_analysis
+                    land_local.ai_analysis = merged_analysis
                     final_analysis = merged_analysis
                 else:
-                    land.ai_analysis = new_analysis
+                    land_local.ai_analysis = new_analysis
                     final_analysis = new_analysis
 
-                db.session.commit()
+                # Staged, not committed: _execute_job commits this together
+                # with the job's own terminal CAS write, once, so a reap
+                # racing this job's execution rolls both back together
+                # rather than letting land_local.ai_analysis land after the
+                # job has already lost ownership (#190 review round 4,
+                # finding 4).
 
+                # _upsert_land_ai_variant is an update-or-insert that
+                # recovers from a lost race against the unique constraint
+                # migration 017 adds, rather than the old query-then-insert
+                # that let two concurrent writers both see "no row" and
+                # both insert (#190 review round 3, finding 4). It stages
+                # its own write too -- no commit or rollback here either,
+                # since its own SAVEPOINT-based recovery already leaves the
+                # session valid for whatever failed for a reason other than
+                # the recognized race.
                 try:
-                    existing_variant = (
-                        AiAnalysisVariant.query.filter_by(
-                            land_id=land_id, provider="claude"
-                        )
-                        .order_by(AiAnalysisVariant.created_at.desc())
-                        .first()
+                    _upsert_land_ai_variant(
+                        land_id, "claude", model=model_used, analysis=final_analysis
                     )
-                    if existing_variant:
-                        existing_variant.analysis = final_analysis
-                        existing_variant.model = model_used
-                        existing_variant.created_at = datetime.now(timezone.utc)
-                    else:
-                        db.session.add(
-                            AiAnalysisVariant(
-                                land_id=land_id,
-                                provider="claude",
-                                model=model_used,
-                                analysis=final_analysis,
-                            )
-                        )
-                    db.session.commit()
                 except Exception as e:
                     logger.warning(
                         "Failed to store Claude analysis variant for land %s: %s",
@@ -459,23 +733,50 @@ def analyze_property_structured(land_id):
                 "raw_analysis": result.get("raw_analysis") if result else None,
             }
 
+        # Claude is the only provider this endpoint calls (see the variant
+        # it writes above) -- fixed in the key so a resubmit after an
+        # interrupted run cannot race a still-active one for the same land
+        # (#176 acceptance criterion 4), and so a `?sync=1` call cannot run
+        # alongside a live async one for the same land (#190 review round
+        # 3, finding 4).
+        dedupe_key = f"land_ai_analysis:{land.id}:claude"
+
         if _should_run_sync():
-            result = _run()
-            if result.get("success"):
+            from services.background_jobs import JobAlreadyActive
+
+            try:
+                job = _run_sync(
+                    _run,
+                    job_type="land_ai_analysis",
+                    meta={"land_id": land.id, "is_enrichment": is_enrichment},
+                    dedupe_key=dedupe_key,
+                )
+            except JobAlreadyActive as exc:
+                return _job_already_active_response(exc)
+
+            result = job["result"] if job else None
+            if result and result.get("success"):
                 return jsonify(result)
-            error_msg = result.get("error", "Analysis failed")
+            error_msg = (
+                (result or {}).get("error")
+                or (job or {}).get("error")
+                or ("Analysis failed")
+            )
             status_code = (
                 503
                 if "overloaded" in error_msg.lower()
                 or "temporarily" in error_msg.lower()
                 else 500
             )
-            return jsonify(result), status_code
+            return jsonify(
+                result or {"success": False, "error": error_msg}
+            ), status_code
 
         job_id = _enqueue(
             _run,
             job_type="land_ai_analysis",
             meta={"land_id": land.id, "is_enrichment": is_enrichment},
+            dedupe_key=dedupe_key,
         )
         return jsonify(
             {
@@ -488,6 +789,11 @@ def analyze_property_structured(land_id):
 
     except HTTPException:
         raise
+    except EnqueueOutcomeUnknown as exc:
+        logger.error(
+            "Enqueue outcome unknown for land %s: %s", land_id, exc, exc_info=True
+        )
+        return _enqueue_outcome_unknown_response(exc)
     except Exception:
         logger.error(
             "Structured AI analysis failed for land %s", land_id, exc_info=True
@@ -505,9 +811,8 @@ def analyze_property_structured(land_id):
 def analyze_universal_property_structured(property_id: int):
     """Analyze a universal Property with a category-aware structured JSON schema."""
     try:
-        from datetime import datetime
-
-        from models import Property, PropertyAiAnalysisVariant
+        from models import Property
+        from services.background_jobs import EnqueueOutcomeUnknown
         from services.property_ai_service import PropertyAIService
 
         prop = db.get_or_404(Property, property_id)
@@ -552,28 +857,30 @@ def analyze_universal_property_structured(property_id: int):
                 merged.update(new_analysis)
                 final = merged
 
-            # Claude remains the primary analysis stored on the Property record itself (legacy parity).
+            # Claude remains the primary analysis stored on the Property
+            # record itself (legacy parity). Staged, not committed: the
+            # variant upsert below has its own SAVEPOINT-scoped recovery
+            # now (#190 review round 4, finding 4), so it no longer needs
+            # this change committed first to protect it from its own
+            # rollback -- _execute_job commits this together with the
+            # job's own terminal CAS write, once, so a reap racing this
+            # job's execution rolls both back together.
             if provider == "claude":
                 prop_local.ai_analysis = final
 
-            # Store per-provider analysis for side-by-side comparison in the UI.
+            # Store per-provider analysis for side-by-side comparison in the
+            # UI. _upsert_property_ai_variant is an update-or-insert that
+            # recovers from a lost race against the unique constraint
+            # migration 017 adds, rather than the old query-then-insert that
+            # let two concurrent writers both see "no row" and both insert.
+            # It stages its own write too -- no commit or rollback here
+            # either, since its own SAVEPOINT-based recovery already leaves
+            # the session valid for whatever failed for a reason other than
+            # the recognized race.
             try:
-                variant = PropertyAiAnalysisVariant.query.filter_by(
-                    property_id=property_id, provider=provider
-                ).first()
-                if variant:
-                    variant.analysis = final
-                    variant.model = result.get("model")
-                    variant.created_at = datetime.now(timezone.utc)
-                else:
-                    db.session.add(
-                        PropertyAiAnalysisVariant(
-                            property_id=property_id,
-                            provider=provider,
-                            model=result.get("model"),
-                            analysis=final,
-                        )
-                    )
+                _upsert_property_ai_variant(
+                    property_id, provider, model=result.get("model"), analysis=final
+                )
             except Exception as e:
                 logger.warning(
                     "Failed to store AI analysis variant for property %s (%s): %s",
@@ -581,8 +888,6 @@ def analyze_universal_property_structured(property_id: int):
                     provider,
                     e,
                 )
-
-            db.session.commit()
 
             return {
                 "success": True,
@@ -592,16 +897,39 @@ def analyze_universal_property_structured(property_id: int):
                 "is_enrichment": is_enrichment,
             }
 
+        # The observed #176 failure: a redeploy interrupted this exact job
+        # for (property, provider), and resubmitting it must reuse the
+        # in-flight run rather than start a second one racing to write the
+        # same PropertyAiAnalysisVariant row. Also what keeps a `?sync=1`
+        # call from running alongside a live async one for the same pair
+        # (#190 review round 3, finding 4).
+        dedupe_key = f"property_ai_analysis:{prop.id}:{provider}"
+
         if _should_run_sync():
-            result = _run()
-            if result.get("success"):
+            from services.background_jobs import JobAlreadyActive
+
+            try:
+                job = _run_sync(
+                    _run,
+                    job_type="property_ai_analysis",
+                    meta={"property_id": prop.id, "provider": provider},
+                    dedupe_key=dedupe_key,
+                )
+            except JobAlreadyActive as exc:
+                return _job_already_active_response(exc)
+
+            result = job["result"] if job else None
+            if result and result.get("success"):
                 return jsonify(result)
-            return jsonify(result), 500
+            return jsonify(
+                result or {"success": False, "error": (job or {}).get("error")}
+            ), 500
 
         job_id = _enqueue(
             _run,
             job_type="property_ai_analysis",
             meta={"property_id": prop.id, "provider": provider},
+            dedupe_key=dedupe_key,
         )
         return jsonify(
             {
@@ -614,6 +942,14 @@ def analyze_universal_property_structured(property_id: int):
 
     except HTTPException:
         raise
+    except EnqueueOutcomeUnknown as exc:
+        logger.error(
+            "Enqueue outcome unknown for property %s: %s",
+            property_id,
+            exc,
+            exc_info=True,
+        )
+        return _enqueue_outcome_unknown_response(exc)
     except Exception:
         logger.error(
             "Structured AI analysis failed for property %s", property_id, exc_info=True
@@ -631,6 +967,7 @@ def analyze_universal_property_structured(property_id: int):
 def generate_openai_structured(land_id):
     """Generate structured AI analysis with OpenAI (ChatGPT) and store it for comparison."""
     try:
+        from services.background_jobs import EnqueueOutcomeUnknown
         from services.openai_service import get_openai_service
 
         land = db.get_or_404(Land, land_id)
@@ -668,44 +1005,48 @@ def generate_openai_structured(land_id):
             analysis = result.get("structured_analysis") or {}
             model = result.get("model")
 
-            existing_local = (
-                AiAnalysisVariant.query.filter_by(land_id=land_id, provider="openai")
-                .order_by(AiAnalysisVariant.created_at.desc())
-                .first()
-            )
-
-            if existing_local:
-                existing_local.analysis = analysis
-                existing_local.model = model
-                existing_local.created_at = datetime.now(timezone.utc)
-                variant = existing_local
-            else:
-                variant = AiAnalysisVariant(
-                    land_id=land_id,
-                    provider="openai",
-                    model=model,
-                    analysis=analysis,
-                )
-                db.session.add(variant)
-
-            db.session.commit()
+            # _upsert_land_ai_variant recovers from a lost insert race
+            # against the unique constraint migration 017 adds, rather than
+            # the old query-then-insert that let two concurrent writers
+            # both see "no row" and both insert (#190 review round 3,
+            # finding 4).
+            _upsert_land_ai_variant(land_id, "openai", model=model, analysis=analysis)
 
             return {
                 "success": True,
-                "analysis": variant.analysis,
-                "model": variant.model,
+                "analysis": analysis,
+                "model": model,
             }
 
+        # Keeps a `?sync=1` call from running alongside a live async one
+        # for the same land (#190 review round 3, finding 4).
+        dedupe_key = f"land_openai_analysis:{land.id}:openai"
+
         if _should_run_sync():
-            result = _run()
-            if result.get("success"):
+            from services.background_jobs import JobAlreadyActive
+
+            try:
+                job = _run_sync(
+                    _run,
+                    job_type="land_openai_analysis",
+                    meta={"land_id": land.id, "force": force},
+                    dedupe_key=dedupe_key,
+                )
+            except JobAlreadyActive as exc:
+                return _job_already_active_response(exc)
+
+            result = job["result"] if job else None
+            if result and result.get("success"):
                 return jsonify(result)
-            return jsonify(result), 500
+            return jsonify(
+                result or {"success": False, "error": (job or {}).get("error")}
+            ), 500
 
         job_id = _enqueue(
             _run,
             job_type="land_openai_analysis",
             meta={"land_id": land.id, "force": force},
+            dedupe_key=dedupe_key,
         )
         return jsonify(
             {
@@ -718,6 +1059,11 @@ def generate_openai_structured(land_id):
 
     except HTTPException:
         raise
+    except EnqueueOutcomeUnknown as exc:
+        logger.error(
+            "Enqueue outcome unknown for land %s: %s", land_id, exc, exc_info=True
+        )
+        return _enqueue_outcome_unknown_response(exc)
     except Exception:
         logger.error(
             "OpenAI structured analysis failed for land %s", land_id, exc_info=True

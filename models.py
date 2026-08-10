@@ -3,7 +3,7 @@ import json
 
 from app import db
 from services.search_subscription_identity import SEARCH_KEY_LENGTH
-from sqlalchemy import CheckConstraint
+from sqlalchemy import CheckConstraint, func
 from sqlalchemy.types import JSON
 
 
@@ -1124,7 +1124,21 @@ class MarketSettings(db.Model):
 
 
 class AiAnalysisVariant(db.Model):
-    """Stores alternative AI analyses per land (e.g., Claude vs ChatGPT)."""
+    """Stores alternative AI analyses per land (e.g., Claude vs ChatGPT).
+
+    At most one row per (land_id, provider) -- enforced by the database, not
+    just by the writer's own logic (#190 review round 3, finding 4;
+    migration 017). Before that migration this was a plain (non-unique)
+    `db.Index`, and both land-side writers in routes/api_routes.py
+    (`analyze_property_structured` for Claude, `generate_openai_structured`
+    for OpenAI) were query-then-insert: `?sync=1` racing an interrupted
+    job's async retry -- `?sync=1` bypasses `background_jobs`' dedupe_key
+    entirely -- could both see "no row for this pair" and both insert,
+    leaving two variants racing for the same land/provider. See
+    `routes.api_routes._upsert_land_ai_variant`, the update-or-insert writer
+    this constraint lets recover from a lost race instead of preventing it
+    silently.
+    """
 
     __tablename__ = "ai_analysis_variants"
 
@@ -1147,7 +1161,9 @@ class AiAnalysisVariant(db.Model):
     )
 
     __table_args__ = (
-        db.Index("ix_ai_analysis_variants_land_provider", "land_id", "provider"),
+        db.UniqueConstraint(
+            "land_id", "provider", name="ux_ai_analysis_variants_land_provider"
+        ),
     )
 
     def __repr__(self):
@@ -1155,7 +1171,20 @@ class AiAnalysisVariant(db.Model):
 
 
 class PropertyAiAnalysisVariant(db.Model):
-    """Stores alternative AI analyses per Property (e.g., Claude vs ChatGPT)."""
+    """Stores alternative AI analyses per Property (e.g., Claude vs ChatGPT).
+
+    At most one row per (property_id, provider) -- enforced by the database,
+    not just by the writer's own logic (#190 review, blocker 3; migration
+    017). Before that migration the composite index here was a plain
+    (non-unique) `db.Index`, and routes/api_routes.py's writer was
+    query-then-insert: an interrupted job's async retry racing a `?sync=1`
+    request (which bypasses background_jobs' dedupe_key entirely) could both
+    see "no row for this pair" and both insert, leaving two variants racing
+    for the same property/provider. See
+    `routes.api_routes._upsert_property_ai_variant`, the update-or-insert
+    writer this constraint lets recover from a lost race instead of just
+    preventing it silently.
+    """
 
     __tablename__ = "property_ai_analysis_variants"
 
@@ -1178,12 +1207,114 @@ class PropertyAiAnalysisVariant(db.Model):
     )
 
     __table_args__ = (
-        db.Index(
-            "ix_property_ai_analysis_variants_property_provider",
+        db.UniqueConstraint(
             "property_id",
             "provider",
+            name="ux_property_ai_analysis_variants_property_provider",
         ),
     )
 
     def __repr__(self):
         return f"<PropertyAiAnalysisVariant property={self.property_id} provider={self.provider}>"
+
+
+class BackgroundJob(db.Model):
+    """Persists the state `services/background_jobs.py` used to keep only in a
+    process-local dict (issue #176).
+
+    `tools/autopilot/deploy_watcher.sh` recreates the app container on every
+    new `main` -- as often as every 300 s -- so a job that happened to be
+    `queued` or `running` in memory was abandoned mid-flight with no record it
+    was ever attempted, and `/api/jobs/<id>` answered 404 for it. This table is
+    written on enqueue, on start and on completion, so the row outlives the
+    process that wrote it. `services.background_jobs.reconcile_orphaned_jobs`
+    is what turns a row still `queued`/`running` at the next startup into
+    `interrupted` -- the process that owned it no longer exists to finish it.
+
+    `dedupe_key` plus the partial unique index below is the idempotency
+    guard for issue #176's acceptance criterion 4: re-running an interrupted
+    AI analysis must not leave two `PropertyAiAnalysisVariant` writers racing
+    for the same (property, provider). The index only covers `queued`/
+    `running` rows, so a terminal (`success`/`error`/`interrupted`) row never
+    blocks a legitimate retry -- only a second *concurrently active* job for
+    the same key does, and the database is what refuses it, not a Python
+    check-then-insert that a second thread could still slip past.
+
+    `lease_expires_at` is what decides whether an active row is still owned
+    by a live process -- always written as `now() + TTL` *in SQL*, by
+    `services.background_jobs`, never as a Python-computed value. A round-2
+    review of #176/PR #190 rejected the first version of this table, which
+    judged staleness by comparing the reading process's own clock against
+    `started_at`/`created_at`: a skewed process clock could then declare a
+    live job dead, and reconciliation ran unconditionally on every
+    `create_app()`, so a one-shot utility script sharing the database with
+    the running web app would interrupt that app's genuinely in-flight job.
+    See `services/background_jobs.py`'s module docstring for the full model,
+    including the round-4 review's transactional advisory lock (a Python
+    `created_at` still shadowing the database's own default could let two
+    enqueuers order the same race differently) and the single-transaction
+    domain-write/terminal-CAS commit.
+    """
+
+    __tablename__ = "background_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'success', 'error', 'interrupted')",
+            name="ck_background_jobs_status_enum",
+        ),
+        db.Index("ix_background_jobs_job_type", "job_type"),
+        db.Index("ix_background_jobs_status", "status"),
+        db.Index("ix_background_jobs_status_lease", "status", "lease_expires_at"),
+        db.Index(
+            "ux_background_jobs_active_dedupe_key",
+            "dedupe_key",
+            unique=True,
+            postgresql_where=db.text(
+                "dedupe_key IS NOT NULL AND status IN ('queued', 'running')"
+            ),
+            sqlite_where=db.text(
+                "dedupe_key IS NOT NULL AND status IN ('queued', 'running')"
+            ),
+        ),
+    )
+
+    # uuid.uuid4().hex, generated by services.background_jobs.enqueue_job --
+    # not an autoincrement id, so the caller knows the job's id before the
+    # row is ever committed.
+    id = db.Column(db.String(32), primary_key=True)
+    job_type = db.Column(db.String(64), nullable=False)
+    status = db.Column(db.String(16), nullable=False, default="queued")
+    # A caller-chosen key identifying "this unit of work", e.g.
+    # "property_ai_analysis:355:claude". NULL for job types that never need
+    # deduplication; never unique on its own, only while status is active
+    # (see the partial index above).
+    dedupe_key = db.Column(db.String(255), nullable=True)
+    meta = db.Column(JSON, nullable=False, default=dict)
+    result = db.Column(JSON, nullable=True)
+    error = db.Column(db.Text, nullable=True)
+    # server_default, not default=utcnow: a Python-side `default=` computes
+    # its value in this process and sends it explicitly with the INSERT,
+    # which would silently shadow the database's own DEFAULT NOW() (already
+    # in migrations/016_create_background_jobs_table.sql) and reintroduce a
+    # process clock into a decision the rest of this table deliberately
+    # keeps in SQL (#190 review round 4, finding 2 -- two enqueuers whose
+    # process clocks disagree, even by a little, could each believe their
+    # own row is the newest one). `server_default=func.now()` compiles to
+    # `now()` on PostgreSQL and `CURRENT_TIMESTAMP` on SQLite (verified),
+    # matching the migration's own DDL exactly, so a row's timestamp always
+    # comes from whichever database actually wrote it.
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    started_at = db.Column(db.DateTime, nullable=True)
+    finished_at = db.Column(db.DateTime, nullable=True)
+    # Set to the *database's* now() + TTL at enqueue and renewed on every
+    # status transition (services.background_jobs._write_status). Never had
+    # a Python-side default of its own to begin with -- every write site in
+    # services.background_jobs sets it explicitly via `_lease_expiry_expr`,
+    # a SQL expression -- so there was nothing to shadow here; listed for
+    # completeness alongside created_at above. A row is only ever treated as
+    # dead when this has passed the database's own now() -- never compared
+    # against anything Python computed.
+    lease_expires_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    def __repr__(self):
+        return f"<BackgroundJob {self.id} type={self.job_type} status={self.status}>"

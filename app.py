@@ -273,6 +273,27 @@ def create_app(testing: bool = False):
         # Import models to ensure metadata is registered
         import models  # noqa: F401
 
+        # Issue #176: reap any background_jobs row whose lease has expired --
+        # e.g. the deploy watcher recreated the container on every new main
+        # while a job was mid-flight. Safe to call from *any* create_app(),
+        # including a one-shot utility script's own instance while the web
+        # process is still alive (#190 review round 2, finding 3): a row's
+        # lease is renewed by its own worker on every write
+        # (services/background_jobs.py), so a row still genuinely in flight
+        # is never touched here, no matter how many processes call this or
+        # how often. Also a no-op when the table does not exist yet, which
+        # covers most test fixtures: they call create_app() before
+        # db.create_all(), while production's migration entrypoint always
+        # creates the table first.
+        from services.background_jobs import reconcile_orphaned_jobs
+
+        interrupted = reconcile_orphaned_jobs()
+        if interrupted:
+            logger.warning(
+                "Marked %d background job(s) as interrupted from a previous process",
+                interrupted,
+            )
+
         # Start the scheduler only after the migration entrypoint has completed.
         if app.config.get("AUTO_START_SCHEDULER", False) and not app.config.get(
             "TESTING", False
