@@ -138,11 +138,23 @@ class TestTheLandPageShowsTheChange:
         assert "was 40,000€" in body
         assert "2026-02-18" in body
 
+    def test_a_rise_reads_as_a_rise(self, app, client):
+        land = make_land("rise", **_price_fields(drop=False))
+
+        body = client.get(f"/lands/{land.id}").get_data(as_text=True)
+
+        assert "+5,000€" in body
+        assert "(+12.5%)" in body
+        assert "was 40,000€" in body
+
     def test_an_unchanged_price_says_nothing_extra(self, app, client):
         land = make_land("flat", price=Decimal("35000.00"))
 
         body = client.get(f"/lands/{land.id}").get_data(as_text=True)
 
+        # Anchored on purpose: a bare "not in body" would also pass on a 404 or
+        # a redirect, which is not the same thing as a page without the widget.
+        assert "35,000€" in body
         assert "price-change-card" not in body
 
 
@@ -157,8 +169,10 @@ class TestTheStaleAiPriceIsGone:
 
         assert "priceInfo.current_price" not in source
         assert "priceInfo.original_price" not in source
-        assert "getElementById('price-info-text')" not in source
-        assert "getElementById('price-info-section')" not in source
+        # The bare ids rather than one spelling of the lookup: the same read
+        # through querySelector or double quotes would slip past that.
+        assert "price-info-text" not in source
+        assert "price-info-section" not in source
 
     def test_the_markup_it_filled_is_gone_too(self, app, client):
         """A hidden div nothing writes to is how a stale field comes back."""
@@ -166,8 +180,20 @@ class TestTheStaleAiPriceIsGone:
 
         body = client.get(f"/lands/{land.id}").get_data(as_text=True)
 
-        assert 'id="price-info-section"' not in body
-        assert 'id="price-info-text"' not in body
+        assert "35,000€" in body, "anchor: this is the page, not an error"
+        assert "price-info-section" not in body
+        assert "price-info-text" not in body
+
+    def test_no_template_still_carries_that_markup(self):
+        """The property page has its own enhanced-description block; a dead
+        hidden div left there would be the same trap in the other file."""
+        templates = (Path(__file__).resolve().parent.parent / "templates").rglob(
+            "*.html"
+        )
+        for template in templates:
+            source = template.read_text(encoding="utf-8")
+            assert "price-info-section" not in source, template.name
+            assert "price-info-text" not in source, template.name
 
     def test_the_rest_of_the_enhanced_description_still_renders(self):
         """Only the price line went: the AI text and its highlights stay."""
