@@ -34,7 +34,7 @@ from app import create_app, db  # noqa: E402
 from models import Property  # noqa: E402
 from services.property_travel_service import (  # noqa: E402
     PropertyTravelService,
-    _reject_rules,
+    _place_rules,
 )
 from services.search_profile_service import TRAVEL_PRESET_DEFS  # noqa: E402
 
@@ -86,7 +86,7 @@ class TestThePresetRefusesWhatIsNotAnAirport:
         "candidate", [GLUEWAY, HOSPITAL_HELIPAD, FLYING_FIELD, HOTEL]
     )
     def test_the_real_false_positives_are_refused(self, candidate):
-        rules = _reject_rules(TRAVEL_PRESET_DEFS["airport"])
+        rules = _place_rules(TRAVEL_PRESET_DEFS["airport"])
 
         assert rules is not None
         assert rules.rejects(candidate), candidate["name"]
@@ -96,14 +96,80 @@ class TestThePresetRefusesWhatIsNotAnAirport:
         ["Asturias Airport", "Aeropuerto de Alicante-Elche", "Santiago Airport"],
     )
     def test_an_actual_airport_is_accepted(self, name):
-        rules = _reject_rules(TRAVEL_PRESET_DEFS["airport"])
+        rules = _place_rules(TRAVEL_PRESET_DEFS["airport"])
 
         assert not rules.rejects(_place(name, ["airport", "establishment"]))
 
-    @pytest.mark.parametrize("preset", ["school", "supermarket", "hospital", "police"])
+    @pytest.mark.parametrize(
+        "preset", ["school", "supermarket", "police", "train_station"]
+    )
     def test_presets_without_rules_are_unchanged(self, preset):
-        """Only the airport preset has a false-positive problem worth rules."""
-        assert _reject_rules(TRAVEL_PRESET_DEFS[preset]) is None
+        """Only `airport` and `hospital` had a false-positive problem."""
+        assert _place_rules(TRAVEL_PRESET_DEFS[preset]) is None
+
+
+class TestThePlaceHasToSayWhatItIs:
+    """A deny-list promoted the next tagged business; the trial run proved it.
+
+    Recalculating three listings replaced "Campo de Vuelo Capitan M RIVERA"
+    with "Grupo 21" -- another business carrying Google's `airport` tag -- and
+    offered "Nefer Clínica de Medicina Estética" as the nearest hospital. So a
+    preset can require the name to carry the word (owner decision,
+    2026-08-10), and a target with nothing qualifying nearby is reported as
+    not found, which the scorer drops rather than scoring as zero.
+    """
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Grupo 21",
+            "GlueWay System",
+            "Hotel A Marisqueira",
+            "Campo de Vuelo Capitan M RIVERA",
+            "Helipuerto Hospital Universitario de Cabueñes",
+        ],
+    )
+    def test_a_place_that_does_not_say_airport_is_refused(self, name):
+        rules = _place_rules(TRAVEL_PRESET_DEFS["airport"])
+
+        assert rules.rejects(_place(name, ["airport", "establishment"]))
+
+    @pytest.mark.parametrize(
+        "name", ["Asturias Airport", "Mutxamel Airport", "Aeropuerto de Alicante-Elche"]
+    )
+    def test_a_place_that_says_airport_is_taken(self, name):
+        rules = _place_rules(TRAVEL_PRESET_DEFS["airport"])
+
+        assert not rules.rejects(_place(name, ["airport", "establishment"]))
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Nefer Clínica de Medicina Estética",
+            "Centro Sanitario Dra Silvia Carrillo",
+            "Clínica Dental Alicante",
+            "Clínica Veterinaria Gijón",
+            # Carries the word "hospital" and is a landing pad.
+            "Helipuerto Hospital Universitario de Cabueñes",
+        ],
+    )
+    def test_a_clinic_is_not_the_nearest_hospital(self, name):
+        rules = _place_rules(TRAVEL_PRESET_DEFS["hospital"])
+
+        assert rules.rejects(_place(name, ["hospital", "health", "establishment"]))
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Hospital Universitario Central de Asturias",
+            "Centro de Salud de Cudillero",
+            "Ambulatorio de Gijón",
+        ],
+    )
+    def test_a_hospital_or_health_centre_is_taken(self, name):
+        rules = _place_rules(TRAVEL_PRESET_DEFS["hospital"])
+
+        assert not rules.rejects(_place(name, ["hospital", "establishment"]))
 
 
 class TestTheLookupWalksPastRefusedCandidates:
