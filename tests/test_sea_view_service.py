@@ -17,6 +17,7 @@ but that it never dresses an unknown up as an answer:
 Every external source is mocked; nothing here touches the network.
 """
 
+import copy
 import json
 
 import pytest
@@ -157,6 +158,28 @@ class TestOutgoingRequests:
         # and the test double streams either way, so losing it would be
         # invisible everywhere else in this file (rx audit note, 2026-08-10).
         assert captured.get("stream") is True
+
+    def test_the_coastline_caller_sets_stream_and_gate_itself(self, monkeypatch):
+        """#196: the assertion above proves `stream=True` reaches
+        `requests.post`, but not who put it there. Pin it at the caller's own
+        boundary, so the transport growing a streaming default could never
+        mask this function dropping the kwarg -- and the same for the gate."""
+        captured = {}
+
+        def _fake_transport(request_fn, *args, **kwargs):
+            captured.update(kwargs)
+            return _FakeResponse(b'{"elements": []}')
+
+        monkeypatch.setattr(svc, "request_with_retries", _fake_transport)
+        # A cell no other test touches: when the whole suite runs, a leaked
+        # app context can make the coastline cache real, and a shared cell
+        # would be served from it -- with the transport never called at all.
+        svc.fetch_coastline_points(41.9, -5.5)
+        assert captured.get("stream") is True, (
+            "fetch_coastline_points did not reach the transport -- "
+            "a cached cell would make this test prove nothing"
+        )
+        assert captured.get("gate") is svc.OVERPASS_GATE
 
     def test_the_elevation_request_sends_it(self, monkeypatch):
         captured = {}
@@ -299,6 +322,34 @@ class TestAPartialAnswerIsNotAnAnswer:
         with pytest.raises(svc.SeaViewSourceError, match="ceiling"):
             svc.fetch_coastline_points(COAST_LAT, COAST_LON)
         assert huge.closed, "a response refused on its header still holds a socket"
+
+    def test_an_unparseable_content_length_falls_through_to_the_chunk_ceiling(
+        self, monkeypatch
+    ):
+        """#196: the `except ValueError` branch had no regression test -- the
+        very branch the note-4 fix rewrote. A header that does not parse must
+        decide nothing, leaving the received-bytes ceiling to do the refusing."""
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+        monkeypatch.setattr(svc, "MAX_COASTLINE_RESPONSE_BYTES", 64)
+
+        garbled = _FakeResponse(b"x" * 200, headers={"Content-Length": "not-a-number"})
+        monkeypatch.setattr(svc.requests, "post", lambda url, **kwargs: garbled)
+        with pytest.raises(svc.SeaViewSourceError, match="more than"):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+        assert garbled.closed
+
+    def test_a_lying_content_length_does_not_bypass_the_ceiling(self, monkeypatch):
+        """#196: the chunk path was only ever exercised with no Content-Length
+        at all. A header that understates -- the actual "a header can lie" case
+        the docstring names -- must still hit the received-bytes ceiling."""
+        monkeypatch.setattr(svc.OVERPASS_GATE, "min_interval_s", 0.0)
+        monkeypatch.setattr(svc, "MAX_COASTLINE_RESPONSE_BYTES", 64)
+
+        liar = _FakeResponse(b"x" * 200, headers={"Content-Length": "10"})
+        monkeypatch.setattr(svc.requests, "post", lambda url, **kwargs: liar)
+        with pytest.raises(svc.SeaViewSourceError, match="more than"):
+            svc.fetch_coastline_points(COAST_LAT, COAST_LON)
+        assert liar.closed
 
     def test_a_refused_status_still_releases_the_connection(self, monkeypatch):
         """Independent review (rx, 2026-08-10): streamed and never read, a
@@ -851,7 +902,10 @@ class TestManualOverrideEndToEnd:
         )
         monkeypatch.setattr(svc, "fetch_coastline_points", _coastline())
 
-        before = dict(db.session.get(Property, stored_property).environment)
+        # deepcopy, not dict(): a shallow copy shares the nested
+        # `sea_view_detail` by reference, so an in-place mutation of it would
+        # compare equal and this test would miss the row being touched (#196).
+        before = copy.deepcopy(db.session.get(Property, stored_property).environment)
 
         prop = db.session.get(Property, stored_property)
         returned = svc.calculate_for_property(prop, use_ai=False, commit=True)
