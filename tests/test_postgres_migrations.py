@@ -50,10 +50,13 @@ REQUIRE_ENV = "REQUIRE_POSTGRES_TESTS"
 IDENTITY_MIGRATION = "013_add_search_profile_search_identity"
 ASSIGNMENT_CLEANUP_MIGRATION = "014_clear_profile_assignment_metadata"
 STATUS_SOURCE_MIGRATION = "015_add_listing_status_source"
+BACKGROUND_JOBS_MIGRATION = "016_create_background_jobs_table"
 IDENTITY_COLUMNS = ("source_search_key", "source_search_url", "is_auto_created")
 IDENTITY_INDEX = "ux_search_profiles_source_search_key"
 LABEL_INDEX = "ux_search_profiles_name_without_key"
 CATCH_ALL_CONSTRAINT = "ck_search_profiles_default_has_no_search_key"
+BACKGROUND_JOBS_DEDUPE_INDEX = "ux_background_jobs_active_dedupe_key"
+BACKGROUND_JOBS_STATUS_CHECK = "ck_background_jobs_status_enum"
 
 _DATABASE_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 
@@ -118,6 +121,15 @@ def _insert_profile(connection, **values) -> None:
     placeholders = ", ".join(f":{column}" for column in values)
     connection.execute(
         text(f"INSERT INTO search_profiles ({columns}) VALUES ({placeholders})"),  # noqa: S608
+        values,
+    )
+
+
+def _insert_job(connection, **values) -> None:
+    columns = ", ".join(values)
+    placeholders = ", ".join(f":{column}" for column in values)
+    connection.execute(
+        text(f"INSERT INTO background_jobs ({columns}) VALUES ({placeholders})"),  # noqa: S608
         values,
     )
 
@@ -228,6 +240,7 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
             IDENTITY_MIGRATION,
             ASSIGNMENT_CLEANUP_MIGRATION,
             STATUS_SOURCE_MIGRATION,
+            BACKGROUND_JOBS_MIGRATION,
         ]
 
         # Two *identified* subscriptions may now share the label...
@@ -546,5 +559,200 @@ def test_015_adds_the_status_source_column_and_guards_its_values(postgres_url):
         )
         with engine.begin() as connection:
             connection.exec_driver_sql(sql)
+    finally:
+        engine.dispose()
+
+
+def test_016_creates_the_background_jobs_table_with_its_guards(postgres_url):
+    """The table issue #176 persists job state in, plus the constraints that
+    make it honest: no status outside the known set, and only one active
+    (queued/running) row per dedupe_key."""
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+        inspector = inspect(engine)
+
+        columns = {
+            column["name"] for column in inspector.get_columns("background_jobs")
+        }
+        assert {
+            "id",
+            "job_type",
+            "status",
+            "dedupe_key",
+            "meta",
+            "result",
+            "error",
+            "created_at",
+            "started_at",
+            "finished_at",
+        }.issubset(columns)
+
+        assert BACKGROUND_JOBS_STATUS_CHECK in {
+            constraint["name"]
+            for constraint in inspector.get_check_constraints("background_jobs")
+        }
+
+        unique_indexes = {
+            index["name"]: index
+            for index in inspector.get_indexes("background_jobs")
+            if index["unique"]
+        }
+        assert BACKGROUND_JOBS_DEDUPE_INDEX in unique_indexes
+        assert unique_indexes[BACKGROUND_JOBS_DEDUPE_INDEX]["column_names"] == [
+            "dedupe_key"
+        ]
+
+        with engine.begin() as connection:
+            _insert_job(
+                connection,
+                id="a" * 32,
+                job_type="property_ai_analysis",
+                status="queued",
+            )
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text("UPDATE background_jobs SET status = 'bogus' WHERE id = :id"),
+                    {"id": "a" * 32},
+                )
+
+        # Re-running the file must not fail on constraints it already added.
+        sql = (MIGRATIONS_DIR / f"{BACKGROUND_JOBS_MIGRATION}.sql").read_text(
+            encoding="utf-8"
+        )
+        with engine.begin() as connection:
+            connection.exec_driver_sql(sql)
+    finally:
+        engine.dispose()
+
+
+def test_016_the_partial_unique_index_blocks_a_second_active_job_for_the_same_key(
+    postgres_url,
+):
+    """Acceptance criterion 4: re-running an interrupted analysis must not
+    leave two variants racing for the same (property, provider)."""
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        key = "property_ai_analysis:355:claude"
+        with engine.begin() as connection:
+            _insert_job(
+                connection,
+                id="b" * 32,
+                job_type="property_ai_analysis",
+                status="running",
+                dedupe_key=key,
+            )
+
+        # A second *active* job for the same key is refused by the database,
+        # not by application code that a concurrent request could slip past.
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                _insert_job(
+                    connection,
+                    id="c" * 32,
+                    job_type="property_ai_analysis",
+                    status="queued",
+                    dedupe_key=key,
+                )
+
+        # Once the first is terminal, a retry is not permanently blocked.
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE background_jobs SET status = 'interrupted' WHERE id = :id"
+                ),
+                {"id": "b" * 32},
+            )
+        with engine.begin() as connection:
+            _insert_job(
+                connection,
+                id="d" * 32,
+                job_type="property_ai_analysis",
+                status="queued",
+                dedupe_key=key,
+            )
+
+        # And two *different* keys are never in each other's way.
+        with engine.begin() as connection:
+            _insert_job(
+                connection,
+                id="e" * 32,
+                job_type="property_ai_analysis",
+                status="running",
+                dedupe_key="property_ai_analysis:900:claude",
+            )
+    finally:
+        engine.dispose()
+
+
+def test_016_two_concurrent_inserts_for_the_same_key_leave_only_one_active_job(
+    postgres_url,
+):
+    """The guard holds under an actual race, not just a sequential check.
+
+    Two separate connections attempt to insert an active job for the same
+    dedupe_key at (as close to) the same instant, synchronized with a
+    barrier. Exactly one may succeed -- proving the partial unique index is
+    what stops the race, the way #98 and #153's lessons say a concurrency
+    invariant should be checked: against the real thing, not a design that
+    merely looks race-free.
+    """
+    import threading
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        key = "property_ai_analysis:900:claude"
+        barrier = threading.Barrier(2)
+        outcomes: dict[str, str] = {}
+
+        def _attempt(job_id: str, label: str) -> None:
+            thread_engine = create_engine(postgres_url)
+            try:
+                barrier.wait(timeout=5)
+                try:
+                    with thread_engine.begin() as connection:
+                        _insert_job(
+                            connection,
+                            id=job_id,
+                            job_type="property_ai_analysis",
+                            status="queued",
+                            dedupe_key=key,
+                        )
+                    outcomes[label] = "ok"
+                except IntegrityError:
+                    outcomes[label] = "blocked"
+            finally:
+                thread_engine.dispose()
+
+        first = threading.Thread(target=_attempt, args=("1" * 32, "first"))
+        second = threading.Thread(target=_attempt, args=("2" * 32, "second"))
+        first.start()
+        second.start()
+        first.join(timeout=10)
+        second.join(timeout=10)
+
+        assert not first.is_alive() and not second.is_alive(), "a thread hung"
+        assert sorted(outcomes.values()) == ["blocked", "ok"], outcomes
+
+        with engine.begin() as connection:
+            active = connection.execute(
+                text(
+                    "SELECT count(*) FROM background_jobs "
+                    "WHERE dedupe_key = :key AND status IN ('queued', 'running')"
+                ),
+                {"key": key},
+            ).scalar_one()
+        assert active == 1
     finally:
         engine.dispose()

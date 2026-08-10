@@ -273,6 +273,23 @@ def create_app(testing: bool = False):
         # Import models to ensure metadata is registered
         import models  # noqa: F401
 
+        # Issue #176: a row still queued/running belongs to the process this
+        # one replaced (the deploy watcher recreates the container on every
+        # new main), never to this one. Reconcile before anything can read or
+        # add to background_jobs. Safe to call unconditionally --
+        # reconcile_orphaned_jobs() is a no-op when the table does not exist
+        # yet, which covers most test fixtures: they call create_app() before
+        # db.create_all(), while production's migration entrypoint always
+        # creates the table first (see services/background_jobs.py).
+        from services.background_jobs import reconcile_orphaned_jobs
+
+        interrupted = reconcile_orphaned_jobs()
+        if interrupted:
+            logger.warning(
+                "Marked %d background job(s) as interrupted from a previous process",
+                interrupted,
+            )
+
         # Start the scheduler only after the migration entrypoint has completed.
         if app.config.get("AUTO_START_SCHEDULER", False) and not app.config.get(
             "TESTING", False

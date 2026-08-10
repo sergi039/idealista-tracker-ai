@@ -48,11 +48,17 @@ def _should_run_sync(allow_request_override: bool = True) -> bool:
     return request.args.get("sync") in ("1", "true", "yes", "on")
 
 
-def _enqueue(job_fn, *, job_type: str, meta=None) -> str:
+def _enqueue(job_fn, *, job_type: str, meta=None, dedupe_key=None) -> str:
     from services.background_jobs import enqueue_job
 
     app_obj = current_app._get_current_object()
-    return enqueue_job(job_fn, job_type=job_type, meta=meta or {}, app=app_obj)
+    return enqueue_job(
+        job_fn,
+        job_type=job_type,
+        meta=meta or {},
+        app=app_obj,
+        dedupe_key=dedupe_key,
+    )
 
 
 @api_bp.route("/jobs/<job_id>", methods=["GET"])
@@ -476,6 +482,11 @@ def analyze_property_structured(land_id):
             _run,
             job_type="land_ai_analysis",
             meta={"land_id": land.id, "is_enrichment": is_enrichment},
+            # Claude is the only provider this endpoint calls (see the
+            # variant it writes below) -- fixed in the key so a resubmit
+            # after an interrupted run cannot race a still-active one for
+            # the same land (#176 acceptance criterion 4).
+            dedupe_key=f"land_ai_analysis:{land.id}:claude",
         )
         return jsonify(
             {
@@ -602,6 +613,11 @@ def analyze_universal_property_structured(property_id: int):
             _run,
             job_type="property_ai_analysis",
             meta={"property_id": prop.id, "provider": provider},
+            # The observed #176 failure: a redeploy interrupted this exact
+            # job for (property, provider), and resubmitting it must reuse
+            # the in-flight run rather than start a second one racing to
+            # write the same PropertyAiAnalysisVariant row.
+            dedupe_key=f"property_ai_analysis:{prop.id}:{provider}",
         )
         return jsonify(
             {
@@ -706,6 +722,7 @@ def generate_openai_structured(land_id):
             _run,
             job_type="land_openai_analysis",
             meta={"land_id": land.id, "force": force},
+            dedupe_key=f"land_openai_analysis:{land.id}:openai",
         )
         return jsonify(
             {

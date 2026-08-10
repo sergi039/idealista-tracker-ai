@@ -140,6 +140,11 @@ def _create_historical_schema(engine):
             connection.execute(
                 text(f"ALTER TABLE {table} DROP COLUMN listing_status_source")  # noqa: S608
             )
+        # Migration 016 (issue #176) added background_jobs, a genuinely new
+        # table with no pre-ledger equivalent -- unlike a new column on an
+        # existing table, create_all() has nothing to trim it down from, so
+        # drop it outright.
+        connection.execute(text("DROP TABLE background_jobs"))
 
 
 def test_the_stated_historical_table_matches_the_runners_fingerprint(tmp_path):
