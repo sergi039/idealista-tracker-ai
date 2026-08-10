@@ -1251,6 +1251,145 @@ def test_016_an_insert_that_never_landed_leaves_nothing_for_a_retry_to_find(
     assert calls["fn"] == 1
 
 
+def test_reconcile_orphaned_jobs_leaves_a_cross_process_heartbeating_lease_alone(
+    postgres_url, monkeypatch
+):
+    """Issue #205 acceptance criterion 1: prove #176's cross-process
+    invariant -- `reconcile_orphaned_jobs()` never touches a job another
+    process is still heartbeating -- against real PostgreSQL, not just
+    SQLite.
+
+    The only existing proof is single-process:
+    tests/test_issue_176_persist_jobs.py's
+    `test_a_second_create_app_does_not_touch_a_live_leased_job` (and the
+    heartbeat variant right after it,
+    `test_a_job_queued_past_its_initial_lease_survives_while_its_owner_
+    heartbeats`) use a file-backed SQLite database so two independent
+    `create_app()` calls -- two separate engines -- share one database,
+    standing in for two OS processes. This is the real thing: a throwaway
+    PostgreSQL server (this module's own style -- see its docstring), two
+    independent `create_app()` instances against it, each its own engine and
+    connection pool, exactly like two separate OS processes talking to the
+    same production database.
+
+    `owner_app` claims a job and renews its lease the way the real
+    heartbeat daemon thread does -- `_renew_owned_leases`, after
+    `_register_owned_job` at claim time -- the same simulate-a-tick idiom
+    tests/test_issue_203_periodic_reconcile.py and test_issue_176's own
+    heartbeat tests already use instead of sleeping out
+    HEARTBEAT_INTERVAL_S seconds for real. `other_process_app` is a wholly
+    separate `create_app()` -- standing in for a second gunicorn worker, or
+    a one-shot utility script sharing the database with the still-running
+    web process -- and its own unconditional startup call to
+    `reconcile_orphaned_jobs()` (app.py) is the sweep under test; no
+    explicit extra call is needed to trigger it.
+
+    An expired, never-heartbeated row is seeded alongside the live one and
+    must still be reaped by that same startup sweep -- proof reconcile
+    actually ran and swept something, not that the table was simply left
+    untouched.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app import create_app
+    from migrations.runner import run_migrations
+    from services.background_jobs import (
+        _register_owned_job,
+        _renew_owned_leases,
+        _unregister_owned_job,
+        reconcile_orphaned_jobs,
+    )
+    from tests import setup_test_environment
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+    finally:
+        engine.dispose()
+
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+
+    # "process A": will claim and heartbeat the live job. Built first, and
+    # deliberately before either row is seeded -- create_app()'s own startup
+    # reconcile sweep (app.py) would otherwise race the live row before it
+    # has ever been heartbeat-renewed even once.
+    owner_app = create_app()
+
+    live_id = "9" * 32
+    expired_id = "8" * 32
+    seed_engine = create_engine(postgres_url)
+    try:
+        with seed_engine.begin() as connection:
+            _insert_job(
+                connection,
+                id=live_id,
+                job_type="property_ai_analysis",
+                status="running",
+                dedupe_key="property_ai_analysis:955:claude",
+                # Already stale by a naive TTL check -- only the heartbeat
+                # renewal below is what keeps this row alive.
+                lease_expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+            )
+            _insert_job(
+                connection,
+                id=expired_id,
+                job_type="land_check_status",
+                status="running",
+                lease_expires_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+            )
+    finally:
+        seed_engine.dispose()
+
+    _register_owned_job(live_id)
+    try:
+        with owner_app.app_context():
+            renewed = _renew_owned_leases(owner_app)
+        assert renewed == 1, (
+            "test setup: the heartbeat tick must have renewed the live lease"
+        )
+
+        # "process B": a wholly separate create_app() against the same real
+        # server -- its own engine, its own connection pool. Its own
+        # unconditional startup reconcile (app.py) is the sweep under test.
+        other_process_app = create_app()
+
+        # The proof, through yet another brand-new connection -- bypassing
+        # every app's own ORM session and identity map, exactly what a
+        # genuinely different OS process reading this table would see.
+        check_engine = create_engine(postgres_url)
+        try:
+            with check_engine.begin() as connection:
+                statuses = dict(
+                    connection.execute(
+                        text(
+                            "SELECT id, status FROM background_jobs "
+                            "WHERE id IN (:live, :expired)"
+                        ),
+                        {"live": live_id, "expired": expired_id},
+                    ).all()
+                )
+        finally:
+            check_engine.dispose()
+
+        assert statuses[live_id] == "running", (
+            "a second process's create_app() must never touch a job whose "
+            "lease a live heartbeat keeps renewed"
+        )
+        assert statuses[expired_id] == "interrupted", (
+            "a genuinely abandoned row must still be reaped by the same "
+            "startup sweep -- the negative control proving reconcile "
+            "actually ran, not that the table was simply left alone"
+        )
+
+        # Idempotent: a repeated sweep (a second gunicorn worker, the next
+        # scheduler tick) finds nothing left to do.
+        with other_process_app.app_context():
+            assert reconcile_orphaned_jobs() == 0
+    finally:
+        _unregister_owned_job(live_id)
+
+
 def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
     postgres_url, tmp_path
 ):

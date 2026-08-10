@@ -244,6 +244,61 @@ answers 503 for it (see `EnqueueOutcomeUnknown`'s own docstring).
 not subclass `Exception`), so they still abort the process exactly as
 they would anywhere else.
 
+## Process-wide lifetime is deliberate, not an oversight (issue #205)
+
+`_EXECUTOR`, `_owned_job_ids`, and the heartbeat thread/`_heartbeat_app` are
+module-level: scoped to the OS process that imported this module, not to
+any one Flask `app` object, and nothing resets them between tests. An
+independent review of #190 flagged this as a low-severity risk -- a job
+submitted by one test could in principle outlive that test's own
+`db.drop_all()`, since nothing tears the executor or the heartbeat down the
+way the `app` fixture tears down its own database.
+
+Binding their lifetime to the Flask app instead -- a fresh
+`ThreadPoolExecutor`/owned-set/heartbeat thread built inside `create_app()`
+and stored on `app.extensions`, torn down and rebuilt on every call -- was
+considered and rejected. Production is exactly one process for the life of
+the container: `Dockerfile`'s `CMD` runs `gunicorn --workers 1 --threads 4
+main:app` with no `--preload`, and `main.py` calls `create_app()` exactly
+once, at import. Every hardening round from #190 through #204 -- the lease
+model itself, `_ensure_heartbeat_started`'s "the one heartbeat daemon
+thread this process will ever have", the `_dedupe_serialization` advisory
+lock -- was designed and tested against *process* identity as the unit
+that owns a job, specifically because an earlier review round rejected
+judging ownership by anything narrower (a one-shot utility script's own
+`create_app()`, sharing the database with a web process that is still
+alive and still holds a valid lease, must not steal or duplicate its work
+-- see "The lease model" above). Rebinding `_EXECUTOR`/the heartbeat to the
+app object would make a *second* `create_app()` in the same process --
+today, only ever a test fixture calling it more than once, never a
+production shape -- abandon whatever the first app's executor was still
+running, with no teardown story for the thread that used to serve it, and
+no test currently exercises that teardown either. That trades a
+theoretical test-isolation gap for a real production one.
+
+The actual, measured risk is also smaller than "ambient state" suggests.
+`_owned_job_ids` is unregistered on every exit path of `_execute_job`
+(success, error, lost ownership -- see its own `finally`), so almost
+nothing survives a test that waited for its own job; the tests that do not
+wait already have `dedicated_executor`/`inline_executor`
+(tests/test_issue_190_review_blockers.py,
+tests/test_issue_176_persist_jobs.py) for exactly that reason.
+`_heartbeat_loop` wraps its renewal call in `except Exception`, and each
+test's SQLite engine is its own private `:memory:` database
+(tests/test_db_engine_isolation.py), so a stale tick against a previous
+test's app either matches zero rows or raises into a caught, logged
+exception -- never a write into a database another test is using. Issue
+#205's own filing says as much: "neither reproduced a failure."
+
+Should a real cross-test failure from this ever be observed, this codebase
+already has a precedent for the fix: `tests/conftest.py`'s flask-caching
+guard (the `pytest_runtest_teardown` hook wrapper that scrubs
+`Cache._set_cache`'s retained app reference after every test) resets what
+leaked from *outside*, rather than changing the retaining library's own
+lifetime contract. The equivalent here would be a conftest hook draining
+`_owned_job_ids` and clearing `_heartbeat_app` between tests, not a change
+to this module's process-wide scope.
+
 ## What this does not solve, honestly
 
 If a job's own writes fail (every retry, and the fresh-session fallback) so
@@ -288,6 +343,9 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
+# Process-wide for this module's whole lifetime, not app-scoped -- see the
+# module docstring's "Process-wide lifetime is deliberate" section (issue
+# #205) for why, and what would need to be true for that to change.
 _MAX_WORKERS = int(os.environ.get("BACKGROUND_WORKERS", "4"))
 _EXECUTOR = ThreadPoolExecutor(max_workers=max(1, _MAX_WORKERS))
 
@@ -308,6 +366,48 @@ _TRANSITION_RETRY_DELAY_S = 0.05
 # docstring); three leaves margin without risking a real bug looping forever.
 _ENQUEUE_MAX_ATTEMPTS = 3
 
+# Shared floor for the three env-configurable intervals below (issue #205,
+# filed as a follow-up review comment). None of them had one before: only
+# the neighboring _MAX_WORKERS guarded itself with max(1, ...), because
+# ThreadPoolExecutor(max_workers=0) raises ValueError -- ask it yourself and
+# see. These three instead turned a bad env value into silent, destructive
+# behaviour, each in its own way (all measured, not assumed):
+#
+# * A negative HEARTBEAT_INTERVAL_S makes time.sleep() raise ValueError
+#   ("sleep length must be non-negative") inside _heartbeat_loop's own
+#   while-loop, outside its try/except -- which kills the one heartbeat
+#   thread this process will ever start, silently (nothing but a daemon
+#   thread's default excepthook ever sees it). Every lease then simply runs
+#   out with nothing renewing it -- reopening exactly the premature-reap bug
+#   the heartbeat (PR #190 round 3) exists to prevent. Zero does not crash,
+#   but busy-loops the same renewal UPDATE in a tight Python loop instead.
+# * apscheduler.triggers.interval.IntervalTrigger.__init__ clamps an
+#   interval of exactly 0 up to 1 second on its own; a negative
+#   RECONCILE_INTERVAL_S is not caught by that fallback at all, so
+#   services/scheduler_service.py's sweep would run on an interval
+#   APScheduler was never designed to go backwards through.
+# * A non-positive LEASE_TTL_SECONDS makes lease_expires_at no later than
+#   the moment it was written (_lease_expiry_expr), so an active row is
+#   reapable almost immediately -- the exact premature-reap failure the
+#   lease model (PR #190 round 2) exists to prevent.
+#
+# 1 second is the floor because it is the smallest value at which none of
+# the three happen, not because it is a sensible production value -- the
+# defaults below (900/60/180) stay what production actually runs on.
+_MIN_INTERVAL_S = 1
+
+
+def _int_env_with_floor(name: str, default: str) -> int:
+    """`int(os.environ.get(name, default))`, floored at `_MIN_INTERVAL_S`.
+
+    See `_MIN_INTERVAL_S`'s own comment for the three concrete failure modes
+    a missing floor used to allow. A non-numeric override still raises
+    `ValueError` at import time, same as before -- fail fast on a typo
+    rather than guess a fallback for it.
+    """
+    return max(_MIN_INTERVAL_S, int(os.environ.get(name, default)))
+
+
 # How long a lease lasts past its last renewal before a row is presumed
 # abandoned. The longest known job budget is the AI analysis call: up to
 # config.py's AI_ANALYSIS_TIMEOUT_SECONDS (180 s) plus the bridge's own
@@ -317,14 +417,14 @@ _ENQUEUE_MAX_ATTEMPTS = 3
 # itself was 600 s). 900 s (15 min) leaves well over 10 minutes of margin
 # past that for scheduling jitter without leaving a genuinely dead row live
 # for long.
-LEASE_TTL_SECONDS = int(
-    os.environ.get("BACKGROUND_JOB_LEASE_TTL_SECONDS", str(15 * 60))
+LEASE_TTL_SECONDS = _int_env_with_floor(
+    "BACKGROUND_JOB_LEASE_TTL_SECONDS", str(15 * 60)
 )
 
 # How often the owning process's heartbeat renews the leases of jobs it
 # still holds -- comfortably smaller than LEASE_TTL_SECONDS so a live job
 # never gets close to its own deadline.
-HEARTBEAT_INTERVAL_S = int(os.environ.get("BACKGROUND_JOB_HEARTBEAT_INTERVAL_S", "60"))
+HEARTBEAT_INTERVAL_S = _int_env_with_floor("BACKGROUND_JOB_HEARTBEAT_INTERVAL_S", "60")
 
 # How often services/scheduler_service.py's periodic sweep calls
 # reconcile_orphaned_jobs() on its own, without waiting for the next
@@ -332,7 +432,7 @@ HEARTBEAT_INTERVAL_S = int(os.environ.get("BACKGROUND_JOB_HEARTBEAT_INTERVAL_S",
 # Comfortably smaller than LEASE_TTL_SECONDS so an abandoned row's wait for
 # `interrupted` is bounded by this interval plus the lease TTL, not by the
 # next deploy or the next matching enqueue -- either of which may never come.
-RECONCILE_INTERVAL_S = int(os.environ.get("BACKGROUND_JOB_RECONCILE_INTERVAL_S", "180"))
+RECONCILE_INTERVAL_S = _int_env_with_floor("BACKGROUND_JOB_RECONCILE_INTERVAL_S", "180")
 
 
 def _now() -> datetime:
@@ -393,6 +493,9 @@ def _row_to_dict(row) -> Dict[str, Any]:
 
 
 # --- The heartbeat: renews every lease this process still owns -----------
+#
+# Also process-wide, also deliberate -- see the module docstring's
+# "Process-wide lifetime is deliberate" section (issue #205).
 
 _owned_job_ids: set = set()
 _owned_job_ids_lock = threading.Lock()
