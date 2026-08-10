@@ -1246,6 +1246,146 @@ def test_a_write_that_genuinely_failed_is_not_mistaken_for_success(
     )
 
 
+# --- The insert's own commit can be ambiguous too (#190 review round 5) ---
+
+
+def test_an_insert_that_lands_but_loses_its_acknowledgement_still_runs_fn_once(
+    app, inline_executor, monkeypatch
+):
+    """Mirrors round 4's ambiguous-write fix, one step earlier: PostgreSQL
+    commits the fresh `queued` row's INSERT server-side, but this process
+    never finds out -- a connection dropped on the way back. The old code
+    only ever caught `IntegrityError` around this commit; anything else (an
+    `OperationalError`, the actual shape a dropped connection raises)
+    propagated straight out of `_acquire_job_slot` as a 500, *before*
+    `enqueue_job` ever registered ownership or dispatched `fn()`. The row
+    still landed as an orphaned `queued` insert nobody was running -- a
+    retry's own liveness check would find it live and defer to its id
+    forever, never calling `fn()`, stuck until its lease expired.
+
+    Simulated by monkeypatching `Session.commit` at the SQLAlchemy class
+    level -- nothing narrower is available for a plain `db.session.
+    commit()` call the way `_try_write` gave the round-4 fix a function to
+    wrap. The first call performs the *real* commit (so the insert
+    genuinely, verifiably lands) and then raises anyway, exactly what a
+    lost acknowledgement looks like.
+    """
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session as SQLASession
+
+    real_commit = SQLASession.commit
+    state = {"raised_once": False}
+
+    def _commit_that_lands_then_loses_its_ack(self, *args, **kwargs):
+        result = real_commit(self, *args, **kwargs)
+        if not state["raised_once"]:
+            state["raised_once"] = True
+            raise OperationalError(
+                "simulated dropped connection after commit", {}, Exception("boom")
+            )
+        return result
+
+    monkeypatch.setattr(SQLASession, "commit", _commit_that_lands_then_loses_its_ack)
+
+    calls = {"fn": 0}
+
+    def _fn():
+        calls["fn"] += 1
+        return {"success": True}
+
+    with app.app_context():
+        job_id = enqueue_job(_fn, job_type="property_ai_analysis", app=app)
+        job = get_job(job_id)
+
+    assert state["raised_once"] is True, (
+        "the test did not exercise the ambiguous insert-commit path it was meant to"
+    )
+    assert calls["fn"] == 1, (
+        "fn() must run exactly once: an insert that actually landed must "
+        "still be picked up and dispatched, not left stuck as an "
+        "unrun orphaned queued row, and not run a second time either"
+    )
+    assert job["status"] == "success"
+    assert job["result"] == {"success": True}
+
+
+def test_an_insert_that_genuinely_never_landed_still_raises(app, monkeypatch):
+    """Negative control: when the insert's commit genuinely never lands
+    (not just loses its acknowledgement), `_matches_our_own_insert` must
+    correctly find nothing, the original exception must propagate, and no
+    row must be left behind -- the disambiguation must not turn every
+    transient insert failure into a false success.
+    """
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session as SQLASession
+
+    real_commit = SQLASession.commit
+    state = {"raised_once": False}
+
+    def _commit_that_never_lands(self, *args, **kwargs):
+        if not state["raised_once"]:
+            state["raised_once"] = True
+            raise OperationalError("simulated failed commit", {}, Exception("boom"))
+        return real_commit(self, *args, **kwargs)
+
+    monkeypatch.setattr(SQLASession, "commit", _commit_that_never_lands)
+
+    def _fn():
+        return {"success": True}
+
+    with app.app_context(), pytest.raises(OperationalError):
+        enqueue_job(_fn, job_type="property_ai_analysis", app=app)
+
+    assert state["raised_once"] is True, (
+        "the test did not exercise the insert-commit failure path it was meant to"
+    )
+    with app.app_context():
+        rows = BackgroundJob.query.filter_by(job_type="property_ai_analysis").all()
+    assert rows == [], (
+        "an insert whose commit genuinely never landed must leave no row behind"
+    )
+
+
+def test_run_job_sync_also_recovers_from_an_ambiguous_insert_commit(app, monkeypatch):
+    """The disambiguation applies to the synchronous path too
+    (`run_job_sync`, used by `?sync=1` and `TESTING`) since it shares
+    `_acquire_job_slot` with the async path -- an ambiguous insert-commit
+    failure there must not answer 500 for work that, in fact, already
+    started (#190 review round 5).
+    """
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session as SQLASession
+
+    from services.background_jobs import run_job_sync
+
+    real_commit = SQLASession.commit
+    state = {"raised_once": False}
+
+    def _commit_that_lands_then_loses_its_ack(self, *args, **kwargs):
+        result = real_commit(self, *args, **kwargs)
+        if not state["raised_once"]:
+            state["raised_once"] = True
+            raise OperationalError("simulated", {}, Exception("boom"))
+        return result
+
+    monkeypatch.setattr(SQLASession, "commit", _commit_that_lands_then_loses_its_ack)
+
+    calls = {"fn": 0}
+
+    def _fn():
+        calls["fn"] += 1
+        return {"success": True}
+
+    with app.app_context():
+        job_id = run_job_sync(_fn, job_type="property_ai_analysis", app=app)
+        job = get_job(job_id)
+
+    assert state["raised_once"] is True
+    assert calls["fn"] == 1
+    assert job["status"] == "success"
+    assert job["result"] == {"success": True}
+
+
 # --- At most one execution per race (#190 review round 3, finding 3) ------
 
 

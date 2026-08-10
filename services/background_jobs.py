@@ -176,6 +176,33 @@ one (`interrupted`) -- so it must have been this write, or an earlier
 attempt of it, landing invisibly. Only when the row shows something else
 has ownership genuinely been lost.
 
+## The insert-commit's own ambiguity (round-5 review)
+
+Round 4's `_matches_our_own_write` disambiguates a *status-transition*
+commit, in `_try_write` -- but `_acquire_job_slot`'s own INSERT of a fresh
+`queued` row commits separately, through a plain `db.session.commit()`
+this module's own `except IntegrityError:` branch was the only thing
+catching. PostgreSQL can commit that INSERT server-side and still fail to
+acknowledge it (the same dropped-connection shape as round 4, finding 2),
+which raises something other than `IntegrityError` -- nothing violated a
+constraint -- straight out of `_acquire_job_slot`, before
+`enqueue_job`/`run_job_sync` ever registers ownership or dispatches
+anything. The row lands as an orphaned `queued` insert nobody is running:
+a retry's own liveness check (`_find_live_job_id`) finds it, defers to its
+id (or answers 409 on the sync path), and nothing ever calls `fn()` for it
+-- stuck until its lease expires and it is reaped.
+
+`_matches_our_own_insert` mirrors `_matches_our_own_write` for this one
+narrower case: on any exception from the insert's own commit other than
+`IntegrityError`, a fresh session/connection re-reads the row by the id
+this attempt generated for itself immediately before the insert (a fresh
+`uuid.uuid4().hex`, so nothing else could plausibly hold it). `queued`
+status with a live lease means the insert landed and only its
+acknowledgement was lost -- `_acquire_job_slot` continues exactly as if
+the commit had returned normally, so the caller still registers ownership
+and dispatches `fn()`. No row under that id at all means the insert
+genuinely never happened, and the original exception propagates.
+
 ## What this does not solve, honestly
 
 If a job's own writes fail (every retry, and the fresh-session fallback) so
@@ -596,6 +623,49 @@ def _reap_expired_active_row(db, dedupe_key: str) -> None:
         )
 
 
+def _matches_our_own_insert(job_id: str) -> bool:
+    """True if `job_id` -- the id `_acquire_job_slot` just tried to insert
+    as a fresh `queued` row -- already exists with status `queued` and a
+    lease that has not expired, read through a brand-new session/
+    connection.
+
+    The insert-path counterpart to `_matches_our_own_write` (#190 review
+    round 5): PostgreSQL can commit an INSERT server-side and still fail to
+    acknowledge it to this process (a connection dropped on the way back),
+    which surfaces here as an exception from `db.session.commit()` that
+    looks, on its face, identical to a transaction that never landed at
+    all -- except this one is not even an `IntegrityError`, since nothing
+    violated a constraint; the earlier round-4 fix only ever handled that
+    one exception type. `job_id` is a fresh `uuid.uuid4().hex` this call
+    generated for itself immediately before the insert, so nothing else
+    could plausibly have created a row under that exact id -- an existing
+    `queued` row with a live lease has no explanation other than "this
+    insert, whose commit raised anyway, actually landed".
+    """
+    from app import db as _db
+    from models import BackgroundJob
+
+    try:
+        with Session(bind=_db.engine) as fresh_session:
+            row = (
+                fresh_session.query(BackgroundJob.id)
+                .filter(
+                    BackgroundJob.id == job_id,
+                    BackgroundJob.status == "queued",
+                    BackgroundJob.lease_expires_at.isnot(None),
+                    BackgroundJob.lease_expires_at >= _now_expr(),
+                )
+                .first()
+            )
+            return row is not None
+    except Exception:
+        logger.exception(
+            "job_id=%s: re-read to disambiguate an ambiguous insert commit also failed",
+            job_id,
+        )
+        return False
+
+
 def _acquire_job_slot(
     db, *, job_type: str, meta: Optional[Dict[str, Any]], dedupe_key: Optional[str]
 ) -> Tuple[str, bool]:
@@ -663,6 +733,35 @@ def _acquire_job_slot(
                 # *different* keys sharing a lock id, not the primary
                 # guarantee -- so loop back, take the lock fresh, and
                 # re-check rather than assuming what happened.
+            except Exception:
+                # The INSERT may have actually committed server-side --
+                # this exception could be a lost acknowledgement (a
+                # connection dropped right after PostgreSQL committed it),
+                # not a failed transaction (#190 review round 5). Unlike
+                # the IntegrityError above, nothing here is conclusive on
+                # its own: a genuinely failed insert and an
+                # acknowledgement lost after a real commit raise the same
+                # way. Resolved the same way `_try_write` resolves an
+                # ambiguous status-write failure -- re-read, through a
+                # brand-new session, by the id this attempt generated for
+                # itself immediately before the insert.
+                try:
+                    db.session.rollback()
+                except Exception:
+                    logger.exception(
+                        "job_id=%s: could not roll back after an ambiguous "
+                        "insert-commit failure",
+                        job_id,
+                    )
+                if _matches_our_own_insert(job_id):
+                    logger.warning(
+                        "job_id=%s: insert already landed under an earlier "
+                        "attempt whose commit acknowledgement was lost; "
+                        "continuing as if it had succeeded",
+                        job_id,
+                    )
+                    return job_id, True
+                raise
 
     raise RuntimeError(
         f"Could not acquire a job slot for job_type={job_type!r} "
