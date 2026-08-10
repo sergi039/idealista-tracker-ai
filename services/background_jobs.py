@@ -11,27 +11,66 @@ The `background_jobs` table (models.BackgroundJob) is now the single source
 of truth: `enqueue_job` writes the row before handing work to the executor,
 the worker thread updates it on start and on completion, and `get_job` always
 reads the row back rather than a cache that a fresh process would start
-empty. `reconcile_orphaned_jobs`, called once at application startup, is what
-turns a row still `queued`/`running` into `interrupted` -- proof that the
-process before this one died mid-job, not that the job vanished. That check
-runs once, at startup, so it only catches a row orphaned by a process that
-has since exited; a row whose own writer thread is stuck *within* a live
-process is instead caught lazily, the next time something tries to reuse its
-dedupe_key (see `_is_stale`, `enqueue_job`).
+empty.
 
 Each of those writes happens from inside its own `app.app_context()`, so
 Flask-SQLAlchemy's `db.session` -- a scoped session keyed to that context --
 gives the worker thread and the Flask request thread separate sessions
 automatically. Nothing here passes a `Session` across a thread boundary.
 
+## The lease model (issue #176 PR #190, round-2 review)
+
+"Is this row still owned by a live process?" used to be answered by
+comparing the *reading process's own clock* against a `started_at`/
+`created_at` timestamp, and `reconcile_orphaned_jobs` ran unconditionally on
+every `create_app()`. An independent review rejected both: a process clock
+that has drifted, or simply differs from the database server's, could
+declare a genuinely live job dead; and any one-shot script that builds its
+own `create_app()` (`utils/backfill_sea_view.py` and friends) while the web
+process is still running would interrupt that process's own in-flight job
+the instant it called `reconcile_orphaned_jobs`.
+
+The fix is a lease, and the database's clock is the only clock that judges
+it:
+
+- `lease_expires_at` is set to the database's own `now() + LEASE_TTL_SECONDS`
+  at enqueue, and renewed (same expression, same UPDATE) on every
+  `_write_status` transition. It is written via a SQL expression
+  (`_lease_expiry_expr`) that embeds `now()`/`CURRENT_TIMESTAMP`, never via
+  a Python-computed `datetime.now() + timedelta(...)` -- so no process's
+  clock, however skewed, can produce the value.
+- A row counts as dead under exactly one predicate, applied nowhere but in
+  SQL: `status IN ('queued', 'running') AND lease_expires_at < now()`. Both
+  `reconcile_orphaned_jobs` (the startup/utility-script sweep) and
+  `enqueue_job` (the dedupe-time reap) use this same predicate, expressed
+  the same way, so "is it dead" never has two different answers depending
+  on which code path asks.
+- Reaping is an atomic compare-and-swap UPDATE
+  (`_reap_expired_active_row`): `WHERE id = :id AND status = :seen_status
+  AND lease_expires_at < now()`. Two concurrent callers racing the same
+  expired row can only ever have one of them actually flip it -- the loser's
+  UPDATE matches zero rows, which is information, not an error, and
+  `enqueue_job` falls through to re-reading whichever row is now active
+  (the winner's replacement, or someone else's) instead of raising.
+- Because "dead" is judged entirely by the lease, `reconcile_orphaned_jobs`
+  no longer needs "this is the process's first boot" to be true. It is safe
+  to call from *any* `create_app()` -- the long-running web process at
+  startup, or a one-shot utility script's own app instance while that web
+  process is still alive -- because a row with a still-valid lease is never
+  touched, no matter who calls it or how many times.
+
+What this does *not* solve, honestly: if a job's own `_write_status` calls
+fail (every retry, and the fresh-session fallback) so that neither `running`
+nor a terminal status is ever recorded, that row is genuinely
+indistinguishable from a live one until its lease expires. `LEASE_TTL_SECONDS`
+is the bound on how long that can last -- not zero, because no lease system
+can know a writer is dead before its lease says so, but bounded, self-healing,
+and judged by one clock everywhere, which the old model was not.
+
 Deployment here is a single gunicorn process (`--workers 1 --threads 4`,
-Dockerfile). `reconcile_orphaned_jobs`'s "any active row belongs to a dead
-process" assumption depends on that: with more than one worker process, a row
-another live worker owns would look identical to one an actually-dead process
-left behind, and reconciliation would need a process-owner predicate (a PID
-or an instance id stamped on the row) to tell them apart. Out of scope here
-because the deployment is single-worker today; flagged for whoever changes
-that.
+Dockerfile) with multiple threads sharing one `_EXECUTOR`. The lease model
+does not depend on that -- it already tolerates multiple independent
+`create_app()` processes sharing one database, which is the harder case.
 """
 
 import logging
@@ -43,6 +82,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 from flask import current_app
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -54,7 +94,7 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=max(1, _MAX_WORKERS))
 ACTIVE_STATUSES = ("queued", "running")
 
 # Shown by the UI in place of "Job not found" (static/js/main.js pollJob).
-INTERRUPTED_MESSAGE = "Interrupted by a redeploy before it finished. Run it again."
+INTERRUPTED_MESSAGE = "Interrupted before it finished. Run it again."
 
 # How many times _write_status retries a failed commit against the normal
 # (scoped) session before falling back to a fresh one. Small and fast: this
@@ -63,21 +103,63 @@ INTERRUPTED_MESSAGE = "Interrupted by a redeploy before it finished. Run it agai
 _TRANSITION_MAX_ATTEMPTS = 3
 _TRANSITION_RETRY_DELAY_S = 0.05
 
-# A row with no update in this long is presumed abandoned -- its writer
-# thread died in a way even _write_status's fresh-session fallback could not
-# record (review of #190, blocker 1). Comfortably past the longest known job
-# budget: static/js/main.js's JOB_POLL_TIMEOUTS.aiAnalysis is 660 s.
-STALE_JOB_AFTER_SECONDS = int(
-    os.environ.get("BACKGROUND_JOB_STALE_AFTER_SECONDS", str(30 * 60))
+# enqueue_job's own bound on insert/reap/retry cycles. Two concurrent callers
+# racing one expired row settle in at most two rounds (see the module
+# docstring); three leaves margin without risking a real bug looping forever.
+_ENQUEUE_MAX_ATTEMPTS = 3
+
+# How long a lease lasts past its last renewal before a row is presumed
+# abandoned. The longest known job budget is the AI analysis call: up to
+# 600 s server-side (services/property_ai_service.py), plus the client's own
+# 60 s queueing allowance (static/js/main.js JOB_POLL_TIMEOUTS.aiAnalysis =
+# 660000 ms). 900 s (15 min) leaves about 4 minutes of margin past that for
+# scheduling jitter without leaving a genuinely dead row live for long.
+LEASE_TTL_SECONDS = int(
+    os.environ.get("BACKGROUND_JOB_LEASE_TTL_SECONDS", str(15 * 60))
 )
 
 
 def _now() -> datetime:
+    """Wall-clock UTC, for informational timestamps only (finished_at on a
+    terminal write, audit logging). Never used to decide whether a lease has
+    expired -- see the module docstring; that decision is made in SQL,
+    against the database's own now(), via `_now_expr`/`_lease_expiry_expr`.
+    """
     return datetime.now(timezone.utc)
 
 
 def _iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() if value else None
+
+
+def _dialect_name(bind_or_session) -> str:
+    """The SQL dialect a session/engine talks, defaulting to PostgreSQL --
+    the only dialect this table is ever actually deployed against; SQLite is
+    a test-only stand-in with no portable INTERVAL syntax of its own, which
+    is the only reason this needs to branch at all."""
+    try:
+        return bind_or_session.get_bind().dialect.name
+    except Exception:
+        return "postgresql"
+
+
+def _now_expr():
+    """SQL expression for 'the database's own current time' -- portable
+    across PostgreSQL and SQLite, used in every comparison that decides
+    whether a lease has expired. Never evaluated in Python."""
+    return func.current_timestamp()
+
+
+def _lease_expiry_expr(dialect_name: str):
+    """SQL expression for 'the database's own now(), plus LEASE_TTL_SECONDS'
+    -- what gets written to `lease_expires_at`. PostgreSQL and SQLite have no
+    shared syntax for timestamp-plus-interval, so this branches on dialect;
+    every call site still only ever expresses "TTL seconds from the
+    database's clock", never `datetime.now() + timedelta(...)`.
+    """
+    if dialect_name == "sqlite":
+        return func.datetime(func.current_timestamp(), f"+{LEASE_TTL_SECONDS} seconds")
+    return func.current_timestamp() + text(f"INTERVAL '{LEASE_TTL_SECONDS} seconds'")
 
 
 def _row_to_dict(row) -> Dict[str, Any]:
@@ -94,25 +176,6 @@ def _row_to_dict(row) -> Dict[str, Any]:
     }
 
 
-def _is_stale(row) -> bool:
-    """No process is plausibly still working `row`.
-
-    `started_at` is the better signal once a job has one; `created_at`
-    covers a row whose own "mark running" write never landed (see
-    `_write_status`). Both columns hold naive UTC values, matching
-    `models.utcnow()` elsewhere -- compare against a naive "now" rather than
-    risk a naive/aware subtraction across the two backends this runs
-    against.
-    """
-    reference = row.started_at or row.created_at
-    if reference is None:
-        return False
-    if reference.tzinfo is not None:
-        reference = reference.astimezone(timezone.utc).replace(tzinfo=None)
-    now = _now().replace(tzinfo=None)
-    return (now - reference).total_seconds() > STALE_JOB_AFTER_SECONDS
-
-
 def _insert_queued_row(db, job_id: str, *, job_type: str, meta, dedupe_key) -> None:
     from models import BackgroundJob
 
@@ -123,33 +186,89 @@ def _insert_queued_row(db, job_id: str, *, job_type: str, meta, dedupe_key) -> N
             status="queued",
             dedupe_key=dedupe_key,
             meta=meta or {},
+            lease_expires_at=_lease_expiry_expr(_dialect_name(db.session)),
         )
     )
     db.session.commit()
 
 
-def _reap_stale_row(db, row) -> None:
-    """Mark an abandoned active row `interrupted` so it stops blocking dedupe.
+def _find_live_job_id(db, dedupe_key: str) -> Optional[str]:
+    """id of the row genuinely, currently holding `dedupe_key` -- one whose
+    lease has not expired by the database's own clock. None if no such row
+    exists (either nothing is active for this key, or the one active row's
+    lease has expired and should be reaped rather than handed back)."""
+    from models import BackgroundJob
 
-    Called with `row` bound to the caller's own session, already loaded --
-    this only flips its status and commits, it does not requery.
+    row = (
+        db.session.query(BackgroundJob.id)
+        .filter(
+            BackgroundJob.dedupe_key == dedupe_key,
+            BackgroundJob.status.in_(ACTIVE_STATUSES),
+            BackgroundJob.lease_expires_at.isnot(None),
+            BackgroundJob.lease_expires_at >= _now_expr(),
+        )
+        .first()
+    )
+    return row[0] if row is not None else None
+
+
+def _reap_expired_active_row(db, dedupe_key: str) -> None:
+    """If an active row for `dedupe_key` has an expired (or missing) lease,
+    atomically mark it `interrupted`.
+
+    The UPDATE is a compare-and-swap: `WHERE id = :id AND status =
+    :seen_status AND (lease NULL or expired)`. Two concurrent callers can
+    both observe the same candidate row and both attempt this, but only one
+    UPDATE can actually match it -- the loser's `rowcount` is 0, which this
+    treats as "someone else handled it" rather than an error (#190 review
+    round 2, findings 2 and 4). A no-op, not an error, when there is no
+    active row for this key at all, or its lease is still valid (nothing to
+    reap).
     """
-    logger.warning(
-        "Job type=%s dedupe_key=%s has a stale %s row %s (no update in over "
-        "%ds); marking it interrupted so a new job is not blocked forever",
-        row.job_type,
-        row.dedupe_key,
-        row.status,
-        row.id,
-        STALE_JOB_AFTER_SECONDS,
+    from models import BackgroundJob
+
+    candidate = (
+        db.session.query(BackgroundJob)
+        .filter(
+            BackgroundJob.dedupe_key == dedupe_key,
+            BackgroundJob.status.in_(ACTIVE_STATUSES),
+        )
+        .order_by(BackgroundJob.created_at.desc())
+        .first()
     )
-    row.status = "interrupted"
-    row.error = (
-        f"{INTERRUPTED_MESSAGE} (reaped as stale: no update in over "
-        f"{STALE_JOB_AFTER_SECONDS}s)"
+    if candidate is None:
+        return
+
+    reaped = (
+        db.session.query(BackgroundJob)
+        .filter(
+            BackgroundJob.id == candidate.id,
+            BackgroundJob.status == candidate.status,
+            (
+                BackgroundJob.lease_expires_at.is_(None)
+                | (BackgroundJob.lease_expires_at < _now_expr())
+            ),
+        )
+        .update(
+            {
+                BackgroundJob.status: "interrupted",
+                BackgroundJob.error: (
+                    f"{INTERRUPTED_MESSAGE} (reaped: lease expired without "
+                    f"renewal within the {LEASE_TTL_SECONDS}s TTL)"
+                ),
+                BackgroundJob.finished_at: _now(),
+            },
+            synchronize_session=False,
+        )
     )
-    row.finished_at = _now()
     db.session.commit()
+    if reaped:
+        logger.warning(
+            "Reaped expired lease on job %s (type=%s dedupe_key=%s)",
+            candidate.id,
+            candidate.job_type,
+            dedupe_key,
+        )
 
 
 def enqueue_job(
@@ -165,60 +284,58 @@ def enqueue_job(
     `dedupe_key`, when given, is enforced by the partial unique index
     `ux_background_jobs_active_dedupe_key` (migration 016), which only covers
     rows still `queued`/`running`. A second enqueue for the same key while
-    one is active returns the id of the job already in flight instead of
-    scheduling a duplicate -- caught from the database rejecting the insert,
-    not from a Python check that a second concurrent request could still
-    slip past between the check and the insert.
+    one is genuinely active -- its lease has not expired -- returns the id
+    of the job already in flight instead of scheduling a duplicate.
 
-    If the row already holding that key is stale (`_is_stale`), it is
-    reaped -- marked `interrupted` -- and a fresh job is queued instead of
-    being handed back. Without this, a row whose writer thread could not
-    record its own outcome (every `_write_status` attempt failed) would
-    block that dedupe_key forever, indistinguishable from a job still
-    genuinely in progress (#190 review, blocker 1).
+    "Genuinely active" is judged entirely by the database's own clock (see
+    the module docstring's lease model), never by this process's. A row
+    whose lease has expired is reaped -- via an atomic compare-and-swap, not
+    an unconditional write -- and a fresh job queued in its place. Two
+    concurrent callers racing the same expired row cannot both "win": the
+    loser's own insert collides with whichever row is now live (the winner's
+    replacement) and this falls through to returning *that* row's id rather
+    than raising an IntegrityError at the caller (#190 review round 2,
+    finding 4).
     """
     from app import db
 
     app_obj = app or current_app._get_current_object()
-    job_id = uuid.uuid4().hex
 
     with app_obj.app_context():
-        try:
-            _insert_queued_row(
-                db, job_id, job_type=job_type, meta=meta, dedupe_key=dedupe_key
-            )
-        except IntegrityError:
-            db.session.rollback()
-            if dedupe_key is None:
-                raise  # the collision was on the primary key, not dedupe_key
-            from models import BackgroundJob
-
-            existing = (
-                db.session.query(BackgroundJob)
-                .filter(
-                    BackgroundJob.dedupe_key == dedupe_key,
-                    BackgroundJob.status.in_(ACTIVE_STATUSES),
+        job_id = None
+        for attempt in range(1, _ENQUEUE_MAX_ATTEMPTS + 1):
+            job_id = uuid.uuid4().hex
+            try:
+                _insert_queued_row(
+                    db, job_id, job_type=job_type, meta=meta, dedupe_key=dedupe_key
                 )
-                .order_by(BackgroundJob.created_at.desc())
-                .first()
-            )
-            if existing is not None and not _is_stale(existing):
-                logger.info(
-                    "Job type=%s dedupe_key=%s already in flight as %s; "
-                    "not queuing a duplicate",
-                    job_type,
-                    dedupe_key,
-                    existing.id,
-                )
-                return existing.id
+                break
+            except IntegrityError:
+                db.session.rollback()
+                if dedupe_key is None:
+                    raise  # the collision was on the primary key, not dedupe_key
 
-            if existing is not None:
-                _reap_stale_row(db, existing)
-            # The row that blocked us was reaped above, or finished between
-            # the failed insert and this read (a benign race) -- either way,
-            # retry the insert once.
-            _insert_queued_row(
-                db, job_id, job_type=job_type, meta=meta, dedupe_key=dedupe_key
+                live_id = _find_live_job_id(db, dedupe_key)
+                if live_id is not None:
+                    logger.info(
+                        "Job type=%s dedupe_key=%s already in flight as %s; "
+                        "not queuing a duplicate",
+                        job_type,
+                        dedupe_key,
+                        live_id,
+                    )
+                    return live_id
+
+                # Nothing live is holding the key -- either its lease just
+                # expired (reap it; if a concurrent caller reaps it first,
+                # this attempt's UPDATE simply matches zero rows) or it
+                # finished a moment ago (nothing to reap, benign). Either
+                # way, retry the insert.
+                _reap_expired_active_row(db, dedupe_key)
+        else:
+            raise RuntimeError(
+                f"Could not enqueue job_type={job_type!r} dedupe_key={dedupe_key!r} "
+                f"after {_ENQUEUE_MAX_ATTEMPTS} insert attempts"
             )
 
     _EXECUTOR.submit(_run_job, app_obj, job_id, fn)
@@ -226,7 +343,8 @@ def enqueue_job(
 
 
 def _try_write(session, job_id: str, fields: Dict[str, Any]) -> bool:
-    """Apply `fields` to the job row and commit through `session`.
+    """Apply `fields` to the job row, renew its lease, and commit through
+    `session`.
 
     Returns False rather than raising on any failure -- missing row, a
     broken commit -- so the caller decides what to try next instead of a
@@ -241,6 +359,10 @@ def _try_write(session, job_id: str, fields: Dict[str, Any]) -> bool:
             return False
         for key, value in fields.items():
             setattr(row, key, value)
+        # Renewed on every transition, in the same UPDATE as the fields
+        # above -- a worker that is still actively writing this row proves
+        # it by extending its own lease each time (#190 review round 2).
+        row.lease_expires_at = _lease_expiry_expr(_dialect_name(session))
         session.commit()
         return True
     except Exception:
@@ -270,9 +392,10 @@ def _write_status(app_obj, job_id: str, **fields) -> bool:
     whatever broke the scoped session's commits (a poisoned transaction, a
     stale identity map) is specific to it rather than to the database
     itself. Only if *that* also fails does this give up and return False --
-    at which point the row stays whatever it last was, and
-    `enqueue_job`'s staleness check is what eventually frees its
-    dedupe_key rather than leaving it blocked forever.
+    at which point the row keeps whatever lease it last had, and expires on
+    schedule: `enqueue_job`'s reap check is what eventually frees its
+    dedupe_key, bounded by `LEASE_TTL_SECONDS` rather than left blocked
+    forever (#190 review round 2, finding 1).
     """
     from app import db as _db
 
@@ -296,10 +419,12 @@ def _write_status(app_obj, job_id: str, **fields) -> bool:
 
     logger.critical(
         "Job %s could not record %s after %d attempt(s) plus a fresh-session "
-        "fallback; it will stay stuck until reaped as stale",
+        "fallback; its lease will simply expire in <= %ds and it will be "
+        "reaped like any other abandoned row",
         job_id,
         fields,
         _TRANSITION_MAX_ATTEMPTS,
+        LEASE_TTL_SECONDS,
     )
     return False
 
@@ -328,9 +453,8 @@ def _run_job(app_obj, job_id: str, fn: Callable[[], Any]) -> None:
                 # Every attempt to persist the result failed. Still try to
                 # at least flag the row honestly instead of leaving it
                 # silently "running" -- if the database is truly
-                # unreachable this fails too, and the row is picked up by
-                # the staleness check the next time something tries to
-                # reuse its dedupe_key.
+                # unreachable this fails too, and the row's lease expires
+                # on schedule regardless (see _write_status).
                 _write_status(
                     app_obj,
                     job_id,
@@ -368,29 +492,29 @@ def serialize_job(job: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def reconcile_orphaned_jobs() -> int:
-    """Mark every row still `queued`/`running` as `interrupted`.
+    """Mark every row whose lease has expired -- `queued`/`running` and
+    `lease_expires_at` in the past by the *database's* clock -- as
+    `interrupted`.
 
-    Called once at application startup (app.py, before the app serves
-    traffic), inside an app context. Any row in an active status at that
-    point was written by a process that is not this one -- this process is
-    only now starting -- so the status is dishonest until this corrects it.
-    A single UPDATE...WHERE rather than a fetch-then-mutate loop: it is
-    atomic on its own, and idempotent -- a second call, from a repeated boot
-    or a second gunicorn worker, matches zero rows and updates nothing.
+    Called at application startup (app.py), inside an app context. Unlike
+    the model this replaced, this is not "any active row belongs to a dead
+    process": it only ever touches a row whose lease has actually run out,
+    so it is safe to call from *any* `create_app()` -- the long-running web
+    process at boot, or a one-shot utility script's own app instance built
+    while that web process is still alive and holding a valid lease on its
+    own job (#190 review round 2, finding 3). A repeated call -- a second
+    boot, a second gunicorn worker, a utility script running alongside the
+    web process -- matches only rows that are genuinely expired by then and
+    updates nothing else.
 
-    Assumes a single worker process (see the module docstring): it has no
-    way to tell "a row another live worker owns" from "a row an actually-dead
-    process left behind" without a process-owner predicate, which the
-    current single-worker deployment does not need.
-
-    A no-op, rather than an error, when `background_jobs` does not exist yet.
-    In production the migration entrypoint always creates it before this
-    module is ever imported (see the module docstring), but most of this
-    suite's test fixtures call `create_app()` and only build the schema with
-    `db.create_all()` afterwards -- setting `app.config["TESTING"]` too late
-    for this function to see it. There is nothing to reconcile before the
-    table exists either way, so this checks the actual precondition instead
-    of trying to infer "are we under test" from Flask config.
+    A no-op, rather than an error, when `background_jobs` does not exist
+    yet. In production the migration entrypoint always creates it before
+    this module is ever imported, but most of this suite's test fixtures
+    call `create_app()` and only build the schema with `db.create_all()`
+    afterwards -- setting `app.config["TESTING"]` too late for this function
+    to see it. There is nothing to reconcile before the table exists either
+    way, so this checks the actual precondition instead of trying to infer
+    "are we under test" from Flask config.
     """
     from sqlalchemy import inspect
 
@@ -402,7 +526,13 @@ def reconcile_orphaned_jobs() -> int:
 
     updated = (
         db.session.query(BackgroundJob)
-        .filter(BackgroundJob.status.in_(ACTIVE_STATUSES))
+        .filter(
+            BackgroundJob.status.in_(ACTIVE_STATUSES),
+            (
+                BackgroundJob.lease_expires_at.is_(None)
+                | (BackgroundJob.lease_expires_at < _now_expr())
+            ),
+        )
         .update(
             {
                 BackgroundJob.status: "interrupted",

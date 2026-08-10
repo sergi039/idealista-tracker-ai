@@ -613,6 +613,7 @@ def test_016_creates_the_background_jobs_table_with_its_guards(postgres_url):
             "created_at",
             "started_at",
             "finished_at",
+            "lease_expires_at",
         }.issubset(columns)
 
         assert BACKGROUND_JOBS_STATUS_CHECK in {
@@ -628,6 +629,17 @@ def test_016_creates_the_background_jobs_table_with_its_guards(postgres_url):
         assert BACKGROUND_JOBS_DEDUPE_INDEX in unique_indexes
         assert unique_indexes[BACKGROUND_JOBS_DEDUPE_INDEX]["column_names"] == [
             "dedupe_key"
+        ]
+
+        # The lease sweep's own index (services.background_jobs
+        # reconcile_orphaned_jobs / _reap_expired_active_row).
+        all_indexes = {
+            index["name"]: index for index in inspector.get_indexes("background_jobs")
+        }
+        assert "ix_background_jobs_status_lease" in all_indexes
+        assert all_indexes["ix_background_jobs_status_lease"]["column_names"] == [
+            "status",
+            "lease_expires_at",
         ]
 
         with engine.begin() as connection:
@@ -779,6 +791,81 @@ def test_016_two_concurrent_inserts_for_the_same_key_leave_only_one_active_job(
                 {"key": key},
             ).scalar_one()
         assert active == 1
+    finally:
+        engine.dispose()
+
+
+def test_016_two_concurrent_reaps_of_the_same_expired_row_leave_one_winner(
+    postgres_url,
+):
+    """The compare-and-swap UPDATE `services.background_jobs
+    ._reap_expired_active_row` runs -- `WHERE id = :id AND status =
+    :seen_status AND lease_expires_at < now()` -- under an actual race
+    between two connections, not just a sequential check (#190 review round
+    2, findings 2 and 4). Exactly one of two concurrent attempts against the
+    same expired-lease row may succeed; the other's UPDATE must affect zero
+    rows rather than raising or double-processing the row.
+    """
+    import threading
+
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        job_id = "3" * 32
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO background_jobs "
+                    "(id, job_type, status, dedupe_key, lease_expires_at) "
+                    "VALUES (:id, 'property_ai_analysis', 'running', "
+                    "'property_ai_analysis:901:claude', "
+                    "NOW() - INTERVAL '1 minute')"
+                ),
+                {"id": job_id},
+            )
+
+        barrier = threading.Barrier(2)
+        rowcounts: dict[str, int] = {}
+
+        def _attempt(label: str) -> None:
+            thread_engine = create_engine(postgres_url)
+            try:
+                barrier.wait(timeout=5)
+                with thread_engine.begin() as connection:
+                    result = connection.execute(
+                        text(
+                            "UPDATE background_jobs SET status = 'interrupted', "
+                            "error = 'reaped', finished_at = NOW() "
+                            "WHERE id = :id AND status = 'running' "
+                            "AND lease_expires_at < NOW()"
+                        ),
+                        {"id": job_id},
+                    )
+                    rowcounts[label] = result.rowcount
+            finally:
+                thread_engine.dispose()
+
+        first = threading.Thread(target=_attempt, args=("first",))
+        second = threading.Thread(target=_attempt, args=("second",))
+        first.start()
+        second.start()
+        first.join(timeout=10)
+        second.join(timeout=10)
+
+        assert not first.is_alive() and not second.is_alive(), "a thread hung"
+        assert sorted(rowcounts.values()) == [0, 1], (
+            f"exactly one CAS must match the row, the other zero: {rowcounts}"
+        )
+
+        with engine.begin() as connection:
+            status = connection.execute(
+                text("SELECT status FROM background_jobs WHERE id = :id"),
+                {"id": job_id},
+            ).scalar_one()
+        assert status == "interrupted"
     finally:
         engine.dispose()
 

@@ -1223,6 +1223,17 @@ class BackgroundJob(db.Model):
     blocks a legitimate retry -- only a second *concurrently active* job for
     the same key does, and the database is what refuses it, not a Python
     check-then-insert that a second thread could still slip past.
+
+    `lease_expires_at` is what decides whether an active row is still owned
+    by a live process -- always written as `now() + TTL` *in SQL*, by
+    `services.background_jobs`, never as a Python-computed value. A round-2
+    review of #176/PR #190 rejected the first version of this table, which
+    judged staleness by comparing the reading process's own clock against
+    `started_at`/`created_at`: a skewed process clock could then declare a
+    live job dead, and reconciliation ran unconditionally on every
+    `create_app()`, so a one-shot utility script sharing the database with
+    the running web app would interrupt that app's genuinely in-flight job.
+    See `services/background_jobs.py`'s module docstring for the full model.
     """
 
     __tablename__ = "background_jobs"
@@ -1233,6 +1244,7 @@ class BackgroundJob(db.Model):
         ),
         db.Index("ix_background_jobs_job_type", "job_type"),
         db.Index("ix_background_jobs_status", "status"),
+        db.Index("ix_background_jobs_status_lease", "status", "lease_expires_at"),
         db.Index(
             "ux_background_jobs_active_dedupe_key",
             "dedupe_key",
@@ -1263,6 +1275,11 @@ class BackgroundJob(db.Model):
     created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
     started_at = db.Column(db.DateTime, nullable=True)
     finished_at = db.Column(db.DateTime, nullable=True)
+    # Set to the *database's* now() + TTL at enqueue and renewed on every
+    # status transition (services.background_jobs._write_status). A row is
+    # only ever treated as dead when this has passed the database's own
+    # now() -- never compared against anything Python computed.
+    lease_expires_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
     def __repr__(self):
         return f"<BackgroundJob {self.id} type={self.job_type} status={self.status}>"

@@ -15,6 +15,19 @@
 -- only covers rows still 'queued' or 'running', so a terminal row never
 -- blocks a legitimate retry -- only a second concurrently active job for the
 -- same key does.
+--
+-- `lease_expires_at` (added before this migration ever shipped -- issue #176
+-- PR #190's round-2 review, findings 1/2/3/4) is what decides whether an
+-- active row is still owned by a live process at all. Every earlier version
+-- of this decision compared against the *reading process's* clock, which a
+-- concurrency reviewer correctly rejected: a skewed process clock could
+-- declare a live job dead, and every create_app() unconditionally
+-- interrupting every active row meant a one-shot utility script sharing the
+-- database with the running web app would kill that app's in-flight job.
+-- services/background_jobs.py now writes this column via SQL now() +
+-- interval (never Python's clock) at enqueue and on every status
+-- transition, and treats a row as dead only when the *database's own* now()
+-- has passed it -- see that module's docstring for the full model.
 
 CREATE TABLE IF NOT EXISTS background_jobs (
     id VARCHAR(32) PRIMARY KEY,
@@ -26,7 +39,8 @@ CREATE TABLE IF NOT EXISTS background_jobs (
     error TEXT,
     created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
     started_at TIMESTAMP WITHOUT TIME ZONE,
-    finished_at TIMESTAMP WITHOUT TIME ZONE
+    finished_at TIMESTAMP WITHOUT TIME ZONE,
+    lease_expires_at TIMESTAMP WITH TIME ZONE
 );
 
 DO $$ BEGIN
@@ -40,6 +54,11 @@ CREATE INDEX IF NOT EXISTS ix_background_jobs_job_type
 
 CREATE INDEX IF NOT EXISTS ix_background_jobs_status
     ON background_jobs (status);
+
+-- The lease sweep (reconcile_orphaned_jobs, and enqueue_job's own reap
+-- check) filters on exactly these two columns together.
+CREATE INDEX IF NOT EXISTS ix_background_jobs_status_lease
+    ON background_jobs (status, lease_expires_at);
 
 -- Only one active (queued/running) row may hold a given dedupe_key. A
 -- terminal row (success/error/interrupted) is invisible to this index, so a
