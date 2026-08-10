@@ -398,6 +398,28 @@ class Property(db.Model):
             return None
         return address.strip() or None
 
+    def _measured_duration(self, target_key: str, legacy_key: str):
+        """Minutes to a target, preferring the source that can be re-measured.
+
+        `travel["targets"]` is rewritten by every enrichment run;
+        `enrichment.legacy_land` is a frozen snapshot from the old `Land`
+        model that no recalculation touches. Reading legacy first made the
+        Transport card contradict Travel Times on all 168 mirrored rows --
+        41 minutes to Asturias Airport in one card, 35 to something unnamed
+        in the other. A target present in `travel` is authoritative even when
+        its value is `None`: "we looked and found nothing" outranks a
+        measurement nobody can reproduce.
+        """
+        if target_key in self._get_travel_targets():
+            return self._travel_target_duration(target_key)
+        return self._get_enrichment_value(legacy_key)
+
+    def _measured_distance_km(self, target_key: str, legacy_key: str):
+        """Kilometres to a target, with the same precedence as the duration."""
+        if target_key in self._get_travel_targets():
+            return self._travel_target_distance_km(target_key)
+        return self._get_enrichment_value(legacy_key)
+
     @property
     def infrastructure_basic(self):
         return self._get_enrichment_section("infrastructure_basic")
@@ -420,59 +442,35 @@ class Property(db.Model):
 
     @property
     def travel_time_airport(self):
-        value = self._get_enrichment_value("travel_time_airport")
-        if value is not None:
-            return value
-        return self._travel_target_duration("airport")
+        return self._measured_duration("airport", "travel_time_airport")
 
     @property
     def travel_time_train_station(self):
-        value = self._get_enrichment_value("travel_time_train_station")
-        if value is not None:
-            return value
-        return self._travel_target_duration("train_station")
+        return self._measured_duration("train_station", "travel_time_train_station")
 
     @property
     def travel_time_hospital(self):
-        value = self._get_enrichment_value("travel_time_hospital")
-        if value is not None:
-            return value
-        return self._travel_target_duration("hospital")
+        return self._measured_duration("hospital", "travel_time_hospital")
 
     @property
     def travel_time_police(self):
-        value = self._get_enrichment_value("travel_time_police")
-        if value is not None:
-            return value
-        return self._travel_target_duration("police")
+        return self._measured_duration("police", "travel_time_police")
 
     @property
     def distance_airport(self):
-        value = self._get_enrichment_value("distance_airport")
-        if value is not None:
-            return value
-        return self._travel_target_distance_km("airport")
+        return self._measured_distance_km("airport", "distance_airport")
 
     @property
     def distance_train_station(self):
-        value = self._get_enrichment_value("distance_train_station")
-        if value is not None:
-            return value
-        return self._travel_target_distance_km("train_station")
+        return self._measured_distance_km("train_station", "distance_train_station")
 
     @property
     def distance_hospital(self):
-        value = self._get_enrichment_value("distance_hospital")
-        if value is not None:
-            return value
-        return self._travel_target_distance_km("hospital")
+        return self._measured_distance_km("hospital", "distance_hospital")
 
     @property
     def distance_police(self):
-        value = self._get_enrichment_value("distance_police")
-        if value is not None:
-            return value
-        return self._travel_target_distance_km("police")
+        return self._measured_distance_km("police", "distance_police")
 
     def _ai_analysis_dict(self):
         """Return ai_analysis as a dict regardless of storage type."""
