@@ -112,6 +112,94 @@ guarantees the merged commit is the reviewed one.
 
 **UNAVAILABLE is not PASS.** A reviewer that cannot run leaves the PR open.
 
+**A documentation-only PR is reviewed against the base, not against nothing.**
+The reviewer's contract is to audit the embedded diff and nothing else, which is
+right for code and impossible for a PR that writes down behaviour already
+shipped: the proof is in the base commit, so "unproven" was the only verdict
+available. #151 hit it twice — both reviews correct about the diff and wrong
+about the repository — and was merged by hand. Adding `file:line` citations did
+not help, because a citation still points outside the diff.
+
+So the bot supplies the other half. When every changed path is documentation,
+`docs_review_evidence.py` reads the *added* documentation, resolves what it
+cites against the base commit, and embeds those excerpts in the request. The
+reviewer still audits only what it was handed; it is handed the thing the claims
+are checkable against.
+
+"Documentation" is decided by name **and** by git's own file mode: `*.md`
+anywhere or a non-executable format under `docs/` (no `.svg` — it can carry a
+script element), and mode `100644` on both sides of the diff. A suffix alone is
+not enough — an executable `tools/deploy.MD` is a script, a `docs/notes.md`
+symlink hides its target, and a `160000` gitlink named `docs/vendor.md` moves a
+whole tree of code the diff never shows. `merge_bot.sh` then asks git the same
+question a second time, coarsely and on its own, so the relaxed prompt needs two
+agreeing answers rather than the helper's word.
+
+`CLAUDE.md`, `AGENTS.md`, `SKILL.md`, `.claude/**` and anything under a
+`skills/`, `agents/` or `prompts/` directory stay eligible — every behavioural
+claim in them is checkable against the base like any other document — but the
+evidence flags them under `AGENT INSTRUCTIONS` and the prompt blocks on an added
+line that grants an agent new authority, weakens a guardrail, or tells it to run
+a command. That text is executed by the next agent run, and unlike a claim about
+behaviour it is fully visible in the diff.
+
+It reads both citation shapes, because this repository uses one of them almost
+exclusively:
+
+| In the documentation | Resolved to |
+|---|---|
+| `services/enrichment_service.py:1056` | ±10 lines around line 1056 |
+| `` `utils/http.py` `` … `` `HTTP_USER_AGENT` `` | ±10 lines around where that identifier is defined |
+| `` `utils/http.py` `` alone, no identifier | a line count, confirming the file exists |
+
+Source paths only — a `.md` cited from a `.md` resolves to nothing, since one
+document is not evidence for another.
+
+The second row is the one that matters. #151 cites code as a backticked path
+plus a backticked symbol and never once as `path:line`, so a resolver that
+handled only explicit line numbers would have found nothing on the very PR this
+exists to unblock. Run against `b01c3ac` it now resolves twelve windows, among
+them `services/enrichment_service.py:1056` — the `remark` refusal the issue
+names as the missing proof.
+
+Consequences worth knowing before writing a docs PR:
+
+- **"Unproven" still blocks.** What moved is where the proof is expected — the
+  excerpts, not the diff. A claim the excerpts merely fail to contradict is not
+  proven: `app.py` importing `CSRFProtect` does not establish "every
+  state-changing endpoint is CSRF-protected".
+- **Name the file you are describing.** A claim about behaviour that cites no
+  source file at all is a BLOCKER, because nothing in the request can falsify
+  it. A backticked path is enough; a symbol alongside it is better, and the
+  citation should point at the line that settles the claim.
+- **A `path:line` that has drifted is a BLOCKER**, printed as `UNRESOLVED`.
+  Documentation naming a line the base does not have is already wrong.
+- **A bare path the base lacks is reported, not blocked.** It prints as
+  `NOT IN BASE` and the reviewer judges it from the text, because documentation
+  legitimately names files that are generated or ignored
+  (`docker-compose.override.yml`, a worktree `.env`).
+- **Mixed PRs get the strict prompt.** One non-documentation path in the diff —
+  including the destination of a rename out of `docs/` — and the normal review
+  applies to the whole thing.
+- **Credential-shaped paths are never read**, cited or not, and an excerpt whose
+  content matches a credential pattern is dropped. Both print as `REFUSED`,
+  which is deliberately *not* `UNRESOLVED`: the refusal is the bot's, not a
+  defect in the documentation. The path rule fails *closed* — a name ending in
+  `key` is a credential unless it is one of the handful of English words that
+  end that way, because an allow-list of qualifiers let `apikey`,
+  `clientsecret` and `clientkey` through one review round apiece.
+- **An image is declared unreadable, not waved through.** Git shows a binary
+  marker and the evidence shows nothing, so `docs/*.png` prints under
+  `UNREADABLE CONTENT` and the prompt asks for a BLOCKER saying a person must
+  look. A gate that certifies pixels it cannot see is worth nothing.
+- **Every failure falls back to the strict prompt**, so a broken or missing
+  helper can only make a review harder to pass, never easier. The helper has to
+  prove it ran: the block's first line must be `DOCS-ONLY-EVIDENCE <base sha>`
+  for the base the bot itself resolved. An exit status is too weak a contract —
+  a helper truncated to `raise SystemExit(0)` exits clean with nothing to show.
+  It also runs under `timeout`, because a hang would hold the merge lock until
+  someone noticed.
+
 **The bot still checks CI and up-to-dateness before reviewing** — not as a gate,
 but to avoid spending a minutes-long review on a PR that protection will refuse,
 and to keep the reviewer looking at the diff that will actually land. The list
