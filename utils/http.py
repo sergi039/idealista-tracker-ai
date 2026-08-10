@@ -146,10 +146,21 @@ def request_with_retries(
         if gate is not None:
             gate.wait()
         try:
-            response = request_fn(*args, **kwargs)
+            # The inner `finally` marks the moment the attempt is over, however
+            # it ended: `request_fn` is an arbitrary callable, so a session
+            # adapter, a hook or a test transport can raise something that is
+            # not a RequestException, and a handler that named only that one
+            # left the gate waited-but-never-marked. The next slot would then be
+            # measured from the *start* of a call that ran for ten seconds. It
+            # is deliberately inside the backoff sleep below rather than around
+            # it: the interval runs from the end of the call, not from the end
+            # of the wait that follows it.
+            try:
+                response = request_fn(*args, **kwargs)
+            finally:
+                if gate is not None:
+                    gate.mark()
         except requests.RequestException as exc:
-            if gate is not None:
-                gate.mark()
             last_exc = exc
             if attempt >= max_attempts:
                 raise
@@ -159,9 +170,6 @@ def request_with_retries(
                 )
             time.sleep(_compute_backoff(attempt, backoff_base, backoff_max))
             continue
-
-        if gate is not None:
-            gate.mark()
 
         if response.status_code in statuses and attempt < max_attempts:
             if logger:

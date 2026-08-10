@@ -601,6 +601,39 @@ class TestPacing:
         assert starts[0] == 100.0
         assert starts[1] - starts[0] >= 30.0
 
+    def test_an_unexpected_exception_still_ends_the_attempt(self):
+        """`mark()` on every exit, not only on `RequestException`.
+
+        `request_fn` is an arbitrary callable — a session adapter, a hook or a
+        test transport can raise anything. Naming one exception type left the
+        gate waited-but-never-marked, so the next slot was measured from the
+        *start* of a call that had run for ten seconds. Found by the
+        independent review of this change.
+        """
+        from utils.http import request_with_retries
+
+        clock = {"now": 100.0}
+        events = []
+
+        class _TracingGate(RateGate):
+            def wait(self):
+                events.append(("wait", clock["now"]))
+                return 0.0
+
+            def mark(self):
+                events.append(("mark", clock["now"]))
+
+        def _explode(*_args, **_kwargs):
+            clock["now"] += 10.0  # a call that ran, then failed oddly
+            raise RuntimeError("adapter blew up")
+
+        gate = _TracingGate(5.0, name="tracing")
+        with patch("utils.http.time.monotonic", lambda: clock["now"]):
+            with pytest.raises(RuntimeError):
+                request_with_retries(_explode, "https://example.invalid", gate=gate)
+
+        assert events == [("wait", 100.0), ("mark", 110.0)]
+
     def test_a_finished_call_does_not_block_behind_another_callers_wait(self):
         """`mark()` must not wait out somebody else's pacing interval.
 
