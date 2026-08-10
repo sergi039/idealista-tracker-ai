@@ -434,8 +434,10 @@ def complete_claude(
         CLAUDE_EFFORT,
         "--no-session-persistence",
     ]
+    model_used = None
     if model:
         cmd += ["--model", model]
+        model_used = model
     if system:
         cmd += ["--system-prompt", system]
     if schema:
@@ -468,6 +470,9 @@ def complete_claude(
             "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
         },
         "provider": "claude",
+        # Same contract as codex: the id this run was given, or null for the
+        # CLI's own default.
+        "model": model_used,
     }
 
 
@@ -548,9 +553,14 @@ def complete_codex(
     cmd += ["-c", f"model_reasoning_effort={CODEX_EFFORT}"]
     # The CLI only knows its own model ids. An API-era name such as
     # "gpt-5-mini" makes it exit 1, so fall back to the CLI default instead of
-    # failing the whole analysis.
+    # failing the whole analysis. What ran is reported back either way: the
+    # warning below is inside the host's log, invisible from the app, which is
+    # how analyses came to be stored and displayed under a model id nothing
+    # confirms was used (#226).
+    model_used = None
     if model and (model.startswith("gpt-5.") or model.startswith("codex")):
         cmd += ["-m", model]
+        model_used = model
     elif model:
         LOG.warning("ignoring model %r: not a codex CLI model id", model)
 
@@ -634,6 +644,9 @@ def complete_codex(
             "reasoning_output_tokens": usage.get("reasoning_output_tokens"),
         },
         "provider": "codex",
+        # The id this run was actually given, or null when the CLI picked its
+        # own default. Never the id that was merely asked for.
+        "model": model_used,
     }
 
 

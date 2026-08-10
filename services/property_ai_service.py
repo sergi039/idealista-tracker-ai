@@ -507,7 +507,9 @@ class PropertyAIService:
         return {
             "status": "success",
             "structured_analysis": analysis_data,
-            "model": self.openai_model,
+            # The bridge reports the id it actually passed to the CLI, or None
+            # when the CLI picked its own default (#226).
+            "model": result.get("model"),
         }
 
     def _analyze_claude(
@@ -534,7 +536,7 @@ class PropertyAIService:
             return {
                 "status": "success",
                 "structured_analysis": analysis_data,
-                "model": self.anthropic_model,
+                "model": result.get("model"),
             }
         except subscription_transport.SubscriptionTransportError as exc:
             # Caught separately from the blanket handler below so a bridge

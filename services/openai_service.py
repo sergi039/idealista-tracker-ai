@@ -300,7 +300,11 @@ class OpenAIService:
 
         return {
             "structured_analysis": analysis_data,
-            "model": self.model,
+            # What the bridge says it ran, not what was asked for: the codex CLI
+            # silently ignores a model id it does not ship, and storing the
+            # configured one labelled the analysis with a model nothing confirms
+            # was used (#226). `None` means the CLI chose, and reads as unknown.
+            "model": result.get("model"),
             "status": "success",
         }
 

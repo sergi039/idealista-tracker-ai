@@ -110,8 +110,11 @@ Format your response in clear sections."""
             response_text = self._extract_response_text(message)
 
             return {
+                # The API answers with the exact snapshot it served, which is
+                # what an alias like "claude-sonnet-5" resolved to. Report that
+                # rather than the alias we asked for (#226).
                 "analysis": response_text,
-                "model": DEFAULT_MODEL,
+                "model": getattr(message, "model", None) or DEFAULT_MODEL,
                 "status": "success",
             }
 
@@ -571,14 +574,14 @@ Keep all responses concise and in English. Focus on practical investment insight
 
                 return {
                     "structured_analysis": analysis_data,
-                    "model": DEFAULT_MODEL,
+                    "model": getattr(message, "model", None) or DEFAULT_MODEL,
                     "status": "success",
                 }
             except json.JSONDecodeError:
                 # If JSON parsing fails, return raw response
                 return {
                     "raw_analysis": response_text,
-                    "model": DEFAULT_MODEL,
+                    "model": getattr(message, "model", None) or DEFAULT_MODEL,
                     "status": "partial_success",
                 }
 
