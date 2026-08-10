@@ -256,6 +256,14 @@ _TRANSITION_RETRY_DELAY_S = 0.05
 # docstring); three leaves margin without risking a real bug looping forever.
 _ENQUEUE_MAX_ATTEMPTS = 3
 
+# _matches_our_own_insert's bound on how many times it re-reads when there is
+# no advisory lock to block on (dedupe_key is None -- #190 review round 6).
+# Deliberately the same shape as _TRANSITION_MAX_ATTEMPTS/
+# _TRANSITION_RETRY_DELAY_S: a short, bounded retry for a residual,
+# non-critical path, not a substitute for the deterministic lock-wait the
+# PostgreSQL + dedupe_key branch uses instead.
+_INSERT_DISAMBIGUATION_MAX_ATTEMPTS = 3
+
 # How long a lease lasts past its last renewal before a row is presumed
 # abandoned. The longest known job budget is the AI analysis call: up to
 # 600 s server-side (services/property_ai_service.py), plus the client's own
@@ -623,41 +631,119 @@ def _reap_expired_active_row(db, dedupe_key: str) -> None:
         )
 
 
-def _matches_our_own_insert(job_id: str) -> bool:
+def _matches_our_own_insert(job_id: str, dedupe_key: Optional[str]) -> bool:
     """True if `job_id` -- the id `_acquire_job_slot` just tried to insert
     as a fresh `queued` row -- already exists with status `queued` and a
-    lease that has not expired, read through a brand-new session/
-    connection.
+    lease that has not expired.
 
     The insert-path counterpart to `_matches_our_own_write` (#190 review
     round 5): PostgreSQL can commit an INSERT server-side and still fail to
     acknowledge it to this process (a connection dropped on the way back),
-    which surfaces here as an exception from `db.session.commit()` that
-    looks, on its face, identical to a transaction that never landed at
-    all -- except this one is not even an `IntegrityError`, since nothing
-    violated a constraint; the earlier round-4 fix only ever handled that
-    one exception type. `job_id` is a fresh `uuid.uuid4().hex` this call
-    generated for itself immediately before the insert, so nothing else
-    could plausibly have created a row under that exact id -- an existing
-    `queued` row with a live lease has no explanation other than "this
-    insert, whose commit raised anyway, actually landed".
+    which surfaces here as an exception from `db.session.commit()` -- not
+    even an `IntegrityError`, since nothing violated a constraint, so the
+    round-4 fix's own exception type never covered it. `job_id` is a fresh
+    `uuid.uuid4().hex` this call generated for itself immediately before
+    the insert, so nothing else could plausibly have created a row under
+    that exact id -- an existing `queued` row with a live lease has no
+    explanation other than "this insert, whose commit raised anyway,
+    actually landed".
+
+    A round-6 review sharpened this further: a plain, immediate re-read is
+    not enough on real PostgreSQL. The server can still be resolving a
+    COMMIT after the client's connection has already dropped -- a protocol
+    detail, not anything this module controls -- and a SELECT issued right
+    after catching the exception can start, under MVCC, *before* that
+    resolution finishes, seeing nothing even though the row is about to
+    exist. Polling or sleeping to paper over that would just trade one
+    unbounded assumption for another; this instead waits on the one thing
+    that can only unblock once the original transaction has genuinely
+    ended:
+
+    - **PostgreSQL, `dedupe_key` given** (every real call site has one --
+      see below): the original transaction took
+      `pg_advisory_xact_lock(hashtext(dedupe_key))` as the very first
+      statement of `_dedupe_serialization`, before ever attempting its
+      insert, and PostgreSQL releases that lock only at that transaction's
+      own COMMIT or ROLLBACK -- never earlier, and never because the
+      client's connection happened to drop. A fresh session's *blocking*
+      acquire of the same lock id therefore cannot return until that
+      transaction has genuinely ended, one way or the other; only then is
+      the re-read that follows no longer racing anything. Deterministic --
+      no sleep, no retry count, no timing assumption. (A concurrent,
+      unrelated caller for the *same* key may acquire this lock before or
+      after this call does; either order is safe -- see the module
+      docstring's "Serializing the enqueue race" section. Whichever of the
+      two ends up seeing the row live simply defers to it instead of
+      dispatching, and the other is the one that actually owns it.)
+    - **PostgreSQL, `dedupe_key` is `None`**: nothing took a lock for this
+      attempt (`_dedupe_serialization` is a no-op without a key), so there
+      is nothing to block on. None of the three real AI-analysis call
+      sites (`land_ai_analysis`, `property_ai_analysis`,
+      `land_openai_analysis`) ever omit `dedupe_key` -- this is a
+      residual, non-critical path for job types that never deduplicate at
+      all. A short, bounded retry (`_INSERT_DISAMBIGUATION_MAX_ATTEMPTS`)
+      narrows the same race without closing it deterministically; that
+      residual window is accepted honestly here, not silently.
+    - **SQLite** (tests only -- this table's only real deployment target
+      is PostgreSQL): `commit()` is synchronous and in-process, so no
+      "the server is still resolving after the client gave up" window
+      exists at all -- the original, unconditional one-shot re-read stays
+      exactly correct, completely unchanged by this round. This branch
+      must also never try to acquire the per-`dedupe_key`
+      `threading.Lock` `_dedupe_serialization` uses for SQLite: that lock
+      is already held, by this *same* thread, for the entire duration of
+      the attempt whose commit is currently failing -- a plain
+      `threading.Lock` is not reentrant, and acquiring it a second time
+      from its own holder deadlocks immediately. The PostgreSQL branch
+      above has no such risk: it takes its lock in the *database*, from a
+      brand-new session/connection, and the original transaction's own
+      hold on it is either already released or about to be -- never held
+      by this code path itself.
     """
     from app import db as _db
     from models import BackgroundJob
 
-    try:
-        with Session(bind=_db.engine) as fresh_session:
-            row = (
-                fresh_session.query(BackgroundJob.id)
-                .filter(
-                    BackgroundJob.id == job_id,
-                    BackgroundJob.status == "queued",
-                    BackgroundJob.lease_expires_at.isnot(None),
-                    BackgroundJob.lease_expires_at >= _now_expr(),
-                )
-                .first()
+    def _row_exists(session) -> bool:
+        row = (
+            session.query(BackgroundJob.id)
+            .filter(
+                BackgroundJob.id == job_id,
+                BackgroundJob.status == "queued",
+                BackgroundJob.lease_expires_at.isnot(None),
+                BackgroundJob.lease_expires_at >= _now_expr(),
             )
-            return row is not None
+            .first()
+        )
+        return row is not None
+
+    try:
+        dialect = _dialect_name(_db.session)
+
+        if dialect == "sqlite":
+            with Session(bind=_db.engine) as fresh_session:
+                return _row_exists(fresh_session)
+
+        if dedupe_key is not None:
+            with Session(bind=_db.engine) as fresh_session:
+                # Blocks until the original transaction has released this
+                # exact advisory lock -- see the docstring above. Not
+                # explicitly committed: closing this session at the end of
+                # the `with` block rolls back its own (read-only, aside
+                # from the lock acquisition) transaction, which releases
+                # the lock just as well as a commit would.
+                fresh_session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+                    {"key": dedupe_key},
+                )
+                return _row_exists(fresh_session)
+
+        for attempt in range(_INSERT_DISAMBIGUATION_MAX_ATTEMPTS):
+            with Session(bind=_db.engine) as fresh_session:
+                if _row_exists(fresh_session):
+                    return True
+            if attempt < _INSERT_DISAMBIGUATION_MAX_ATTEMPTS - 1:
+                time.sleep(_TRANSITION_RETRY_DELAY_S)
+        return False
     except Exception:
         logger.exception(
             "job_id=%s: re-read to disambiguate an ambiguous insert commit also failed",
@@ -753,7 +839,7 @@ def _acquire_job_slot(
                         "insert-commit failure",
                         job_id,
                     )
-                if _matches_our_own_insert(job_id):
+                if _matches_our_own_insert(job_id, dedupe_key):
                     logger.warning(
                         "job_id=%s: insert already landed under an earlier "
                         "attempt whose commit acknowledgement was lost; "

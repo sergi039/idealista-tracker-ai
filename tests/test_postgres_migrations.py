@@ -1041,6 +1041,195 @@ def test_016_the_dedupe_serialization_lock_allows_only_one_execution_per_key(
         check_engine.dispose()
 
 
+def test_016_the_insert_disambiguation_blocks_until_the_original_transaction_commits(
+    postgres_url, monkeypatch
+):
+    """#190 review round 6: a bare, immediate re-read right after catching
+    an ambiguous insert-commit exception can race PostgreSQL's own
+    server-side resolution of that COMMIT -- the database can still be
+    finishing the commit after the client's connection has already
+    dropped, and a SELECT that starts before that resolution completes
+    will not see the row under MVCC, even though it is about to exist.
+    `_matches_our_own_insert`'s PostgreSQL branch must not just re-read; it
+    must first *block* on the same `pg_advisory_xact_lock` id the original
+    transaction took as `_dedupe_serialization`'s very first statement,
+    which PostgreSQL releases only at that transaction's own COMMIT or
+    ROLLBACK.
+
+    Connection X plays "the transaction whose acknowledgement was lost": it
+    takes the lock and inserts the row, but does not commit yet -- exactly
+    the ambiguous, still-open state this disambiguation exists to wait out.
+    `_matches_our_own_insert` is called directly (a white-box check of the
+    function itself, against the real dialect) and must observably block
+    for as long as X's transaction stays open, then wake the instant X
+    commits and correctly see the row.
+    """
+    import threading
+
+    from app import create_app
+    from migrations.runner import run_migrations
+    from services import background_jobs
+    from tests import setup_test_environment
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+    finally:
+        engine.dispose()
+
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    app = create_app()
+
+    key = "property_ai_analysis:904:claude"
+    job_id = "5" * 32
+
+    x_engine = create_engine(postgres_url)
+    x_conn = x_engine.connect()
+    try:
+        x_trans = x_conn.begin()
+        x_conn.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": key}
+        )
+        x_conn.execute(
+            text(
+                "INSERT INTO background_jobs "
+                "(id, job_type, status, dedupe_key, lease_expires_at) "
+                "VALUES (:id, 'property_ai_analysis', 'queued', :key, "
+                "NOW() + INTERVAL '900 seconds')"
+            ),
+            {"id": job_id, "key": key},
+        )
+
+        result_holder: dict[str, object] = {}
+        finished = threading.Event()
+
+        def _call_disambiguation() -> None:
+            with app.app_context():
+                result_holder["value"] = background_jobs._matches_our_own_insert(
+                    job_id, key
+                )
+            finished.set()
+
+        thread = threading.Thread(target=_call_disambiguation)
+        thread.start()
+        try:
+            blocked = not finished.wait(timeout=0.5)
+            assert blocked, (
+                "disambiguation must block while the original transaction "
+                "is still open, not race ahead of it with an immediate read"
+            )
+
+            x_trans.commit()
+
+            thread.join(timeout=10)
+            assert not thread.is_alive(), (
+                "disambiguation never woke up after the commit"
+            )
+            assert result_holder.get("value") is True, (
+                "disambiguation must see the row once the original "
+                "transaction has actually committed"
+            )
+        finally:
+            thread.join(timeout=10)
+    finally:
+        x_conn.close()
+        x_engine.dispose()
+
+
+def test_016_the_insert_disambiguation_wakes_to_no_row_after_a_rollback(
+    postgres_url, monkeypatch
+):
+    """The mirror of the test above: connection X takes the lock, inserts,
+    and then *rolls back* instead of committing -- the insert genuinely
+    never happened. `_matches_our_own_insert` must still block until that
+    resolution (a ROLLBACK releases the advisory lock exactly like a
+    COMMIT does), then correctly find no row and return `False`, so
+    `_acquire_job_slot` re-raises the original exception instead of
+    silently treating a real failure as a success.
+    """
+    import threading
+
+    from app import create_app
+    from migrations.runner import run_migrations
+    from services import background_jobs
+    from tests import setup_test_environment
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+    finally:
+        engine.dispose()
+
+    setup_test_environment()
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    app = create_app()
+
+    key = "property_ai_analysis:905:claude"
+    job_id = "6" * 32
+
+    x_engine = create_engine(postgres_url)
+    x_conn = x_engine.connect()
+    try:
+        x_trans = x_conn.begin()
+        x_conn.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": key}
+        )
+        x_conn.execute(
+            text(
+                "INSERT INTO background_jobs "
+                "(id, job_type, status, dedupe_key, lease_expires_at) "
+                "VALUES (:id, 'property_ai_analysis', 'queued', :key, "
+                "NOW() + INTERVAL '900 seconds')"
+            ),
+            {"id": job_id, "key": key},
+        )
+
+        result_holder: dict[str, object] = {}
+        finished = threading.Event()
+
+        def _call_disambiguation() -> None:
+            with app.app_context():
+                result_holder["value"] = background_jobs._matches_our_own_insert(
+                    job_id, key
+                )
+            finished.set()
+
+        thread = threading.Thread(target=_call_disambiguation)
+        thread.start()
+        try:
+            blocked = not finished.wait(timeout=0.5)
+            assert blocked, (
+                "disambiguation must block while the original transaction is still open"
+            )
+
+            x_trans.rollback()
+
+            thread.join(timeout=10)
+            assert not thread.is_alive(), (
+                "disambiguation never woke up after the rollback"
+            )
+            assert result_holder.get("value") is False, (
+                "a rolled-back insert must never be mistaken for a landed one"
+            )
+        finally:
+            thread.join(timeout=10)
+    finally:
+        x_conn.close()
+        x_engine.dispose()
+
+    check_engine = create_engine(postgres_url)
+    try:
+        with check_engine.begin() as check_conn:
+            count = check_conn.execute(
+                text("SELECT count(*) FROM background_jobs WHERE id = :id"),
+                {"id": job_id},
+            ).scalar_one()
+        assert count == 0, "a rolled-back insert must leave no row behind"
+    finally:
+        check_engine.dispose()
+
+
 def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
     postgres_url, tmp_path
 ):
