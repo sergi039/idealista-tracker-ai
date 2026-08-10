@@ -118,8 +118,16 @@ def complete(
     system: str = "",
     model: str = "",
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    schema: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Run one completion through the subscription CLI behind the bridge."""
+    """Run one completion through the subscription CLI behind the bridge.
+
+    `schema` is optional and additive (issue #218): a caller that does not
+    pass one gets exactly today's behaviour, because the bridge only adds
+    `--output-schema` / `--json-schema` to the CLI invocation when the field
+    is present and non-empty. `None` serialises to JSON `null`, which reads
+    the same as "the key is absent" on the bridge's side either way.
+    """
     result = _post(
         "/v1/complete",
         {
@@ -128,6 +136,7 @@ def complete(
             "system": system,
             "model": model,
             "timeout": timeout,
+            "schema": schema,
         },
         timeout,
     )
