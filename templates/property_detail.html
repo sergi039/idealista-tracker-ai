@@ -910,9 +910,18 @@
                             </span>
                         </div>
                         {# Provenance, not decoration: a `likely` from bare-earth terrain
-                           and a `likely` from a marketing phrase are not the same claim. #}
+                           and a `likely` from a marketing phrase are not the same claim.
+                           `read_verdict` answers the literal string "none" when no source
+                           computed anything, and printing that put the word "none" under
+                           "Sea view unknown" on 193 of the owner's listings -- a code
+                           leaking into the page, and one that reads like a verdict of its
+                           own. Say what it means instead. #}
                         <div class="small text-body-secondary mb-3">
-                            {{ sea_view_verdict.source }}{% if sea_view_verdict.reason %} &mdash; {{ sea_view_verdict.reason }}{% endif %}
+                            {% if sea_view_verdict.source and sea_view_verdict.source != 'none' %}
+                                {{ sea_view_verdict.source }}{% if sea_view_verdict.reason %} &mdash; {{ sea_view_verdict.reason }}{% endif %}
+                            {% else %}
+                                {{ t('sea_view_not_computed') }}
+                            {% endif %}
                             {% set geometry = sea_view_verdict.detail.get('geometry') or {} %}
                             {% if geometry.get('distance_m') %}
                                 <br><i class="fas fa-ruler-horizontal me-1"></i>{{ (geometry.distance_m / 1000)|round(1) }} km to the coastline
