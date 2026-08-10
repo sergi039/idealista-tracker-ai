@@ -111,8 +111,24 @@ def request_with_retries(
     backoff_max: float = 5.0,
     timeout: Optional[float] = None,
     logger: Optional[logging.Logger] = None,
+    gate: Optional[RateGate] = None,
     **kwargs,
 ) -> requests.Response:
+    """Issue a request, retrying the statuses the server retries on.
+
+    `gate` paces **every attempt**, not just the first. A caller that took the
+    gate itself and then handed the retry loop a free hand paced its lookups
+    while leaving the retries unpaced -- and a retry storm is precisely when
+    the endpoint is asking for less traffic, so the pacing came off exactly
+    where it was needed. Measured during the #152 backfill: 5 s between
+    lookups still drew more 429s than 504s, because each refusal was answered
+    by a burst the gate never saw.
+
+    The backoff and the gate are not redundant. The backoff is what *this*
+    server just asked for; the gate is what this process allows itself across
+    every caller. Waiting for the gate after the backoff yields the longer of
+    the two: a backoff already past the next slot costs nothing extra.
+    """
     if max_attempts < 1:
         max_attempts = 1
 
@@ -127,9 +143,13 @@ def request_with_retries(
     last_exc = None
 
     for attempt in range(1, max_attempts + 1):
+        if gate is not None:
+            gate.wait()
         try:
             response = request_fn(*args, **kwargs)
         except requests.RequestException as exc:
+            if gate is not None:
+                gate.mark()
             last_exc = exc
             if attempt >= max_attempts:
                 raise
@@ -139,6 +159,9 @@ def request_with_retries(
                 )
             time.sleep(_compute_backoff(attempt, backoff_base, backoff_max))
             continue
+
+        if gate is not None:
+            gate.mark()
 
         if response.status_code in statuses and attempt < max_attempts:
             if logger:
@@ -159,4 +182,12 @@ def request_with_retries(
 
     if last_exc:
         raise last_exc
-    return request_fn(*args, **kwargs)
+    # Unreachable: the loop either returns, raises, or continues. Kept as a
+    # belt-and-braces final attempt, and it takes the gate like any other.
+    if gate is not None:
+        gate.wait()
+    try:
+        return request_fn(*args, **kwargs)
+    finally:
+        if gate is not None:
+            gate.mark()

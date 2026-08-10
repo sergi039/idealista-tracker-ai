@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🚦 Fixed: the rate gate covers the retries, which is where the traffic was (2026-08-10)
+- **What**: `request_with_retries` takes a `gate=` and waits on it before
+  **every** attempt. The three callers that paced themselves by hand —
+  the Overpass amenity query, the Overpass coastline query, and the
+  OpenTopoData elevation query — now pass their gate instead of wrapping the
+  call, and the elevation endpoint gets a proper `ELEVATION_GATE` in place of
+  its `_last_elevation_call_at` global.
+- **Why**: the gate was taken once per *lookup* while the retry loop inside
+  `request_with_retries` fired unpaced, held back only by its own backoff. That
+  is backwards: a retry storm is precisely when the endpoint is asking for less
+  traffic. It showed up in the #152 backfill — at 5 s between lookups the run
+  still drew more `429`s than `504`s, because each refusal was answered by a
+  burst the gate never saw.
+- **The backoff is not a substitute and not redundant**: the backoff is what
+  *this* server just asked for, the gate is what this process allows itself
+  across every caller. Waiting for the gate after the backoff yields the longer
+  of the two, so a backoff already past the next slot costs nothing extra.
+- **Pinned by three tests**, each of which fails if the gate goes back to
+  covering only the first attempt: the amenity lookup hands the transport its
+  gate rather than taking it; a 504-then-200 takes the gate twice; and on a
+  fake clock a retry cannot start before the interval, where the 0.5 s default
+  backoff alone would have fired it at once.
+
 ### 🐢 Changed: Overpass is paced at 5 s, because 2 s was a guess (2026-08-09, #152 follow-up)
 - **What**: `OVERPASS_MIN_INTERVAL_S` goes from 2 s to 5 s, and `429 Too Many
   Requests` joins the three refusal shapes recorded in `docs/STATE.md`.
