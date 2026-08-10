@@ -177,11 +177,25 @@ def test_a_timeout_kills_the_whole_process_tree(bridge, tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX")
-def test_a_normal_exit_is_not_killed(bridge, tmp_path, monkeypatch):
-    """Cancellation belongs to the timeout path, never to a finished run."""
+def test_a_normal_exit_is_never_signalled(bridge, tmp_path, monkeypatch):
+    """Cancellation belongs to the timeout path, never to a finished run.
+
+    Asserting on the output alone would pass against a `finally: killpg`, so
+    watch the signal itself.
+    """
     monkeypatch.setenv("AI_BRIDGE_WORKDIR", str(tmp_path / "cold"))
+    signalled = []
+    real_killpg = os.killpg
+
+    def spy(pgid, sig):
+        signalled.append((pgid, sig))
+        return real_killpg(pgid, sig)
+
+    monkeypatch.setattr(bridge.os, "killpg", spy)
     out = bridge._run([sys.executable, "-c", "print('done')"], "", 30)
+
     assert out.strip() == "done"
+    assert signalled == []
 
 
 def test_a_failing_cli_is_reported_as_an_error_not_a_timeout(
@@ -213,6 +227,38 @@ def test_runs_are_bounded(bridge, tmp_path, monkeypatch):
 
     # Serialised: two 0.6 s runs cannot both finish inside one of them.
     assert time.monotonic() - started >= 1.0
+
+
+def test_the_budget_covers_queueing_and_running_together(bridge, tmp_path, monkeypatch):
+    """One budget, not one per stage.
+
+    Waiting a full timeout for a slot and then granting a full timeout to the
+    run lets a call live for two budgets, while the HTTP client gives up after
+    one — leaving a paid CLI running with nobody to receive its answer.
+    """
+    monkeypatch.setenv("AI_BRIDGE_WORKDIR", str(tmp_path / "cold"))
+    monkeypatch.setattr(bridge, "MAX_CONCURRENT_RUNS", 1)
+    monkeypatch.setattr(bridge, "_RUN_SLOTS", threading.BoundedSemaphore(1))
+    monkeypatch.setattr(bridge, "MIN_RUN_SECONDS", 0.5)
+    monkeypatch.setattr(bridge, "KILL_GRACE_SECONDS", 1.0)
+
+    holder = threading.Thread(
+        target=lambda: bridge._run(
+            [sys.executable, "-c", "import time; time.sleep(3)"], "", 30
+        )
+    )
+    holder.start()
+    try:
+        time.sleep(0.2)
+        started = time.monotonic()
+        with pytest.raises(bridge.BridgeError):
+            bridge._run([sys.executable, "-c", "import time; time.sleep(30)"], "", 4)
+        elapsed = time.monotonic() - started
+    finally:
+        holder.join()
+
+    # ~2.8 s queued + the rest of the 4 s budget. Two budgets would be ~6.8 s.
+    assert elapsed < 5.5, f"the call took {elapsed:.1f}s, more than its 4s budget"
 
 
 def test_a_full_bridge_reports_busy_instead_of_queueing_forever(
@@ -357,25 +403,72 @@ def test_a_successful_call_still_answers_200(bridge, monkeypatch):
         server.server_close()
 
 
-def test_the_subprocess_never_sees_an_api_key(bridge, monkeypatch, tmp_path):
-    """A key in the environment would take precedence over the subscription."""
+# Every one of these is read by an installed CLI and would move the call off
+# the subscription onto a billed path. The launcher sources the whole .env, so
+# any of them can arrive here without anyone meaning it.
+BILLED_PATH_VARS = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "AWS_BEARER_TOKEN_BEDROCK",
+]
+
+
+@pytest.mark.parametrize("variable", BILLED_PATH_VARS)
+def test_the_subprocess_never_sees_a_billed_auth_path(
+    bridge, monkeypatch, tmp_path, variable
+):
+    """A key or gateway override silently outranks the subscription session."""
     monkeypatch.setenv("AI_BRIDGE_WORKDIR", str(tmp_path / "cold"))
-    # Deliberately not shaped like a real key: what is asserted is that the
-    # variable is absent, and a realistic-looking literal only trips secret
-    # scanners.
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "must-not-reach-the-cli")
-    monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-the-cli-either")
+    # Deliberately not shaped like a real credential: what is asserted is that
+    # the variable is absent, and a realistic literal only trips secret scanners.
+    monkeypatch.setenv(variable, "must-not-reach-the-cli")
+    printed = bridge._run(
+        [sys.executable, "-c", f"import os; print(os.environ.get({variable!r}))"],
+        "",
+        30,
+    )
+    assert printed.strip() == "None"
+
+
+def test_the_subscription_session_still_reaches_the_cli(bridge, monkeypatch, tmp_path):
+    """Stripping provider variables must not strip the OAuth session with them."""
+    monkeypatch.setenv("AI_BRIDGE_WORKDIR", str(tmp_path / "cold"))
+    monkeypatch.setenv("CODEX_HOME", "/tmp/codex-home")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/claude-config")
     printed = bridge._run(
         [
             sys.executable,
             "-c",
-            "import os; print(os.environ.get('ANTHROPIC_API_KEY'), "
-            "os.environ.get('OPENAI_API_KEY'))",
+            "import os; print(os.environ.get('CODEX_HOME'), "
+            "os.environ.get('CLAUDE_CONFIG_DIR'))",
         ],
         "",
         30,
     )
-    assert printed.strip() == "None None"
+    assert printed.strip() == "/tmp/codex-home /tmp/claude-config"
+
+
+def test_an_unknown_provider_variable_is_stripped_by_default(
+    bridge, monkeypatch, tmp_path
+):
+    """A provider variable a future CLI adds must not quietly take effect."""
+    monkeypatch.setenv("AI_BRIDGE_WORKDIR", str(tmp_path / "cold"))
+    monkeypatch.setenv("ANTHROPIC_SOMETHING_INVENTED_LATER", "value")
+    printed = bridge._run(
+        [
+            sys.executable,
+            "-c",
+            "import os; print(os.environ.get('ANTHROPIC_SOMETHING_INVENTED_LATER'))",
+        ],
+        "",
+        30,
+    )
+    assert printed.strip() == "None"
 
 
 def test_bridge_has_no_shell_invocation():

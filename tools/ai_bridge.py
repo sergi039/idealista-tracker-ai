@@ -81,6 +81,29 @@ _RUN_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_RUNS)
 # How long a timed-out process group gets between SIGTERM and SIGKILL.
 KILL_GRACE_SECONDS = float(os.environ.get("AI_BRIDGE_KILL_GRACE", "5"))
 
+# Below this much of the budget left after queueing, starting a CLI only buys a
+# timeout: report a busy bridge instead of a run that cannot finish.
+MIN_RUN_SECONDS = float(os.environ.get("AI_BRIDGE_MIN_RUN_SECONDS", "5"))
+
+# Provider credentials and endpoint overrides never reach a CLI. See _cli_env.
+# The prefixes are the net; these names are the ones whose presence is worth
+# saying out loud, because each of them moves a call off the subscription and
+# onto a billed path, and each is read by an installed CLI today.
+AUTH_ENV_PREFIXES = ("ANTHROPIC_", "OPENAI_", "CODEX_", "CLAUDE_CODE_")
+CREDENTIAL_ENV_NAMES = frozenset(
+    {
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "OPENAI_API_KEY",
+        "CODEX_API_KEY",
+        "AWS_BEARER_TOKEN_BEDROCK",
+    }
+)
+AUTH_ENV_KEEP = frozenset({"CODEX_HOME", "CLAUDE_CONFIG_DIR"})
+
 # The CLIs live outside the login shell's PATH when launched from a LaunchAgent.
 EXTRA_PATH = os.pathsep.join(
     [
@@ -92,12 +115,43 @@ EXTRA_PATH = os.pathsep.join(
 
 
 def _cli_env() -> dict:
+    """The environment a CLI is allowed to see.
+
+    Anything that can point a CLI at a billed API path instead of the owner's
+    subscription session is removed. Two names were not enough: `codex` also
+    reads `CODEX_API_KEY`, and `claude` reads `ANTHROPIC_AUTH_TOKEN`,
+    `ANTHROPIC_BASE_URL` and the `CLAUDE_CODE_USE_BEDROCK` / `_USE_VERTEX`
+    switches (all four verified present in the installed binaries). The
+    launcher sources the whole `.env`, so any of them could arrive here without
+    anyone meaning it — and a key silently wins over the subscription, which is
+    the one outcome this bridge exists to prevent.
+
+    Stripping by prefix rather than by list is deliberate: a provider variable
+    added by a future CLI release is removed by default instead of quietly
+    taking effect. `CODEX_HOME` and `CLAUDE_CONFIG_DIR` are the exceptions —
+    they locate the OAuth session itself.
+    """
     env = dict(os.environ)
     env["PATH"] = os.pathsep.join([EXTRA_PATH, env.get("PATH", "")])
-    # A key in the environment would silently take precedence over the
-    # subscription session inside the CLIs; this bridge exists to avoid that.
-    env.pop("ANTHROPIC_API_KEY", None)
-    env.pop("OPENAI_API_KEY", None)
+
+    removed = [
+        name
+        for name in list(env)
+        if name not in AUTH_ENV_KEEP
+        and (name.startswith(AUTH_ENV_PREFIXES) or name in CREDENTIAL_ENV_NAMES)
+    ]
+    for name in removed:
+        env.pop(name, None)
+
+    # Names only: the values are exactly what must not be logged. A credential
+    # is worth a warning — it means the environment really did hold a billed
+    # path — while the rest of the prefix sweep is routine hygiene.
+    credentials = sorted(set(removed) & CREDENTIAL_ENV_NAMES)
+    if credentials:
+        LOG.warning("kept a billed auth path away from the CLI: %s", credentials)
+    routine = sorted(set(removed) - CREDENTIAL_ENV_NAMES)
+    if routine:
+        LOG.debug("stripped inherited CLI variables: %s", routine)
     return env
 
 
@@ -205,12 +259,29 @@ def _kill_process_group(proc: subprocess.Popen, grace: float) -> None:
 
 
 def _run(cmd: list[str], stdin_text: str, timeout: int) -> str:
-    """Run one CLI to completion, or kill its whole process tree trying."""
+    """Run one CLI to completion, or kill its whole process tree trying.
+
+    `timeout` is the budget for the whole call, queueing included. Spending it
+    twice — once waiting for a slot, once running — would let a request live for
+    two budgets while the HTTP client gave up after one, leaving an expensive
+    CLI running with nobody left to receive its answer.
+    """
+    deadline = time.monotonic() + timeout
     if not _RUN_SLOTS.acquire(timeout=timeout):
         raise BridgeBusy(
             f"all {MAX_CONCURRENT_RUNS} run slots were busy for {timeout}s"
         )
     try:
+        budget = deadline - time.monotonic()
+        # Only queueing can push the budget below the floor, so the floor is
+        # capped at half the request's own budget: a caller who asked for a
+        # short timeout and got a slot immediately still gets its run.
+        floor = min(MIN_RUN_SECONDS, timeout / 2)
+        if budget < floor:
+            raise BridgeBusy(
+                f"a slot came free with {budget:.1f}s of the {timeout}s budget "
+                "left, too little to answer in"
+            )
         proc = subprocess.Popen(  # noqa: S603 - argv is built here, never shell
             cmd,
             stdin=subprocess.PIPE,
@@ -222,7 +293,7 @@ def _run(cmd: list[str], stdin_text: str, timeout: int) -> str:
             start_new_session=True,
         )
         try:
-            stdout, stderr = proc.communicate(stdin_text, timeout=timeout)
+            stdout, stderr = proc.communicate(stdin_text, timeout=budget)
         except subprocess.TimeoutExpired:
             _kill_process_group(proc, KILL_GRACE_SECONDS)
             # Drain the pipes the killed process left behind.
@@ -230,7 +301,9 @@ def _run(cmd: list[str], stdin_text: str, timeout: int) -> str:
                 proc.communicate(timeout=KILL_GRACE_SECONDS)
             except (subprocess.TimeoutExpired, ValueError):
                 pass
-            raise BridgeTimeout(f"{cmd[0]} timed out after {timeout}s") from None
+            raise BridgeTimeout(
+                f"{cmd[0]} timed out after {budget:.0f}s of a {timeout}s budget"
+            ) from None
     finally:
         _RUN_SLOTS.release()
 
