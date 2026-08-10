@@ -150,9 +150,46 @@ class TestOutgoingRequests:
             return _Response()
 
         monkeypatch.setattr(svc.requests, "get", _get)
-        monkeypatch.setattr(svc.Config, "SEA_VIEW_ELEVATION_MIN_INTERVAL_S", 0.0)
+        # The interval is captured when ELEVATION_GATE is built, so setting it
+        # on Config afterwards does nothing -- setting it on the gate is what
+        # a test has to do now.
+        monkeypatch.setattr(svc.ELEVATION_GATE, "min_interval_s", 0.0)
         svc.fetch_elevations([(43.0, -6.0)])
         assert captured["headers"]["User-Agent"] == svc.HTTP_USER_AGENT
+
+    def test_the_elevation_request_is_paced_by_its_own_gate(self, monkeypatch):
+        """OpenTopoData's public instance asks for one call a second, and the
+        retries count towards that as much as the first attempt.
+
+        Its own gate rather than Overpass's: two endpoints, two budgets, and
+        waiting for one because the other is busy would slow a run for nothing.
+        """
+        captured = {}
+
+        class _Response:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {"status": "OK", "results": [{"elevation": 10.0}]}
+
+        def _get(url, **kwargs):
+            captured.update(kwargs)
+            return _Response()
+
+        monkeypatch.setattr(svc.requests, "get", _get)
+        monkeypatch.setattr(svc.ELEVATION_GATE, "min_interval_s", 0.0)
+
+        gates = []
+        monkeypatch.setattr(
+            svc,
+            "request_with_retries",
+            lambda fn, *a, **kw: gates.append(kw.get("gate")) or _get(*a, **kw),
+        )
+        svc.fetch_elevations([(43.0, -6.0)])
+
+        assert gates == [svc.ELEVATION_GATE]
+        assert gates[0] is not svc.OVERPASS_GATE
 
 
 class TestApproximateCoordinates:

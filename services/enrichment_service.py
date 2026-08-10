@@ -1183,10 +1183,6 @@ class EnrichmentService:
             out center;
             """
 
-            # Both Overpass callers in this process share one gate, so a bulk
-            # run over hundreds of rows does not become hundreds of
-            # back-to-back queries against an endpoint that grants two slots.
-            OVERPASS_GATE.wait()
             try:
                 response = request_with_retries(
                     requests.post,
@@ -1208,11 +1204,13 @@ class EnrichmentService:
                     backoff_max=90.0,
                     timeout=60,
                     logger=logger,
+                    # Both Overpass callers in this process share one gate, and
+                    # it covers every attempt: the retries are what a bulk run
+                    # spends most of its requests on.
+                    gate=OVERPASS_GATE,
                 )
             except requests.RequestException as exc:
                 return OsmAmenityReading(failure=failure_from_exception(exc))
-            finally:
-                OVERPASS_GATE.mark()
 
             status_code = getattr(response, "status_code", None)
             if status_code != 200:
