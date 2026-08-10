@@ -547,7 +547,7 @@ def properties():
         sort_order = request.args.get("order", "desc")
 
         # Pagination
-        page = request.args.get("page", 1, type=int)
+        page = max(request.args.get("page", 1, type=int), 1)
         per_page = request.args.get("per_page", 25, type=int)
         per_page = min(max(per_page, 10), 100)
 
@@ -657,6 +657,13 @@ def properties():
             active_mode = mode
 
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+        # A page past the end renders the last one instead of an empty table
+        # under a correct "of N results" count. Reachable from the page-size
+        # control (which used to carry `page` across) and from any stale link.
+        if pagination.pages and page > pagination.pages:
+            page = pagination.pages
+            pagination = query.paginate(page=page, per_page=per_page, error_out=False)
 
         # Travel columns for whatever subscriptions are on screen: presets for
         # all of them, plus the custom destinations when exactly one is shown.
