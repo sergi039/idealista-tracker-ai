@@ -120,6 +120,14 @@ Default recommendation:
     `utils/http.py` `OVERPASS_GATE`, because the two slots above are per IP
     rather than per caller (#152). Pacing the coastline query and the amenity
     query separately paced neither.
+  - **The pacer belongs to the transport, not the caller.** `gate=` is passed
+    to `request_with_retries`, which takes it before *every* attempt. A caller
+    that took the gate itself and then handed the retry loop a free hand paced
+    its lookups and left the retries unpaced — and a retry storm is exactly
+    when the endpoint is asking for less traffic. The backoff does not replace
+    it: the backoff is what this server just asked for, the gate is what the
+    process allows itself across every caller, and waiting for the gate after
+    the backoff yields the longer of the two at no extra cost.
   - **The interval is 5 s, and it is measured rather than chosen.** A dry-run
     amenity backfill over 20 properties at the previous 2 s spent 39 requests
     on 20 answers: 16 served, 8 refused with `504`, 15 with `429`. More than

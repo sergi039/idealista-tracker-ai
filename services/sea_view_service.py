@@ -29,7 +29,6 @@ billing that blocks #98 does not block this.
 import json
 import logging
 import math
-import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -37,7 +36,12 @@ import requests
 
 from config import Config
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
-from utils.http import HTTP_USER_AGENT, OVERPASS_GATE, request_with_retries
+from utils.http import (
+    HTTP_USER_AGENT,
+    OVERPASS_GATE,
+    RateGate,
+    request_with_retries,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -272,8 +276,6 @@ def fetch_coastline_points(
     )
     http = session or requests
 
-    OVERPASS_GATE.wait()
-
     try:
         response = request_with_retries(
             http.post,
@@ -290,11 +292,11 @@ def fetch_coastline_points(
             backoff_max=90.0,
             timeout=120,
             logger=logger,
+            # Shared with the amenity query, and it covers the retries too.
+            gate=OVERPASS_GATE,
         )
     except requests.RequestException as exc:
         raise SeaViewSourceError(f"Overpass request failed: {exc}") from exc
-    finally:
-        OVERPASS_GATE.mark()
 
     if response.status_code != 200:
         raise SeaViewSourceError(f"Overpass returned HTTP {response.status_code}")
@@ -332,7 +334,10 @@ def fetch_coastline_points(
     return points
 
 
-_last_elevation_call_at = 0.0
+# OpenTopoData's public instance asks for one call a second. Its own gate
+# rather than Overpass's: two different endpoints, two different budgets, and
+# waiting for one because the other is busy would slow a run for no reason.
+ELEVATION_GATE = RateGate(Config.SEA_VIEW_ELEVATION_MIN_INTERVAL_S, name="opentopodata")
 
 
 def fetch_elevations(
@@ -351,13 +356,6 @@ def fetch_elevations(
             f"{Config.SEA_VIEW_ELEVATION_MAX_LOCATIONS}-location request cap"
         )
 
-    global _last_elevation_call_at
-    wait = Config.SEA_VIEW_ELEVATION_MIN_INTERVAL_S - (
-        time.monotonic() - _last_elevation_call_at
-    )
-    if wait > 0:
-        time.sleep(wait)
-
     locations = "|".join(f"{lat:.6f},{lon:.6f}" for lat, lon in points)
     http = session or requests
     try:
@@ -368,11 +366,12 @@ def fetch_elevations(
             headers={"User-Agent": HTTP_USER_AGENT},
             timeout=60,
             logger=logger,
+            # OpenTopoData's public instance asks for one call a second, and
+            # the retries count towards that as much as the first attempt.
+            gate=ELEVATION_GATE,
         )
     except requests.RequestException as exc:
         raise SeaViewSourceError(f"Elevation request failed: {exc}") from exc
-    finally:
-        _last_elevation_call_at = time.monotonic()
 
     if response.status_code != 200:
         raise SeaViewSourceError(f"Elevation API returned HTTP {response.status_code}")

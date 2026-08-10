@@ -82,20 +82,282 @@ fi
 
 # Canary for the corruption class handled above (issue #74, incident
 # 2026-08-08): no check the gate spawns may mutate this repository's shared
-# config. If it happens anyway, the epilogue after the loop restores this
-# snapshot and fails the push loudly, instead of leaving core.bare=true to
-# quietly kill every worktree of this clone.
+# config. If it happens anyway, the epilogue after the loop reports it and
+# fails the push loudly, instead of leaving core.bare=true to quietly kill
+# every worktree of this clone.
+#
+# The canary is deliberately key-scoped, not byte-scoped (issue #155). This
+# clone is worked by several agent sessions at once, so the shared config has
+# writers other than this gate, and a whole-file comparison cannot tell them
+# apart: a parallel `git push -u` used to abort a green push, and the
+# whole-file restore then silently threw that session's upstream away. Two
+# predicates carry that distinction, each with its reasoning at the
+# definition: config_key_is_branch_bookkeeping() (ignored outright) and
+# config_key_is_clone_scope() (the only keys the hook writes back).
 shared_config="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)/config"
 config_snapshot="$(mktemp "${TMPDIR:-/tmp}/local-ci-gate-config.XXXXXX")" || config_snapshot=""
 if [ -n "$config_snapshot" ] && ! cp "$shared_config" "$config_snapshot" 2>/dev/null; then
     rm -f "$config_snapshot"
     config_snapshot=""
 fi
-# A dead canary must not block the push (the env scrub above is the actual
-# fix), but it must not die silently either.
+# No snapshot means no canary, and "I could not check" is not a reason to
+# let a push through the one gate that stands between a leaked GIT_DIR and a
+# clone every worktree of which stops working. Fail closed; SKIP_LOCAL_CI=1
+# is the deliberate way past it.
 if [ -z "$config_snapshot" ]; then
-    echo "pre-push: warning: could not snapshot ${shared_config}; the config-mutation canary is OFF for this run"
+    echo "pre-push: FATAL: could not snapshot ${shared_config}, so the config-mutation"
+    echo "pre-push: canary cannot run. Fix the temp directory, or push with"
+    echo "pre-push: SKIP_LOCAL_CI=1 if you accept running without the gate."
+    exit 1
 fi
+
+# The exact branch keys another session on this clone writes while the gate
+# runs: `git push -u`, `git checkout -b --track` and `git worktree add -b`
+# set remote/merge (and rebase under branch.autoSetupRebase), VS Code adds
+# vscode-merge-base, and `git branch -d` drops them again. With
+# extensions.worktreeConfig on, those writes land in the shared file every
+# worktree sees. The gate itself only ever runs `git worktree add --detach`,
+# which creates no branch, so ignoring these costs the canary no detection
+# power for its own leaks - and it is the difference between guarding the
+# config and blaming this push for someone else's `push -u` (issue #155).
+#
+# Deliberately these four keys and not the whole [branch] section: the rest
+# of it is not bookkeeping. branch.<name>.pushRemote redirects where future
+# pushes go, and nothing in a parallel workflow writes it.
+config_key_is_branch_bookkeeping() {
+    case "$1" in
+        branch.*.remote | branch.*.merge | branch.*.rebase | branch.*.vscode-merge-base)
+            return 0
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+# The keys that describe what this repository *is*, rather than how somebody
+# likes to work in it: get one wrong and every worktree of the clone stops
+# functioning (core.bare = true was the 2026-08-08 incident), and the include
+# machinery can silently redefine all of the above.
+#
+# These are the only keys the hook writes back, and the test is attribution,
+# not danger: only git's own plumbing writes them, so reverting one cannot
+# undo a peer session's work - which is the damage issue #155 is about.
+# core.hooksPath is danger without attribution and so is NOT here: this
+# repo's own tools/ci/install_hooks.sh writes it, so a parallel session
+# plausibly did. It is reported and left alone, like every other key.
+config_key_is_clone_scope() {
+    case "$1" in
+        core.bare | core.worktree | core.repositoryformatversion) return 0 ;;
+        extensions.* | include.* | includeif.*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Writes to $2 one sorted "<key><TAB><n><TAB><value>" line per entry of the
+# config file $1, minus the branch keys, and to "$2.order" the same keys in
+# the order the file lists them. `--file` does not follow include.*
+# directives, so this describes that one file.
+#
+# The order file exists because git evaluates a config top to bottom and
+# include.path pulls its target in *at that point*: moving an [include]
+# block below [core] lets it override core.bare while every individual entry
+# stays byte-identical. Sorted fingerprints cannot see that; the order can.
+# Branch keys are filtered out before the order is taken, so a parallel
+# session appending [branch "x"] does not disturb it.
+#
+# Three details keep distinct configs from sharing a fingerprint, which is
+# the only way a mutation could slip past unseen:
+#   * <n> is the key's 1-based occurrence in file order, so reordering a
+#     multi-valued key (include.path A,B -> B,A changes what git loads) is a
+#     difference, not a no-op;
+#   * a valueless key ("bare", which reads as true) renders as `-` and an
+#     empty one ("bare =") as `=`, because git tells them apart;
+#   * backslash and newline are escaped rather than translated, so no value
+#     can be spelled two ways or smuggle a line break into the record.
+#
+# Returns non-zero if git cannot read the file, rather than reporting it as
+# empty: two "empty" fingerprints compare equal, which would turn an
+# unreadable config into a silent PASS - the one way this canary could wave
+# through the corruption it exists to catch.
+config_fingerprint() {
+    local file="$1"
+    local out="$2"
+    local raw="${out}.raw"
+    local entry entry_key entry_value
+    if ! git config --file "$file" --list -z >"$raw" 2>/dev/null; then
+        rm -f "$raw"
+        return 1
+    fi
+    # awk only creates the order file when it has something to write, and a
+    # missing file would compare as "changed" against an empty one.
+    : >"${out}.order" || return 1
+    while IFS= read -r -d '' entry; do
+        entry_key="${entry%%$'\n'*}"
+        # A tab separates key from value in every record below, and git does
+        # allow one inside a subsection name ([includeIf "gitdir:a<TAB>b"]).
+        # Such a key would split in the wrong place and let two different
+        # configs render identically, so refuse to judge instead: exiting the
+        # subshell fails the whole pipeline, which the caller treats as
+        # "cannot compare this file".
+        #
+        # The cost is a clone that owns such a key seeing every push refused
+        # once anything touches its config, branch bookkeeping included. That
+        # is the deliberate side to fail on, and the message says exactly
+        # which key and why; teaching the renderer to escape tabs would mean
+        # decoding them again before handing a key to `git config`, in the
+        # one comparison that must not be subtly wrong.
+        case "$entry_key" in
+            *$'\t'*) exit 1 ;;
+        esac
+        if config_key_is_branch_bookkeeping "$entry_key"; then
+            continue
+        fi
+        case "$entry" in
+            *$'\n'*) entry_value="=${entry#*$'\n'}" ;;
+            *) entry_value="-" ;;
+        esac
+        entry_value="${entry_value//\\/\\\\}"
+        entry_value="${entry_value//$'\n'/\\n}"
+        printf '%s\t%s\n' "$entry_key" "$entry_value"
+    done <"$raw" |
+        CANARY_ORDER="${out}.order" awk 'BEGIN { FS = "\t"; OFS = "\t"; order = ENVIRON["CANARY_ORDER"] }
+            { print $1 >order; print $1, ++seen[$1], substr($0, length($1) + 2) }' |
+        LC_ALL=C sort >"$out"
+    # PIPESTATUS, not $?: $? here is `sort`, and a failed awk or a short write
+    # would otherwise leave a truncated fingerprint that compares equal to
+    # another truncated one - a mutation passing because the check broke.
+    local pipe_status="${PIPESTATUS[*]}"
+    local stage_rc
+    rm -f "$raw"
+    for stage_rc in $pipe_status; do
+        [ "$stage_rc" -eq 0 ] || return 1
+    done
+    return 0
+}
+
+# Writes to $3 the sorted names of the keys whose fingerprint lines differ
+# between fingerprint files $1 and $2. Returns non-zero if that could not be
+# computed, so a broken comparison is never mistaken for "nothing changed".
+config_changed_keys() {
+    # FILENAME, not the usual FNR == NR: with an empty "before" file that
+    # idiom calls every "after" row a "before" row, and an added core.bare
+    # would come out as no change at all.
+    CANARY_BEFORE="$1" awk -F '\t' '
+        FILENAME == ENVIRON["CANARY_BEFORE"] { before[$0] = 1; next }
+        { after[$0] = 1 }
+        END {
+            for (line in before) if (!(line in after)) changed[key(line)] = 1
+            for (line in after) if (!(line in before)) changed[key(line)] = 1
+            for (name in changed) if (name != "") print name
+        }
+        function key(line,    tab) {
+            tab = index(line, "\t")
+            return tab > 1 ? substr(line, 1, tab - 1) : ""
+        }
+    ' "$1" "$2" | LC_ALL=C sort >"$3"
+    local pipe_status="${PIPESTATUS[*]}"
+    local stage_rc
+    for stage_rc in $pipe_status; do
+        [ "$stage_rc" -eq 0 ] || return 1
+    done
+    return 0
+}
+
+# The lines of the fingerprint file $1 that belong to key $2. Compared with
+# cmp this is an exact check - it keeps the valueless/empty distinction and
+# the ordering that config_key_values() below deliberately flattens for
+# reading. Never grep here: a key name is not a regular expression.
+#
+# The key travels through the environment, not `awk -v`: -v decodes escape
+# sequences, so a legal subsection name like [includeIf "gitdir:C:\new"]
+# would arrive with a newline in it and match nothing at all. Every awk in
+# this file passes shell values the same way, for the same reason.
+config_fingerprint_key() {
+    CANARY_KEY="$2" awk -F '\t' '$1 == ENVIRON["CANARY_KEY"]' "$1"
+}
+
+# Prints "yes" when key $2 has a valueless entry in fingerprint file $1 -
+# "[core] bare" with no "=", which git reads as true. `git config` cannot
+# write one back: it would spell it "bare =", which reads as *false*, so this
+# is the one case where a repair does more damage than the damage.
+#
+# The answer is printed rather than returned as an exit status on purpose: an
+# awk that dies with status 1 would be indistinguishable from an honest "no",
+# and a wrong "no" here is what flips the entry. A failed run prints nothing,
+# which the caller reads as "could not tell" and leaves the key alone.
+config_key_valueless_state() {
+    CANARY_KEY="$2" awk -F '\t' '
+        $1 == ENVIRON["CANARY_KEY"] && $3 == "-" { found = 1 }
+        END { print(found ? "yes" : "no") }
+    ' "$1"
+}
+
+# A key's values in one config file, rendered for the failure report.
+config_key_values() {
+    local file="$1"
+    local key="$2"
+    local rendered
+    if ! git config --file "$file" --get-all "$key" >/dev/null 2>&1; then
+        printf '(unset)'
+        return 0
+    fi
+    rendered="$(git config --file "$file" --get-all "$key" 2>/dev/null | paste -s -d '|' -)"
+    printf '%s' "${rendered:-(empty)}"
+}
+
+# Put key $1 back the way the snapshot has it, using $2 as scratch space and
+# leaving every other key - including whatever a parallel session wrote
+# meanwhile - alone. `git config` takes the config lock for each write, so a
+# concurrent writer is merged with rather than overwritten.
+#
+# Never `--unset-all` first: that is the destructive half, and if the write
+# that should follow it cannot take the lock the key is left *gone*, which is
+# worse than the mutation being repaired. --replace-all does the whole job in
+# one locked operation for a single-valued key, and for a multi-valued one it
+# seeds the first value so a failure part-way leaves a shorter list rather
+# than nothing.
+restore_config_key() {
+    local key="$1"
+    local scratch="$2"
+    local old_value
+    local seeded=0
+    local get_rc
+
+    # -z goes before --get-all on purpose: trailing, git accepts it and
+    # prints nothing at all, so the key would be cleared and never put back.
+    git config --file "$config_snapshot" -z --get-all "$key" >"$scratch" 2>/dev/null
+    get_rc=$?
+
+    # git says 1 for "no such key" and something else for "I failed". Only
+    # the first means the gate invented this key; treating a read error the
+    # same way would delete a key that was there all along.
+    if [ "$get_rc" -eq 1 ]; then
+        git config --file "$shared_config" --unset-all "$key" >/dev/null 2>&1 ||
+            echo "pre-push: warning: could not remove ${key} from ${shared_config}"
+        return 0
+    fi
+    if [ "$get_rc" -ne 0 ] || [ ! -s "$scratch" ]; then
+        echo "pre-push: warning: could not read ${key} back out of the snapshot"
+        echo "pre-push: (git exit ${get_rc}); left as the gate left it."
+        return 1
+    fi
+
+    while IFS= read -r -d '' old_value; do
+        if [ "$seeded" -eq 0 ]; then
+            # Only a *successful* seed may be followed by --add. Marking it
+            # seeded first would append the remaining values onto the value
+            # the gate wrote, leaving a list that is half repair, half damage.
+            if ! git config --file "$shared_config" --replace-all "$key" "$old_value"; then
+                echo "pre-push: warning: could not restore ${key} in ${shared_config};"
+                echo "pre-push: left as the gate left it."
+                return 1
+            fi
+            seeded=1
+        elif ! git config --file "$shared_config" --add "$key" "$old_value"; then
+            echo "pre-push: warning: ${key} is only partly restored in ${shared_config}."
+            return 1
+        fi
+    done <"$scratch"
+}
 
 run_gate_on_commit() {
     local sha="$1"
@@ -138,18 +400,145 @@ for sha in $pushed_shas; do
     run_gate_on_commit "$sha" || overall_rc=1
 done
 
-if [ -n "$config_snapshot" ]; then
-    if ! cmp -s "$config_snapshot" "$shared_config"; then
+if [ -n "$config_snapshot" ] && ! cmp -s "$config_snapshot" "$shared_config"; then
+    # The file changed. Ask *which keys* changed before blaming this push:
+    # a parallel session's branch bookkeeping is not a gate leak.
+    diff_dir="$(mktemp -d "${TMPDIR:-/tmp}/local-ci-gate-diff.XXXXXX")" || diff_dir=""
+    if [ -z "$diff_dir" ]; then
+        # Fail closed. We know the config changed and cannot say whether it
+        # was core.bare; "could not check" is not a reason to let it through.
         echo
-        echo "pre-push: FATAL: this gate run mutated ${shared_config}:"
-        diff "$config_snapshot" "$shared_config" | sed 's/^/    /'
-        cp "$config_snapshot" "$shared_config"
-        echo "pre-push: restored the pre-push copy. Some check is writing to the real"
-        echo "pre-push: repo config again - find and fix it before pushing (issue #74)."
+        echo "pre-push: FATAL: ${shared_config} changed during this gate run and no temp"
+        echo "pre-push: dir could be created to work out which keys. Not judging it and"
+        echo "pre-push: not pushing; check the config by hand."
         overall_rc=1
+    else
+        changed_keys="${diff_dir}/changed"
+        if ! config_fingerprint "$config_snapshot" "${diff_dir}/before" ||
+            ! config_fingerprint "$shared_config" "${diff_dir}/after"; then
+            echo
+            echo "pre-push: FATAL: ${shared_config} changed during this gate run and cannot"
+            echo "pre-push: be compared: either 'git config --list' cannot read it, or a key"
+            echo "pre-push: has a tab in its subsection name, which this check cannot tell"
+            echo "pre-push: apart from another key. Nothing was changed back; read it by hand."
+            overall_rc=1
+            rm -rf "$diff_dir"
+            diff_dir=""
+        fi
     fi
-    rm -f "$config_snapshot"
+
+    if [ -n "$diff_dir" ] &&
+        ! config_changed_keys "${diff_dir}/before" "${diff_dir}/after" "$changed_keys"; then
+        echo
+        echo "pre-push: FATAL: ${shared_config} changed during this gate run and the"
+        echo "pre-push: comparison that works out which keys did not complete. Nothing"
+        echo "pre-push: was changed back; check the config by hand before pushing."
+        overall_rc=1
+        rm -rf "$diff_dir"
+        diff_dir=""
+    fi
+
+    if [ -n "$diff_dir" ]; then
+        order_changed=0
+        if ! cmp -s "${diff_dir}/before.order" "${diff_dir}/after.order"; then
+            order_changed=1
+        fi
+
+        if [ ! -s "$changed_keys" ] && [ "$order_changed" -eq 0 ]; then
+            echo
+            echo "pre-push: note: only branch bookkeeping in ${shared_config} changed"
+            echo "pre-push: while the gate ran - a parallel 'git push -u', 'git branch' or"
+            echo "pre-push: 'git worktree add', here or in another session. Left as written."
+        elif [ ! -s "$changed_keys" ]; then
+            echo
+            echo "pre-push: FATAL: every entry of ${shared_config} still has its old value,"
+            echo "pre-push: but they were reordered during this gate run. git reads the file"
+            echo "pre-push: top to bottom, so an [include] moved below [core] overrides what"
+            echo "pre-push: [core] said - the effective config changed even though no single"
+            echo "pre-push: entry did. Nothing was changed back; read the file itself."
+            overall_rc=1
+        else
+            echo
+            echo "pre-push: FATAL: ${shared_config} changed during this gate run:"
+            while IFS= read -r key; do
+                if config_key_is_clone_scope "$key"; then
+                    verdict="reverting"
+                else
+                    verdict="left as found"
+                fi
+                printf '    %s: %s -> %s   [%s]\n' "$key" \
+                    "$(config_key_values "$config_snapshot" "$key")" \
+                    "$(config_key_values "$shared_config" "$key")" "$verdict"
+            done <"$changed_keys"
+            if [ "$order_changed" -eq 1 ]; then
+                echo "pre-push: the entries also sit in a different order now. git reads the"
+                echo "pre-push: file top to bottom and include.* applies where it appears, so"
+                echo "pre-push: read the file itself - no revert can put an order back."
+            fi
+
+            while IFS= read -r key; do
+                if ! config_key_is_clone_scope "$key"; then
+                    continue
+                fi
+                # "no" is the only answer that permits a repair; anything
+                # else, including a check that could not run, leaves the key
+                # alone rather than risk flipping true to false.
+                valueless="$(config_key_valueless_state "${diff_dir}/before" "$key")" ||
+                    valueless=""
+                if [ "$valueless" != "no" ]; then
+                    echo "pre-push: WARNING: ${key} was valueless before the gate, or could"
+                    echo "pre-push: not be read - and git cannot write a valueless entry back:"
+                    echo "pre-push: as an empty value it would flip from true to false. Left as"
+                    echo "pre-push: the gate left it; repair it by hand."
+                    continue
+                fi
+                restore_config_key "$key" "${diff_dir}/values"
+            done <"$changed_keys"
+
+            # Claim the revert only where it demonstrably happened. Compared
+            # through the fingerprint, not the rendered values: that is what
+            # keeps "valueless" from passing as "empty" and a reordered
+            # multi-valued key from passing as restored.
+            restore_verified=1
+            if ! config_fingerprint "$shared_config" "${diff_dir}/verify"; then
+                restore_verified=0
+            else
+                while IFS= read -r key; do
+                    if ! config_key_is_clone_scope "$key"; then
+                        continue
+                    fi
+                    # Two failed extractions produce two empty files, which
+                    # cmp would happily call a match - a repair certified by
+                    # the check having crashed.
+                    if ! config_fingerprint_key "${diff_dir}/before" "$key" >"${diff_dir}/k1" ||
+                        ! config_fingerprint_key "${diff_dir}/verify" "$key" >"${diff_dir}/k2"; then
+                        restore_verified=0
+                        echo "pre-push: WARNING: could not check whether ${key} was put back."
+                    elif ! cmp -s "${diff_dir}/k1" "${diff_dir}/k2"; then
+                        restore_verified=0
+                        echo "pre-push: WARNING: ${key} is STILL not what it was before the gate."
+                    fi
+                done <"$changed_keys"
+            fi
+            if [ "$restore_verified" -eq 1 ]; then
+                echo "pre-push: the keys marked [reverting] are back at their pre-gate values."
+            else
+                echo "pre-push: the revert did NOT fully succeed - repair this config by hand"
+                echo "pre-push: before doing anything else in this clone."
+            fi
+
+            echo "pre-push: Only keys that decide what this repository *is* (core.bare,"
+            echo "pre-push: core.worktree, extensions.*, include.*) are reverted, because"
+            echo "pre-push: only git's own plumbing writes them. Everything else is left as"
+            echo "pre-push: found: it may belong to another session on this clone, and this"
+            echo "pre-push: gate cannot tell. Most likely a check the gate spawned wrote to"
+            echo "pre-push: the real repo config (issue #74); check that before pushing again."
+            overall_rc=1
+        fi
+        rm -rf "$diff_dir"
+    fi
 fi
+[ -n "$config_snapshot" ] && rm -f "$config_snapshot"
 
 if [ "$overall_rc" -ne 0 ]; then
     echo

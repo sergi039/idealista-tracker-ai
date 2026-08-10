@@ -45,6 +45,16 @@ Bypass a single push with `SKIP_LOCAL_CI=1 git push`. `.github/workflows/
 ci.yml` stays the merge gate for autopilot; since issue #81 it runs the same
 ruff commands, so the two really are in sync.
 
+The hook's shared-`.git/config` canary (issue #74) compares config keys and
+skips the four a parallel session writes (`branch.<name>.remote`, `.merge`,
+`.rebase`, `.vscode-merge-base`): sessions share this clone, so a parallel
+`git push -u` or `git worktree add -b` is not this gate leaking (issue #155).
+Any other changed key is named and blocks the push. Only `core.bare`,
+`core.worktree`, `core.repositoryformatversion`, `extensions.*` and
+`include.*` are written back — only git's plumbing writes those, while
+`user.email` or `core.hooksPath` may belong to another session.
+`SKIP_LOCAL_CI=1` is not the answer to a config complaint any more.
+
 Ruff itself is a locked dev dependency (`uv.lock`), so `uv run ruff` is one
 pinned version for CI, the hook and you. Rule selection is explicit in
 `pyproject.toml` (`[tool.ruff.lint] select`) because ruff's *default* set is
@@ -223,6 +233,14 @@ and TODO.md; respect it if you ever run both side by side.
   `EnrichmentService.enrich_osm_amenities` **directly and never
   `PropertyEnrichmentService.enrich_property`**, which would fire the paid
   Google travel and Places calls once per row.
+- **Pacing is passed to the transport, never taken around it.** Hand
+  `gate=OVERPASS_GATE` to `request_with_retries`; it takes the gate before
+  every attempt. A caller that wraps the call in its own `gate.wait()` /
+  `gate.mark()` paces its lookups and leaves the retries unpaced, which is the
+  traffic a struggling endpoint sees most of. Same for any other
+  rate-limited endpoint: give it its own `RateGate`
+  (`ELEVATION_GATE` in `services/sea_view_service.py` is the second one) rather
+  than a hand-rolled `_last_call_at` global.
 - **Overpass is paced at 5 s, and that number is measured** (#152 follow-up).
   A 20-property dry run at the previous 2 s spent 39 requests on 20 answers —
   15 of them refused with `429 Too Many Requests`, more than the 8 refused with

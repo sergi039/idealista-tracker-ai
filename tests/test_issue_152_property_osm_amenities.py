@@ -567,6 +567,73 @@ class TestPacing:
         assert len(starts) == 2
         assert abs(starts[1] - starts[0]) >= 0.15 * 0.8, starts
 
+    def test_a_retry_waits_for_the_slot_the_gate_gives_it(self):
+        """The backoff and the gate together, on a fake clock.
+
+        They are not redundant: the backoff is what this server just asked for,
+        the gate is what the process allows itself across every caller. A
+        backoff already past the next slot must cost nothing extra, and a short
+        one must not let the retry jump the queue.
+        """
+        from utils.http import request_with_retries
+
+        clock = {"now": 100.0}
+        starts = []
+
+        def _sleep(seconds):
+            clock["now"] += seconds
+
+        def _post(*_args, **_kwargs):
+            starts.append(clock["now"])
+            return _response(status_code=504 if len(starts) == 1 else 200)
+
+        gate = RateGate(30.0, name="slow")
+        with (
+            patch("utils.http.time.monotonic", lambda: clock["now"]),
+            patch("utils.http.time.sleep", _sleep),
+        ):
+            request_with_retries(
+                _post, "https://example.invalid", max_attempts=2, gate=gate
+            )
+
+        # First attempt at once, the retry no sooner than the interval -- the
+        # 0.5 s default backoff alone would have fired it almost immediately.
+        assert starts[0] == 100.0
+        assert starts[1] - starts[0] >= 30.0
+
+    def test_an_unexpected_exception_still_ends_the_attempt(self):
+        """`mark()` on every exit, not only on `RequestException`.
+
+        `request_fn` is an arbitrary callable — a session adapter, a hook or a
+        test transport can raise anything. Naming one exception type left the
+        gate waited-but-never-marked, so the next slot was measured from the
+        *start* of a call that had run for ten seconds. Found by the
+        independent review of this change.
+        """
+        from utils.http import request_with_retries
+
+        clock = {"now": 100.0}
+        events = []
+
+        class _TracingGate(RateGate):
+            def wait(self):
+                events.append(("wait", clock["now"]))
+                return 0.0
+
+            def mark(self):
+                events.append(("mark", clock["now"]))
+
+        def _explode(*_args, **_kwargs):
+            clock["now"] += 10.0  # a call that ran, then failed oddly
+            raise RuntimeError("adapter blew up")
+
+        gate = _TracingGate(5.0, name="tracing")
+        with patch("utils.http.time.monotonic", lambda: clock["now"]):
+            with pytest.raises(RuntimeError):
+                request_with_retries(_explode, "https://example.invalid", gate=gate)
+
+        assert events == [("wait", 100.0), ("mark", 110.0)]
+
     def test_a_finished_call_does_not_block_behind_another_callers_wait(self):
         """`mark()` must not wait out somebody else's pacing interval.
 
@@ -590,20 +657,57 @@ class TestPacing:
         assert blocked_for < 0.2, blocked_for
 
     @patch("services.enrichment_service.request_with_retries")
-    def test_the_amenity_lookup_goes_through_the_gate(
-        self, mock_request, app, service, monkeypatch
+    def test_the_amenity_lookup_hands_the_transport_the_gate(
+        self, mock_request, app, service
     ):
-        calls = []
-        monkeypatch.setattr(OVERPASS_GATE, "wait", lambda: calls.append("wait") or 0.0)
-        monkeypatch.setattr(OVERPASS_GATE, "mark", lambda: calls.append("mark"))
+        """Pacing belongs to the transport, so the retries are paced too.
 
+        The lookup used to take the gate itself and then hand the retry loop a
+        free hand -- which paced the lookups and left the bursts unpaced.
+        """
         mock_request.return_value = _amenities("cafe")
         property_id = _property(app, "prop_osm_gate")
 
         with app.app_context():
             service.enrich_osm_amenities(db.session.get(Property, property_id))
 
-        assert calls == ["wait", "mark"]
+        assert mock_request.call_args.kwargs["gate"] is OVERPASS_GATE
+
+    def test_every_attempt_takes_the_gate_not_just_the_first(self, app, service):
+        """The real transport, with a refusal in front of the answer.
+
+        Measured during the #152 backfill: at 5 s between lookups the run still
+        drew more 429s than 504s, because each refusal was answered by a burst
+        the gate never saw. One `wait` per attempt is the fix.
+        """
+        calls = []
+
+        class _CountingGate(RateGate):
+            def wait(self):
+                calls.append("wait")
+                return 0.0
+
+            def mark(self):
+                calls.append("mark")
+
+        gate = _CountingGate(0.0, name="counting")
+        property_id = _property(app, "prop_osm_gate_retry")
+
+        with app.app_context():
+            with (
+                patch("utils.http.time.sleep", return_value=None),
+                patch("services.enrichment_service.OVERPASS_GATE", gate),
+                patch(
+                    "services.enrichment_service.requests.post",
+                    side_effect=[_response(status_code=504), _amenities("cafe")],
+                ),
+            ):
+                service.enrich_osm_amenities(db.session.get(Property, property_id))
+
+            section = db.session.get(Property, property_id).infrastructure_extended
+
+        assert calls == ["wait", "mark", "wait", "mark"]
+        assert section["osm_amenities"] == {"cafe": 1}
 
     @patch("services.enrichment_service.request_with_retries")
     def test_a_second_property_at_the_same_point_asks_nothing(
