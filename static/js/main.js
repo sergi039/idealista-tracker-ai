@@ -1262,31 +1262,16 @@ window.IdealistaApp = {
             }
         }
 
-        // Display price info if available
-        if (data.price_info && Object.keys(data.price_info).length > 0) {
-            const priceInfo = data.price_info;
-            let priceText = '';
-            
-            if (priceInfo.current_price) {
-                priceText = `Current price: €${priceInfo.current_price.toLocaleString()}`;
-                
-                if (priceInfo.original_price && priceInfo.original_price !== priceInfo.current_price) {
-                    priceText += ` (Originally €${priceInfo.original_price.toLocaleString()}`;
-                    if (priceInfo.discount) {
-                        priceText += ` - ${priceInfo.discount}% off!`;
-                    }
-                    priceText += ')';
-                }
-            }
-            
-            if (priceText) {
-                const priceInfoText = document.getElementById('price-info-text');
-                if (priceInfoText) {
-                    priceInfoText.textContent = priceText;
-                    document.getElementById('price-info-section').style.display = 'block';
-                }
-            }
-        }
+        // The AI blob's `price_info.current_price` used to be rendered here as
+        // "Current price: €40,000". It is not the current price: it is whatever
+        // the price was when the description was enhanced, and nothing updates
+        // it when a price-drop email lands. Measured 2026-08-10 -- of the rows
+        // carrying both a recorded price change and this blob, *every one*
+        // disagreed with the row: 5 lands and 5 properties, one of them showing
+        // €40,000 two centimetres from a Price tile reading €35,000.
+        //
+        // The price lives on the row, and the Price tile shows it with the
+        // recorded change beneath it. There is nothing for a stale copy to add.
 
         // Show enhanced description and language toggle
         const enhancedDesc = document.getElementById('enhanced-description');
