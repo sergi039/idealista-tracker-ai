@@ -194,6 +194,28 @@ merely *looks* clean can still differ from the committed blob (excluded or
 ignored files), so an uncommitted "fix" can't hide a broken commit.
 `tests/test_local_ci_hook.py` pins this contract.
 
+The hook also carries a canary on the clone's shared `.git/config`: nothing
+the gate spawns may write there, because a stray `core.bare = true` breaks
+every worktree of the clone at once (issue #74). It compares config *keys*,
+not the file's bytes, and ignores exactly the four a parallel session writes
+— `branch.<name>.remote`, `.merge`, `.rebase` and `.vscode-merge-base`, which
+is what `git push -u`, `git checkout -b --track` and `git worktree add -b`
+leave behind (issue #155). Everything else, including the rest of the
+`[branch]` section, aborts the push and is named in the output.
+
+Only `core.bare`, `core.worktree`, `core.repositoryformatversion`,
+`extensions.*` and `include.*` are written back, because only git's own
+plumbing writes those, so reverting one cannot undo a peer session's work.
+Anything else — `user.email`, `core.hooksPath`, which this repo's own
+`install_hooks.sh` writes — is reported and left exactly as found: the hook
+cannot tell its own leak from a peer's legitimate write, and guessing is what
+the old whole-file restore did when it wiped out a parallel session's freshly
+set upstream. The order of the entries counts too, because git reads the file
+top to bottom and an `[include]` moved below `[core]` overrides it without
+changing a single value. If the snapshot or the comparison cannot be made at
+all, the push is refused rather than waved through; `SKIP_LOCAL_CI=1` is the
+deliberate way past.
+
 Bypass a single push with `SKIP_LOCAL_CI=1 git push` if you need to push
 work-in-progress.
 
