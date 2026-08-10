@@ -41,6 +41,10 @@ JOURNAL="${AUTOPILOT_REVIEW_JOURNAL:-${REPO_DIR}/data/autopilot-reviews.tsv}"
 # environment variable disable the only guarantee that the reviewed diff is
 # the diff that lands.
 REQUIRED_CHECKS_OVERRIDE="${AUTOPILOT_REQUIRED_CHECKS:-}"
+# Wall-clock ceiling on the documentation-only classifier. It reads git objects
+# for every file the documentation cites, and it runs while this script holds
+# the merge lock.
+DOCS_EVIDENCE_TIMEOUT="${AUTOPILOT_DOCS_EVIDENCE_TIMEOUT:-60}"
 
 # One name per line, split on newlines only. A check may legitimately be called
 # "Unit tests / pytest", and word-splitting would turn that into four names
@@ -119,11 +123,17 @@ log() {
 
 mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$JOURNAL")"
 touch "$JOURNAL"
+
+# Resolved before the `cd`, not after: `$0` may well be a relative path, and
+# resolving it from inside $REPO_DIR would find this script's siblings only when
+# the invocation happened to start there.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 cd "$REPO_DIR" || { echo "repo not found: $REPO_DIR" >&2; exit 1; }
 
 # --- single instance -------------------------------------------------------
 # shellcheck source=lib/lock.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/lock.sh"
+source "${HERE}/lib/lock.sh"
 if ! autopilot_acquire_lock "$LOCK_DIR"; then
     log "another merge_bot run is in progress, skipping"
     exit 0
@@ -239,6 +249,185 @@ commit is never covered by this one." >>"$LOG_FILE" 2>&1 \
 }
 
 # --- gate 2: independent review -------------------------------------------
+# Every prompt opens with this. A reviewer that runs `gh pr merge` performs the
+# very action it is gating - observed once in practice, where only a missing
+# flag stopped it.
+review_preamble() {
+    printf '%s' "Review this pull request for merge into ${BASE_BRANCH} of a self-hosted Flask
+app that ingests real estate listings.
+
+Do NOT run gh, git push, docker or any other state-changing command: this review
+decides whether an automated merge happens, and a reviewer that runs
+'gh pr merge' would perform the very action it is gating. Observed once in
+practice - the reviewer invoked gh pr merge and only a missing flag stopped it."
+}
+
+standard_review_prompt() {
+    printf '%s\n\n%s\n' "$(review_preamble)" "Read the diff. Judge correctness, security, error handling and whether the
+tests actually prove the claimed behaviour rather than mocking past it. This
+repository has a history of tests that mock the failing call itself and
+therefore pass against a broken fix. Return BLOCKER if the change is wrong,
+unproven, or weakens the existing security posture (auth on state-changing
+endpoints, CSRF, rate limits, parameterised queries)."
+}
+
+# A documentation-only diff cannot be judged by that prompt, and the failure is
+# structural rather than a matter of wording. The reviewer's contract is to
+# audit the embedded diff and nothing else; the behaviour a docs PR describes
+# lives in the *base* commit, so "the implementation is absent from the diff" is
+# the only verdict the contract can produce - and it is not a defect. Hit twice
+# on #151, both reviews correct about the diff and wrong about the repository,
+# ending in a manual merge (issue #154).
+#
+# So give the reviewer the missing half instead of asking it to trust: for a
+# diff that touches nothing but documentation, docs_review_evidence.py resolves
+# the files and backticked identifiers the added text cites against the base and
+# embeds those excerpts in the request. The reviewer still audits what it was
+# handed - the added documentation and the base source behind its claims. It
+# is simply handed the thing the claims are checkable against, which keeps the
+# gate honest - a docs PR that misdescribes the code still fails.
+#
+# Returns 0 only for a documentation-only diff, leaving the prompt in
+# DOCS_ONLY_PROMPT; every other outcome, including a broken helper, returns
+# non-zero so the caller falls back to the standard prompt. That fallback can
+# only make a review harder to pass, never easier.
+#
+# The prompt travels in a variable rather than on stdout so that `log` still
+# works here. A `$(...)` caller would capture the log lines along with the
+# prompt: the diagnostics would vanish from the console and, on the success
+# path, land inside the text sent to the reviewer.
+#
+# A second opinion on the same question, taken straight from git rather than
+# from the helper's report. Deliberately coarser than the helper's rule - it
+# only asks whether every changed path looks like documentation, and says
+# nothing about file modes - so it can never accept something the helper
+# rejects. What it buys is that the relaxed prompt needs two agreeing answers,
+# and one of them does not depend on the helper having run correctly at all.
+docs_paths_only() {
+    local base_sha="$1" head_ref="$2" listing path lower
+    listing="$(git diff --name-only --no-renames "${base_sha}..${head_ref}" 2>/dev/null)" \
+        || return 1
+    [ -n "$listing" ] || return 1
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        # `tr` rather than ${path,,}: /bin/bash on macOS is still 3.2.
+        lower="$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')"
+        case "$lower" in
+            *.md|docs/*) ;;
+            *) return 1 ;;
+        esac
+    done <<<"$listing"
+    return 0
+}
+
+DOCS_ONLY_PROMPT=""
+docs_only_review_prompt() {
+    local base_sha="$1" head_ref="$2" evidence rc timeout_bin
+
+    # A hang here would hold the merge lock for as long as the process lives,
+    # and the lock is released by the kernel rather than by a timer. Without a
+    # bounded run there is no tick that recovers on its own.
+    timeout_bin="$(command -v timeout || command -v gtimeout || true)"
+    if [ -z "$timeout_bin" ]; then
+        log "  GNU timeout is missing - not running the docs-only classifier unbounded"
+        return 1
+    fi
+    # `timeout 0` means *no limit* to GNU timeout, so an unvalidated 0 here
+    # would restore precisely the unbounded run this guard exists to prevent.
+    # The digit-count pattern rejects a value long enough to overflow the
+    # numeric comparison below rather than letting `[` decide what it means.
+    case "$DOCS_EVIDENCE_TIMEOUT" in
+        [1-9]|[1-9][0-9]|[1-9][0-9][0-9]) : ;;
+        *) log "  AUTOPILOT_DOCS_EVIDENCE_TIMEOUT must be 1..600 seconds - using the strict prompt"
+           return 1 ;;
+    esac
+    if [ "$DOCS_EVIDENCE_TIMEOUT" -gt 600 ]; then
+        log "  AUTOPILOT_DOCS_EVIDENCE_TIMEOUT must be 1..600 seconds - using the strict prompt"
+        return 1
+    fi
+
+    if ! docs_paths_only "$base_sha" "$head_ref"; then
+        return 1
+    fi
+
+    set +e
+    evidence="$("$timeout_bin" -k 5 "$DOCS_EVIDENCE_TIMEOUT" \
+        python3 "${HERE}/docs_review_evidence.py" \
+        --repo "$REPO_DIR" --base "$base_sha" --head "$head_ref" 2>>"$LOG_FILE")"
+    rc=$?
+    set -e
+    [ "$rc" = "0" ] || return 1
+
+    # Exit status alone is too weak a contract to hand a PR the relaxed prompt.
+    # A helper truncated to `raise SystemExit(0)`, or one whose output was lost,
+    # exits clean with nothing to show - and every PR, including one that
+    # rewrites app.py, would then be reviewed as documentation on the strength
+    # of a classification that never ran.
+    #
+    # Two lines are required, not one. Command substitution strips the trailing
+    # newline, so a helper that emitted the sentinel *and nothing else* would
+    # otherwise pass: the first-line test would see the whole string, and the
+    # strip that follows would leave it untouched and send it as the evidence.
+    local expected
+    expected="DOCS-ONLY-EVIDENCE ${base_sha}"$'\n'"Documentation-only diff against base ${base_sha}."
+    case "$evidence" in
+        "$expected"$'\n'*) : ;;
+        *) log "  docs-only classifier exited 0 without a complete block - using the strict prompt"
+           return 1 ;;
+    esac
+    evidence="${evidence#*$'\n'}"
+
+    DOCS_ONLY_PROMPT="$(printf '%s\n\n%s\n\n%s\n' "$(review_preamble)" "Every path in this diff is documentation. There is no executable behaviour to
+get wrong, so the question is not whether the change works - it is whether it
+tells the truth about code that already shipped. The implementation it describes
+is in the base commit and is deliberately outside this diff.
+
+Do NOT return BLOCKER because the implementation or its tests are absent from
+the diff. That is the expected shape of this PR, not a defect.
+
+\"Unproven\" still blocks. What changes is where the proof is expected: in the
+excerpts below rather than in the diff. A claim the excerpts do not *establish*
+is as unproven as one they contradict - if the lines shown do not settle what
+the sentence asserts, the documentation cited the wrong place, and the fix is a
+citation that points at the code which proves it.
+
+Return BLOCKER only for:
+  - a statement that contradicts the base excerpts embedded below
+  - a statement the excerpts below do not support. \`app.py\` importing
+    \`CSRFProtect\` does not establish \"every state-changing endpoint is
+    CSRF-protected\"; the excerpt has to show the thing being claimed
+  - an UNRESOLVED entry below: the documentation names a line the base commit
+    does not have, so it is already wrong
+  - a NOT IN BASE entry below that the documentation describes as an existing
+    file. A document may legitimately name a file that is generated, ignored or
+    still to be written; decide from the text which one this is
+  - a REFUSED entry below whose *contents* the documentation asserts something
+    specific about. The refusal itself is not a defect - the bot will not paste
+    a file that may carry credentials - but a claim about what is inside one
+    cannot be checked here, and documentation should not be making it
+  - a claim this diff adds about how the code behaves that names no source file
+    at all, so nothing in this request can check it
+  - a credential, secret or absolute local path the diff adds to a tracked file
+  - a removal that deletes a documented security constraint: the app has no
+    authentication and is bound to loopback for that reason, and warnings about
+    that, about CSRF, rate limits or secrets handling, are where a human learns
+    it. Striking one out changes no code and changes who knows
+  - a line added OR REMOVED under an AGENT INSTRUCTIONS notice below that
+    changes what an autonomous agent may do: granting it new authority, telling
+    it to run a command, or deleting a guardrail it had. Deletion counts:
+    striking 'never read .env' out of those files widens what the next agent
+    run will do exactly as surely as adding a permission. Those files are
+    instructions this repository's own bot loads, and unlike a claim about
+    behaviour their text is fully visible in this diff
+  - an UNREADABLE CONTENT notice below, unless the surrounding documentation
+    makes clear the image is a mock-up or a public page. Nobody has seen those
+    pixels - not the diff, not this request, not you - so say a person has to
+    look. A gate that certifies what it cannot read is worth nothing
+  - a TRUNCATED notice below: the evidence did not fit, so ask for a smaller PR
+
+Otherwise return PASS." "$evidence")"
+}
+
 review_is_pass() {
     local pr="$1" head_sha="$2" base_sha="$3" cached rc ref key
 
@@ -292,6 +481,14 @@ review_is_pass() {
         return 1
     fi
 
+    local prompt
+    if docs_only_review_prompt "$base_sha" "$ref"; then
+        log "  PR #${pr}: documentation-only diff - reviewing it against the base"
+        prompt="$DOCS_ONLY_PROMPT"
+    else
+        prompt="$(standard_review_prompt)"
+    fi
+
     log "  PR #${pr}: requesting independent review of ${base_sha:0:7}..${head_sha:0:7}"
     set +e
     # Pin the reviewer to Codex instead of inheriting rx's `fallback` chain.
@@ -308,22 +505,7 @@ review_is_pass() {
     # ours to change here: it decides what counts as a verdict for every gate
     # on this machine. Drop this pin once Claude's answers are accepted.
     RX_PROVIDER_POLICY=codex-only \
-    rx --range "${base_sha}..${ref}" \
-        "Review this pull request for merge into ${BASE_BRANCH} of a self-hosted Flask
-app that ingests real estate listings.
-
-Read the diff. Do NOT run gh, git push, docker or any other state-changing
-command: this review decides whether an automated merge happens, and a reviewer
-that runs 'gh pr merge' would perform the very action it is gating. Observed
-once in practice - the reviewer invoked gh pr merge and only a missing flag
-stopped it.
-
-Judge correctness, security, error handling and whether the tests actually
-prove the claimed behaviour rather than mocking past it. This repository has a
-history of tests that mock the failing call itself and therefore pass against a
-broken fix. Return BLOCKER if the change is wrong, unproven, or weakens the
-existing security posture (auth on state-changing endpoints, CSRF, rate limits,
-parameterised queries)." >>"$LOG_FILE" 2>&1
+    rx --range "${base_sha}..${ref}" "$prompt" >>"$LOG_FILE" 2>&1
     rc=$?
     set -e
 
