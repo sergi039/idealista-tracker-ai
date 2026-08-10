@@ -38,6 +38,9 @@ TRANSLATIONS = {
         "sea_view_state_likely": "Sea view likely",
         "sea_view_state_no": "No sea view",
         "sea_view_state_unknown": "Sea view unknown",
+        # Shown instead of the literal source code "none": nobody computed a
+        # verdict here, which is not the same as computing "no sea view".
+        "sea_view_not_computed": "Not computed yet",
         # Quick scope switches on the properties toolbar
         "favorites": "Favorites",
         "hide_removed": "Hide removed",
@@ -158,6 +161,7 @@ TRANSLATIONS = {
         "sea_view_state_likely": "Vista al mar probable",
         "sea_view_state_no": "Sin vista al mar",
         "sea_view_state_unknown": "Vista al mar sin determinar",
+        "sea_view_not_computed": "Sin calcular todavía",
         "favorites": "Favoritos",
         "hide_removed": "Ocultar retirados",
         "price": "Precio",
