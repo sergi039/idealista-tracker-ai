@@ -718,14 +718,20 @@
                             </div>
                         {% else %}
                             {% set base_key = key.replace('_available', '').replace('_distance', '').replace('_travel_time', '') %}
-                            {% set has_distance = property.infrastructure_extended.get(base_key + '_distance') if property.infrastructure_extended else None %}
-                            {% set has_travel_time = property.infrastructure_extended.get(base_key + '_travel_time') if property.infrastructure_extended else None %}
 
-                            {% if not (
-                                key.endswith('_available') and (has_distance or has_travel_time)
-                            ) and not (
-                                key.endswith('_distance') and value == 0
-                            ) %}
+                            {# How far away a supermarket, a school or a hospital is
+                               belongs to the Travel Times card, which measures it and
+                               re-measures it on every enrichment run. What this block
+                               held was a frozen copy from the legacy Land import that
+                               no recalculation touches: on 157 of the 168 mirrored
+                               rows it contradicted the card directly above it, by up
+                               to 21 minutes, naming a different shop. One question,
+                               one answer -- so the distances and times are gone from
+                               here, and what stays is what Travel Times does not say:
+                               whether the amenity is there at all, and the OSM counts.
+                               `/lands/<id>` keeps its own copy, because `Land` has no
+                               travel targets and that block is its only source. #}
+                            {% if not key.endswith('_distance') and not key.endswith('_travel_time') %}
                                 <div class="d-flex justify-content-between align-items-center mb-2">
                                     <span class="small">{{ key.replace('_', ' ').title() }}</span>
                                     {% if value is sameas true %}
@@ -733,36 +739,11 @@
                                     {% elif value is sameas false %}
                                         <i class="fas fa-times-circle text-danger"></i>
                                     {% elif value is number %}
-                                        {% if 'distance' in key %}
-                                            {% set distance_km = value/1000 %}
-                                            {% set travel_time_value = property.infrastructure_extended.get(base_key + '_travel_time') if property.infrastructure_extended else None %}
-                                            <div class="d-flex align-items-center">
-                                                {% if travel_time_value is not none %}
-                                                    <span class="badge bg-info me-1">
-                                                        <i class="fas fa-car me-1"></i>{{ travel_time_value }}min
-                                                    </span>
-                                                {% endif %}
-                                                <span class="badge bg-secondary">{{ "%.1f"|format(distance_km) }}km</span>
-                                            </div>
-                                        {% elif 'travel_time' in key %}
-                                            {% set distance_value = property.infrastructure_extended.get(base_key + '_distance') if property.infrastructure_extended else None %}
-                                            <div class="d-flex align-items-center">
-                                                <span class="badge bg-info me-1">
-                                                    <i class="fas fa-car me-1"></i>{{ value }}min
-                                                </span>
-                                                {% if distance_value is not none %}
-                                                    <span class="badge bg-secondary">{{ "%.1f"|format(distance_value/1000) }}km</span>
-                                                {% endif %}
-                                            </div>
-                                        {% else %}
-                                            {% if 'duration' in key or 'time' in key %}
-                                                <span class="badge bg-info">{{ value }}min</span>
-                                            {% elif 'distance' in key %}
-                                                <span class="badge bg-secondary">{{ "%.1f"|format(value/1000) }}km</span>
-                                            {% else %}
-                                                <span class="badge bg-secondary">{{ value }}</span>
-                                            {% endif %}
-                                        {% endif %}
+                                        {# The distance and travel-time branches that
+                                           lived here are unreachable now: those keys
+                                           are filtered out above. Any other number
+                                           still renders. #}
+                                        <span class="badge bg-secondary">{{ value }}</span>
                                     {% elif value is mapping %}
                                         <div class="small">
                                             {% for k, v in value.items() %}
