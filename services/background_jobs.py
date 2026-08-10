@@ -41,9 +41,10 @@ A lease set once, at enqueue, is not enough: `_EXECUTOR` is a
 `ThreadPoolExecutor` with a fixed worker count and an *unbounded* queue.
 Enough ~600 s jobs ahead of one in the queue and it can outlive its own
 `LEASE_TTL_SECONDS` before a worker ever picks it up -- at which point a
-lease sweep (this process's own next `enqueue_job` call, or a different
-process's `create_app()`) would reap it while its `Future` is still very
-much alive, and queue a paid duplicate right behind it.
+lease sweep (this process's own next `enqueue_job` call, a different
+process's `create_app()`, or the periodic scheduler tick below) would reap
+it while its `Future` is still very much alive, and queue a paid duplicate
+right behind it.
 
 So the *owning process* renews every lease it holds, independent of whether
 that job has started running yet. `_register_owned_job`/
@@ -57,7 +58,24 @@ that set with one `UPDATE ... WHERE id IN (...) AND status IN ('queued',
 'running')`. A row this process no longer owns (already unregistered) is
 never touched by it; a row belonging to a *different*, still-live process is
 renewed by *that* process's own heartbeat, not this one's -- the sweep
-predicate stays the single one described above either way.
+predicate stays the single one described above no matter which of the three
+triggers calls it.
+
+## Periodic reconciliation (issue #203)
+
+Until now `reconcile_orphaned_jobs` ran only at `create_app()` and, for one
+key at a time, when `enqueue_job` meets the same `dedupe_key` again -- so a
+job abandoned by a killed process (the deploy watcher recreating the
+container) had `/api/jobs/<id>` answer `200 {"status": "running"}` for up to
+`LEASE_TTL_SECONDS`, and could then stay that way indefinitely: nothing else
+was watching. `services/scheduler_service.py` now also calls it on a timer
+(`run_background_jobs_reconciliation`, registered on the app's own
+APScheduler in `init_scheduler`), every `RECONCILE_INTERVAL_S` seconds --
+comfortably smaller than `LEASE_TTL_SECONDS`, and configurable via
+`BACKGROUND_JOB_RECONCILE_INTERVAL_S`, the same way `LEASE_TTL_SECONDS` and
+`HEARTBEAT_INTERVAL_S` are. It is a third caller of the same function with
+the same SQL predicate, not a new one -- see `reconcile_orphaned_jobs`'s own
+docstring.
 
 ## Compare-and-swap writes (round-3 review, finding 2)
 
@@ -320,6 +338,14 @@ LEASE_TTL_SECONDS = int(
 # still holds -- comfortably smaller than LEASE_TTL_SECONDS so a live job
 # never gets close to its own deadline.
 HEARTBEAT_INTERVAL_S = int(os.environ.get("BACKGROUND_JOB_HEARTBEAT_INTERVAL_S", "60"))
+
+# How often services/scheduler_service.py's periodic sweep calls
+# reconcile_orphaned_jobs() on its own, without waiting for the next
+# create_app() or a re-enqueue of the same dedupe_key (issue #203).
+# Comfortably smaller than LEASE_TTL_SECONDS so an abandoned row's wait for
+# `interrupted` is bounded by this interval plus the lease TTL, not by the
+# next deploy or the next matching enqueue -- either of which may never come.
+RECONCILE_INTERVAL_S = int(os.environ.get("BACKGROUND_JOB_RECONCILE_INTERVAL_S", "180"))
 
 
 def _now() -> datetime:
@@ -1403,13 +1429,24 @@ def reconcile_orphaned_jobs() -> int:
     `lease_expires_at` in the past by the *database's* clock -- as
     `interrupted`.
 
-    Called at application startup (app.py), inside an app context. This
-    only ever touches a row whose lease has actually run out, so it is safe
-    to call from *any* `create_app()` -- the long-running web process at
-    startup, or a one-shot utility script's own app instance built while
-    that web process is still alive and holding a valid, heartbeat-renewed
-    lease on its own job. A repeated call -- a second boot, a second
-    gunicorn worker, a utility script running alongside the web process --
+    Called at application startup (app.py), inside an app context, and --
+    issue #203 -- periodically after that too, by
+    services/scheduler_service.py's own scheduled job
+    (`run_background_jobs_reconciliation`), registered on the same
+    APScheduler the app already runs, every `RECONCILE_INTERVAL_S` seconds.
+    Before that periodic call existed, a job abandoned by a killed process
+    (the deploy watcher recreating the container) had no sweep at all
+    between `create_app()` calls: `/api/jobs/<id>` kept answering
+    `200 {"status": "running"}` until the next restart or a re-enqueue of
+    the same `dedupe_key` happened to reap it -- either of which might never
+    come. This function's own predicate is unchanged by having a second
+    caller: it only ever touches a row whose lease has actually run out, so
+    it is safe to call from *any* `create_app()`, and just as safe to call
+    on a timer -- the long-running web process at startup or on a tick, or a
+    one-shot utility script's own app instance built while that web process
+    is still alive and holding a valid, heartbeat-renewed lease on its own
+    job. A repeated call -- a second boot, a second gunicorn worker, a
+    scheduled tick, a utility script running alongside the web process --
     matches only rows that are genuinely expired by then and updates
     nothing else.
 
