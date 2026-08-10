@@ -47,14 +47,28 @@ def _capture(module, monkeypatch, stdout):
     return recorded
 
 
-def test_default_openai_model_is_passed_to_the_codex_cli(bridge, monkeypatch):
-    stdout = json.dumps(
-        {
-            "type": "item.completed",
-            "item": {"type": "agent_message", "text": "ok"},
-        }
+def _codex_stream(text="ok"):
+    """A complete codex stream.
+
+    Since #201 the bridge refuses a stream with no `turn.completed`: one that
+    stops early was cut off, and reporting its partial text as the answer is
+    how a truncated valuation would pass for a whole one.
+    """
+    return "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": text},
+                }
+            ),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
     )
-    recorded = _capture(bridge, monkeypatch, stdout)
+
+
+def test_default_openai_model_is_passed_to_the_codex_cli(bridge, monkeypatch):
+    recorded = _capture(bridge, monkeypatch, _codex_stream())
 
     result = bridge.complete_codex("prompt", "", Config.OPENAI_MODEL, 30)
 
@@ -68,7 +82,7 @@ def test_default_openai_model_is_passed_to_the_codex_cli(bridge, monkeypatch):
 
 def test_unknown_openai_model_would_be_dropped(bridge, monkeypatch):
     """The guard the test above relies on is real, not a no-op."""
-    recorded = _capture(bridge, monkeypatch, "")
+    recorded = _capture(bridge, monkeypatch, _codex_stream())
 
     bridge.complete_codex("prompt", "", "gpt-5-mini", 30)
 
