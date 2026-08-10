@@ -19,7 +19,7 @@ from collections import Counter
 
 import requests
 
-from app import create_app
+from app import create_app, db
 from models import Property
 from services import sea_view_service
 
@@ -103,6 +103,10 @@ def main() -> None:
                 logger.error(
                     "Sea-view evaluation failed for %s", prop.id, exc_info=True
                 )
+                # `apply_to_property(commit=True)` requires a session with
+                # nothing pending, so one row's failure must not leave anything
+                # in flight for the next row to trip over.
+                db.session.rollback()
 
             if index % 25 == 0 or index == total:
                 logger.info("%s/%s processed", index, total)

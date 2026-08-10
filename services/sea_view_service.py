@@ -92,6 +92,14 @@ COASTLINE_QUERY_RADIUS_M = (
 # services/enrichment_service.py: both spend the same two per-IP slots, so a
 # private interval here would only pace half of the traffic (#152).
 
+# The reply is untrusted input, however well-known the endpoint: bound what is
+# parsed and what is kept. A 25 km coastline query measured about 220 KB, so
+# these ceilings are two orders of magnitude of headroom and still refuse a
+# body that would fill the process. Neither truncates silently -- both raise.
+MAX_COASTLINE_RESPONSE_BYTES = 16 * 1024 * 1024
+MAX_COASTLINE_POINTS = 200_000
+COASTLINE_CHUNK_BYTES = 64 * 1024
+
 MIN_PROFILE_SAMPLES = 12
 MAX_PROFILE_SAMPLES = 60
 PROFILE_SAMPLE_SPACING_M = 150
@@ -291,6 +299,9 @@ def fetch_coastline_points(
             backoff_base=8.0,
             backoff_max=90.0,
             timeout=120,
+            # Streamed so the size ceiling is enforced as the body arrives,
+            # not after it is already in memory.
+            stream=True,
             logger=logger,
             # Shared with the amenity query, and it covers the retries too.
             gate=OVERPASS_GATE,
@@ -299,38 +310,146 @@ def fetch_coastline_points(
         raise SeaViewSourceError(f"Overpass request failed: {exc}") from exc
 
     if response.status_code != 200:
+        # Streamed and never read: dropped without `close()`, the connection
+        # stays checked out until garbage collection gets around to it.
+        response.close()
         raise SeaViewSourceError(f"Overpass returned HTTP {response.status_code}")
+
+    # Whatever goes wrong reading this body, the caller must see one exception
+    # type. Anything else -- a TypeError from an unexpected node shape, a
+    # RecursionError from a deeply nested body -- would escape
+    # `evaluate_geometry`'s SeaViewSourceError handler and abort the row
+    # instead of degrading it honestly to `unknown`. The decode is inside the
+    # wrapper for exactly that reason.
     try:
-        payload = response.json()
-    except ValueError as exc:
-        raise SeaViewSourceError("Overpass returned a non-JSON body") from exc
+        points = _parse_coastline_payload(json.loads(_read_bounded_body(response)))
+    except SeaViewSourceError:
+        raise
+    except Exception as exc:
+        raise SeaViewSourceError(
+            f"Overpass returned an unreadable body: {exc}"
+        ) from exc
+
+    _cache_set(
+        cell_lat, cell_lon, cache_type, points, timeout=COASTLINE_CACHE_TIMEOUT_S
+    )
+    return points
+
+
+def _read_bounded_body(response) -> bytes:
+    """Read a response body, refusing one that is too large to hold.
+
+    Reading `response.content` would have already materialised the whole thing
+    before any check could run, so the size limit has to be enforced while the
+    body is still arriving. Both the advertised length and the bytes actually
+    received are checked -- a header can lie.
+    """
+    try:
+        declared = response.headers.get("Content-Length") if response.headers else None
+        if declared is not None:
+            try:
+                declared_bytes = int(declared)
+            except ValueError:
+                # An unparseable header decides nothing; the read below does.
+                # Only the int() sits in the try -- a wider net would also have
+                # caught the refusal itself if its class ever grew a ValueError
+                # ancestry, silently demoting this check to the chunk path.
+                declared_bytes = None
+            if (
+                declared_bytes is not None
+                and declared_bytes > MAX_COASTLINE_RESPONSE_BYTES
+            ):
+                raise SeaViewSourceError(
+                    f"Overpass announced {declared} bytes, over the "
+                    f"{MAX_COASTLINE_RESPONSE_BYTES}-byte ceiling"
+                )
+
+        body = bytearray()
+        for chunk in response.iter_content(chunk_size=COASTLINE_CHUNK_BYTES):
+            if not chunk:
+                continue
+            # Check before extending, not after: appending first would put the
+            # oversized body in memory, which is the thing being prevented.
+            if len(body) + len(chunk) > MAX_COASTLINE_RESPONSE_BYTES:
+                raise SeaViewSourceError(
+                    f"Overpass sent more than {MAX_COASTLINE_RESPONSE_BYTES} bytes"
+                )
+            body.extend(chunk)
+        return bytes(body)
+    except BaseException:
+        # A streamed response abandoned before the end holds its socket. Every
+        # refusal path -- a lying header, the ceiling, a transport error from
+        # `iter_content` -- has to hand the connection back on its way out.
+        response.close()
+        raise
+
+
+def _parse_coastline_payload(payload: Any) -> List[Tuple[float, float]]:
+    """Coastline coordinates from an Overpass reply, or a refusal.
+
+    The return value decides whether a property may be told there is no sea
+    near it, so every shape that is not a complete, well-formed answer raises.
+    Exactly one shape returns an empty list: a reply with no `remark` whose
+    `elements` array is itself empty.
+    """
+    if not isinstance(payload, dict):
+        raise SeaViewSourceError(
+            f"Overpass returned a {type(payload).__name__}, not an object"
+        )
+
+    # Overpass reports a query that ran out of time or memory as HTTP 200 with
+    # a top-level `remark` and whatever it had managed to collect. Reading that
+    # as "no coastline here" would write a truncated answer to the database as
+    # a computed negative -- the #98 mistake with a different source. Presence
+    # is the test, not truthiness: an empty remark is still a remark.
+    if "remark" in payload:
+        raise SeaViewSourceError(
+            f"Overpass returned a partial result: {payload.get('remark')!r}"
+        )
+
+    elements = payload.get("elements")
+    if not isinstance(elements, list):
+        raise SeaViewSourceError(
+            f"Overpass returned no `elements` array (got {type(elements).__name__})"
+        )
 
     # An answer that is present but unusable is not an answer. A coastline way
     # whose geometry is missing, empty, or unparsable would otherwise be dropped
     # silently, and the caller would read the shortened list -- or the empty one
     # -- as the measured fact "no coastline here".
     points: List[Tuple[float, float]] = []
-    for element in payload.get("elements", []):
+    for element in elements:
+        if not isinstance(element, dict):
+            raise SeaViewSourceError("Overpass returned a malformed element")
         geometry = element.get("geometry")
         if not isinstance(geometry, list) or not geometry:
             raise SeaViewSourceError("Overpass returned a way without geometry")
         for node in geometry:
+            if not isinstance(node, dict):
+                raise SeaViewSourceError("Overpass returned a malformed geometry node")
             node_lat, node_lon = node.get("lat"), node.get("lon")
             if node_lat is None or node_lon is None:
                 raise SeaViewSourceError("Overpass returned a node without coordinates")
+            # `float(True)` is 1.0, which would sail through as a latitude.
+            if isinstance(node_lat, bool) or isinstance(node_lon, bool):
+                raise SeaViewSourceError("Overpass returned a boolean coordinate")
             try:
                 lat_value, lon_value = float(node_lat), float(node_lon)
             except (TypeError, ValueError) as exc:
                 raise SeaViewSourceError(
                     "Overpass returned an unparsable coordinate"
                 ) from exc
+            # NaN and infinity fail the range test too: any comparison with NaN
+            # is False, so `not (-90.0 <= nan <= 90.0)` refuses it.
             if not (-90.0 <= lat_value <= 90.0) or not (-180.0 <= lon_value <= 180.0):
                 raise SeaViewSourceError("Overpass returned a coordinate out of range")
             points.append((lat_value, lon_value))
+            if len(points) > MAX_COASTLINE_POINTS:
+                raise SeaViewSourceError(
+                    f"Overpass returned more than {MAX_COASTLINE_POINTS} "
+                    "coastline points"
+                )
 
-    _cache_set(
-        cell_lat, cell_lon, cache_type, points, timeout=COASTLINE_CACHE_TIMEOUT_S
-    )
     return points
 
 
@@ -417,7 +536,11 @@ def evaluate_geometry(
     Returns a dict with `state` in VALID_STATES plus the numbers behind it.
     """
     approximate = (coordinate_accuracy or "").lower() != "precise"
-    cache_type = "sea_view_geometry_v1"
+    # Accuracy belongs in the key: the same point answers differently depending
+    # on whether it is a surveyed address or a municipality centroid, and two
+    # rows can share coordinates to four decimals while disagreeing about that.
+    # A shared key would serve one row's `likely` as the other's verdict.
+    cache_type = f"sea_view_geometry_v1_{'approximate' if approximate else 'precise'}"
     if use_cache:
         cached = _cache_get(lat, lon, cache_type)
         if cached is not None:
@@ -726,8 +849,11 @@ def evaluate_property(
     state, source, reason = combine(text_detail, geometry_detail)
 
     if manual is not None:
-        # An owner who looked at the listing outranks both models, but the
-        # computed opinion is kept so a disagreement stays visible.
+        # An owner who looked at the listing outranks both models. The computed
+        # opinion rides along in the return value so a caller can show the
+        # disagreement -- `apply_to_property` will not store any of this, since
+        # writing beside a hand-set verdict means another stale read-modify-
+        # write of the whole JSON column.
         return {
             "sea_view": manual,
             "sea_view_detail": {
@@ -754,18 +880,114 @@ def evaluate_property(
 
 
 def apply_to_property(prop, verdict: Dict[str, Any], commit: bool = True) -> None:
-    """Persist a verdict into `Property.enrichment["environment"]`."""
+    """Persist a verdict into `Property.enrichment["environment"]`.
+
+    `enrichment` is one JSON column, so writing it is a read-modify-write over
+    everything in it. Evaluation spends seconds on external calls, and the
+    environment endpoint can land inside that window: without a lock a backfill
+    quietly overwrites the verdict the owner just set by hand, taking the rest
+    of the column with it.
+
+    A plain `refresh()` is not enough -- it is a read, so another session can
+    still commit between it and ours. With `commit=True` the row is read under
+    `FOR UPDATE`, which holds until this function commits or rolls back; both
+    paths do one of the two, so the lock is never left dangling for whatever
+    the caller does next.
+
+    With `commit=False` the caller owns the transaction, so no lock is taken:
+    taking one on their behalf, for an interval this function cannot see the
+    end of, is worse than the race it would close. That mode is for callers
+    that already hold the row, and it makes no concurrency promise.
+
+    A mapped property that this session does not hold -- another session's, or
+    one that was expunged or detached -- is a caller error and raises when
+    `commit=True`: writing to it and committing here would persist nothing at
+    all, silently.
+    """
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy.exc import NoInspectionAvailable
+
     from app import db
 
-    enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
-    environment = enrichment.get("environment")
-    environment = dict(environment) if isinstance(environment, dict) else {}
-    environment.update(verdict)
-    enrichment = dict(enrichment)
-    enrichment["environment"] = environment
-    prop.enrichment = enrichment
-    if commit:
-        db.session.commit()
+    try:
+        state = sa_inspect(prop)
+    except NoInspectionAvailable:
+        state = None  # a plain object (a test double); nothing to lock
+
+    savepoint = None
+    if state is not None and commit:
+        # `db.session` is a scoped-session proxy, so comparing it to
+        # `state.session` -- a real Session -- is always unequal. Ask the proxy
+        # whether it holds this object instead. Note this covers a *detached*
+        # object too, whose `state.session` is simply None.
+        if prop not in db.session:
+            raise RuntimeError(
+                "apply_to_property was asked to commit a property this session "
+                "does not hold; the write would not be persisted"
+            )
+        # `begin_nested()` flushes before it opens the savepoint. That flush
+        # would write out anything else pending in the session -- including a
+        # stale `enrichment` assigned before this call, which would erase a
+        # hand-set verdict a moment before the locked read goes looking for it,
+        # and including an unrelated half-built object whose IntegrityError
+        # would surface from a place with no rollback. So this mode requires a
+        # clean session and says so instead of flushing on the caller's behalf.
+        #
+        # In-place mutation of a JSON column is invisible to SQLAlchemy and
+        # therefore *cannot* be detected here. This function owns the column
+        # write; that is the contract, not an oversight.
+        if db.session.new or db.session.dirty or db.session.deleted:
+            raise RuntimeError(
+                "apply_to_property(commit=True) needs a session with nothing "
+                "pending: taking its savepoint would flush and commit whatever "
+                "else is in flight"
+            )
+
+    try:
+        if commit and state is not None:
+            # Read the persisted row under a lock rather than trusting the copy
+            # in memory. The savepoint is what lets the lock be released on the
+            # skip path without discarding the rest of the transaction.
+            savepoint = db.session.begin_nested()
+            db.session.refresh(prop, with_for_update=True)
+
+        enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
+        environment = enrichment.get("environment")
+        environment = dict(environment) if isinstance(environment, dict) else {}
+
+        stored_detail = environment.get("sea_view_detail")
+        if isinstance(stored_detail, dict) and stored_detail.get("source") == "manual":
+            # A hand-set verdict is only ever written by the environment
+            # endpoint, which writes directly. Anything arriving here was
+            # computed from a read of this row -- including a `manual` verdict
+            # `evaluate_property` echoed back -- so it is at best as old as the
+            # row and can only make it worse.
+            logger.info(
+                "Sea view for property %s is hand-set; leaving it alone",
+                getattr(prop, "id", None),
+            )
+            if savepoint is not None:
+                # Nothing to write, but the FOR UPDATE is still held. Roll back
+                # to the savepoint: that releases the row lock without touching
+                # anything the caller had already done in this transaction.
+                savepoint.rollback()
+            return
+
+        environment.update(verdict)
+        enrichment = dict(enrichment)
+        enrichment["environment"] = environment
+        prop.enrichment = enrichment
+
+        if commit:
+            db.session.commit()
+    except Exception:
+        if commit:
+            # A failed commit leaves the transaction -- and the row lock -- open,
+            # and every later row in a backfill loop would then fail on a
+            # poisoned session. Put it back in a usable state before the caller
+            # sees the error.
+            db.session.rollback()
+        raise
 
 
 def calculate_for_property(

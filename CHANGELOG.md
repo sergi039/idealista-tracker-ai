@@ -211,8 +211,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CSV export, which gains `Sea View` and `Sea View Source` columns. The
   property page shows the verdict with its provenance, and its Environment card
   now renders even when there is no data yet, which is what makes the hand-set
-  override reachable; a hand-set verdict outranks both models and survives
-  recalculation. `python -m utils.backfill_sea_view` fills it.
+  override reachable; a hand-set verdict outranks both models and a
+  recalculation leaves it untouched. `python -m utils.backfill_sea_view` fills it.
 - **Why**: the control was rendered dead because `Property` had no field behind
   it. But the underlying question needs no paid API — Google billing (#98) is
   irrelevant to it — and the old `Land` boolean it replaced was `true` on
