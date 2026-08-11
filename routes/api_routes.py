@@ -104,7 +104,7 @@ def _is_property_variant_collision(error: Exception) -> bool:
 
 
 def _upsert_property_ai_variant(
-    property_id: int, provider: str, *, model, analysis
+    property_id: int, provider: str, *, model, analysis, price_at_analysis=None
 ) -> None:
     """Write the (property_id, provider) AI-analysis variant without the
     query-then-insert race migration 017 closes off at the database level
@@ -135,7 +135,15 @@ def _upsert_property_ai_variant(
     from models import PropertyAiAnalysisVariant
 
     stamp = datetime.now(timezone.utc)
-    fields = {"analysis": analysis, "model": model, "created_at": stamp}
+    # `price_at_analysis` is the price the prompt carried, so the page can say
+    # an analysis predates a price correction instead of presenting it as
+    # current (#235). None means the caller could not say, and stays None.
+    fields = {
+        "analysis": analysis,
+        "model": model,
+        "created_at": stamp,
+        "price_at_analysis": price_at_analysis,
+    }
 
     updated = (
         db.session.query(PropertyAiAnalysisVariant)
@@ -153,6 +161,7 @@ def _upsert_property_ai_variant(
                     provider=provider,
                     model=model,
                     analysis=analysis,
+                    price_at_analysis=price_at_analysis,
                 )
             )
     except IntegrityError as exc:
@@ -196,7 +205,9 @@ def _is_land_variant_collision(error: Exception) -> bool:
     return str(orig).strip() == _SQLITE_LAND_VARIANT_COLLISION
 
 
-def _upsert_land_ai_variant(land_id: int, provider: str, *, model, analysis) -> None:
+def _upsert_land_ai_variant(
+    land_id: int, provider: str, *, model, analysis, price_at_analysis=None
+) -> None:
     """Write the (land_id, provider) AI-analysis variant without the
     query-then-insert race migration 017 closes off at the database level
     for the legacy `Land` model too (#190 review round 3, finding 4) -- the
@@ -214,7 +225,12 @@ def _upsert_land_ai_variant(land_id: int, provider: str, *, model, analysis) -> 
     from models import AiAnalysisVariant
 
     stamp = datetime.now(timezone.utc)
-    fields = {"analysis": analysis, "model": model, "created_at": stamp}
+    fields = {
+        "analysis": analysis,
+        "model": model,
+        "created_at": stamp,
+        "price_at_analysis": price_at_analysis,
+    }
 
     updated = (
         db.session.query(AiAnalysisVariant)
@@ -228,7 +244,11 @@ def _upsert_land_ai_variant(land_id: int, provider: str, *, model, analysis) -> 
         with db.session.begin_nested():
             db.session.add(
                 AiAnalysisVariant(
-                    land_id=land_id, provider=provider, model=model, analysis=analysis
+                    land_id=land_id,
+                    provider=provider,
+                    model=model,
+                    analysis=analysis,
+                    price_at_analysis=price_at_analysis,
                 )
             )
     except IntegrityError as exc:
@@ -707,7 +727,11 @@ def analyze_property_structured(land_id):
                 # the recognized race.
                 try:
                     _upsert_land_ai_variant(
-                        land_id, "claude", model=model_used, analysis=final_analysis
+                        land_id,
+                        "claude",
+                        model=model_used,
+                        analysis=final_analysis,
+                        price_at_analysis=land_local.price,
                     )
                 except Exception as e:
                     logger.warning(
@@ -883,7 +907,11 @@ def analyze_universal_property_structured(property_id: int):
             # the recognized race.
             try:
                 _upsert_property_ai_variant(
-                    property_id, provider, model=result.get("model"), analysis=final
+                    property_id,
+                    provider,
+                    model=result.get("model"),
+                    analysis=final,
+                    price_at_analysis=prop_local.price,
                 )
             except Exception as e:
                 logger.warning(
@@ -1011,7 +1039,13 @@ def generate_openai_structured(land_id):
             # the old query-then-insert that let two concurrent writers
             # both see "no row" and both insert (#190 review round 3,
             # finding 4).
-            _upsert_land_ai_variant(land_id, "openai", model=model, analysis=analysis)
+            _upsert_land_ai_variant(
+                land_id,
+                "openai",
+                model=model,
+                analysis=analysis,
+                price_at_analysis=land_local.price,
+            )
 
             return {
                 "success": True,
@@ -1189,6 +1223,24 @@ def compare_property_ai_analyses(property_id: int):
                 "property_category": prop.property_category,
                 "has_claude": bool(claude_analysis),
                 "has_chatgpt": bool(openai_variant),
+                # The price each analysis was computed from, and the one the
+                # listing carries now: a correction (#220) leaves a stored
+                # analysis reasoning about a number that is no longer there,
+                # and the page says so rather than presenting it as current
+                # (#235). None means the variant predates the column.
+                "current_price": float(prop.price) if prop.price is not None else None,
+                "claude_price_at_analysis": (
+                    float(claude_variant.price_at_analysis)
+                    if claude_variant is not None
+                    and claude_variant.price_at_analysis is not None
+                    else None
+                ),
+                "chatgpt_price_at_analysis": (
+                    float(openai_variant.price_at_analysis)
+                    if openai_variant is not None
+                    and openai_variant.price_at_analysis is not None
+                    else None
+                ),
                 "chatgpt_model": openai_variant.model if openai_variant else None,
                 "openai_configured": bool(getattr(Config, "AI_BRIDGE_TOKEN", None)),
                 "claude_model": (
