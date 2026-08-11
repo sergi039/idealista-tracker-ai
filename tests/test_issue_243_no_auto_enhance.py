@@ -11,48 +11,22 @@ The real function runs under node here, against a server that says the
 description was never processed, and the only request it may make is the read.
 """
 
-import json
 import re
-import shutil
-import subprocess
 from pathlib import Path
 
-import pytest
+from tests.js_harness import object_member_source, run_node_script
 
 MAIN_JS = Path(__file__).resolve().parents[1] / "static" / "js" / "main.js"
 
 
-def _extract_method(source: str, name: str) -> str:
-    """Return `function () {...}` for one `name: function (...) {...}` member."""
-    match = re.search(rf"\n    {name}: (function\s*\()", source)
-    assert match, f"{name} is not a member of the object literal any more"
-    depth, start = 0, source.index("{", match.end())
-    for pos in range(start, len(source)):
-        if source[pos] == "{":
-            depth += 1
-        elif source[pos] == "}":
-            depth -= 1
-            if depth == 0:
-                return source[match.start(1) : pos + 1]
-    raise AssertionError(f"unbalanced braces in {name}")
-
-
 def _run(driver: str, tmp_path) -> dict:
-    if shutil.which("node") is None:
-        pytest.skip("node is not installed")
-
-    source = MAIN_JS.read_text(encoding="utf-8")
-    script = tmp_path / "desc.js"
-    script.write_text(
-        f"const initializeDescriptionUI = {_extract_method(source, 'initializeDescriptionUI')};\n"
-        + driver,
-        encoding="utf-8",
+    """Drive the real `initializeDescriptionUI` under node."""
+    member = object_member_source(
+        MAIN_JS.read_text(encoding="utf-8"), "initializeDescriptionUI"
     )
-    out = subprocess.run(
-        ["node", str(script)], capture_output=True, text=True, timeout=30
+    return run_node_script(
+        f"const initializeDescriptionUI = {member};\n" + driver, tmp_path
     )
-    assert out.returncode == 0, out.stderr
-    return json.loads(out.stdout.strip().splitlines()[-1])
 
 
 _HARNESS = """

@@ -12,7 +12,6 @@ The contract pinned here: the bridge reports the id it actually passed, or
 it. `None` reads as "unknown" on the page, which is the truth.
 """
 
-import importlib.util
 import json
 from pathlib import Path
 
@@ -21,19 +20,14 @@ import pytest
 from app import create_app, db
 from tests import setup_test_environment
 
+from tests.js_harness import load_bridge
+
 _BRIDGE_PATH = Path(__file__).resolve().parents[1] / "tools" / "ai_bridge.py"
-
-
-def _load_bridge():
-    spec = importlib.util.spec_from_file_location("ai_bridge_model_label", _BRIDGE_PATH)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 @pytest.fixture
 def bridge():
-    return _load_bridge()
+    return load_bridge("ai_bridge_model_label")
 
 
 @pytest.fixture

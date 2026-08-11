@@ -10,12 +10,14 @@ node is not a CI dependency (the workflow provisions Python only), so a caller
 without node is **skipped**, never silently passed.
 """
 
+import importlib.util
 import json
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -92,6 +94,22 @@ const notesOf = (id) => document.getElementById(id).childNodes.map(
 """
 
 
+BRIDGE_PATH = Path(__file__).resolve().parents[1] / "tools" / "ai_bridge.py"
+
+
+def load_bridge(name: str = "ai_bridge_under_test"):
+    """Import `tools/ai_bridge.py` as a module.
+
+    It is a script, not a package member — four test files had grown their own
+    identical copy of this five-line import, which is four places to fix the day
+    the bridge moves or grows an import guard.
+    """
+    spec = importlib.util.spec_from_file_location(name, BRIDGE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def read_template(template_name: str) -> str:
     with open(os.path.join(TEMPLATES_DIR, template_name), "r", encoding="utf-8") as f:
         return f.read()
@@ -128,6 +146,45 @@ def function_source(source: str, name: str) -> str:
             if depth == 0:
                 return source[start : pos + 1]
     raise AssertionError(f"unbalanced braces in {name}")
+
+
+def object_member_source(source: str, name: str) -> str:
+    """Return `function (...) {...}` for one `name: function (...) {...}` member.
+
+    `function_source` finds a top-level declaration; this finds a method of the
+    one big object literal `static/js/main.js` is written as.
+    """
+    match = re.search(rf"\n    {name}: (function\s*\()", source)
+    assert match, f"{name} is not a member of the object literal any more"
+    depth, start = 0, source.index("{", match.end())
+    for pos in range(start, len(source)):
+        if source[pos] == "{":
+            depth += 1
+        elif source[pos] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[match.start(1) : pos + 1]
+    raise AssertionError(f"unbalanced braces in {name}")
+
+
+def run_node_script(script_js: str, tmp_path) -> dict:
+    """Run one self-contained script under node and parse its last JSON line.
+
+    The DOM-stubbed variant is `run_node`, which loads a whole template first;
+    this is for a driver that brings its own stubs.
+    """
+    if NODE is None:
+        pytest.skip(
+            "node executable not found; the JS-level regression is skipped "
+            "(this repo's CI only provisions Python)"
+        )
+    script = tmp_path / "driver.js"
+    script.write_text(script_js, encoding="utf-8")
+    proc = subprocess.run(
+        [NODE, str(script)], capture_output=True, text=True, timeout=30
+    )
+    assert proc.returncode == 0, f"node failed:\n{proc.stderr}"
+    return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
 def run_node(template_name: str, driver_js: str) -> dict:
