@@ -349,7 +349,7 @@ class TestTheBlockOnThePropertyPage:
 
         assert (
             body.index("Dual Scoring Analysis")
-            < body.index("Beaches within")
+            < body.index("Beaches ≤")
             < body.index("Travel Times &amp; Distances")
         )
 
@@ -367,12 +367,12 @@ class TestTheBlockOnThePropertyPage:
         )
         body = self._body(client, prop)
 
-        assert "Beaches within" not in body
+        assert "Beaches ≤" not in body
 
     def test_it_is_absent_for_a_listing_that_was_never_measured(self, app, client):
         prop = _listing("page-empty", travel={"targets": {}})
 
-        assert "Beaches within" not in self._body(client, prop)
+        assert "Beaches ≤" not in self._body(client, prop)
 
     def test_an_unavailable_lookup_still_says_so(self, app, client):
         """Hiding the block here would state "no beach nearby" on the strength
@@ -391,5 +391,5 @@ class TestTheBlockOnThePropertyPage:
         )
         body = self._body(client, prop)
 
-        assert "Beaches within" in body
+        assert "Beaches ≤" in body
         assert "Not measured" in body

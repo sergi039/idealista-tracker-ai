@@ -543,10 +543,14 @@
         {% if beach_items or beaches.get('status') == 'unavailable' %}
             <div class="card mb-3">
                 <div class="card-header">
+                    {# The heading says the limit and stops there: `compact-header`
+                       is 180px of ellipsis, and "Beaches within 20 min drive"
+                       came out as "Beaches within 20...". The full wording lives
+                       in the tooltip. #}
                     <h6 class="card-title mb-0 compact-header"
                         title="{{ t('beaches_within') }} {{ beaches.get('max_drive_min') or 20 }} {{ t('minutes_drive') }}">
                         <i class="fas fa-umbrella-beach me-2"></i>{{ t('beaches_within') }}
-                        {{ beaches.get('max_drive_min') or 20 }} {{ t('minutes_drive') }}
+                        {{ beaches.get('max_drive_min') or 20 }} min
                     </h6>
                 </div>
                 <div class="card-body">
@@ -557,12 +561,17 @@
                         {% set beach_url = 'https://www.google.com/maps/search/?api=1&query=' ~ beach.get('lat') ~ ',' ~ beach.get('lon')
                                            ~ ('&query_place_id=' ~ (beach.get('place_id')|urlencode) if beach.get('place_id') else '') %}
                         <div class="d-flex justify-content-between align-items-start {{ 'mb-2' if not loop.last }}">
+                            {# No `compact-text` here. That class is 120px of
+                               ellipsis, which turned "Playa de Riboira" into
+                               "Playa de Rib..." -- and the name is the whole
+                               point of a row you are meant to click. It wraps
+                               instead, and the badges keep their width. #}
                             <a href="{{ beach_url }}" target="_blank" rel="noopener"
-                               class="small fw-bold compact-text text-decoration-none"
+                               class="small fw-bold text-decoration-none me-2"
                                title="{{ beach.get('name') or t('nearest_beach') }} — Google Maps">
                                 <i class="fas fa-umbrella-beach me-1 text-primary"></i>{{ beach.get('name') or t('nearest_beach') }}
                             </a>
-                            <div class="text-nowrap ms-2">
+                            <div class="text-nowrap ms-auto flex-shrink-0">
                                 {% if beach.get('duration_min') is not none %}
                                     <span class="badge bg-info me-1"
                                           {% if beach.get('estimated') %}title="Estimated, not measured by Google"{% endif %}>
