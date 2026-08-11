@@ -210,23 +210,49 @@ class HousingPropertyScorer(BasePropertyScorer):
                 sea_cfg_error,
             )
 
+        # One unusable value must not take the whole subscription's scoring with
+        # it. `float("high")` used to raise from inside the weight
+        # comprehension, and the caller's blanket except turned that into "no
+        # score" for every listing under the profile, reported nowhere (#240).
+        # A bad override is skipped, named in the log, and the default for that
+        # key stands -- the same treatment `_resolve_sea_distance_config` above
+        # already gives its own section.
+        def _apply_numeric_overrides(target: Dict[str, Any], source: Any, label: str):
+            if not isinstance(source, dict):
+                return
+            for key, value in source.items():
+                if value is None:
+                    continue
+                try:
+                    target[key] = float(value)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Ignoring %s.%s in scoring_config for category %s: "
+                        "%r is not a number",
+                        label,
+                        key,
+                        self.category,
+                        value,
+                    )
+
         if isinstance(cat_cfg, dict):
-            inv = cat_cfg.get("investment")
-            life = cat_cfg.get("lifestyle")
-            travel_minutes = cat_cfg.get("travel_minutes")
-            if isinstance(inv, dict):
-                investment_weights.update(
-                    {k: float(v) for k, v in inv.items() if v is not None}
-                )
-            if isinstance(life, dict):
-                lifestyle_weights.update(
-                    {k: float(v) for k, v in life.items() if v is not None}
-                )
-            if isinstance(travel_minutes, dict):
-                if travel_minutes.get("best") is not None:
-                    travel_minutes_cfg["best"] = float(travel_minutes.get("best"))
-                if travel_minutes.get("worst") is not None:
-                    travel_minutes_cfg["worst"] = float(travel_minutes.get("worst"))
+            _apply_numeric_overrides(
+                investment_weights, cat_cfg.get("investment"), "investment"
+            )
+            _apply_numeric_overrides(
+                lifestyle_weights, cat_cfg.get("lifestyle"), "lifestyle"
+            )
+            _apply_numeric_overrides(
+                travel_minutes_cfg,
+                {
+                    key: value
+                    for key, value in (cat_cfg.get("travel_minutes") or {}).items()
+                    if key in ("best", "worst")
+                }
+                if isinstance(cat_cfg.get("travel_minutes"), dict)
+                else None,
+                "travel_minutes",
+            )
 
         mix = getattr(Config, "COMBINED_MIX", {"investment": 0.32, "lifestyle": 0.68})
         if isinstance(cat_cfg, dict) and isinstance(cat_cfg.get("combined_mix"), dict):
@@ -235,10 +261,18 @@ class HousingPropertyScorer(BasePropertyScorer):
                 mix_override.get("investment") is not None
                 and mix_override.get("lifestyle") is not None
             ):
-                mix = {
-                    "investment": float(mix_override["investment"]),
-                    "lifestyle": float(mix_override["lifestyle"]),
-                }
+                try:
+                    mix = {
+                        "investment": float(mix_override["investment"]),
+                        "lifestyle": float(mix_override["lifestyle"]),
+                    }
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Ignoring combined_mix in scoring_config for category %s: "
+                        "%r is not a pair of numbers",
+                        self.category,
+                        mix_override,
+                    )
 
         value_score, value_meta = self._value_score(prop)
         size_score, size_meta = self._size_score(prop)
