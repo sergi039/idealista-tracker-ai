@@ -1973,6 +1973,13 @@ def criteria():
         # Get market settings
         market_settings = MarketSettings.get_settings()
 
+        # What these weights actually score. The page used to promise "all
+        # properties"; they are the legacy Land vocabulary and only the legacy
+        # scorer reads them (#239).
+        from models import Land
+
+        legacy_land_count = Land.query.count()
+
         return render_template(
             "criteria.html",
             investment_weights=investment_weights,
@@ -1982,6 +1989,7 @@ def criteria():
             reference_cities=reference_cities,
             city_registry_names=city_registry_names,
             market_settings=market_settings,
+            legacy_land_count=legacy_land_count,
         )
 
     except Exception:
@@ -1994,6 +2002,7 @@ def criteria():
             combined_mix={"investment": 0.32, "lifestyle": 0.68},
             criteria_descriptions={},
             market_settings=None,
+            legacy_land_count=0,
         )
 
 
@@ -2234,8 +2243,15 @@ def update_criteria_profile(profile):
         scoring_service = ScoringService()
 
         if scoring_service.update_weights(weights, profile=profile):
+            # It rescored lands. Saying "all properties" sent the owner back to
+            # /properties to look for a change that was never going to be there
+            # (#239).
+            from models import Land
+
             flash(
-                f"{profile.title()} profile weights updated and all properties rescored successfully!",
+                f"{profile.title()} weights updated; "
+                f"{Land.query.count()} legacy land listings rescored. "
+                "Listings on /properties score by their subscription's own config.",
                 "success",
             )
         else:

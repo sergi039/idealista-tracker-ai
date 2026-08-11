@@ -9,10 +9,27 @@
             <h1>
                 <i class="fas fa-sliders-h me-2"></i>
                 Dual Scoring System Configuration
+                <span class="badge bg-secondary align-middle fs-6">Legacy lands</span>
             </h1>
             <a href="{{ url_for('main.properties') }}" class="btn btn-outline-secondary">
                 <i class="fas fa-arrow-left me-1"></i>Back to Properties
             </a>
+        </div>
+
+        {# These weights are the legacy `Land` vocabulary and only the legacy
+           scorer reads them. `/properties` scores come from
+           PropertyScoringService, whose criteria (value, size, travel, sea) are
+           a different set entirely, configured per subscription. Saying so is
+           the honest half of #239; wiring the two together is a design decision
+           for the owner, not a side effect of a bug fix. #}
+        <div class="alert alert-secondary small" id="criteria-scope-note">
+            <i class="fas fa-circle-info me-1"></i>
+            These weights score the <strong>{{ legacy_land_count }} legacy land listings</strong>
+            behind <code>/lands/&lt;id&gt;</code>. The listings on
+            <a href="{{ url_for('main.properties') }}">/properties</a> are scored by a different
+            set of criteria — value, size, travel and distance to the sea — configured per
+            subscription under <a href="{{ url_for('main.profiles') }}">Subscriptions</a> →
+            Scoring Config.
         </div>
 
         <!-- Profile Navigation Tabs -->
