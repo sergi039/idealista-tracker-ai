@@ -285,6 +285,30 @@ and TODO.md; respect it if you ever run both side by side.
   handled in `EnrichmentService._fetch_osm_amenities` and pinned by
   `tests/test_overpass_user_agent_and_refusal.py`; this rule exists so the
   next Overpass caller does not have to rediscover them.
+- **Google Places Nearby Search reaches 50 km, whatever `radius=` asks for.**
+  Measured 2026-08-11 at 43.551663,-6.831426 (property 360, La Caridad):
+  `radius=50000`, `radius=100000` and `radius=200000` returned the *identical*
+  seven places, same seven `place_id`s, farthest 45.21 km. Google clamps to its
+  documented 50,000 m maximum silently — no error, no warning, no field saying
+  it did — so a call asking for more reads as reaching further than it can, and
+  a reviewer cannot tell from the code that it does not. Reach past 50 km comes
+  from Places **Text Search**, which takes no `radius` at all (`location` only
+  biases its ranking). That is how the legacy `Land` airport lookup finds an
+  airport an hour away (`_airport_candidates` in `services/enrichment_service.py`);
+  PR #254 does the same for the `/properties` airport preset, where the
+  measurement was first taken.
+- **What may be recorded as an airport is defined once**, in
+  `services/place_rules.py` (the `PlaceRules` matcher) over the patterns on the
+  preset in `services/search_profile_service.py` (issue #171). Google's
+  `type=airport` covers helipads, aerodromes and aeroclubs; at the coordinate
+  above, all seven results were exactly that. `/properties` refused them from
+  #171 onward while the legacy `Land` path, holding no copy of the rules, went
+  on taking the nearest — which is how 145 of 168 lands came to store a
+  "nearest airport" at a median 0.27x the distance of the real one, rendering
+  on `/lands/<id>` directly above the correct road distance from
+  `Land.distance_airport`. Do not copy the patterns into a third caller; import
+  them. `utils/clear_legacy_land_airport.py` removes the values the unfiltered
+  search left behind (free — no API call — with a rollback snapshot).
 - **Amenities are measured for `Property`, through the same one client**
   (#152). `_fetch_osm_amenities` is the whole Overpass amenity client — cache,
   gate, transport, refusals — and `_enrich_with_osm_data` (legacy `Land`) and
