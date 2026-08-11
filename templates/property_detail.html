@@ -2250,6 +2250,31 @@ async function refreshAiComparison() {
             statusParts.push(`Baseline: ${data.comparison.baseline.reason}`);
         }
 
+        /* An analysis reasons about the price it was given. A correction
+           afterwards (#220 rewrote 22 of them) leaves it arguing about a number
+           the listing no longer carries, and the page said nothing (#235). A
+           variant with no recorded price compares nothing rather than guessing
+           it was current. */
+        const _priceStale = (analysed) => (
+            analysed !== null && analysed !== undefined
+            && data.current_price !== null && data.current_price !== undefined
+            && Math.abs(analysed - data.current_price) >= 0.01
+        );
+        const _money = (value) => `€${Number(value).toLocaleString()}`;
+        const outdated = [];
+        if (claudeGenerated && _priceStale(data.claude_price_at_analysis)) {
+            outdated.push(`Claude at ${_money(data.claude_price_at_analysis)}`);
+        }
+        if (gptGenerated && _priceStale(data.chatgpt_price_at_analysis)) {
+            outdated.push(`ChatGPT at ${_money(data.chatgpt_price_at_analysis)}`);
+        }
+        if (outdated.length) {
+            statusParts.push(
+                `Priced before the current ${_money(data.current_price)}: `
+                + `${outdated.join(', ')} — press Enrich to re-run.`
+            );
+        }
+
         /* A provider that answered every rental figure with null is not a
            failed request; saying so keeps the em dashes from reading like a
            broken page. */

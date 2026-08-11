@@ -144,6 +144,12 @@ def _create_historical_schema(engine):
         # create_all() builds today's model, and the pre-ledger schema had no
         # such column. Nothing in the model constrains it, so it drops cleanly.
         connection.execute(text("ALTER TABLE lands DROP COLUMN travel"))
+        # Migration 019 (issue #235) added price_at_analysis to both variant
+        # tables. Same treatment.
+        for table in ("ai_analysis_variants", "property_ai_analysis_variants"):
+            connection.execute(
+                text(f"ALTER TABLE {table} DROP COLUMN price_at_analysis")  # noqa: S608
+            )
         # Migration 016 (issue #176) added background_jobs, a genuinely new
         # table with no pre-ledger equivalent -- unlike a new column on an
         # existing table, create_all() has nothing to trim it down from, so

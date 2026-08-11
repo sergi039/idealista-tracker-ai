@@ -1159,6 +1159,10 @@ class AiAnalysisVariant(db.Model):
     )  # 'claude', 'openai'
     model = db.Column(db.String(128), nullable=True)
     analysis = db.Column(JSON, nullable=False, default=dict)
+    # The price the prompt carried. NULL means "not recorded" -- every variant
+    # written before #235 -- and the page compares nothing rather than
+    # inventing a comparison.
+    price_at_analysis = db.Column(db.Numeric(10, 2))
     created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
 
     land = db.relationship(
@@ -1205,6 +1209,10 @@ class PropertyAiAnalysisVariant(db.Model):
     )  # 'claude', 'openai'
     model = db.Column(db.String(128), nullable=True)
     analysis = db.Column(JSON, nullable=False, default=dict)
+    # The price the prompt carried. NULL means "not recorded" -- every variant
+    # written before #235 -- and the page compares nothing rather than
+    # inventing a comparison.
+    price_at_analysis = db.Column(db.Numeric(10, 2))
     created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
 
     property = db.relationship(
