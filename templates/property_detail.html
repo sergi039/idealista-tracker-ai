@@ -528,6 +528,68 @@
             </div>
         {% endif %}
 
+        {# Beaches within a short drive, top of the column by owner decision
+           (2026-08-11). The block is deliberately absent -- not empty, not
+           greyed out -- for a listing whose nearest beach is further than the
+           limit: an inland property has nothing to say here.
+
+           `unavailable` is the one state that still renders, because a lookup
+           that never answered must not read as "no beach nearby". That is the
+           #98 lesson, and `travel.beaches.status` keeps the four cases apart. #}
+        {% set _travel = property.travel if property.travel is mapping else {} %}
+        {% set beaches = _travel.get('beaches') if _travel is mapping else None %}
+        {% set beaches = beaches if beaches is mapping else {} %}
+        {% set beach_items = beaches.get('items') if beaches.get('items') is iterable and beaches.get('items') is not string else [] %}
+        {% if beach_items or beaches.get('status') == 'unavailable' %}
+            <div class="card mb-3">
+                <div class="card-header">
+                    <h6 class="card-title mb-0 compact-header"
+                        title="{{ t('beaches_within') }} {{ beaches.get('max_drive_min') or 20 }} {{ t('minutes_drive') }}">
+                        <i class="fas fa-umbrella-beach me-2"></i>{{ t('beaches_within') }}
+                        {{ beaches.get('max_drive_min') or 20 }} {{ t('minutes_drive') }}
+                    </h6>
+                </div>
+                <div class="card-body">
+                    {% for beach in beach_items %}
+                        {# Straight to the place on Google Maps: the place id pins the
+                           exact beach, the coordinate is what the link falls back to
+                           when Google returned no id. #}
+                        {% set beach_url = 'https://www.google.com/maps/search/?api=1&query=' ~ beach.get('lat') ~ ',' ~ beach.get('lon')
+                                           ~ ('&query_place_id=' ~ (beach.get('place_id')|urlencode) if beach.get('place_id') else '') %}
+                        <div class="d-flex justify-content-between align-items-start {{ 'mb-2' if not loop.last }}">
+                            <a href="{{ beach_url }}" target="_blank" rel="noopener"
+                               class="small fw-bold compact-text text-decoration-none"
+                               title="{{ beach.get('name') or t('nearest_beach') }} — Google Maps">
+                                <i class="fas fa-umbrella-beach me-1 text-primary"></i>{{ beach.get('name') or t('nearest_beach') }}
+                            </a>
+                            <div class="text-nowrap ms-2">
+                                {% if beach.get('duration_min') is not none %}
+                                    <span class="badge bg-info me-1"
+                                          {% if beach.get('estimated') %}title="Estimated, not measured by Google"{% endif %}>
+                                        {{ '~' if beach.get('estimated') }}{{ beach.get('duration_min') }}min
+                                    </span>
+                                {% endif %}
+                                {% if beach.get('distance_km') is not none %}
+                                    <span class="badge bg-secondary">{{ '%.1f'|format(beach.get('distance_km')) }}km</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% endfor %}
+                    {% if beaches.get('status') == 'unavailable' %}
+                        <div class="d-flex justify-content-between align-items-center {{ 'mt-2' if beach_items }}">
+                            <span class="small fw-bold compact-text">
+                                <i class="fas fa-umbrella-beach me-1 text-primary"></i>{{ t('nearest_beach') }}
+                            </span>
+                            <span class="badge bg-warning text-dark"
+                                  title="The lookup did not answer, so nothing was measured{% if beaches.get('error') %} ({{ beaches.get('error') }}){% endif %}">
+                                {{ t('beaches_not_measured') }}
+                            </span>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        {% endif %}
+
         <div class="card mb-4">
             <div class="card-header">
                 <h6 class="card-title mb-0 compact-header" title="{{ t('travel_times_distances') }}">
