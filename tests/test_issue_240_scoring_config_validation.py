@@ -13,7 +13,6 @@ place, naming the key.
 """
 
 import itertools
-import json
 from decimal import Decimal
 
 import pytest
@@ -163,52 +162,51 @@ class TestOneBadOverrideDoesNotStopTheScoring:
         )
 
 
-class TestTheSaveRefusesAConfigTheScorerCannotUse:
-    def _save(self, client, profile, config):
+class TestTheSaveRefusesAValueTheScorerCannotUse:
+    """The JSON textarea this used to post to became a real form in #239; the
+    contract it carried — a value the scorer cannot use never reaches the
+    database, and the message names it — moved with it."""
+
+    def _save(self, client, profile, fields):
+        data = {"action": "save_scoring_weights"}
+        data.update(fields)
         return client.post(
-            f"/profiles/{profile.id}/edit",
-            data={
-                "action": "save_scoring_config",
-                "scoring_config_json": json.dumps(config),
-            },
-            follow_redirects=True,
+            f"/profiles/{profile.id}/edit", data=data, follow_redirects=True
         ).get_data(as_text=True)
 
-    def test_it_names_the_offending_key(self, app, client):
+    def test_it_names_the_offending_field(self, app, client):
         profile = _profile()
 
         body = self._save(
-            client,
-            profile,
-            {"categories": {"land": {"investment": {"price": "high"}}}},
+            client, profile, {"scoring__land__investment__value_score": "high"}
         )
 
-        assert "categories.land.investment.price" in body
+        assert "land.investment.value_score" in body
         assert "not saved" in body.lower()
-        assert profile.scoring_config is None, "a config the scorer cannot use"
+        assert profile.scoring_config is None, "a value the scorer cannot use"
 
-    def test_a_valid_config_is_saved(self, app, client):
+    def test_a_number_is_stored_where_the_scorer_reads_it(self, app, client):
         profile = _profile()
 
         body = self._save(
-            client,
-            profile,
-            {"categories": {"land": {"investment": {"price": 0.5}}}},
+            client, profile, {"scoring__land__investment__value_score": "0.5"}
         )
 
-        assert "Scoring config saved" in body
+        assert "Scoring saved" in body
         assert (
-            profile.scoring_config["categories"]["land"]["investment"]["price"] == 0.5
+            profile.scoring_config["categories"]["land"]["investment"]["value_score"]
+            == 0.5
         )
 
-    def test_a_null_is_not_a_bad_number(self, app, client):
-        """`None` means "no override", which every reader already handles."""
-        profile = _profile()
+    def test_an_empty_field_means_no_override(self, app, client):
+        """Not an error, and not a copy of today's default frozen into the row."""
+        profile = _profile(
+            {"categories": {"land": {"investment": {"value_score": 0.5}}}}
+        )
 
         body = self._save(
-            client,
-            profile,
-            {"categories": {"land": {"investment": {"price": None}}}},
+            client, profile, {"scoring__land__investment__value_score": ""}
         )
 
-        assert "Scoring config saved" in body
+        assert "Scoring saved" in body
+        assert profile.scoring_config is None
