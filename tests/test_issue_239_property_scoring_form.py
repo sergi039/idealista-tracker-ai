@@ -186,3 +186,107 @@ class TestSaving:
         _save(client, profile, {"scoring__land__investment__value_score": ""})
 
         assert profile.scoring_config is None
+
+
+class TestTheCombinedMixIsAPair:
+    """#255: the scorer applies `combined_mix` only when both halves are there.
+    A form that saves one of them stores something that looks set and does
+    nothing."""
+
+    def test_half_a_mix_is_refused_naming_both_fields(self, client, profile):
+        body = _save(
+            client, profile, {"scoring__land__combined_mix__investment": "0.9"}
+        )
+
+        assert "not saved" in body.lower()
+        assert "both investment and lifestyle" in body
+        assert profile.scoring_config is None, "a value the scorer would step over"
+
+    def test_the_other_half_alone_is_refused_too(self, client, profile):
+        body = _save(client, profile, {"scoring__land__combined_mix__lifestyle": "0.1"})
+
+        assert "not saved" in body.lower()
+        assert profile.scoring_config is None
+
+    def test_both_halves_are_applied(self, client, profile):
+        _save(
+            client,
+            profile,
+            {
+                "scoring__land__combined_mix__investment": "0.4",
+                "scoring__land__combined_mix__lifestyle": "0.6",
+            },
+        )
+
+        assert profile.scoring_config["categories"]["land"]["combined_mix"] == {
+            "investment": 0.4,
+            "lifestyle": 0.6,
+        }
+
+    def test_neither_half_leaves_the_default_alone(self, client, profile):
+        body = _save(
+            client,
+            profile,
+            {
+                "scoring__land__combined_mix__investment": "",
+                "scoring__land__combined_mix__lifestyle": "",
+                "scoring__land__investment__value_score": "0.5",
+            },
+        )
+
+        assert "Scoring saved" in body
+        assert "combined_mix" not in profile.scoring_config["categories"]["land"]
+
+
+class TestTheSaveIsOneTransaction:
+    """#256: the config used to commit before the rescore, so a failure inside
+    the loop left the weights stored, nothing rescored, and a 500 that told the
+    owner the opposite."""
+
+    def test_a_failing_rescore_leaves_the_stored_config_alone(
+        self, client, profile, monkeypatch
+    ):
+        from services import property_scoring_service as module
+
+        def explode(self, prop, commit=False):
+            raise RuntimeError("scoring blew up")
+
+        monkeypatch.setattr(
+            module.PropertyScoringService, "calculate_for_property", explode
+        )
+
+        with pytest.raises(RuntimeError):
+            _save(client, profile, {"scoring__land__investment__value_score": "0.9"})
+
+        db.session.rollback()
+        assert profile.scoring_config is None, (
+            "the weights were committed before the work that failed"
+        )
+
+    def test_the_rescore_sees_the_config_being_saved(self, client, profile):
+        """It reads the staged value through the session, not a committed one."""
+        seen = []
+        from services import property_scoring_service as module
+
+        original = module.PropertyScoringService.calculate_for_property
+
+        def record(self, prop, commit=False):
+            seen.append(
+                (prop.search_profile.scoring_config or {})
+                .get("categories", {})
+                .get("land", {})
+                .get("investment", {})
+                .get("value_score")
+            )
+            return original(self, prop, commit=commit)
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(
+            module.PropertyScoringService, "calculate_for_property", record
+        )
+        try:
+            _save(client, profile, {"scoring__land__investment__value_score": "0.9"})
+        finally:
+            monkeypatch.undo()
+
+        assert seen and set(seen) == {0.9}

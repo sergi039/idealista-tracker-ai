@@ -1357,6 +1357,22 @@ def edit_profile(profile_id):
                 )
                 return redirect(url_for("main.edit_profile", profile_id=profile_id))
 
+            # `combined_mix` is the one section the scorer takes as a pair: it
+            # applies the override only when both halves are present, and steps
+            # over it otherwise. A form that saves half of it stores something
+            # that looks set and does nothing (#255).
+            half_filled = []
+            for category, cat_cfg in categories.items():
+                mix = cat_cfg.get("combined_mix") or {}
+                if len(mix) == 1:
+                    half_filled.append(
+                        f"{category}: combined mix needs both investment and "
+                        "lifestyle, or neither"
+                    )
+            if half_filled:
+                flash("Scoring not saved: " + "; ".join(half_filled), "error")
+                return redirect(url_for("main.edit_profile", profile_id=profile_id))
+
             if categories:
                 stored["categories"] = categories
             else:
@@ -1374,12 +1390,17 @@ def edit_profile(profile_id):
                 )
                 return redirect(url_for("main.edit_profile", profile_id=profile_id))
 
+            # Staged, then rescored, then committed once. Committing the config
+            # first meant a failure inside the loop left the weights stored, no
+            # score recomputed, and a 500 telling the owner nothing was saved
+            # (#256). The rescore reads the staged config through the session,
+            # so it still sees the new weights.
             profile.scoring_config = stored or None
-            db.session.commit()
 
             rescored = 0
+            scoring_service = PropertyScoringService()
             for prop in Property.query.filter_by(search_profile_id=profile.id).all():
-                if PropertyScoringService().calculate_for_property(prop, commit=False):
+                if scoring_service.calculate_for_property(prop, commit=False):
                     rescored += 1
             db.session.commit()
 
