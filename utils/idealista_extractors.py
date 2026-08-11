@@ -22,15 +22,19 @@ _NUMBER_COMMA_GROUP = r"(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?![\
 # which grammar matched. Parse with _parse_number_groups().
 _PRICE_NUMBER = rf"(?:{_NUMBER_DOT_GROUP}|{_NUMBER_COMMA_GROUP})"
 
-# A `€` carrying a per-unit suffix is a unit price, never an asking price, and
-# every alert email states both: "99,000 € 309 €/m²". Without this exclusion the
-# per-m² figure was read as a second price, which made `extract_price_change()`
-# call an ordinary new-listing email a price change (two amounts = old + new)
-# and `extract_price()` return its "new price" -- so a €99,000 house was stored,
-# scored and analysed as €309 (issue #220). The suffix sits after the currency
-# sign, where idealista puts it, and covers "€/m²", "€/m2", "€ / m2" and the
-# monthly form a rental carries.
-_PER_UNIT_SUFFIX = r"(?!\s*/\s*(?:m[²2]|mes\b|month\b))"
+# A `€` carrying a **per-area** suffix is a unit price, never an asking price,
+# and every sale alert states both: "99,000 € 309 €/m²". Without this exclusion
+# the per-m² figure was read as a second price, which made
+# `extract_price_change()` call an ordinary new-listing email a price change
+# (two amounts = old + new) and `extract_price()` return its "new price" -- so a
+# €99,000 house was stored, scored and analysed as €309 (issue #220).
+#
+# Only the area units. The first cut also excluded "€/mes" and "€/month", which
+# was wrong in the other direction: a rental states its asking price *only* that
+# way ("650 €/mes"), so every rental body extracted no price at all. A per-area
+# *monthly* rate, "12 €/m²/mes", is still excluded -- the suffix right after the
+# currency sign is `/m²`, which is what this matches.
+_PER_UNIT_SUFFIX = r"(?!\s*/\s*m[²2])"
 
 # One amount in euros. Every "this is a price" regex below is built from it, so
 # the exclusion cannot be forgotten in one of them.
