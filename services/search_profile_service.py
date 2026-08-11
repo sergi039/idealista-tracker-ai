@@ -135,6 +135,25 @@ TRAVEL_PRESET_DEFS: Dict[str, Dict[str, Any]] = {
         "require_name_patterns": _AIRPORT_REQUIRE_NAMES,
         "reject_name_patterns": _AIRPORT_REJECT_NAMES,
         "reject_types": _AIRPORT_REJECT_TYPES,
+        # Nearby Search is capped at ~50 km regardless of what is asked for --
+        # measured 2026-08-11 against property 360 (La Caridad, El Franco,
+        # 43.551663,-6.831426): an explicit radius=75000 and radius=120000 both
+        # returned the identical 7 places, farthest 45.2 km, same as plain
+        # rankby=distance with no radius at all. Every one of those 7 was a
+        # helipad, a light-aircraft aerodrome or an aeroclub, so #171's name
+        # rule correctly refused all of them -- but Asturias Airport itself
+        # sits 64.3 km away and can never appear in that response, which is
+        # why 36 of the owner's 366 properties read "not found" here while
+        # every other preset resolves. A Places Text Search (no `radius`
+        # param, so none of Nearby Search's cap applies) found it as the
+        # nearest qualifying match on the first try. `wide_search_query` opts
+        # a preset into that second, paid call as a fallback -- it only fires
+        # when Nearby Search already answered with nothing this preset
+        # accepts (see `_nearest_place_for_preset` in
+        # property_travel_service.py) -- so the five dense presets below,
+        # which have never shown this failure across the owner's database,
+        # never pay for it.
+        "wide_search_query": "airport",
     },
     "train_station": {
         "label": "Nearest train station",
