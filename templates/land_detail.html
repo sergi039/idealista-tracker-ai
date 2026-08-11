@@ -2516,10 +2516,13 @@ async function generateChatGPTAnalysis() {
             btn.innerHTML = `<i class="fas fa-spinner fa-spin me-2"></i>Analyzing…`;
         }
 
+        // A press always recomputes now (#219/#234), so there is no `force`
+        // flag left for the endpoint to read -- mirrors runClaudeAnalysis's
+        // requestBody above, which dropped the same distinction earlier.
         const resp = await fetch(`/api/analysis/generate/{{ land.id }}/openai`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ force: true })
+            body: JSON.stringify({})
         });
         const data = await resp.json().catch(() => null);
 
