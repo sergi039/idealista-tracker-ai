@@ -5,7 +5,6 @@ path rather than imported as a package.
 """
 
 import ast
-import importlib.util
 import json
 import os
 import signal
@@ -21,19 +20,14 @@ from pathlib import Path
 
 import pytest
 
+from tests.js_harness import load_bridge
+
 _BRIDGE_PATH = Path(__file__).resolve().parents[1] / "tools" / "ai_bridge.py"
-
-
-def _load_bridge():
-    spec = importlib.util.spec_from_file_location("ai_bridge_under_test", _BRIDGE_PATH)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 @pytest.fixture
 def bridge():
-    return _load_bridge()
+    return load_bridge("ai_bridge_under_test")
 
 
 @pytest.fixture

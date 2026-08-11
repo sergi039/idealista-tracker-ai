@@ -21,7 +21,6 @@ tests/test_ai_bridge_isolation.py's own note), so it is loaded here the same
 way: by path, not as a package import.
 """
 
-import importlib.util
 import json
 import os
 import threading
@@ -31,6 +30,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+
+from tests.js_harness import load_bridge
 
 _BRIDGE_PATH = Path(__file__).resolve().parents[1] / "tools" / "ai_bridge.py"
 
@@ -42,18 +43,9 @@ _SAMPLE_SCHEMA = {
 }
 
 
-def _load_bridge():
-    spec = importlib.util.spec_from_file_location(
-        "ai_bridge_schema_under_test", _BRIDGE_PATH
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 @pytest.fixture
 def bridge():
-    return _load_bridge()
+    return load_bridge("ai_bridge_schema_under_test")
 
 
 @pytest.fixture

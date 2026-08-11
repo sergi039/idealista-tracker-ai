@@ -8,7 +8,6 @@ the class of bug that is invisible in the UI. Pin both defaults at the boundary
 that decides which flag is passed.
 """
 
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -17,19 +16,14 @@ import pytest
 
 from config import Config
 
+from tests.js_harness import load_bridge
+
 BRIDGE_PATH = Path(__file__).resolve().parent.parent / "tools" / "ai_bridge.py"
-
-
-def _load_bridge():
-    spec = importlib.util.spec_from_file_location("ai_bridge_under_test", BRIDGE_PATH)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 @pytest.fixture
 def bridge(monkeypatch):
-    module = _load_bridge()
+    module = load_bridge("ai_bridge_under_test")
     monkeypatch.setattr(module, "_which", lambda name: f"/usr/local/bin/{name}")
     return module
 
