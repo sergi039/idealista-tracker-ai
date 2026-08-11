@@ -64,7 +64,10 @@ _MAX_DESTINATIONS_PER_REQUEST = 25
 # place and feeds the scorer; this list is informational, holds as many beaches
 # as are within reach, and must never move a score. It rides along in the same
 # Distance Matrix batch as the presets, so it costs one extra Places call per
-# property and no extra Distance Matrix request.
+# property and no extra Distance Matrix request -- which is why the beaches
+# take only the room the presets leave in that one request (#260), nearest
+# first, instead of pushing the group over the per-request limit and being
+# billed twice.
 BEACHES_STATUS_OK = "ok"
 BEACHES_STATUS_NONE_WITHIN_LIMIT = "none_within_limit"
 BEACHES_STATUS_NOT_FOUND = "not_found"
@@ -524,7 +527,22 @@ class PropertyTravelService:
         # that fact instead.
         beach_lookup = self._beach_candidates(origin_lat, origin_lon)
         beach_entries: Dict[str, Dict[str, Any]] = {}
-        for index, place in enumerate(beach_lookup.places):
+        # "No extra Distance Matrix request" is only true if the merged group
+        # fits in one. Six presets plus twenty beach candidates is 26 against a
+        # 25-destination request, which `_get_distances` splits into two billed
+        # calls -- so the beaches take the room that is left, nearest first,
+        # rather than the promise quietly becoming false on exactly the coastal
+        # listings this list is for (#260).
+        room_for_beaches = max(
+            0,
+            _MAX_DESTINATIONS_PER_REQUEST
+            - sum(
+                1
+                for d in destinations
+                if str(d.get("mode") or "driving").lower() == _BEACH_MODE
+            ),
+        )
+        for index, place in enumerate(beach_lookup.places[:room_for_beaches]):
             key = f"{_BEACH_TARGET_PREFIX}{index}"
             destinations.append(
                 {

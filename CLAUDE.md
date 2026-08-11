@@ -173,8 +173,11 @@ preset: presets resolve one place and feed the scorer, so a beach lookup Google
 refuses is kept out of `travel["targets"]` and out of the run tally — a beach
 must not turn a good travel run into a degraded one. The candidates ride in the
 preset's own Distance Matrix batch, so the feature costs one extra Places call
-per property and no extra route request, and only candidates within 30 km in a
-straight line are measured at all (a road is never shorter than that, so the
+per property and no extra route request — which holds only because the beaches
+take the room the presets leave in that one request (six presets plus twenty
+beaches is 26 destinations against a 25-destination limit, and the split would
+be billed twice), and only candidates within 30 km in a straight line are
+measured at all (a road is never shorter than that, so the
 rest cannot come in under the limit and paying for them is waste). The four
 statuses — `ok`, `none_within_limit`, `not_found`, `unavailable` — exist for the
 #98 reason: only a *measured* absence hides the block, and a refusal still
