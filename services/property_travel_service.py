@@ -59,6 +59,68 @@ _ESTIMATE_CACHE_TTL = 60 * 60 * 24 * 3
 # Distance Matrix accepts at most 25 destinations per request.
 _MAX_DESTINATIONS_PER_REQUEST = 25
 
+# --- Beaches -----------------------------------------------------------------
+# A beach is deliberately *not* a travel preset. A preset resolves exactly one
+# place and feeds the scorer; this list is informational, holds as many beaches
+# as are within reach, and must never move a score. It rides along in the same
+# Distance Matrix batch as the presets, so it costs one extra Places call per
+# property and no extra Distance Matrix request.
+BEACHES_STATUS_OK = "ok"
+BEACHES_STATUS_NONE_WITHIN_LIMIT = "none_within_limit"
+BEACHES_STATUS_NOT_FOUND = "not_found"
+BEACHES_STATUS_UNAVAILABLE = "unavailable"
+
+# Beach places are read as `natural_feature` narrowed by a keyword, the same
+# pair the legacy `travel_time_service` used. Google's legacy Nearby Search has
+# no `beach` type, and `tourist_attraction` alone returns museums and viewpoints.
+# The keyword is Spanish because the listings are: another region needs its own.
+_BEACH_PLACE_TYPE = "natural_feature"
+_BEACH_KEYWORD = "playa"
+_BEACH_MODE = "driving"
+_BEACH_TARGET_PREFIX = "beach:"
+_BEACH_CACHE_PREFIX = "places_beaches_v1"
+
+# How long a drive still counts as "at the beach". The owner asked for 20
+# minutes; the environment variable exists so changing it needs no deploy.
+BEACH_MAX_DRIVE_MIN_DEFAULT = 20
+
+# One Places page. Paging is a second billable request per property for beaches
+# nobody would drive to, and `rankby=distance` already puts the nearest first.
+_BEACH_MAX_CANDIDATES = 20
+
+# Only candidates this close in a straight line reach Distance Matrix. A road is
+# never shorter than the straight line, so a beach 30 km away would need a 90
+# km/h average to come in under 20 minutes -- which no coastal road does. The
+# ones beyond it cannot pass the filter, so paying to measure them is waste.
+_BEACH_CANDIDATE_RADIUS_M = 30_000
+
+# `natural_feature` plus a keyword still lets businesses named after the beach
+# through -- campsites, hotels and beach bars carry "playa" in their name.
+_BEACH_REJECT_NAMES = (
+    "camping",
+    "hotel",
+    "hostal",
+    "apartament",
+    "apartamento",
+    "restaurant",
+    "chiringuito",
+    "parking",
+    "aparcamiento",
+    "mirador",
+    "urbanizaci",
+    "residencial",
+)
+_BEACH_REJECT_TYPES = (
+    "lodging",
+    "restaurant",
+    "cafe",
+    "bar",
+    "campground",
+    "parking",
+    "store",
+    "real_estate_agency",
+)
+
 
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     import math
@@ -154,6 +216,41 @@ def _place_rules(preset_def: Dict[str, Any]) -> Optional[_PlaceRules]:
     )
 
 
+_BEACH_RULES = _PlaceRules(
+    reject_name_patterns=_BEACH_REJECT_NAMES,
+    reject_types=_BEACH_REJECT_TYPES,
+)
+
+
+def _beach_limit_min() -> int:
+    """The drive-time limit a beach must come in under, in minutes."""
+    raw = getattr(Config, "BEACH_MAX_DRIVE_MIN", BEACH_MAX_DRIVE_MIN_DEFAULT)
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError):
+        return BEACH_MAX_DRIVE_MIN_DEFAULT
+    # A non-positive limit would hide the block everywhere while looking
+    # configured; a bad value is not a reason to silently disable a feature.
+    return limit if limit > 0 else BEACH_MAX_DRIVE_MIN_DEFAULT
+
+
+def _place_from_result(candidate: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The fields kept from one Places result, or None when it has no location."""
+    geometry = candidate.get("geometry")
+    location = geometry.get("location") if isinstance(geometry, dict) else None
+    location = location if isinstance(location, dict) else {}
+    place = {
+        "name": candidate.get("name"),
+        "place_id": candidate.get("place_id"),
+        "types": candidate.get("types"),
+        "lat": location.get("lat"),
+        "lon": location.get("lng"),
+    }
+    if place["lat"] is None or place["lon"] is None:
+        return None
+    return place
+
+
 @dataclass(frozen=True)
 class PlaceLookup:
     """Outcome of a nearest-place search.
@@ -166,6 +263,21 @@ class PlaceLookup:
     place: Optional[Dict[str, Any]] = None
     failure: Optional[GoogleApiFailure] = None
     reason: str = NOT_FOUND_NO_NEARBY_PLACE
+
+
+@dataclass
+class BeachLookup:
+    """Outcome of the beach search around one property.
+
+    `places` are the candidates close enough to be worth measuring, nearest
+    first; `total_found` counts every beach Google returned, including the ones
+    dropped for being beyond the radius -- that is what tells "no beaches here"
+    apart from "beaches, but all of them far away".
+    """
+
+    places: List[Dict[str, Any]] = field(default_factory=list)
+    total_found: int = 0
+    failure: Optional[GoogleApiFailure] = None
 
 
 @dataclass(frozen=True)
@@ -404,6 +516,26 @@ class PropertyTravelService:
                     "formatted_address": item.get("formatted_address"),
                 }
 
+        # Beaches. They ride in the same Distance Matrix batch as the targets
+        # above -- one extra Places call per property, no extra route request --
+        # but they are kept out of `targets` and out of the tally on purpose:
+        # no score reads them, so a beach Google would not talk about must not
+        # turn a good travel run into a degraded one. Their own status carries
+        # that fact instead.
+        beach_lookup = self._beach_candidates(origin_lat, origin_lon)
+        beach_entries: Dict[str, Dict[str, Any]] = {}
+        for index, place in enumerate(beach_lookup.places):
+            key = f"{_BEACH_TARGET_PREFIX}{index}"
+            destinations.append(
+                {
+                    "key": key,
+                    "mode": _BEACH_MODE,
+                    "lat": place["lat"],
+                    "lon": place["lon"],
+                }
+            )
+            beach_entries[key] = {"place": place}
+
         # Compute distances & durations (grouped by mode).
         by_mode: Dict[str, List[Dict[str, Any]]] = {}
         for d in destinations:
@@ -414,7 +546,11 @@ class PropertyTravelService:
                 continue
             results = self._get_distances(origin_lat, origin_lon, group, mode=mode)
             for entry, res in zip(group, results):
-                target = targets.setdefault(entry["key"], {})
+                key = entry["key"]
+                if key in beach_entries:
+                    self._apply_distance(beach_entries[key], res, None)
+                    continue
+                target = targets.setdefault(key, {})
                 self._apply_distance(target, res, tally)
 
         # Invariant: every target carries a status. A target that reached the
@@ -436,11 +572,25 @@ class PropertyTravelService:
             )
             tally.record_failure(failure)
 
+        # The same invariant for the beaches, minus the tally: a short reply
+        # leaves them unmeasured, which `_beaches_payload` reports as such
+        # rather than dropping them as "too far".
+        for entry in beach_entries.values():
+            if not entry.get("status"):
+                entry.update(
+                    {
+                        "status": TARGET_STATUS_UNAVAILABLE,
+                        "error": REASON_MALFORMED_RESPONSE,
+                        "stage": STAGE_DISTANCE_MATRIX,
+                    }
+                )
+
         travel = {
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "origin": {"lat": origin_lat, "lon": origin_lon},
             "profile_id": profile.id if profile else None,
             "targets": targets,
+            "beaches": self._beaches_payload(beach_lookup, beach_entries),
             "api_status": tally.summary(),
         }
 
@@ -477,9 +627,16 @@ class PropertyTravelService:
         return self.calculate_for_property(prop, commit=commit)
 
     def _apply_distance(
-        self, target: Dict[str, Any], res: DistanceResult, tally: _RunTally
+        self,
+        target: Dict[str, Any],
+        res: DistanceResult,
+        tally: Optional[_RunTally],
     ) -> None:
-        """Fold one Distance Matrix outcome into its target dict."""
+        """Fold one Distance Matrix outcome into its target dict.
+
+        `tally` is None for destinations that must not sway the run's verdict --
+        the beaches, which no score reads.
+        """
         if res.failure is not None:
             target.update(
                 {
@@ -488,7 +645,8 @@ class PropertyTravelService:
                     "stage": STAGE_DISTANCE_MATRIX,
                 }
             )
-            tally.record_failure(res.failure)
+            if tally is not None:
+                tally.record_failure(res.failure)
             return
 
         if not res.resolved:
@@ -498,7 +656,8 @@ class PropertyTravelService:
                     "reason": NOT_FOUND_NO_ROUTE,
                 }
             )
-            tally.record_not_found()
+            if tally is not None:
+                tally.record_not_found()
             return
 
         target.update(
@@ -517,7 +676,8 @@ class PropertyTravelService:
                 else None,
             }
         )
-        tally.record_resolved(estimated=res.estimated)
+        if tally is not None:
+            tally.record_resolved(estimated=res.estimated)
 
     def _resolve_profile(self, prop: Property) -> Optional[SearchProfile]:
         if prop.search_profile:
@@ -591,8 +751,55 @@ class PropertyTravelService:
         ):
             return PlaceLookup(place=cached)
 
+        results, failure = self._places_nearby(lat, lon, place_type=place_type)
+        if failure is not None:
+            return PlaceLookup(failure=failure)
+        if not results:
+            # Google answered: nothing of this type nearby.
+            return PlaceLookup()
+
+        # `rankby=distance` orders the list, so the first candidate the preset
+        # accepts is the nearest one. Taking `results[0]` unconditionally is
+        # what put a contractor tagged `airport` 2.4 km away in front of the
+        # real airport 40 km away.
+        for candidate in results:
+            if reject is not None and reject.rejects(candidate):
+                logger.debug(
+                    "Places lookup skipped %s for %s: fails the preset's rules",
+                    candidate.get("name"),
+                    place_type,
+                )
+                continue
+            out = _place_from_result(candidate)
+            if out is None:
+                continue
+
+            cache_enrichment_data(lat, lon, cache_type, out, timeout=_PLACES_CACHE_TTL)
+            return PlaceLookup(place=out)
+
+        # Everything nearby was refused. That is an answer -- "no airport here"
+        # -- and not a failure, so it must not read as an API refusal.
+        return PlaceLookup()
+
+    def _places_nearby(
+        self,
+        lat: float,
+        lon: float,
+        place_type: str,
+        keyword: Optional[str] = None,
+    ) -> Tuple[List[Dict[str, Any]], Optional[GoogleApiFailure]]:
+        """One page of Places Nearby Search, ranked by distance.
+
+        The single Places transport in this service: `_nearest_place` takes the
+        first acceptable hit off it, the beach lookup takes every hit within
+        reach, and the request, its refusals and its logging stay in one place.
+
+        A refusal comes back as the failure, never as an empty list -- "Google
+        did not answer" and "Google says there is nothing here" are different
+        facts (#98), and only the second one may be recorded as a result.
+        """
         if not self.google_places_key:
-            return PlaceLookup(failure=GoogleApiFailure(reason=REASON_NO_API_KEY))
+            return [], GoogleApiFailure(reason=REASON_NO_API_KEY)
 
         url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
         params = {
@@ -601,6 +808,9 @@ class PropertyTravelService:
             "type": place_type,
             "key": self.google_places_key,
         }
+        if keyword:
+            params["keyword"] = keyword
+
         try:
             response = request_with_retries(
                 requests.get, url, params=params, timeout=12, logger=logger
@@ -610,51 +820,160 @@ class PropertyTravelService:
             logger.warning(
                 "Places lookup failed (%s): %s", place_type, failure.describe()
             )
-            return PlaceLookup(failure=failure)
+            return [], failure
 
         payload, failure = read_api_payload(response)
         if failure is not None:
             logger.warning(
                 "Places lookup refused (%s): %s", place_type, failure.describe()
             )
-            return PlaceLookup(failure=failure)
+            return [], failure
 
-        results = payload.get("results") or []
-        if not isinstance(results, list) or not results:
-            # Google answered: nothing of this type nearby.
-            return PlaceLookup()
+        results = payload.get("results")
+        if not isinstance(results, list):
+            return [], None
+        return [item for item in results if isinstance(item, dict)], None
 
-        # `rankby=distance` orders the list, so the first candidate the preset
-        # accepts is the nearest one. Taking `results[0]` unconditionally is
-        # what put a contractor tagged `airport` 2.4 km away in front of the
-        # real airport 40 km away.
+    def _beach_candidates(self, lat: float, lon: float) -> "BeachLookup":
+        """Beaches near a property, nearest first, within the drive radius.
+
+        Only the candidates worth measuring are returned: the rest could not
+        come in under the time limit whatever the roads look like, and each one
+        would be a billed Distance Matrix element.
+        """
+        cache_type = (
+            f"{_BEACH_CACHE_PREFIX}:{_BEACH_PLACE_TYPE}:"
+            f"{_BEACH_KEYWORD}:{_BEACH_RULES.signature}"
+        )
+        cached = get_cached_enrichment_data(lat, lon, cache_type)
+        if isinstance(cached, dict) and isinstance(cached.get("places"), list):
+            return BeachLookup(
+                places=[p for p in cached["places"] if isinstance(p, dict)],
+                total_found=int(cached.get("total_found") or 0),
+            )
+
+        results, failure = self._places_nearby(
+            lat, lon, place_type=_BEACH_PLACE_TYPE, keyword=_BEACH_KEYWORD
+        )
+        if failure is not None:
+            return BeachLookup(failure=failure)
+
+        places: List[Dict[str, Any]] = []
+        total_found = 0
         for candidate in results:
-            if not isinstance(candidate, dict):
+            if _BEACH_RULES.rejects(candidate):
                 continue
-            if reject is not None and reject.rejects(candidate):
-                logger.debug(
-                    "Places lookup skipped %s for %s: fails the preset's rules",
-                    candidate.get("name"),
-                    place_type,
-                )
+            place = _place_from_result(candidate)
+            if place is None:
                 continue
-            loc = (candidate.get("geometry") or {}).get("location") or {}
-            out = {
-                "name": candidate.get("name"),
-                "place_id": candidate.get("place_id"),
-                "types": candidate.get("types"),
-                "lat": loc.get("lat"),
-                "lon": loc.get("lng"),
+            total_found += 1
+            straight_m = _haversine_m(
+                lat, lon, float(place["lat"]), float(place["lon"])
+            )
+            if straight_m > _BEACH_CANDIDATE_RADIUS_M:
+                continue
+            place["straight_m"] = int(round(straight_m))
+            places.append(place)
+            if len(places) >= _BEACH_MAX_CANDIDATES:
+                break
+
+        cache_enrichment_data(
+            lat,
+            lon,
+            cache_type,
+            {"places": places, "total_found": total_found},
+            timeout=_PLACES_CACHE_TTL,
+        )
+        return BeachLookup(places=places, total_found=total_found)
+
+    @staticmethod
+    def _beaches_payload(
+        lookup: "BeachLookup", measured: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Fold the beach lookup and its distances into one stored record.
+
+        The four statuses keep apart what the page must not confuse: beaches
+        within the limit (`ok`), beaches that exist but are all too far
+        (`none_within_limit`), Google answering that there are none at all
+        (`not_found`), and no answer at all (`unavailable`). Only the first two
+        are measured facts; a refusal must never render as "no beach nearby".
+        """
+        limit_min = _beach_limit_min()
+        base: Dict[str, Any] = {
+            "max_drive_min": limit_min,
+            "mode": _BEACH_MODE,
+            "search_radius_m": _BEACH_CANDIDATE_RADIUS_M,
+            "candidates": len(lookup.places),
+            "found": lookup.total_found,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        if lookup.failure is not None:
+            return {
+                **base,
+                "status": BEACHES_STATUS_UNAVAILABLE,
+                "stage": STAGE_PLACES,
+                "error": lookup.failure.reason,
+                "items": [],
             }
-            if out.get("lat") is None or out.get("lon") is None:
+
+        items: List[Dict[str, Any]] = []
+        unmeasured = 0
+        for entry in measured.values():
+            place = entry.get("place") or {}
+            status = entry.get("status")
+            if status == TARGET_STATUS_UNAVAILABLE:
+                unmeasured += 1
                 continue
+            duration_min = entry.get("duration_min")
+            if duration_min is None or duration_min > limit_min:
+                continue
+            items.append(
+                {
+                    "name": place.get("name"),
+                    "place_id": place.get("place_id"),
+                    "lat": place.get("lat"),
+                    "lon": place.get("lon"),
+                    "duration_min": duration_min,
+                    "distance_m": entry.get("distance_m"),
+                    "distance_km": entry.get("distance_km"),
+                    "estimated": bool(entry.get("estimated")),
+                }
+            )
 
-            cache_enrichment_data(lat, lon, cache_type, out, timeout=_PLACES_CACHE_TTL)
-            return PlaceLookup(place=out)
+        items.sort(key=lambda item: (item["duration_min"], item.get("distance_m") or 0))
 
-        # Everything nearby was refused. That is an answer -- "no airport here"
-        # -- and not a failure, so it must not read as an API refusal.
-        return PlaceLookup()
+        # Google holds the same beach under several place ids -- a live lookup
+        # off La Caridad returned "Playa de Torbas" twice, 5 minutes apart --
+        # and a name repeated down the block reads as two places to go to. The
+        # nearest of each name survives, which is the one the sort put first.
+        deduped: List[Dict[str, Any]] = []
+        seen_names = set()
+        for item in items:
+            name_key = str(item.get("name") or "").strip().casefold()
+            if name_key and name_key in seen_names:
+                continue
+            if name_key:
+                seen_names.add(name_key)
+            deduped.append(item)
+        items = deduped
+
+        if items:
+            status = BEACHES_STATUS_OK
+        elif unmeasured:
+            # Every candidate that could have qualified went unmeasured, so
+            # "none within the limit" is not something this run may claim.
+            status = BEACHES_STATUS_UNAVAILABLE
+        elif lookup.total_found:
+            status = BEACHES_STATUS_NONE_WITHIN_LIMIT
+        else:
+            status = BEACHES_STATUS_NOT_FOUND
+
+        payload = {**base, "status": status, "items": items}
+        if unmeasured:
+            payload["unmeasured"] = unmeasured
+            payload["stage"] = STAGE_DISTANCE_MATRIX
+        return payload
 
     def _get_distances(
         self, lat: float, lon: float, destinations: List[Dict[str, Any]], mode: str

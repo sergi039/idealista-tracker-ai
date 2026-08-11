@@ -164,6 +164,27 @@ What the page has now, top to bottom:
 Keep it that way. Adding a control means deciding which of the three it
 belongs to, not adding a second copy near where it is needed.
 
+**The beaches block is informational, and it must never move a score** (owner
+decision, 2026-08-11). `Property.travel["beaches"]` holds every beach within a
+20-minute drive (`BEACH_MAX_DRIVE_MIN`), nearest first, each linked to Google
+Maps; a listing with none is shown no block at all, which is why an inland
+property's right-hand column looks exactly as it did. It is *not* a travel
+preset: presets resolve one place and feed the scorer, so a beach lookup Google
+refuses is kept out of `travel["targets"]` and out of the run tally — a beach
+must not turn a good travel run into a degraded one. The candidates ride in the
+preset's own Distance Matrix batch, so the feature costs one extra Places call
+per property and no extra route request, and only candidates within 30 km in a
+straight line are measured at all (a road is never shorter than that, so the
+rest cannot come in under the limit and paying for them is waste). The four
+statuses — `ok`, `none_within_limit`, `not_found`, `unavailable` — exist for the
+#98 reason: only a *measured* absence hides the block, and a refusal still
+renders, saying it was not measured. `natural_feature` + keyword `playa` is the
+Places pair, measured against the live API on 2026-08-11: it returns real
+beaches in Asturias *and* in Galicia (where they are named "Praia"), while the
+legacy `tourist_attraction` + `playa` pair returned a fountain, a swimming pool
+and the town itself. Google lists the same beach under several place ids, so
+identical names are collapsed to the nearest one.
+
 **Distance to the sea is a scoring criterion, and it reuses the sea-view
 coastline client.** `services/sea_distance_service.py` scores straight-line
 metres to the OSM coastline, but it does **not** fetch that coastline: it calls
