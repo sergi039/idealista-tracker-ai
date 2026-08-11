@@ -148,6 +148,11 @@ class Config:
         os.environ.get("SEA_DISTANCE_ENABLED", "true").lower() == "true"
     )
 
+    # How long a drive still counts as "at the beach" for the beaches block on
+    # the property page. A beach further than this is not shown at all, so the
+    # block disappears entirely for inland listings.
+    BEACH_MAX_DRIVE_MIN = os.environ.get("BEACH_MAX_DRIVE_MIN", "20")
+
     # Universal build is sale-first; rentals are excluded unless explicitly enabled.
     SALE_ONLY = os.environ.get("SALE_ONLY", "true").lower() == "true"
 
