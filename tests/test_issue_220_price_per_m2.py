@@ -59,14 +59,38 @@ def test_the_asking_price_wins_over_the_price_per_m2(body, expected):
     [
         "Reduced to 309 €/m²",
         "1.452 €/m² en esta zona",
-        # A rental figure is not an asking price either.
-        "Alquiler 950 €/mes",
+        # A per-area *monthly* rate is still a per-area rate: the suffix right
+        # after the currency sign is `/m²`.
+        "Oficina 12 €/m²/mes 200 m2",
     ],
 )
-def test_a_unit_price_alone_is_not_a_price(body):
+def test_a_per_area_price_alone_is_not_a_price(body):
     """Better no price than the wrong one: the importer skips a listing with no
     price, and that is the honest outcome for a body that never states one."""
     assert extract_price(body) is None
+
+
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        ("Alquiler 650 €/mes 3 hab. 90 m2 en Gijón", 650.0),
+        ("Rent 1,200 €/month 2 bed", 1200.0),
+        ("Precio: 650 €/mes", 650.0),
+    ],
+)
+def test_a_rental_states_its_price_only_as_a_monthly_figure(body, expected):
+    """The first cut of this fix excluded `€/mes` alongside `€/m²`, which is the
+    same mistake pointing the other way: a rental has no bare-€ total, so every
+    rental body extracted no price at all. Ingestion stores rentals whenever the
+    owner turns "Sale-only (skip rentals)" off (`tests/test_sale_only.py`)."""
+    assert extract_price(body) == expected
+
+
+def test_a_rental_price_drop_still_resolves():
+    assert extract_price_change("El precio ha bajado de 650 €/mes a 600 €/mes") == (
+        650.0,
+        600.0,
+    )
 
 
 def test_a_plain_listing_is_not_a_price_change():
