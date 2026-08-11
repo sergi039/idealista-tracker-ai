@@ -60,6 +60,119 @@ INVESTMENT_RATING_ORDER = ("BELOW", "MODERATE", "GOOD", "EXCELLENT")
 UNCLASSIFIED_FILTER = "__none__"
 
 
+SCORING_FIELD_PREFIX = "scoring"
+
+
+def _scoring_field_name(category: str, section: str, key: str) -> str:
+    """One naming scheme for the per-subscription scoring inputs (#239)."""
+    return f"{SCORING_FIELD_PREFIX}__{category}__{section}__{key}"
+
+
+def _scoring_form_model(profile) -> list:
+    """What the subscription page renders: every editable weight, its stored
+    override and the default it falls back to.
+
+    Built from `PropertyScoringService`, never from a copy of its numbers — the
+    page and the scoring cannot drift apart that way. Categories the
+    subscription actually holds listings in come first, so the ones that matter
+    are the ones on screen.
+    """
+    from models import Property
+    from services.property_scoring_service import PropertyScoringService
+
+    service = PropertyScoringService()
+    stored = profile.scoring_config if isinstance(profile.scoring_config, dict) else {}
+    stored_categories = (
+        stored.get("categories") if isinstance(stored.get("categories"), dict) else {}
+    )
+
+    counts = dict(
+        db.session.query(Property.property_category, db.func.count(Property.id))
+        .filter(Property.search_profile_id == profile.id)
+        .group_by(Property.property_category)
+        .all()
+    )
+
+    model = []
+    for category in service.known_categories():
+        defaults = service.defaults_for(category)
+        cat_stored = (
+            stored_categories.get(category)
+            if isinstance(stored_categories.get(category), dict)
+            else {}
+        )
+        sections = []
+        for section, keys in service.EDITABLE_SECTIONS.items():
+            section_stored = (
+                cat_stored.get(section)
+                if isinstance(cat_stored.get(section), dict)
+                else {}
+            )
+            sections.append(
+                {
+                    "name": section,
+                    "fields": [
+                        {
+                            "key": key,
+                            "input_name": _scoring_field_name(category, section, key),
+                            "value": section_stored.get(key),
+                            "default": defaults.get(section, {}).get(key),
+                        }
+                        for key in keys
+                    ],
+                }
+            )
+        model.append(
+            {
+                "category": category,
+                "listing_count": int(counts.get(category) or 0),
+                "sections": sections,
+                "overridden": bool(cat_stored),
+            }
+        )
+
+    model.sort(key=lambda entry: (-entry["listing_count"], entry["category"]))
+    return model
+
+
+def _unmanaged_scoring_keys(profile) -> list:
+    """Anything stored in `scoring_config` the form does not render.
+
+    A hand-written key is kept on save rather than dropped; naming it here
+    keeps it from being invisible instead.
+    """
+    from services.property_scoring_service import PropertyScoringService
+
+    service = PropertyScoringService()
+    stored = profile.scoring_config if isinstance(profile.scoring_config, dict) else {}
+    known_sections = service.EDITABLE_SECTIONS
+    unmanaged = []
+
+    for key in stored:
+        if key != "categories":
+            unmanaged.append(key)
+
+    categories = stored.get("categories")
+    if not isinstance(categories, dict):
+        return sorted(unmanaged)
+
+    for category, cat_cfg in categories.items():
+        if category not in service.known_categories():
+            unmanaged.append(f"categories.{category}")
+            continue
+        if not isinstance(cat_cfg, dict):
+            continue
+        for section, values in cat_cfg.items():
+            if section not in known_sections:
+                unmanaged.append(f"categories.{category}.{section}")
+                continue
+            if isinstance(values, dict):
+                for key in values:
+                    if key not in known_sections[section]:
+                        unmanaged.append(f"categories.{category}.{section}.{key}")
+    return sorted(unmanaged)
+
+
 def _unusable_scoring_numbers(config: dict) -> list:
     """Every scoring_config value that claims to be a number and is not.
 
@@ -1185,46 +1298,95 @@ def edit_profile(profile_id):
             flash("AI context saved", "success")
             return redirect(url_for("main.edit_profile", profile_id=profile_id))
 
-        if action == "save_scoring_config":
-            raw = (request.form.get("scoring_config_json") or "").strip()
-            if not raw:
-                profile.scoring_config = None
-                db.session.commit()
-                flash("Scoring config cleared (defaults apply)", "success")
-                return redirect(url_for("main.edit_profile", profile_id=profile_id))
+        if action == "save_scoring_weights":
+            # The form owns a known set of numbers per category; anything else
+            # in the stored config (a hand-written key, a category with no
+            # scorer) is carried across untouched rather than dropped by a UI
+            # that never knew about it (#239).
+            from services.property_scoring_service import PropertyScoringService
 
-            import json
+            service = PropertyScoringService()
+            stored = (
+                dict(profile.scoring_config)
+                if isinstance(profile.scoring_config, dict)
+                else {}
+            )
+            categories = {
+                name: dict(values)
+                for name, values in (stored.get("categories") or {}).items()
+                if isinstance(values, dict)
+            }
 
-            try:
-                parsed = json.loads(raw)
-            except Exception:
+            rejected = []
+            for category in service.known_categories():
+                cat_cfg = {
+                    section: dict(values)
+                    for section, values in (categories.get(category) or {}).items()
+                    if isinstance(values, dict)
+                }
+                for section, keys in service.EDITABLE_SECTIONS.items():
+                    section_cfg = dict(cat_cfg.get(section) or {})
+                    for key in keys:
+                        field = _scoring_field_name(category, section, key)
+                        raw_value = (request.form.get(field) or "").strip()
+                        if not raw_value:
+                            # Empty means "no override": the scorer's own
+                            # default applies, and storing a copy of it would
+                            # freeze today's default into the subscription.
+                            section_cfg.pop(key, None)
+                            continue
+                        try:
+                            section_cfg[key] = float(raw_value.replace(",", "."))
+                        except ValueError:
+                            rejected.append(
+                                f"{category}.{section}.{key} = {raw_value!r}"
+                            )
+                    if section_cfg:
+                        cat_cfg[section] = section_cfg
+                    else:
+                        cat_cfg.pop(section, None)
+                if cat_cfg:
+                    categories[category] = cat_cfg
+                else:
+                    categories.pop(category, None)
+
+            if rejected:
                 flash(
-                    "Invalid JSON for scoring config. Check syntax and try again.",
+                    "Scoring not saved: " + "; ".join(rejected) + ". Use numbers.",
                     "error",
                 )
                 return redirect(url_for("main.edit_profile", profile_id=profile_id))
 
-            if not isinstance(parsed, dict):
-                flash("Scoring config must be a JSON object", "error")
-                return redirect(url_for("main.edit_profile", profile_id=profile_id))
+            if categories:
+                stored["categories"] = categories
+            else:
+                stored.pop("categories", None)
 
-            # A weight typed as a string is not a weight. The scorer now skips
-            # such an override rather than losing the whole profile's scoring to
-            # it (#240), but the honest place to catch it is here, where the
-            # owner can still fix the typo.
-            unusable = _unusable_scoring_numbers(parsed)
+            # The same check the JSON editor used to run, over the merged
+            # result: a value the scorer cannot use never reaches the database.
+            unusable = _unusable_scoring_numbers(stored)
             if unusable:
                 flash(
-                    "Scoring config not saved: "
+                    "Scoring not saved: "
                     + "; ".join(unusable)
                     + ". Weights and thresholds must be numbers.",
                     "error",
                 )
                 return redirect(url_for("main.edit_profile", profile_id=profile_id))
 
-            profile.scoring_config = parsed
+            profile.scoring_config = stored or None
             db.session.commit()
-            flash("Scoring config saved", "success")
+
+            rescored = 0
+            for prop in Property.query.filter_by(search_profile_id=profile.id).all():
+                if PropertyScoringService().calculate_for_property(prop, commit=False):
+                    rescored += 1
+            db.session.commit()
+
+            flash(
+                f"Scoring saved; {rescored} listings in this subscription rescored.",
+                "success",
+            )
             return redirect(url_for("main.edit_profile", profile_id=profile_id))
 
         if action == "save_classification_rules":
@@ -1383,17 +1545,6 @@ def edit_profile(profile_id):
         ai_market_context = str(
             (profile.ai_config or {}).get("market_context") or ""
         ).strip()
-    scoring_config_json = ""
-    if isinstance(getattr(profile, "scoring_config", None), dict):
-        try:
-            import json
-
-            scoring_config_json = json.dumps(
-                profile.scoring_config, indent=2, ensure_ascii=False
-            )
-        except Exception:
-            scoring_config_json = ""
-
     classification_rules_json = ""
     if isinstance(getattr(profile, "classification_rules", None), list):
         try:
@@ -1422,7 +1573,8 @@ def edit_profile(profile_id):
         travel_presets=travel_presets,
         custom_targets=config.get("custom") or [],
         ai_market_context=ai_market_context,
-        scoring_config_json=scoring_config_json,
+        scoring_form=_scoring_form_model(profile),
+        unmanaged_scoring_keys=_unmanaged_scoring_keys(profile),
         classification_rules_json=classification_rules_json,
         email_matchers_json=email_matchers_json,
         global_ai_market_context=SettingsService.get_ai_market_context(),

@@ -727,6 +727,66 @@ class PropertyScoringService:
         }
         self._default = DefaultPropertyScorer()
 
+    # The editable shape of `SearchProfile.scoring_config`, in one place: the
+    # subscription page builds its form from this rather than repeating the
+    # scorer's own vocabulary, so a criterion added to a scorer cannot go on
+    # being invisible in the UI that is supposed to configure it (#239).
+    WEIGHT_KEYS = ("value_score", "size_score", "travel_score", "sea_score")
+    EDITABLE_SECTIONS = {
+        "investment": WEIGHT_KEYS,
+        "lifestyle": WEIGHT_KEYS,
+        "combined_mix": ("investment", "lifestyle"),
+        "travel_minutes": ("best", "worst"),
+        "sea_distance": ("near_m", "far_m"),
+    }
+
+    def known_categories(self) -> list:
+        """The categories that have a scorer of their own, in a stable order."""
+        return sorted(self._scorers)
+
+    def defaults_for(self, category: str) -> Dict[str, Dict[str, float]]:
+        """What a category scores by when its subscription overrides nothing.
+
+        Read off the scorer itself. A page that hard-coded these numbers would
+        drift from the scoring the moment either changed.
+        """
+        scorer = self._scorers.get((category or "").strip().lower()) or self._default
+        combined_mix = getattr(
+            Config, "COMBINED_MIX", {"investment": 0.32, "lifestyle": 0.68}
+        )
+        return {
+            "investment": {
+                key: float(value)
+                for key, value in getattr(
+                    scorer, "DEFAULT_INVESTMENT_WEIGHTS", {}
+                ).items()
+            },
+            "lifestyle": {
+                key: float(value)
+                for key, value in getattr(
+                    scorer, "DEFAULT_LIFESTYLE_WEIGHTS", {}
+                ).items()
+            },
+            "combined_mix": {
+                "investment": float(combined_mix.get("investment", 0.32)),
+                "lifestyle": float(combined_mix.get("lifestyle", 0.68)),
+            },
+            "travel_minutes": {
+                key: float(value)
+                for key, value in getattr(
+                    scorer, "DEFAULT_TRAVEL_MINUTES", {"best": 10.0, "worst": 60.0}
+                ).items()
+            },
+            "sea_distance": {
+                key: float(value)
+                for key, value in getattr(
+                    scorer,
+                    "DEFAULT_SEA_DISTANCE",
+                    {"near_m": 300.0, "far_m": 10000.0},
+                ).items()
+            },
+        }
+
     def scorer_for(self, prop: Property) -> BasePropertyScorer:
         category = (prop.property_category or "").strip().lower()
         return self._scorers.get(category) or self._default

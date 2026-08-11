@@ -266,38 +266,77 @@
     </div>
 </div>
 
-<div class="card shadow-sm mb-3">
+<div class="card shadow-sm mb-3" id="scoring-weights">
     <div class="card-body">
         <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
-            <h5 class="mb-0">Scoring config (advanced)</h5>
-            <div class="text-body-secondary small">Optional per-profile override (JSON)</div>
+            <h5 class="mb-0">Scoring</h5>
+            <div class="text-body-secondary small">
+                How this subscription's listings are scored. Empty = the default.
+            </div>
         </div>
 
-        <form method="POST" class="row g-2">
+        {# The one place these weights are edited. They used to be a raw JSON
+           textarea, which is why /criteria — a page for a different scorer
+           entirely — looked like the place to tune scoring (#239). Every field
+           is built from PropertyScoringService's own vocabulary and defaults,
+           so the form cannot drift from the scoring it configures. #}
+        <form method="POST" class="row g-3">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-            <input type="hidden" name="action" value="save_scoring_config">
-            <div class="col-12">
-                <textarea class="form-control form-control-sm"
-                          name="scoring_config_json"
-                          rows="10"
-                          placeholder="Leave empty to use defaults...">{{ scoring_config_json or '' }}</textarea>
-                <div class="form-text">
-                    Expected shape (example):<br>
-                    <code>{"categories":{"housing":{"investment":{"value_score":0.6,"travel_score":0.25,"sea_score":0.15},"lifestyle":{"travel_score":0.45,"size_score":0.3,"sea_score":0.25},"travel_minutes":{"best":10,"worst":60},"sea_distance":{"near_m":300,"far_m":10000}}}}</code>
-                    <br>
-                    <span class="text-body-secondary">
-                        <code>sea_distance</code>: straight-line metres to the coastline.
-                        The shoreline scores 100, <code>near_m</code> sets how fast the
-                        score falls away from it, and <code>far_m</code> is where it
-                        reaches 0. Keep <code>far_m</code> at or below 15&nbsp;km: that is
-                        how far the coastline lookup actually searches, and a wider
-                        horizon leaves inland listings unscored rather than at 0.
-                    </span>
+            <input type="hidden" name="action" value="save_scoring_weights">
+
+            {% for entry in scoring_form %}
+                <div class="col-12">
+                    <details class="border rounded p-2" {{ 'open' if entry.listing_count or entry.overridden }}>
+                        <summary class="fw-semibold">
+                            {{ entry.category.replace('_', ' ')|title }}
+                            <span class="badge bg-secondary ms-1">{{ entry.listing_count }} listings</span>
+                            {% if entry.overridden %}<span class="badge bg-info ms-1">customised</span>{% endif %}
+                        </summary>
+                        <div class="row g-2 mt-1">
+                            {% for section in entry.sections %}
+                                <div class="col-12">
+                                    <div class="small text-body-secondary text-uppercase">{{ section.name.replace('_', ' ') }}</div>
+                                </div>
+                                {% for field in section.fields %}
+                                    <div class="col-6 col-md-3">
+                                        <label class="form-label small mb-0" for="{{ field.input_name }}">
+                                            {{ field.key.replace('_score', '').replace('_', ' ') }}
+                                        </label>
+                                        <input type="text"
+                                               inputmode="decimal"
+                                               class="form-control form-control-sm"
+                                               id="{{ field.input_name }}"
+                                               name="{{ field.input_name }}"
+                                               value="{{ field.value if field.value is not none else '' }}"
+                                               placeholder="{{ field.default }}">
+                                    </div>
+                                {% endfor %}
+                            {% endfor %}
+                        </div>
+                    </details>
                 </div>
+            {% endfor %}
+
+            <div class="col-12">
+                <div class="form-text">
+                    A blank field uses the scorer's own default (shown greyed in the box), so
+                    tomorrow's default reaches this subscription instead of a copy of today's.
+                    <code>sea_distance</code> is straight-line metres to the coastline: the
+                    shoreline scores 100, <code>near_m</code> sets how fast the score falls away
+                    and <code>far_m</code> is where it reaches 0 — keep <code>far_m</code> at or
+                    below 15&nbsp;km, the radius the coastline lookup actually searches.
+                </div>
+                {% if unmanaged_scoring_keys %}
+                    <div class="alert alert-secondary small mt-2 mb-0" id="unmanaged-scoring-keys">
+                        Kept as stored, not editable here:
+                        {% for key in unmanaged_scoring_keys %}<code>{{ key }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+                    </div>
+                {% endif %}
             </div>
+
             <div class="col-12 d-flex gap-2 align-items-center">
-                <button class="btn btn-primary btn-sm" type="submit">Save scoring config</button>
-                <span class="text-body-secondary small">To clear: empty the JSON and save.</span>
+                <button class="btn btn-primary btn-sm" type="submit">Save scoring</button>
+                <span class="text-body-secondary small">Saving rescores this subscription's listings.</span>
             </div>
         </form>
     </div>
