@@ -60,6 +60,24 @@ INVESTMENT_RATING_ORDER = ("BELOW", "MODERATE", "GOOD", "EXCELLENT")
 UNCLASSIFIED_FILTER = "__none__"
 
 
+def _partial_save_message(kind: str, kept: int, dropped: list) -> tuple:
+    """The flash for a save that stored some of what was submitted.
+
+    A blanket "saved" over a partial save is what let a mistyped rule vanish
+    without a word (#241). `warning` is the category this module already uses
+    for a partial outcome.
+    """
+    if not dropped:
+        return (f"{kind.capitalize()} saved", "success")
+    positions = ", ".join(f"#{index}" for index in dropped)
+    return (
+        f"Saved {kept} of {kept + len(dropped)} {kind}; "
+        f"dropped {len(dropped)} invalid ({positions}). "
+        "Check the pattern and the required fields.",
+        "warning",
+    )
+
+
 def _investment_rating_expr(model):
     """Upper-cased `ai_analysis.rental_market_analysis.investment_rating`.
 
@@ -1191,12 +1209,21 @@ def edit_profile(profile_id):
 
             from services.settings_service import _validate_classification_rule
 
+            # A dropped entry is the interesting outcome: the owner typed it
+            # and it is not stored. Count them, and say so below rather than
+            # flashing an unqualified success over a partial save (#241).
             validated = []
-            for item in parsed:
-                if isinstance(item, dict):
-                    valid = _validate_classification_rule(item)
-                    if valid:
-                        validated.append(valid)
+            dropped = []
+            for index, item in enumerate(parsed, start=1):
+                valid = (
+                    _validate_classification_rule(item)
+                    if isinstance(item, dict)
+                    else None
+                )
+                if valid:
+                    validated.append(valid)
+                else:
+                    dropped.append(index)
 
             if not validated:
                 flash(
@@ -1208,7 +1235,7 @@ def edit_profile(profile_id):
             validated.sort(key=lambda r: int(r.get("priority", 0)), reverse=True)
             profile.classification_rules = validated
             db.session.commit()
-            flash("Classification rules saved", "success")
+            flash(*_partial_save_message("rules", len(validated), dropped))
             return redirect(url_for("main.edit_profile", profile_id=profile_id))
 
         if action == "save_email_matchers":
@@ -1239,29 +1266,36 @@ def edit_profile(profile_id):
                 return redirect(url_for("main.edit_profile", profile_id=profile_id))
 
             validated = []
-            for item in parsed:
+            dropped = []
+            for index, item in enumerate(parsed, start=1):
                 if isinstance(item, str):
                     pattern = item.strip()
-                    if not pattern:
-                        continue
-                    try:
-                        re.compile(pattern)
-                    except re.error:
-                        continue
-                    validated.append(pattern)
                 elif isinstance(item, dict):
                     pattern = str(item.get("pattern") or "").strip()
-                    if not pattern:
-                        continue
-                    try:
-                        re.compile(pattern)
-                    except re.error:
-                        continue
-                    try:
-                        priority = int(item.get("priority") or 0)
-                    except Exception:
-                        priority = 0
-                    validated.append({"pattern": pattern, "priority": priority})
+                else:
+                    dropped.append(index)
+                    continue
+
+                if not pattern:
+                    dropped.append(index)
+                    continue
+                try:
+                    re.compile(pattern)
+                except re.error:
+                    # An unusable regex here decides which saved search an
+                    # unrecognised alert email is routed to; dropping it in
+                    # silence sends future mail somewhere else (#241).
+                    dropped.append(index)
+                    continue
+
+                if isinstance(item, str):
+                    validated.append(pattern)
+                    continue
+                try:
+                    priority = int(item.get("priority") or 0)
+                except Exception:
+                    priority = 0
+                validated.append({"pattern": pattern, "priority": priority})
 
             if not validated:
                 flash(
@@ -1272,7 +1306,7 @@ def edit_profile(profile_id):
 
             profile.email_matchers = validated
             db.session.commit()
-            flash("Email matchers saved", "success")
+            flash(*_partial_save_message("email matchers", len(validated), dropped))
             return redirect(url_for("main.edit_profile", profile_id=profile_id))
 
         flash("Unknown action", "error")
