@@ -2153,8 +2153,18 @@ def set_property_status(property_id):
 
 
 @api_bp.route("/land/<int:land_id>/check-status", methods=["POST"])
+@limiter.limit("5 per minute")
 def check_land_status(land_id):
-    """Check if a listing is still active on Idealista"""
+    """Check if a listing is still active on Idealista.
+
+    Rate-limited and queue-only, for the same two reasons its Property twin
+    below is (#136, #258): every call spends one outbound request against
+    idealista from a page the owner can hold down, and `?sync=1` would hold a
+    worker for the whole outbound timeout — a handful of concurrent calls is
+    all it takes to exhaust the pool of an app that has no authentication in
+    front of it. The scraper's own throttle stays where it is; this keeps the
+    endpoint from being a way around it.
+    """
     try:
         from services.listing_status_service import ListingStatusService
 
@@ -2194,7 +2204,7 @@ def check_land_status(land_id):
                 else None,
             }
 
-        if _should_run_sync():
+        if _should_run_sync(allow_request_override=False):
             return jsonify(_run())
 
         job_id = _enqueue(_run, job_type="land_check_status", meta={"land_id": land.id})

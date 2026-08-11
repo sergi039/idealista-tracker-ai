@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from config import Config
+
 ROOT = Path(__file__).resolve().parents[1]
 MAIN_JS = ROOT / "static" / "js" / "main.js"
 POLL_SITES = (
@@ -29,12 +31,23 @@ POLL_SITES = (
     ROOT / "templates" / "land_detail.html",
 )
 
+# The app's own job-queueing allowance on top of the bridge's budget: the time
+# between the press and the CLI actually starting (#206 item 3; the same number
+# is spelled out in the comment on JOB_POLL_TIMEOUTS in static/js/main.js).
+QUEUEING_ALLOWANCE_MS = 60_000
+
 # Every budget the page may use, and the server-side limit each one answers to.
+# `aiAnalysis` is *derived*, not copied: a second hand-written literal here
+# would keep this suite green while `config.py` raised the server's timeout past
+# the page's budget — which is the #178 defect the file exists to prevent (#259).
 EXPECTED_BUDGETS = {
-    # config.py AI_ANALYSIS_TIMEOUT_SECONDS (180s) + AI_BRIDGE_SOCKET_MARGIN_
-    # SECONDS (25s) + a 60s allowance for the app's own job-queueing (#206
-    # item 3; see the comment on JOB_POLL_TIMEOUTS in static/js/main.js).
-    "aiAnalysis": 265000,
+    "aiAnalysis": (
+        Config.AI_ANALYSIS_TIMEOUT_SECONDS * 1000
+        + int(Config.AI_BRIDGE_SOCKET_MARGIN_SECONDS * 1000)
+        + QUEUEING_ALLOWANCE_MS
+    ),
+    # No server-side constant states these two; they are the page's own budget
+    # for a Google enrichment run and for one throttled listing fetch.
     "enrichment": 300000,
     "listingStatus": 180000,
 }
