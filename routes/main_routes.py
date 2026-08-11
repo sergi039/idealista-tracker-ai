@@ -60,6 +60,38 @@ INVESTMENT_RATING_ORDER = ("BELOW", "MODERATE", "GOOD", "EXCELLENT")
 UNCLASSIFIED_FILTER = "__none__"
 
 
+def _unusable_scoring_numbers(config: dict) -> list:
+    """Every scoring_config value that claims to be a number and is not.
+
+    Returns "categories.land.investment.price = 'high'"-shaped strings, so the
+    message names the key rather than saying the document is wrong somewhere.
+    """
+    numeric_sections = ("investment", "lifestyle", "travel_minutes", "combined_mix")
+    problems = []
+
+    categories = config.get("categories")
+    if not isinstance(categories, dict):
+        return problems
+
+    for category, cat_cfg in categories.items():
+        if not isinstance(cat_cfg, dict):
+            continue
+        for section in numeric_sections:
+            values = cat_cfg.get(section)
+            if not isinstance(values, dict):
+                continue
+            for key, value in values.items():
+                if value is None:
+                    continue
+                try:
+                    float(value)
+                except (TypeError, ValueError):
+                    problems.append(
+                        f"categories.{category}.{section}.{key} = {value!r}"
+                    )
+    return problems
+
+
 def _partial_save_message(kind: str, kept: int, dropped: list) -> tuple:
     """The flash for a save that stored some of what was submitted.
 
@@ -1174,6 +1206,20 @@ def edit_profile(profile_id):
 
             if not isinstance(parsed, dict):
                 flash("Scoring config must be a JSON object", "error")
+                return redirect(url_for("main.edit_profile", profile_id=profile_id))
+
+            # A weight typed as a string is not a weight. The scorer now skips
+            # such an override rather than losing the whole profile's scoring to
+            # it (#240), but the honest place to catch it is here, where the
+            # owner can still fix the typo.
+            unusable = _unusable_scoring_numbers(parsed)
+            if unusable:
+                flash(
+                    "Scoring config not saved: "
+                    + "; ".join(unusable)
+                    + ". Weights and thresholds must be numbers.",
+                    "error",
+                )
                 return redirect(url_for("main.edit_profile", profile_id=profile_id))
 
             profile.scoring_config = parsed
