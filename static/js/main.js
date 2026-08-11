@@ -1253,9 +1253,13 @@ window.IdealistaApp = {
                 console.log('[DESC] Received description variants response:', data);
                 if (data.success) {
                     if (data.status === 'not_processed') {
-                        console.log('[DESC] Description not processed, auto-enhancing...');
-                        // Auto-enhance the description silently
-                        this.autoEnhanceDescription(landId);
+                        /* Opening a page does not start an AI run. This used to
+                           POST /api/enhance/description/<id> on its own, with no
+                           press, no confirmation and nothing to stop a reload
+                           doing it again -- a subscription-billed run begun by
+                           looking at a listing (#243). The original description
+                           stays on screen, which is what the page renders. */
+                        console.log('[DESC] No enhanced description stored; leaving the original.');
                     } else {
                         console.log('[DESC] Description already processed, displaying enhanced version...');
                         // Show language toggle and enhanced description
@@ -1266,36 +1270,10 @@ window.IdealistaApp = {
                 }
             })
             .catch(error => {
+                // A failed lookup is not a reason to spend an AI run either.
                 console.error('[DESC] Failed to load description variants:', error);
-                // Try to auto-enhance as fallback
-                this.autoEnhanceDescription(landId);
             });
     },
-
-    autoEnhanceDescription: function(landId) {
-        // Silently enhance the description in the background
-        fetch(`/api/enhance/description/${landId}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                // Display enhanced description with language toggle
-                this.displayEnhancedDescription(data);
-            } else {
-                // Keep original description visible, hide any loading indicators
-                console.log('Auto-enhancement failed, keeping original description');
-            }
-        })
-        .catch(error => {
-            console.error('Auto-enhancement failed:', error);
-            // Keep original description visible
-        });
-    },
-
 
     displayEnhancedDescription: function(data) {
         // Store description variants for language switching
