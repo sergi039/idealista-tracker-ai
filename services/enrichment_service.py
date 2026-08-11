@@ -23,9 +23,23 @@ from utils.google_api import (
 from utils.http import HTTP_USER_AGENT, OVERPASS_GATE, request_with_retries
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 from config import Config
+from services.place_rules import place_rules_from
 from services.scoring_service import ScoringService
+from services.search_profile_service import TRAVEL_PRESET_DEFS
 
 logger = logging.getLogger(__name__)
+
+# What may be written down as an airport, read from the preset that defines it
+# (issue #171) instead of copied. `/properties` has refused helipads and
+# aeroclubs since #171; this legacy path went on accepting them, which is the
+# drift a second copy of the patterns would have made permanent.
+_AIRPORT_RULES = place_rules_from(TRAVEL_PRESET_DEFS.get("airport") or {})
+
+# Bumped from v1 with those rules: a v1 entry holds the helipad the old,
+# unfiltered airport search accepted, and it is cached for a week. Reusing the
+# key would have served that answer -- and the "no airport" the rules would now
+# refuse to draw from it -- for seven days after the fix shipped.
+_PLACES_CACHE_TYPE = "google_places_v2"
 
 # Outcome of the last Overpass call, persisted in
 # `infrastructure_extended["osm_amenities_status"]["state"]`. Without it an
@@ -644,7 +658,7 @@ class EnrichmentService:
         try:
             lat, lon = float(land.location_lat), float(land.location_lon)
 
-            cached = get_cached_enrichment_data(lat, lon, "google_places_v1")
+            cached = get_cached_enrichment_data(lat, lon, _PLACES_CACHE_TYPE)
             if isinstance(cached, dict):
                 infrastructure_extended = land.infrastructure_extended or {}
                 transport = land.transport or {}
@@ -740,15 +754,20 @@ class EnrichmentService:
                 elif amenity in ["train_station", "bus_station", "airport"]:
                     # Calculate transport accessibility
                     places_for_transport = nearby_places
-                    if not places_for_transport and amenity == "airport":
-                        # For airports, check if there's one within 100km radius
-                        places_for_transport, wide_failure = self._search_nearby_places(
-                            lat, lon, place_types, radius=100000
+                    if amenity == "airport":
+                        places_for_transport, wide_failure = self._airport_candidates(
+                            lat, lon, nearby_places
                         )
                         if wide_failure is not None:
                             first_failure = first_failure or wide_failure
-                            failed_amenities.append(amenity)
+                            if amenity not in failed_amenities:
+                                # The near search may already have logged it:
+                                # name each amenity once, not once per call.
+                                failed_amenities.append(amenity)
                             if not places_for_transport:
+                                # Nobody answered about airports: leave the
+                                # keys untouched rather than recording "no
+                                # airport here" for a search that never ran.
                                 continue
 
                     if places_for_transport:
@@ -789,7 +808,7 @@ class EnrichmentService:
             cache_enrichment_data(
                 lat,
                 lon,
-                "google_places_v1",
+                _PLACES_CACHE_TYPE,
                 {
                     "infrastructure_extended": infrastructure_extended,
                     "transport": transport,
@@ -802,6 +821,127 @@ class EnrichmentService:
         except Exception as e:
             logger.error("Failed to enrich with Google Places", exc_info=True)
             return failure_from_exception(e)
+
+    def _airport_candidates(
+        self, lat: float, lon: float, near_places: List[Dict]
+    ) -> Tuple[List[Dict], Optional[GoogleApiFailure]]:
+        """The places near `lat, lon` that may be recorded as an airport.
+
+        Two corrections over the plain `type=airport` search this replaces,
+        both measured on 2026-08-11 against the owner's own data:
+
+        * **Google's `airport` type is not a claim about airports.** At
+          43.551663,-6.831426 it returns seven places and every one is a
+          helipad, a light-aircraft aerodrome or an aeroclub -- the nearest
+          being "Helipuerto Hospital de Jarrio", 6.75 km away. Taking the
+          nearest of those is how 145 of the owner's 168 lands came to store
+          an "airport" sitting at a median 0.27x the distance of the real
+          one, contradicting the road distance to the actual airport shown
+          from `Land.distance_airport` on the same page. It also moved a
+          score: `ScoringService._score_transport` reads `airport_available`
+          and `airport_distance`, and dropping the helipad shifts 158 of the
+          168 by a median +1.26 points of `score_total` (it normalises over
+          the options it found, so a mediocre one drags the rest down). So
+          issue #171's rules apply here, read from the preset that defines
+          them rather than copied.
+
+        * **An explicit `radius=` buys nothing past 50 km.** The
+          `radius=100000` this replaces was silently clamped: at that same
+          coordinate `radius=50000`, `radius=100000` and `radius=200000` all
+          returned the *identical* seven places, farthest 45.21 km. Asturias
+          Airport is 64.3 km away and could never appear in any of them, so
+          the wide attempt was dead code that still cost a call. Text Search
+          takes no `radius` -- `location` only biases its ranking -- and has
+          no such cap (PR #254 measured it finding that airport first try).
+
+        The second call only happens when the first one answered and nothing
+        in it qualifies, so a listing with a real airport nearby still costs
+        exactly one request.
+        """
+        accepted = self._accepted_airports(near_places)
+        if accepted:
+            return accepted, None
+
+        wide_places, failure = self._search_places_text(
+            lat, lon, query="airport", place_type="airport"
+        )
+        return self._accepted_airports(wide_places), failure
+
+    @staticmethod
+    def _accepted_airports(places: List[Dict]) -> List[Dict]:
+        """Drop everything #171's rules refuse to call an airport."""
+        if _AIRPORT_RULES is None:
+            return list(places or [])
+        return [
+            place
+            for place in places or []
+            if isinstance(place, dict) and not _AIRPORT_RULES.rejects(place)
+        ]
+
+    def _search_places_text(
+        self, lat: float, lon: float, query: str, place_type: str
+    ) -> Tuple[List[Dict], Optional[GoogleApiFailure]]:
+        """Places Text Search, for an answer that legitimately sits far away.
+
+        Same contract as `_search_nearby_places`: an empty list with no
+        failure means Google answered and there is nothing; an empty list
+        with a failure means we never got to look, and the caller must not
+        write that down as an absence (#98).
+
+        Ranked by relevance rather than distance, so a famous airport can
+        outrank a closer one. Every result therefore carries its own
+        straight-line `distance` and the caller picks the nearest, the same
+        way it does for a nearby search.
+        """
+        if not self.google_places_key:
+            return [], GoogleApiFailure(reason=REASON_NO_API_KEY)
+
+        url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+        params = {
+            "query": query,
+            "location": f"{lat},{lon}",
+            # Narrows the free-text query back to the type being looked for --
+            # without it "airport" also matches car rentals and parking lots
+            # that merely mention one.
+            "type": place_type,
+            "key": self.google_places_key,
+        }
+
+        try:
+            response = request_with_retries(
+                requests.get, url, params=params, timeout=15, logger=logger
+            )
+            payload, failure = read_api_payload(response)
+        except Exception as e:
+            payload, failure = None, failure_from_exception(e)
+
+        if failure is not None:
+            logger.warning(
+                "Places text search refused (%s): %s", query, failure.describe()
+            )
+            return [], failure
+
+        places: List[Dict] = []
+        for place in payload.get("results") or []:
+            if not isinstance(place, dict):
+                continue
+            location = (place.get("geometry") or {}).get("location") or {}
+            places.append(
+                {
+                    "name": place.get("name"),
+                    "rating": place.get("rating"),
+                    "place_id": place.get("place_id"),
+                    "types": place.get("types", []),
+                    "location": location,
+                    "distance": self._calculate_distance(
+                        lat,
+                        lon,
+                        location.get("lat", 0),
+                        location.get("lng", 0),
+                    ),
+                }
+            )
+        return places, None
 
     def _search_nearby_places(
         self, lat: float, lon: float, place_types: List[str], radius: int = 5000

@@ -493,6 +493,44 @@ class TestLandEnrichmentRefusal:
 
         assert any(r.levelno >= logging.ERROR for r in caplog.records)
 
+    def test_a_refused_airport_fallback_is_not_stored_as_no_airport(self, app):
+        """#98's invariant reaches the airport Text Search too.
+
+        The test above patches every request, so the *first* Places call
+        fails and the airport branch is skipped before it ever asks again.
+        The fallback added for the 50 km clamp is therefore a second, later
+        place where a refusal could be written down as "no airport here" —
+        this pins that it is not. The measurement behind the fallback and
+        the rest of its behaviour live in
+        `tests/test_legacy_land_airport_wide_search.py`.
+        """
+        land = self._land()
+        service = EnrichmentService()
+        service.google_places_key = "places"
+
+        def _answer(_method, url, params=None, **_kwargs):
+            if "textsearch" in url:
+                return _denied_response()
+            if (params or {}).get("type") == "airport":
+                # Google answers, but only with a helipad -- #171's rules
+                # refuse it, which is what sends the code to the fallback.
+                return _place_response("Helipuerto Hospital de Jarrio", 43.506, -6.886)
+            return Mock(
+                status_code=200, json=lambda: {"status": "ZERO_RESULTS", "results": []}
+            )
+
+        with patch(
+            "services.enrichment_service.request_with_retries", side_effect=_answer
+        ):
+            with patch("services.enrichment_service.time.sleep", return_value=None):
+                failure = service._enrich_with_google_places(land)
+
+        assert failure is not None
+        assert failure.reason == REASON_REQUEST_DENIED
+        transport = land.transport or {}
+        assert "airport_available" not in transport
+        assert "airport_distance" not in transport
+
     def test_enrich_land_reports_failure_when_google_refuses(self, app):
         land = self._land()
         service = EnrichmentService()
