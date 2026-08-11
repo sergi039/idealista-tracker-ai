@@ -181,6 +181,11 @@ class _Message:
     content: List[_TextBlock] = field(default_factory=list)
     usage: _Usage = field(default_factory=_Usage)
     stop_reason: str = "end_turn"
+    # The id the bridge says it passed to the CLI, or None when the CLI chose
+    # for itself. `anthropic.Anthropic` answers with a `model` too, so a caller
+    # written against the real SDK reads the same attribute -- and without it
+    # the #226 fix was a no-op on every path that goes through this shim (#244).
+    model: Optional[str] = None
 
 
 class _Messages:
@@ -226,6 +231,7 @@ class _Messages:
                 input_tokens=usage.get("input_tokens"),
                 output_tokens=usage.get("output_tokens"),
             ),
+            model=result.get("model"),
         )
 
 
