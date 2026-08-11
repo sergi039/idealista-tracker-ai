@@ -22,6 +22,11 @@ run of a land fills them back in correctly.
     python -m utils.clear_legacy_land_airport --snapshot data/land_airport.json
     python -m utils.clear_legacy_land_airport --restore data/land_airport.json
 
+`--rescore` may be given on that run or on a later one: a clearing pass leaves
+no land carrying the keys, so a rescore selects every land instead of only the
+ones still holding them (clearing is then a no-op) — otherwise a second pass
+would select nothing and report success having done nothing.
+
 `ScoringService._score_transport` reads `airport_available` and
 `airport_distance`, so a cleared land's stored score still embeds the helipad
 until it is recomputed. `--rescore` does that (also free — Land scoring reads
@@ -105,6 +110,29 @@ def _restore(path: str) -> int:
     return restored
 
 
+def carrying_the_keys(lands: List[Land]) -> List[Land]:
+    """The lands that still hold a value the unfiltered airport search wrote."""
+    return [
+        land
+        for land in lands
+        if any(key in (land.transport or {}) for key in AIRPORT_KEYS)
+    ]
+
+
+def select_lands(lands: List[Land], rescore: bool) -> List[Land]:
+    """Which lands this run touches.
+
+    Selecting only the lands that still carry the airport keys is right for a
+    clearing run and wrong for a rescoring one. Once a clearing pass has been
+    through, nothing carries them — so a later `--rescore` would select
+    nothing and report success having done nothing, which is how this was
+    found. A score is stale on exactly the lands whose data changed, i.e.
+    every land the clearing pass touched, so a rescore looks at all of them
+    and clearing is simply a no-op where the keys are already gone.
+    """
+    return list(lands) if rescore else carrying_the_keys(lands)
+
+
 def _cleared(transport: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """`transport` without the airport keys.
 
@@ -149,12 +177,14 @@ def main() -> None:
             )
             return
 
-        lands = [
-            land
-            for land in Land.query.order_by(Land.id.asc()).all()
-            if any(key in (land.transport or {}) for key in AIRPORT_KEYS)
-        ]
-        logger.info("Lands carrying an unfiltered airport measurement: %s", len(lands))
+        all_lands = Land.query.order_by(Land.id.asc()).all()
+        lands = select_lands(all_lands, rescore=args.rescore)
+        logger.info(
+            "Lands carrying an unfiltered airport measurement: %s of %s (selected %s)",
+            len(carrying_the_keys(all_lands)),
+            len(all_lands),
+            len(lands),
+        )
         if not lands:
             return
 
