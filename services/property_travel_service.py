@@ -725,6 +725,29 @@ class PropertyTravelService:
             best_place["preset_key"] = preset_key
             return PlaceLookup(place=best_place)
 
+        # Nearby Search found nothing this preset accepts. For a preset whose
+        # real answer can legitimately sit past its ~50 km reach (only
+        # "airport" opts in today via `wide_search_query`, see
+        # search_profile_service.py for the measurement), fall back to a
+        # Places Text Search -- a second, paid call. It only fires when
+        # Nearby Search actually answered and still found nothing usable: a
+        # failure stays a failure rather than spending another call chasing
+        # the same refusal.
+        wide_query = (
+            preset_def.get("wide_search_query")
+            if isinstance(preset_def, dict)
+            else None
+        )
+        if failure is None and wide_query:
+            wide_lookup = self._nearest_place_text_search(
+                lat, lon, query=str(wide_query), place_types=place_types, reject=reject
+            )
+            if wide_lookup.place is not None:
+                wide_place = dict(wide_lookup.place)
+                wide_place["preset_key"] = preset_key
+                return PlaceLookup(place=wide_place)
+            failure = wide_lookup.failure
+
         return PlaceLookup(failure=failure)
 
     def _nearest_place(
@@ -974,6 +997,124 @@ class PropertyTravelService:
             payload["unmeasured"] = unmeasured
             payload["stage"] = STAGE_DISTANCE_MATRIX
         return payload
+
+    def _nearest_place_text_search(
+        self,
+        lat: float,
+        lon: float,
+        query: str,
+        place_types: List[Any],
+        reject: Optional["_PlaceRules"] = None,
+    ) -> PlaceLookup:
+        """Text Search fallback for a preset whose real answer can be farther
+        than Nearby Search's reach.
+
+        Nearby Search is capped at roughly 50 km regardless of `rankby=distance`
+        or an explicit `radius=` -- measured 2026-08-11 against property 360
+        (La Caridad, El Franco): `radius=75000` and `radius=120000` both came
+        back with the identical 7 places, farthest 45.2 km, matching plain
+        `rankby=distance`. Text Search has no such cap when called without a
+        `radius` (`location` only biases its ranking, it does not bound it);
+        the same query found Asturias Airport -- 64.3 km away -- as its
+        nearest qualifying result on the first try.
+
+        Only reached from `_nearest_place_for_preset` when the primary Nearby
+        Search already answered and found nothing this preset accepts, so
+        this second, paid call is the exception rather than the rule.
+        """
+        # Every preset that defines `place_types` today lists exactly one
+        # (see TRAVEL_PRESET_DEFS); a preset that ever needed several and
+        # also opted into `wide_search_query` would have to loop here the
+        # way the primary Nearby Search loop does, one call per type.
+        place_type = str(place_types[0]) if place_types else ""
+
+        # A distinct cache key from `_nearest_place`'s: a different endpoint
+        # with a different result shape and ordering, not a substitute lookup
+        # for the same query.
+        cache_type = f"{_PLACES_CACHE_PREFIX}:text:{query}:{place_type}"
+        if reject is not None:
+            cache_type = f"{cache_type}:{reject.signature}"
+        cached = get_cached_enrichment_data(lat, lon, cache_type)
+        if (
+            isinstance(cached, dict)
+            and cached.get("lat") is not None
+            and cached.get("lon") is not None
+        ):
+            return PlaceLookup(place=cached)
+
+        if not self.google_places_key:
+            return PlaceLookup(failure=GoogleApiFailure(reason=REASON_NO_API_KEY))
+
+        url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+        params = {
+            "query": query,
+            "location": f"{lat},{lon}",
+            "key": self.google_places_key,
+        }
+        if place_type:
+            # Narrows the free-text query back to the type the preset cares
+            # about -- without it, "airport" alone also matched car rentals
+            # and parking lots that merely mention one.
+            params["type"] = place_type
+        try:
+            response = request_with_retries(
+                requests.get, url, params=params, timeout=12, logger=logger
+            )
+        except Exception as e:
+            failure = failure_from_exception(e)
+            logger.warning(
+                "Places text search failed (%s): %s", query, failure.describe()
+            )
+            return PlaceLookup(failure=failure)
+
+        payload, failure = read_api_payload(response)
+        if failure is not None:
+            logger.warning(
+                "Places text search refused (%s): %s", query, failure.describe()
+            )
+            return PlaceLookup(failure=failure)
+
+        results = payload.get("results") or []
+        if not isinstance(results, list) or not results:
+            return PlaceLookup()
+
+        # Unlike `rankby=distance`, Text Search orders by relevance rather
+        # than strict distance -- a globally prominent airport can outrank a
+        # closer, less famous one. Every candidate's distance is computed
+        # here and the nearest one that survives the preset's rules wins.
+        best: Optional[Tuple[float, Dict[str, Any]]] = None
+        for candidate in results:
+            if not isinstance(candidate, dict):
+                continue
+            if reject is not None and reject.rejects(candidate):
+                continue
+            loc = (candidate.get("geometry") or {}).get("location") or {}
+            out = {
+                "name": candidate.get("name"),
+                "place_id": candidate.get("place_id"),
+                "types": candidate.get("types"),
+                "lat": loc.get("lat"),
+                "lon": loc.get("lng"),
+            }
+            if out.get("lat") is None or out.get("lon") is None:
+                continue
+            distance_m = _haversine_m(lat, lon, float(out["lat"]), float(out["lon"]))
+            if best is None or distance_m < best[0]:
+                best = (distance_m, out)
+
+        if best is None:
+            # Google answered and nothing survived the preset's rules either --
+            # still a real "not found", same as Nearby Search's empty case.
+            return PlaceLookup()
+
+        logger.info(
+            "Places wide search resolved %r for query %r (%.1f km away)",
+            best[1].get("name"),
+            query,
+            best[0] / 1000.0,
+        )
+        cache_enrichment_data(lat, lon, cache_type, best[1], timeout=_PLACES_CACHE_TTL)
+        return PlaceLookup(place=best[1])
 
     def _get_distances(
         self, lat: float, lon: float, destinations: List[Dict[str, Any]], mode: str

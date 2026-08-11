@@ -24,6 +24,7 @@ from models import Property  # noqa: E402
 from services.property_travel_service import (  # noqa: E402
     _BEACH_CANDIDATE_RADIUS_M,
     DistanceResult,
+    PlaceLookup,
     PropertyTravelService,
 )
 from utils.google_api import GoogleApiFailure  # noqa: E402
@@ -73,6 +74,7 @@ class _Recorder:
         self.failure = failure
         self.durations = durations or {}
         self.measured_keys = []
+        self.text_searches = []
 
     def places_nearby(self, lat, lon, place_type, keyword=None):
         if keyword == "playa":
@@ -82,6 +84,19 @@ class _Recorder:
         # Every preset answers "nothing of this type nearby": a real answer, so
         # the run stays `ok` and only the beaches are under test here.
         return [], None
+
+    def text_search(self, lat, lon, query, place_types, reject=None):
+        """The airport preset's wide-search fallback, answering "nothing".
+
+        It has to be stubbed as well as `_places_nearby`: the preset reaches
+        for Text Search precisely when Nearby Search answered with nothing it
+        accepts, which is what this recorder makes every preset do. Left real,
+        the call goes to Google with a fake key, comes back refused, and the
+        run reads `degraded` -- a beaches test failing on the airport's
+        network access.
+        """
+        self.text_searches.append(query)
+        return PlaceLookup()
 
     def get_distances(self, lat, lon, destinations, mode):
         results = []
@@ -107,6 +122,7 @@ def _service(monkeypatch, recorder):
         google_maps_key="test-maps-key", google_places_key="test-places-key"
     )
     monkeypatch.setattr(service, "_places_nearby", recorder.places_nearby)
+    monkeypatch.setattr(service, "_nearest_place_text_search", recorder.text_search)
     monkeypatch.setattr(service, "_get_distances", recorder.get_distances)
     return service
 
