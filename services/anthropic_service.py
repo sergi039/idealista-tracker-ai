@@ -110,11 +110,14 @@ Format your response in clear sections."""
             response_text = self._extract_response_text(message)
 
             return {
-                # The API answers with the exact snapshot it served, which is
-                # what an alias like "claude-sonnet-5" resolved to. Report that
-                # rather than the alias we asked for (#226).
+                # Whoever answered says which model did: the real SDK reports
+                # the snapshot an alias resolved to, and the subscription shim
+                # reports the id the bridge passed to the CLI (or None when the
+                # CLI chose). Never DEFAULT_MODEL as a stand-in -- substituting
+                # the configured alias for an unknown one is the #226 defect,
+                # and doing it here made that fix a no-op for Land (#244).
                 "analysis": response_text,
-                "model": getattr(message, "model", None) or DEFAULT_MODEL,
+                "model": getattr(message, "model", None),
                 "status": "success",
             }
 
@@ -574,14 +577,14 @@ Keep all responses concise and in English. Focus on practical investment insight
 
                 return {
                     "structured_analysis": analysis_data,
-                    "model": getattr(message, "model", None) or DEFAULT_MODEL,
+                    "model": getattr(message, "model", None),
                     "status": "success",
                 }
             except json.JSONDecodeError:
                 # If JSON parsing fails, return raw response
                 return {
                     "raw_analysis": response_text,
-                    "model": getattr(message, "model", None) or DEFAULT_MODEL,
+                    "model": getattr(message, "model", None),
                     "status": "partial_success",
                 }
 
