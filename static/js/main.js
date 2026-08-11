@@ -979,6 +979,14 @@ window.IdealistaApp = {
         let stopped = false;
         const startedAt = Date.now();
         let timerId = null;
+        /* A poll that could not be answered says nothing about the job: it runs
+           server-side, and a network blip or a transient 5xx is not a failed
+           analysis. Reporting one as failure invited a second press -- and a
+           second paid run (#242). Only a run of consecutive failures gives up,
+           and even then it reports the work as still running, the way the
+           timeout path above does. */
+        const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+        let consecutivePollFailures = 0;
 
         const stop = () => {
             stopped = true;
@@ -1011,8 +1019,14 @@ window.IdealistaApp = {
                 const resp = await fetch(`/api/jobs/${jobId}`);
                 const data = await resp.json().catch(() => null);
                 if (!resp.ok || !data || data.success !== true) {
-                    throw new Error((data && data.error) ? data.error : `HTTP ${resp.status}`);
+                    const failure = new Error((data && data.error) ? data.error : `HTTP ${resp.status}`);
+                    // 404 is an answer: there is no such job, and no amount of
+                    // asking again will produce one. Everything else may be the
+                    // server having a moment.
+                    failure.terminal = resp.status === 404;
+                    throw failure;
                 }
+                consecutivePollFailures = 0;
                 const job = data.job || {};
                 if (onUpdate) onUpdate(job);
                 if (job.status === 'success') {
@@ -1036,8 +1050,22 @@ window.IdealistaApp = {
                 }
                 schedule();
             } catch (err) {
+                if (err && err.terminal) {
+                    stop();
+                    if (onError) onError({ status: 'error', error: String(err.message || err) });
+                    return;
+                }
+                consecutivePollFailures += 1;
+                if (consecutivePollFailures < MAX_CONSECUTIVE_POLL_FAILURES) {
+                    schedule();
+                    return;
+                }
                 stop();
-                if (onError) onError({ status: 'error', error: String(err && err.message ? err.message : err) });
+                if (onError) onError({
+                    status: 'timeout',
+                    stillRunning: true,
+                    error: 'Lost contact with the server while it was working. It is still running there; reload the page in a moment to see the result.'
+                });
             }
         };
 

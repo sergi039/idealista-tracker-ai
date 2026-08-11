@@ -168,3 +168,123 @@ def test_a_timeout_reports_work_in_progress_not_failure(tmp_path):
         f"timeout message blames the run: {reported.get('error')!r}"
     )
     assert "still running" in message
+
+
+def _run_poll_scenario(
+    tmp_path, name: str, fetch_js: str, options_js: str = ""
+) -> dict:
+    """Drive the real `pollJob` under node against a scripted server."""
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+
+    body = _extract_poll_job(MAIN_JS.read_text(encoding="utf-8"))
+    script = tmp_path / f"{name}.js"
+    script.write_text(
+        "\n".join(
+            [
+                f"const pollJob = {body};",
+                "globalThis.window = { setTimeout, clearTimeout };",
+                "let calls = 0;",
+                fetch_js,
+                "pollJob('job-1', {",
+                "  intervalMs: 5,",
+                "  timeoutMs: 5000,",
+                options_js,
+                "  onSuccess: (job) => { console.log(JSON.stringify("
+                "{ outcome: 'success', job, calls })); process.exit(0); },",
+                "  onError: (job) => { console.log(JSON.stringify("
+                "{ outcome: 'error', job, calls })); process.exit(0); },",
+                "});",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    out = subprocess.run(
+        ["node", str(script)], capture_output=True, text=True, timeout=30
+    )
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+class TestATransientPollFailureIsNotAFailedRun:
+    """#242: one unanswered poll used to end the poll and blame the analysis."""
+
+    def test_a_single_network_blip_is_ridden_out(self, tmp_path):
+        result = _run_poll_scenario(
+            tmp_path,
+            "blip",
+            "globalThis.fetch = async () => {\n"
+            "  calls += 1;\n"
+            "  if (calls === 1) throw new Error('network down');\n"
+            "  return { ok: true, status: 200, json: async () => "
+            "({ success: true, job: { status: 'success', result: {} } }) };\n"
+            "};",
+        )
+
+        assert result["outcome"] == "success", (
+            "the job finished; a failed poll on the way must not report failure"
+        )
+        assert result["calls"] == 2
+
+    def test_a_transient_server_error_is_ridden_out(self, tmp_path):
+        result = _run_poll_scenario(
+            tmp_path,
+            "five-oh-two",
+            "globalThis.fetch = async () => {\n"
+            "  calls += 1;\n"
+            "  if (calls <= 2) return { ok: false, status: 502, json: async () => null };\n"
+            "  return { ok: true, status: 200, json: async () => "
+            "({ success: true, job: { status: 'success', result: {} } }) };\n"
+            "};",
+        )
+
+        assert result["outcome"] == "success"
+        assert result["calls"] == 3
+
+    def test_sustained_failure_reports_work_in_progress_not_failure(self, tmp_path):
+        result = _run_poll_scenario(
+            tmp_path,
+            "sustained",
+            "globalThis.fetch = async () => { calls += 1; throw new Error('down'); };",
+        )
+
+        assert result["outcome"] == "error"
+        assert result["job"]["status"] == "timeout"
+        assert result["job"]["stillRunning"] is True, (
+            "the server was never told to stop; the run is not ours to declare failed"
+        )
+        assert result["calls"] == 3, (
+            "gives up after a run of failures, not on the first"
+        )
+
+    def test_an_unknown_job_id_stops_at_once(self, tmp_path):
+        """404 is an answer, and asking again cannot change it."""
+        result = _run_poll_scenario(
+            tmp_path,
+            "gone",
+            "globalThis.fetch = async () => {\n"
+            "  calls += 1;\n"
+            "  return { ok: false, status: 404, json: async () => "
+            "({ success: false, error: 'Job not found' }) };\n"
+            "};",
+        )
+
+        assert result["outcome"] == "error"
+        assert result["job"]["status"] == "error"
+        assert result["calls"] == 1
+
+    def test_a_job_the_server_calls_failed_is_still_a_failure(self, tmp_path):
+        result = _run_poll_scenario(
+            tmp_path,
+            "server-error",
+            "globalThis.fetch = async () => {\n"
+            "  calls += 1;\n"
+            "  return { ok: true, status: 200, json: async () => "
+            "({ success: true, job: { status: 'error', error: 'Claude refused' }) };\n"
+            "};".replace("}) };", "} }) };"),
+        )
+
+        assert result["outcome"] == "error"
+        assert result["job"]["status"] == "error"
+        assert result["job"]["error"] == "Claude refused"
+        assert result["calls"] == 1
