@@ -10,6 +10,35 @@ logger = logging.getLogger(__name__)
 
 cache = Cache()
 
+# CACHE_TYPE names a backend *class* by its full path, not the bare "redis" /
+# "simple" shorthand. Those short names resolve to the module-level factory
+# functions flask-caching deprecates, which is where ~1000 of the test suite's
+# 1101 warnings came from - one per create_app(). They also carry a real cost
+# the day the library drops them: the lookup fails inside init_cache(), i.e.
+# inside the app factory, so the app does not start. Both spellings work on the
+# installed 2.3.1; only this one survives the removal the warning announces.
+REDIS_CACHE_BACKEND = "flask_caching.backends.RedisCache"
+SIMPLE_CACHE_BACKEND = "flask_caching.backends.SimpleCache"
+
+# The short name each backend is known by inside this module. Two helpers below
+# branch on "redis", so they read CACHE_TYPE through _backend_name() and keep
+# working whichever spelling it holds - the class path above, or a bare "redis"
+# someone sets in a config. (Both helpers have a separate, older defect: they
+# read `cache.config`, which is the Cache() constructor argument and is None
+# here, so neither has ever reached its Redis branch. Out of scope for this
+# change; recorded in the standing backlog.)
+_BACKEND_SHORT_NAMES = {
+    REDIS_CACHE_BACKEND: "redis",
+    SIMPLE_CACHE_BACKEND: "simple",
+}
+
+
+def _backend_name(cache_type):
+    """Short backend name for a CACHE_TYPE value, whichever spelling it uses."""
+    if not cache_type:
+        return "unknown"
+    return _BACKEND_SHORT_NAMES.get(cache_type, cache_type)
+
 
 def init_cache(app):
     """Initialize caching with appropriate backend"""
@@ -18,14 +47,17 @@ def init_cache(app):
     if redis_url:
         # Use Redis if available
         cache_config = {
-            "CACHE_TYPE": "redis",
+            "CACHE_TYPE": REDIS_CACHE_BACKEND,
             "CACHE_REDIS_URL": redis_url,
             "CACHE_DEFAULT_TIMEOUT": 300,  # 5 minutes default
         }
         logger.info("Using Redis for caching")
     else:
         # Fall back to simple in-memory cache
-        cache_config = {"CACHE_TYPE": "simple", "CACHE_DEFAULT_TIMEOUT": 300}
+        cache_config = {
+            "CACHE_TYPE": SIMPLE_CACHE_BACKEND,
+            "CACHE_DEFAULT_TIMEOUT": 300,
+        }
         logger.info("Using in-memory caching (Redis not configured)")
 
     app.config.update(cache_config)
@@ -108,7 +140,7 @@ def get_cached_enrichment_data(lat, lon, data_type):
 def clear_cache_pattern(pattern):
     """Clear all cache entries matching a pattern (Redis only)"""
     try:
-        if cache.config.get("CACHE_TYPE") == "redis" and hasattr(
+        if _backend_name(cache.config.get("CACHE_TYPE")) == "redis" and hasattr(
             cache.cache, "_write_client"
         ):
             # Redis backend
@@ -128,7 +160,9 @@ def clear_cache_pattern(pattern):
 def get_cache_stats():
     """Get cache statistics"""
     stats = {
-        "backend": cache.config.get("CACHE_TYPE", "unknown")
+        # Reported as the short name, so this stays "redis" / "simple" rather
+        # than leaking the backend class path the config now holds.
+        "backend": _backend_name(cache.config.get("CACHE_TYPE"))
         if cache.config
         else "unknown",
         "available": True,
