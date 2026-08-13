@@ -2,6 +2,7 @@
 
 import os
 import hashlib
+from flask import current_app, has_app_context
 from flask_caching import Cache
 from functools import wraps
 import logging
@@ -20,13 +21,10 @@ cache = Cache()
 REDIS_CACHE_BACKEND = "flask_caching.backends.RedisCache"
 SIMPLE_CACHE_BACKEND = "flask_caching.backends.SimpleCache"
 
-# The short name each backend is known by inside this module. Two helpers below
-# branch on "redis", so they read CACHE_TYPE through _backend_name() and keep
-# working whichever spelling it holds - the class path above, or a bare "redis"
-# someone sets in a config. (Both helpers have a separate, older defect: they
-# read `cache.config`, which is the Cache() constructor argument and is None
-# here, so neither has ever reached its Redis branch. Out of scope for this
-# change; recorded in the standing backlog.)
+# The short name each backend is known by inside this module. The two helpers
+# below branch on "redis", so they read CACHE_TYPE through _backend_name() and
+# keep working whichever spelling it holds - the class path above, or a bare
+# "redis" someone sets in a config.
 _BACKEND_SHORT_NAMES = {
     REDIS_CACHE_BACKEND: "redis",
     SIMPLE_CACHE_BACKEND: "simple",
@@ -38,6 +36,26 @@ def _backend_name(cache_type):
     if not cache_type:
         return "unknown"
     return _BACKEND_SHORT_NAMES.get(cache_type, cache_type)
+
+
+def active_backend_name():
+    """Short name of the backend the running app configured.
+
+    Reads the *application* config, which is where init_cache() writes
+    CACHE_TYPE. The obvious-looking `cache.config` is not that: it is the
+    `Cache()` constructor argument, this module builds the singleton as a bare
+    `Cache()`, and `init_app()` merges the app config into a local variable
+    without ever assigning `self.config`. So it stayed None for the process's
+    whole life, `get_cache_stats()` always answered "unknown", and
+    `clear_cache_pattern()` always took its unsupported branch - on a Redis
+    deployment it would have reported success at clearing nothing.
+
+    Returns "unknown" outside an application context: there is no app to ask,
+    and a caller must not read that as "no cache configured".
+    """
+    if not has_app_context():
+        return "unknown"
+    return _backend_name(current_app.config.get("CACHE_TYPE"))
 
 
 def init_cache(app):
@@ -140,9 +158,7 @@ def get_cached_enrichment_data(lat, lon, data_type):
 def clear_cache_pattern(pattern):
     """Clear all cache entries matching a pattern (Redis only)"""
     try:
-        if _backend_name(cache.config.get("CACHE_TYPE")) == "redis" and hasattr(
-            cache.cache, "_write_client"
-        ):
+        if active_backend_name() == "redis" and hasattr(cache.cache, "_write_client"):
             # Redis backend
             client = cache.cache._write_client
             for key in client.scan_iter(match=pattern):
@@ -161,10 +177,8 @@ def get_cache_stats():
     """Get cache statistics"""
     stats = {
         # Reported as the short name, so this stays "redis" / "simple" rather
-        # than leaking the backend class path the config now holds.
-        "backend": _backend_name(cache.config.get("CACHE_TYPE"))
-        if cache.config
-        else "unknown",
+        # than leaking the backend class path the config holds.
+        "backend": active_backend_name(),
         "available": True,
     }
 
