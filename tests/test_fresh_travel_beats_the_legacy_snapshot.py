@@ -125,12 +125,15 @@ class TestTheRecalculatedValueWins:
 
 
 class TestThePageAgreesWithItself:
-    def test_both_cards_quote_the_same_number(self, app, client):
+    def test_the_page_quotes_fresh_travel_never_the_snapshot(self, app, client):
+        """The Transport card is gone (proposal D12, 2026-08-13), so the page
+        can no longer disagree with itself — but the frozen legacy snapshot
+        must still never resurface anywhere on it."""
         listing = _listing("page", LEGACY_SNAPSHOT, FRESH_TARGETS)
 
         body = client.get(f"/properties/{listing.id}").get_data(as_text=True)
-        transport = body[body.index("Airport Distance") :][:400]
 
-        assert "41min" in transport, "Transport must quote the recalculated value"
-        assert "35min" not in transport, "the frozen snapshot must not resurface"
+        assert "Airport Distance" not in body, "the Transport card stays gone"
+        assert "41min" in body, "the page must quote the recalculated value"
+        assert "35min" not in body, "the frozen snapshot must not resurface"
         assert "Asturias Airport" in body, "Travel Times still names the place"

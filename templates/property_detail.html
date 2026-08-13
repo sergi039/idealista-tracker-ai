@@ -8,6 +8,37 @@
    button reads it too. #}
 {% set _targets = (property.travel.get('targets') if property.travel is mapping else {}) or {} %}
 {% set has_enrichment = (property.location_lat and property.location_lon and _targets and (_targets|length > 0)) %}
+
+{# One band definition for every 0-100 score on the page (proposal D7). The
+   thresholds are the ones the page always used for the score badge — 70/50 —
+   with a word attached, because the number alone is only legible to whoever
+   chose the thresholds. Color is never the only channel. #}
+{% macro score_band_class(score) -%}
+    {{- 'success' if score >= 70 else ('warning' if score >= 50 else 'danger') -}}
+{%- endmacro %}
+{% macro score_band_word(score) -%}
+    {{- t('score_band_strong') if score >= 70 else (t('score_band_moderate') if score >= 50 else t('score_band_weak')) -}}
+{%- endmacro %}
+
+{# Walk-Score-style ring: SVG stroke over pathLength=100, so the dasharray IS
+   the score and no template math is needed. Decorative — the number and band
+   word beside it carry the value for screen readers. #}
+{% macro score_ring(score, size=56) -%}
+    {% set band = score_band_class(score) %}
+    <span class="score-ring flex-shrink-0" style="width: {{ size }}px; height: {{ size }}px;" aria-hidden="true">
+        <svg viewBox="0 0 36 36" width="{{ size }}" height="{{ size }}">
+            <circle cx="18" cy="18" r="16" fill="none"
+                    stroke="var(--bs-border-color)" stroke-width="3.5"></circle>
+            <circle cx="18" cy="18" r="16" fill="none"
+                    stroke="var(--bs-{{ band }})" stroke-width="3.5"
+                    pathLength="100"
+                    stroke-dasharray="{{ [score, 100]|min|round(1) }} 100"
+                    stroke-linecap="round"
+                    transform="rotate(-90 18 18)"></circle>
+        </svg>
+        <span class="score-ring-value">{{ "%.0f"|format(score) }}</span>
+    </span>
+{%- endmacro %}
 <div class="row">
     <div class="col-12 mb-4">
         <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
@@ -246,9 +277,15 @@
                     <i class="fas fa-info-circle me-2"></i>Overview
                 </h2>
                 {% if property.score_total is not none %}
-                    <span class="badge score-badge"
-                          style="background-color: {{ 'var(--bs-success)' if property.score_total >= 70 else 'var(--bs-warning)' if property.score_total >= 50 else 'var(--bs-danger)' }}">
-                        Score: {{ "%.1f"|format(property.score_total) }}
+                    {# Ring + band word instead of a bare number (D7): the word
+                       is what makes 76.7 legible; the exact figure stays in the
+                       tooltip and in the breakdown card on the right. #}
+                    <span class="d-inline-flex align-items-center gap-2"
+                          title="Score: {{ '%.1f'|format(property.score_total) }}/100">
+                        {{ score_ring(property.score_total, 44) }}
+                        <span class="badge bg-{{ score_band_class(property.score_total) }}">
+                            {{ score_band_word(property.score_total) }}
+                        </span>
                     </span>
                 {% endif %}
             </div>
@@ -266,6 +303,13 @@
                                     <span class="text-body-secondary">Not specified</span>
                                 {% endif %}
                             </div>
+                            {# €/m² belongs next to the price (D6): it is the
+                               number every AI paragraph below reasons from. #}
+                            {% if property.price and property.area and (property.area|float) > 0 %}
+                                <small class="text-body-secondary">
+                                    €{{ "{:,.0f}".format((property.price|float) / (property.area|float)) }}/m²
+                                </small>
+                            {% endif %}
                             {# A recorded price change, which the list has shown all
                                along and this page did not: 51 of the owner's
                                properties carry one, and without it the tile reads
@@ -346,19 +390,75 @@
                     </div>
                 </div>
 
-                {# Nothing else belongs at the bottom of this card (owner decision,
-                   2026-08-09). The Location panel went first, then the two
-                   buttons under it: "Check status" is an icon next to the title
-                   now, and "AI Analyses" only scrolled to a section that already
-                   sits directly below, with its own tabs and its own heading. #}
+                {# The 2026-08-09 decision cleared this card's tail of buttons
+                   and panels. The 2026-08-13 proposal (D6, approved) puts one
+                   thing back: the at-a-glance chip row — sea verdicts plus a
+                   pill per measured travel target, each pill a route from the
+                   listing. Chips, not controls; nothing else returns here. #}
+                {% set _hero_enrichment = property.enrichment if property.enrichment is mapping else {} %}
+                {% set _hero_sea = _hero_enrichment.get('sea') if _hero_enrichment.get('sea') is mapping else {} %}
+                {% set _hero_travel = property.travel if property.travel is mapping else {} %}
+                {% set _hero_targets = _hero_travel.get('targets') if _hero_travel.get('targets') is mapping else {} %}
+                <div class="d-flex flex-wrap align-items-center gap-2 mt-1">
+                    {% if _hero_sea.get('status') == 'ok' and _hero_sea.get('distance_m') is not none %}
+                        <span class="badge bg-primary" title="{{ t('distance_to_sea') }}">
+                            <i class="fas fa-water me-1"></i>{{ "%.1f"|format(_hero_sea.get('distance_m') / 1000) }} km
+                        </span>
+                    {% endif %}
+                    {% if sea_view_verdict and sea_view_verdict.state in ('yes', 'likely') %}
+                        <span class="badge {{ 'bg-success' if sea_view_verdict.state == 'yes' else 'bg-info' }}"
+                              title="{{ t('sea_view_state_' ~ sea_view_verdict.state) }}">
+                            <i class="fas fa-binoculars me-1"></i>{{ t('sea_view_state_' ~ sea_view_verdict.state) }}
+                        </span>
+                    {% endif %}
+                    {% for tt in (travel_display_targets if travel_display_targets is iterable else []) %}
+                        {% set tdata = _hero_targets.get(tt.key) %}
+                        {% set tdata = tdata if tdata is mapping else {} %}
+                        {% if tdata.get('duration_min') is not none %}
+                            {% set _pill_place = tdata.get('place') if tdata.get('place') is mapping else {} %}
+                            {% set _pill_lat = _pill_place.get('lat') if _pill_place.get('lat') is not none else tdata.get('lat') %}
+                            {% set _pill_lon = _pill_place.get('lon') if _pill_place.get('lon') is not none else tdata.get('lon') %}
+                            {% set _pill_url = maps_directions_url(property.location_lat, property.location_lon, _pill_lat, _pill_lon, _pill_place.get('place_id')) %}
+                            {% set _pill_title = tt.label ~ (': ' ~ _pill_place.get('name') if _pill_place.get('name') else '') %}
+                            {% if _pill_url %}
+                                <a href="{{ _pill_url }}" target="_blank" rel="noopener"
+                                   class="badge bg-body-tertiary border text-body text-decoration-none"
+                                   title="{{ _pill_title }} — route">
+                                    <i class="fas {{ tt.icon }} me-1"></i>{{ tdata.get('duration_min') }} min
+                                </a>
+                            {% else %}
+                                <span class="badge bg-body-tertiary border text-body" title="{{ _pill_title }}">
+                                    <i class="fas {{ tt.icon }} me-1"></i>{{ tdata.get('duration_min') }} min
+                                </span>
+                            {% endif %}
+                        {% endif %}
+                    {% endfor %}
+                    {# The alerts carry no images, so the page says so instead
+                       of just having none (D6; photo sourcing is question 4). #}
+                    <span class="small text-body-secondary ms-auto" title="{{ t('no_photos_tooltip') }}">
+                        <i class="far fa-image me-1"></i>{{ t('no_photos') }}
+                    </span>
+                </div>
             </div>
         </div>
 
         {% if property.description %}
+        {# Display-side cleanup only (D13): the recognized Gmail-alert
+           boilerplate is trimmed at render time, the stored text is never
+           touched, and whenever anything was trimmed the original is one
+           click away. Patterns live in utils/description_display.py, pinned
+           by fixtures from the owner's real emails. #}
+        {% set _desc = clean_description_for_display(property.description) %}
         <div class="card shadow-sm mb-3">
             <div class="card-body">
                 <h5 class="mb-2">{{ t('property_description') }}</h5>
-                <div class="text-body-secondary" style="white-space: pre-wrap;">{{ property.description }}</div>
+                <div class="text-body-secondary" style="white-space: pre-wrap;">{{ _desc.text }}</div>
+                {% if _desc.stripped %}
+                    <details class="mt-2">
+                        <summary class="small text-body-secondary">{{ t('show_original_email') }}</summary>
+                        <div class="text-body-secondary small mt-2" style="white-space: pre-wrap;">{{ property.description }}</div>
+                    </details>
+                {% endif %}
             </div>
         </div>
         {% endif %}
@@ -468,19 +568,34 @@
                 </div>
                 <div class="card-body">
                     <div id="ai-compare-status" class="small text-body-secondary">Loading…</div>
+                    {# The disagreement panel (D10): the verdict rows — the
+                       part the two providers always answer, and the only part
+                       where a difference is a one-glance signal — stay
+                       visible as badge pairs. Every figure, prose cell and
+                       coverage row moves behind the disclosure below; the
+                       table used to re-print the tab prose one screen lower
+                       (the 360 audit's second-worst text wall). #}
                     <div class="table-responsive mt-2">
                         <table class="table table-sm align-middle mb-0" id="ai-compare-table" style="display:none;">
                             <thead>
                                 <tr>
-                                    <th style="min-width: 190px;">Metric</th>
-                                    <th style="min-width: 160px;">Claude</th>
-                                    <th style="min-width: 160px;">ChatGPT</th>
-                                    <th style="min-width: 160px;" id="ai-compare-baseline-head">Baseline</th>
+                                    <th style="min-width: 160px;">Verdict</th>
+                                    <th style="min-width: 140px;">Claude</th>
+                                    <th style="min-width: 140px;">ChatGPT</th>
+                                    <th style="min-width: 140px;" id="ai-compare-baseline-head">Baseline</th>
                                 </tr>
                             </thead>
-                            <tbody id="ai-compare-tbody"></tbody>
+                            <tbody id="ai-compare-verdicts-tbody"></tbody>
                         </table>
                     </div>
+                    <details class="mt-2" id="ai-compare-details" style="display:none;">
+                        <summary class="small text-body-secondary">All figures, prose and coverage</summary>
+                        <div class="table-responsive mt-2">
+                            <table class="table table-sm align-middle mb-0">
+                                <tbody id="ai-compare-tbody"></tbody>
+                            </table>
+                        </div>
+                    </details>
                 </div>
             </div>
         </div>
@@ -524,6 +639,60 @@
                             </div>
                         {% endif %}
                     </div>
+
+                    {# Why the score is what it is (D8): the per-component
+                       breakdown was computed and stored all along — this shows
+                       it as component × weight = contribution. A None
+                       component reads "not measured — excluded", never 0: the
+                       scorer drops it and renormalises (#98's sibling rule),
+                       and the page must say the same thing the math did. #}
+                    {% set _scoring = property.scoring if property.scoring is mapping else {} %}
+                    {% set _profiles = _scoring.get('profiles') if _scoring.get('profiles') is mapping else {} %}
+                    {% set _component_labels = [
+                        ('value_score', t('component_value')),
+                        ('size_score', t('component_size')),
+                        ('travel_score', t('component_travel')),
+                        ('sea_score', t('component_sea')),
+                    ] %}
+                    {% for _prof_key, _prof_label in [('investment', t('investment_score')), ('lifestyle', t('lifestyle_score'))] %}
+                        {% set _prof = _profiles.get(_prof_key) if _profiles.get(_prof_key) is mapping else {} %}
+                        {% set _weights = _prof.get('weights') if _prof.get('weights') is mapping else {} %}
+                        {% set _components = _prof.get('components') if _prof.get('components') is mapping else {} %}
+                        {% if _weights %}
+                            <div class="mt-3 score-breakdown">
+                                <div class="small fw-bold text-body-secondary mb-1">{{ _prof_label }}</div>
+                                {% for _comp_key, _comp_label in _component_labels %}
+                                    {% set _w = _weights.get(_comp_key) %}
+                                    {% if _w is not none and _w > 0 %}
+                                        {% set _c = _components.get(_comp_key) %}
+                                        <div class="d-flex align-items-center gap-2 mb-1 small">
+                                            <span class="score-breakdown-label text-body-secondary">{{ _comp_label }}</span>
+                                            {% if _c is not none %}
+                                                <div class="progress flex-grow-1" style="height: 6px;">
+                                                    <div class="progress-bar bg-{{ score_band_class(_c) }}"
+                                                         style="width: {{ [_c, 100]|min|round }}%"></div>
+                                                </div>
+                                                <span class="text-nowrap text-body-secondary score-breakdown-math">
+                                                    {{ "%.0f"|format(_c) }} × {{ "%.2f"|format(_w) }} =
+                                                    <span class="fw-bold text-body">{{ "%.1f"|format(_c * _w) }}</span>
+                                                </span>
+                                            {% else %}
+                                                <span class="text-body-secondary fst-italic">{{ t('component_not_measured') }}</span>
+                                            {% endif %}
+                                        </div>
+                                    {% endif %}
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    {% endfor %}
+                    {% set _mix = _scoring.get('combined_mix') if _scoring.get('combined_mix') is mapping else {} %}
+                    {% if _mix and property.score_investment is not none and property.score_lifestyle is not none %}
+                        <div class="small text-body-secondary mt-2">
+                            {{ t('combined_score') }} =
+                            {{ "%.0f"|format(property.score_investment) }} × {{ "%.2f"|format(_mix.get('investment', 0)) }}
+                            + {{ "%.0f"|format(property.score_lifestyle) }} × {{ "%.2f"|format(_mix.get('lifestyle', 0)) }}
+                        </div>
+                    {% endif %}
                 </div>
             </div>
         {% endif %}
@@ -554,23 +723,31 @@
                     </h6>
                 </div>
                 <div class="card-body">
-                    {% for beach in beach_items %}
-                        {# Straight to the place on Google Maps: the place id pins the
-                           exact beach, the coordinate is what the link falls back to
-                           when Google returned no id. #}
-                        {% set beach_url = 'https://www.google.com/maps/search/?api=1&query=' ~ beach.get('lat') ~ ',' ~ beach.get('lon')
-                                           ~ ('&query_place_id=' ~ (beach.get('place_id')|urlencode) if beach.get('place_id') else '') %}
-                        <div class="d-flex justify-content-between align-items-start {{ 'mb-2' if not loop.last }}">
+                    {# Top-3 visible, the rest behind a disclosure (D11): 16
+                       beach rows pushed every other card below the fold. The
+                       macro renders one row either way. #}
+                    {% macro beach_row(beach, last) %}
+                        {# Straight to the place on Google Maps via the shared
+                           builder: the place id pins the exact beach, the
+                           coordinate is the fallback when Google gave no id. #}
+                        {% set beach_url = maps_place_url(beach.get('lat'), beach.get('lon'), beach.get('place_id')) %}
+                        <div class="d-flex justify-content-between align-items-start {{ 'mb-2' if not last }}">
                             {# No `compact-text` here. That class is 120px of
                                ellipsis, which turned "Playa de Riboira" into
                                "Playa de Rib..." -- and the name is the whole
                                point of a row you are meant to click. It wraps
                                instead, and the badges keep their width. #}
-                            <a href="{{ beach_url }}" target="_blank" rel="noopener"
-                               class="small fw-bold text-decoration-none me-2"
-                               title="{{ beach.get('name') or t('nearest_beach') }} — Google Maps">
-                                <i class="fas fa-umbrella-beach me-1 text-primary"></i>{{ beach.get('name') or t('nearest_beach') }}
-                            </a>
+                            {% if beach_url %}
+                                <a href="{{ beach_url }}" target="_blank" rel="noopener"
+                                   class="small fw-bold text-decoration-none me-2"
+                                   title="{{ beach.get('name') or t('nearest_beach') }} — Google Maps">
+                                    <i class="fas fa-umbrella-beach me-1 text-primary"></i>{{ beach.get('name') or t('nearest_beach') }}
+                                </a>
+                            {% else %}
+                                <span class="small fw-bold me-2">
+                                    <i class="fas fa-umbrella-beach me-1 text-primary"></i>{{ beach.get('name') or t('nearest_beach') }}
+                                </span>
+                            {% endif %}
                             <div class="text-nowrap ms-auto flex-shrink-0">
                                 {% if beach.get('duration_min') is not none %}
                                     <span class="badge bg-info me-1"
@@ -583,7 +760,23 @@
                                 {% endif %}
                             </div>
                         </div>
+                    {% endmacro %}
+                    {% for beach in beach_items[:3] %}
+                        {{ beach_row(beach, loop.last and beach_items|length <= 3) }}
                     {% endfor %}
+                    {% if beach_items|length > 3 %}
+                        <details class="mt-1">
+                            <summary class="small text-body-secondary">
+                                {{ beach_items|length - 3 }} {{ t('more_beaches_within') }}
+                                {{ beaches.get('max_drive_min') or 20 }} min
+                            </summary>
+                            <div class="mt-2">
+                                {% for beach in beach_items[3:] %}
+                                    {{ beach_row(beach, loop.last) }}
+                                {% endfor %}
+                            </div>
+                        </details>
+                    {% endif %}
                     {% if beaches.get('status') == 'unavailable' %}
                         <div class="d-flex justify-content-between align-items-center {{ 'mt-2' if beach_items }}">
                             <span class="small fw-bold compact-text">
@@ -681,9 +874,17 @@
                     {% if custom_targets and custom_targets|length > 0 %}
                         {% for target in custom_targets %}
                             {% set tdata = travel_targets.get(target.key) if travel_targets is mapping else {} %}
+                            {% set _ct = tdata if tdata is mapping else {} %}
+                            {% set _ct_route = maps_directions_url(property.location_lat, property.location_lon, _ct.get('lat'), _ct.get('lon')) %}
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 <span class="small fw-bold compact-text" title="{{ target.label or target.key }}">
                                     <i class="fas fa-city me-1 text-warning"></i>{{ target.label or target.key }}
+                                    {% if _ct_route %}
+                                        <a href="{{ _ct_route }}" target="_blank" rel="noopener"
+                                           class="ms-1 text-decoration-none" title="{{ t('route_from_property') }}">
+                                            <i class="fas fa-diamond-turn-right"></i>
+                                        </a>
+                                    {% endif %}
                                 </span>
                                 <div class="text-nowrap">{{ travel_readout(tdata) }}</div>
                             </div>
@@ -696,12 +897,16 @@
                        330-354 of the owner's listings and appeared nowhere:
                        Claude cites "Alimerka supermarket (0 min)" in its
                        analysis of a plot whose page never mentioned it. #}
+                    {# Police included since the Transport card's removal
+                       (D12): it was the one preset only that card showed, and
+                       deleting the duplicate must not delete the measurement. #}
                     {% set hub_defs = [
                         ('airport', t('nearest_airport'), 'fa-plane'),
                         ('train_station', t('train_station'), 'fa-train'),
                         ('hospital', t('hospital'), 'fa-hospital'),
                         ('school', 'School', 'fa-graduation-cap'),
                         ('supermarket', 'Supermarket', 'fa-basket-shopping'),
+                        ('police', 'Police', 'fa-shield-halved'),
                     ] %}
                     {% for hub_key, hub_label, hub_icon in hub_defs %}
                         {% set tdata = travel_targets.get(hub_key) if travel_targets is mapping else {} %}
@@ -711,7 +916,9 @@
                                owner disabled says nothing and stays hidden. #}
                             {% set readout = travel_readout(tdata) %}
                             {% if readout|trim %}
-                                {% set place_name = (tdata.get('place') or {}).get('name') %}
+                                {% set _hub_place = tdata.get('place') if tdata.get('place') is mapping else {} %}
+                                {% set place_name = _hub_place.get('name') %}
+                                {% set _hub_route = maps_directions_url(property.location_lat, property.location_lon, _hub_place.get('lat'), _hub_place.get('lon'), _hub_place.get('place_id')) %}
                                 <div class="d-flex justify-content-between align-items-start mb-2">
                                     <span class="small fw-bold compact-text" title="{{ hub_label }}">
                                         <i class="fas {{ hub_icon }} me-1 text-primary"></i>{{ hub_label }}
@@ -719,9 +926,18 @@
                                            type covers helipads and businesses that merely
                                            carry the tag, so naming the place is the only
                                            way an owner can tell "10 min to the airport"
-                                           from "10 min to a contractor". #}
+                                           from "10 min to a contractor". The name opens
+                                           the route from the listing (D12/D24). #}
                                         {% if place_name %}
-                                            <span class="d-block fw-normal text-body-secondary">{{ place_name }}</span>
+                                            {% if _hub_route %}
+                                                <a href="{{ _hub_route }}" target="_blank" rel="noopener"
+                                                   class="d-block fw-normal text-decoration-none text-body-secondary"
+                                                   title="{{ t('route_from_property') }}: {{ place_name }}">
+                                                    {{ place_name }} <i class="fas fa-diamond-turn-right"></i>
+                                                </a>
+                                            {% else %}
+                                                <span class="d-block fw-normal text-body-secondary">{{ place_name }}</span>
+                                            {% endif %}
                                         {% endif %}
                                     </span>
                                     <div class="text-nowrap">{{ readout }}</div>
@@ -895,148 +1111,13 @@
             </div>
         {% endif %}
 
-        {% if property.transport or property.travel_time_airport is not none or property.travel_time_train_station is not none or property.travel_time_hospital is not none or property.travel_time_police is not none %}
-            <div class="card mb-4">
-                <div class="card-header">
-                    <h6 class="card-title mb-0 compact-header" title="{{ t('transport') }}">
-                        <i class="fas fa-route me-2"></i>{{ t('transport') }}
-                    </h6>
-                </div>
-                <div class="card-body">
-                    {% if property.transport and property.transport.get('airport_available') == false %}
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span class="small fw-bold"><i class="fas fa-plane me-1"></i>Airport</span>
-                            <div>
-                                <i class="fas fa-times-circle text-danger"></i>
-                                <small class="text-muted ms-1">Not available</small>
-                            </div>
-                        </div>
-                    {% elif property.travel_time_airport is not none %}
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span class="small fw-bold">Airport Distance</span>
-                            <div class="d-flex align-items-center">
-                                <span class="badge bg-info me-1">
-                                    <i class="fas fa-car me-1"></i>{{ property.travel_time_airport }}min
-                                </span>
-                                {% if property.distance_airport is not none %}
-                                    <span class="badge bg-secondary">{{ property.distance_airport }}km</span>
-                                {% endif %}
-                            </div>
-                        </div>
-                    {% endif %}
-                    {% if property.travel_time_train_station is not none %}
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span class="small fw-bold">Train Station Distance</span>
-                            <div class="d-flex align-items-center">
-                                <span class="badge bg-info me-1">
-                                    <i class="fas fa-car me-1"></i>{{ property.travel_time_train_station }}min
-                                </span>
-                                {% if property.distance_train_station is not none %}
-                                    <span class="badge bg-secondary">{{ property.distance_train_station }}km</span>
-                                {% endif %}
-                            </div>
-                        </div>
-                    {% endif %}
-                    {% if property.travel_time_hospital is not none %}
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span class="small fw-bold">Hospital Distance</span>
-                            <div class="d-flex align-items-center">
-                                <span class="badge bg-info me-1">
-                                    <i class="fas fa-car me-1"></i>{{ property.travel_time_hospital }}min
-                                </span>
-                                {% if property.distance_hospital is not none %}
-                                    <span class="badge bg-secondary">{{ property.distance_hospital }}km</span>
-                                {% endif %}
-                            </div>
-                        </div>
-                    {% endif %}
-                    {% if property.travel_time_police is not none %}
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span class="small fw-bold">Police Station Distance</span>
-                            <div class="d-flex align-items-center">
-                                <span class="badge bg-info me-1">
-                                    <i class="fas fa-car me-1"></i>{{ property.travel_time_police }}min
-                                </span>
-                                {% if property.distance_police is not none %}
-                                    <span class="badge bg-secondary">{{ property.distance_police }}km</span>
-                                {% endif %}
-                            </div>
-                        </div>
-                    {% endif %}
-
-                    {% if (property.travel_time_airport or property.travel_time_train_station or property.travel_time_hospital or property.travel_time_police) and property.transport %}
-                        <hr class="my-3">
-                    {% endif %}
-
-                    {% if property.transport %}
-                        {% for key, value in property.transport.items() %}
-                            {% set base_key = key.replace('_available', '').replace('_distance', '').replace('_travel_time', '') %}
-                            {% set has_distance_field = property.transport.get(base_key + '_distance') if property.transport else None %}
-                            {% set has_travel_time_field = property.transport.get(base_key + '_travel_time') if property.transport else None %}
-
-                            {% if not (
-                                (key.endswith('_available') and (has_distance_field or has_travel_time_field)) or
-                                (key.endswith('_travel_time') and has_distance_field) or
-                                (key.startswith('duration_to_')) or
-                                (key == 'airport_available' and property.travel_time_airport)
-                            ) %}
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <span class="small">{{ key.replace('_', ' ').title() }}</span>
-                                {% if value is sameas true %}
-                                    <i class="fas fa-check-circle text-success"></i>
-                                {% elif value is sameas false %}
-                                    <i class="fas fa-times-circle text-danger"></i>
-                                {% elif value is number and 'distance' in key %}
-                                    <div class="d-flex align-items-center">
-                                        {% if key.startswith('distance_to_') %}
-                                            {% set duration_key = key.replace('distance_to_', 'duration_to_') %}
-                                            {% set duration_value = property.transport.get(duration_key) %}
-                                            {% if value == 0 and not duration_value %}
-                                                <span class="text-muted small">no data</span>
-                                            {% else %}
-                                                {% if duration_value %}
-                                                    <span class="badge bg-info me-1">
-                                                        <i class="fas fa-car me-1"></i>{{ "%.0f"|format(duration_value/60) }}min
-                                                    </span>
-                                                {% endif %}
-                                                <span class="badge bg-secondary">
-                                                    <i class="fas fa-road me-1"></i>{{ "%.0f"|format(value/1000) }}km
-                                                </span>
-                                            {% endif %}
-                                        {% else %}
-                                            {% set transport_type = key.replace('_distance', '') %}
-                                            {% if property.transport and property.transport.get(transport_type + '_travel_time') %}
-                                                <span class="badge bg-info me-1">
-                                                    <i class="fas fa-car me-1"></i>{{ property.transport[transport_type + '_travel_time'] }}min
-                                                </span>
-                                            {% endif %}
-                                            {% if value < 1000 %}
-                                                <span class="badge bg-secondary">
-                                                    <i class="fas fa-road me-1"></i>{{ "%.1f"|format(value/1000) }}km
-                                                </span>
-                                            {% else %}
-                                                <span class="badge bg-secondary">
-                                                    <i class="fas fa-road me-1"></i>{{ "%.0f"|format(value/1000) }}km
-                                                </span>
-                                            {% endif %}
-                                        {% endif %}
-                                    </div>
-                                {% elif value is number and 'duration' in key %}
-                                    <span class="badge bg-info">{{ "%.0f"|format(value/60) }}min</span>
-                                {% elif value is number and key.endswith('_travel_time') %}
-                                    <span class="badge bg-info">
-                                        <i class="fas fa-car me-1"></i>{{ value }}min
-                                    </span>
-                                {% else %}
-                                    <span class="text-muted small">{{ value }}</span>
-                                {% endif %}
-                            </div>
-                            {% endif %}
-                        {% endfor %}
-                    {% endif %}
-                </div>
-            </div>
-        {% endif %}
+        {# The Transport card is gone (proposal D12, approved 2026-08-13): it
+           repeated the Travel Times card's numbers minus the place names —
+           the 360 audit measured it as a verbatim duplicate. The legacy
+           `property.transport` extras it also listed were `duration_to_*` /
+           `distance_to_*` pairs from `enrichment.legacy_land`, which remain
+           readable on /lands/<id> for the mirrored rows. Do not bring the
+           card back; extend the Travel Times card instead. #}
 
         {# The environment card is always rendered. Gating it on existing data
            meant the sea-view override -- the one control a human can use to
@@ -1522,8 +1603,58 @@ function formatMetricValue(value, suffix = '') {
    comparison row — it says so, in one wording. */
 const RISK_LEVEL_NOTE = "Each provider's own judgement; the scale is not calibrated between providers.";
 
+/* Verdict-first rendering (proposal D9, approved 2026-08-13, NN/g
+   progressive-disclosure pattern): the badges and the pros/cons columns are
+   the visible layer; every paragraph sits behind a native <details>. Nothing
+   the provider said is dropped — it is one click further away. */
+
+const AI_STALE_AFTER_DAYS = 30;
+
+/* Provenance line: whose opinion, which model, formed when. `meta` comes
+   from the server's variant rows; a missing piece says so rather than
+   guessing (a fresh in-page run knows its date but not its model id — the
+   comparison endpoint remains the authority on that). */
+function _aiProvenanceHtml(meta) {
+    if (!meta || typeof meta !== 'object') return '';
+    const parts = [];
+    parts.push(meta.model ? escapeHtml(String(meta.model)) : 'model not recorded');
+    let staleBadge = '';
+    if (meta.dateIso) {
+        const generated = new Date(meta.dateIso);
+        if (!Number.isNaN(generated.getTime())) {
+            parts.push(generated.toISOString().slice(0, 10));
+            const ageDays = (Date.now() - generated.getTime()) / 86400000;
+            if (ageDays > AI_STALE_AFTER_DAYS) {
+                staleBadge = ` <span class="badge bg-warning text-dark">stale — ${Math.floor(ageDays)}d old</span>`;
+            }
+        }
+    } else {
+        parts.push('date not recorded');
+    }
+    return `<div class="small text-body-secondary mb-2">
+        <i class="fas fa-circle-info me-1"></i>AI opinion, not a measurement — ${parts.join(' · ')}${staleBadge}
+    </div>`;
+}
+
+/* One collapsed section. The summary row carries the icon, the title and the
+   verdict badges, so a closed section still states its conclusion. */
+function _aiSection(icon, title, badgesHtml, bodyHtml) {
+    if (!bodyHtml) return '';
+    return `
+        <details class="ai-section card border-0 bg-body-tertiary mb-2">
+            <summary class="card-body p-3 py-2">
+                <span class="fw-semibold small">
+                    <i class="fas fa-chevron-right ai-section-caret me-1"></i>
+                    <i class="fas ${icon} me-1"></i>${title}
+                </span>
+                <span class="d-flex flex-wrap gap-1 ms-auto">${badgesHtml || ''}</span>
+            </summary>
+            <div class="card-body p-3 pt-0 small">${bodyHtml}</div>
+        </details>`;
+}
+
 // Render structured AI analysis (legacy schema; tolerant to missing keys)
-function renderStructuredAIAnalysis(analysis) {
+function renderStructuredAIAnalysis(analysis, meta) {
     if (!analysis || typeof analysis !== 'object') {
         return `<div class="alert alert-warning mb-0">No structured analysis available.</div>`;
     }
@@ -1533,32 +1664,18 @@ function renderStructuredAIAnalysis(analysis) {
     // the similar_objects data consumed by renderSimilarProperties()).
     analysis = deepEscapeStrings(analysis);
 
-    // Helper to safely access nested properties
-    const safeGet = (obj, path, defaultValue = null) => {
-        try {
-            return path.split('.').reduce((current, key) => current && current[key], obj) || defaultValue;
-        } catch {
-            return defaultValue;
-        }
-    };
-
-    // Price analysis section
     const priceAnalysis = analysis.price_analysis || {};
     const verdict = priceAnalysis.verdict || 'UNKNOWN';
     const verdictClass = getPriceVerdictClass(verdict);
 
-    // Investment potential section
     const investment = analysis.investment_potential || {};
     const investmentRating = investment.rating || 'UNKNOWN';
     const riskLevel = investment.risk_level || 'UNKNOWN';
 
-    /* Risk section: what the "Risk: X" badge is actually based on. Every
-       provider is asked for it on every listing and it was stored all along —
-       the page simply never rendered it, so the badge and the comparison row
-       stated a verdict with nothing behind it (#209). */
-    const risks = analysis.risks_analysis || {};
-    /* A provider that answered with a sentence where the schema asked for a
+    /* Risk section: what the "Risk: X" badge is actually based on (#209).
+       A provider that answered with a sentence where the schema asked for a
        list still answered; dropping it would report silence. */
+    const risks = analysis.risks_analysis || {};
     const riskItems = (value) => Array.isArray(value)
         ? value
         : (typeof value === 'string' && value.trim() ? [value] : []);
@@ -1566,120 +1683,94 @@ function renderStructuredAIAnalysis(analysis) {
         (key) => riskItems(risks[key]).length > 0
     ) || !!risks.mitigation;
 
-    // Rental analysis section
     const rental = analysis.rental_market_analysis || {};
-
-    // Market dynamics section
     const market = analysis.market_price_dynamics || {};
     const trend = market.price_trend || 'UNKNOWN';
     const trendClass = getPriceTrendClass(trend);
-
-    // Similar objects
     const similar = analysis.similar_objects || [];
 
-    return `
-        <div class="row g-3">
-            <!-- Price Analysis -->
-            <div class="col-12">
-                <div class="card border-0 bg-body-tertiary">
-                    <div class="card-body p-3">
-                        <div class="d-flex justify-content-between align-items-start mb-2">
-                            <h6 class="mb-0"><i class="fas fa-tag me-2"></i>Price Analysis</h6>
-                            <span class="badge ${verdictClass}">${humanizeEnumLabel(verdict)}</span>
-                        </div>
-                        <p class="mb-0 small">${priceAnalysis.summary || 'No price analysis available'}</p>
-                    </div>
-                </div>
-            </div>
+    /* The verdict strip: every enum the provider answered, in one glance. */
+    const verdictStrip = `
+        <div class="d-flex flex-wrap gap-1 mb-2">
+            <span class="badge ${verdictClass}" title="Price verdict">${humanizeEnumLabel(verdict)}</span>
+            <span class="badge bg-primary" title="Investment potential">Potential: ${humanizeEnumLabel(investmentRating)}</span>
+            <span class="badge bg-warning text-dark" title="${RISK_LEVEL_NOTE}">Risk: ${humanizeEnumLabel(riskLevel)}</span>
+            <span class="badge ${trendClass}" title="Market trend">Trend: ${humanizeEnumLabel(trend)}</span>
+            ${rental.investment_rating ? `<span class="badge bg-secondary" title="Investment rating">${humanizeEnumLabel(rental.investment_rating)}</span>` : ''}
+        </div>`;
 
-            <!-- Investment Potential -->
-            <div class="col-12">
-                <div class="card border-0 bg-body-tertiary">
-                    <div class="card-body p-3">
-                        <div class="d-flex justify-content-between align-items-start mb-2">
-                            <h6 class="mb-0"><i class="fas fa-chart-line me-2"></i>Investment Potential</h6>
-                            <div class="d-flex gap-1">
-                                <span class="badge bg-primary">Potential: ${humanizeEnumLabel(investmentRating)}</span>
-                                <span class="badge bg-warning text-dark">Risk: ${humanizeEnumLabel(riskLevel)}</span>
-                            </div>
-                        </div>
-                        <p class="mb-0 small">${investment.summary || investment.forecast || 'No investment potential analysis available'}</p>
-                        ${renderListItems(investment.key_drivers, 'Key drivers', 'primary')}
-                    </div>
-                </div>
-            </div>
+    /* Pros/cons, five each, visible (D9): the advantages and major risks are
+       what the owner actually reads first. Full lists stay in the sections. */
+    const advantages = riskItems(risks.advantages);
+    const majorRisks = riskItems(risks.major_risks);
+    const _prosConsColumn = (items, icon, color) => `
+        <div class="col-md-6">
+            <ul class="list-unstyled mb-0">
+                ${items.slice(0, 5).map((item) => `<li class="mb-1"><i class="fas ${icon} text-${color} me-1"></i>${humanizeEnumLabel(item) || String(item ?? '')}</li>`).join('')}
+                ${items.length > 5 ? `<li class="text-body-secondary">+${items.length - 5} more below</li>` : ''}
+            </ul>
+        </div>`;
+    const prosConsHtml = (advantages.length || majorRisks.length) ? `
+        <div class="row g-2 mb-2 small">
+            ${_prosConsColumn(advantages, 'fa-check-circle', 'success')}
+            ${_prosConsColumn(majorRisks, 'fa-times-circle', 'danger')}
+        </div>` : '';
 
-            <!-- Risk Assessment: the reasons behind the Risk badge above -->
-            <div class="col-12">
-                <div class="card border-0 bg-body-tertiary">
-                    <div class="card-body p-3">
-                        <div class="d-flex justify-content-between align-items-start mb-2">
-                            <h6 class="mb-0"><i class="fas fa-triangle-exclamation me-2"></i>Risk Assessment</h6>
-                            <span class="badge bg-warning text-dark">Risk: ${humanizeEnumLabel(riskLevel)}</span>
-                        </div>
-                        <p class="mb-2 small text-body-secondary">${RISK_LEVEL_NOTE}</p>
-                        ${riskDetail ? `
-                            ${renderListItems(riskItems(risks.major_risks), 'Major risks', 'danger')}
-                            ${renderListItems(riskItems(risks.minor_issues), 'Minor issues', 'warning')}
-                            ${renderListItems(riskItems(risks.advantages), 'Advantages', 'success')}
-                            ${risks.mitigation ? `<p class="mb-0 small"><span class="fw-semibold">Mitigation:</span> ${risks.mitigation}</p>` : ''}
-                        ` : `<p class="mb-0 small">This provider listed no specific risks for this listing.</p>`}
-                    </div>
-                </div>
+    /* Rental figures: a provider that answered every figure with null gets
+       one honest line, not four em-dash tiles (the 360 audit's finding). */
+    const rentalFigures = [rental.rental_yield, rental.cap_rate,
+                           rental.price_to_rent_ratio, rental.payback_period_years];
+    const rentalHasFigures = rentalFigures.some((v) => v !== null && v !== undefined && v !== '');
+    const rentalTiles = rentalHasFigures ? `
+        <div class="row g-2 text-center mb-2">
+            <div class="col-6 col-md-3">
+                <div class="small text-muted">Yield</div>
+                <div class="fw-semibold">${formatMetricValue(rental.rental_yield, '%')}</div>
             </div>
+            <div class="col-6 col-md-3">
+                <div class="small text-muted">Cap Rate</div>
+                <div class="fw-semibold">${formatMetricValue(rental.cap_rate, '%')}</div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="small text-muted">Price/Rent</div>
+                <div class="fw-semibold">${formatMetricValue(rental.price_to_rent_ratio)}</div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="small text-muted">Payback</div>
+                <div class="fw-semibold">${formatMetricValue(rental.payback_period_years, 'y')}</div>
+            </div>
+        </div>` : '';
+    const rentalBody = (rentalHasFigures || rental.summary)
+        ? `${rentalTiles}<p class="mb-0">${rental.summary || humanizeEnumLabel(rental.investment_rating) || ''}</p>`
+        : '';
+    const rentalMissingLine = (rentalHasFigures || rentalBody)
+        ? '' : '<div class="small text-body-secondary mb-2">No rental figures from this provider for this listing.</div>';
 
-            <!-- Rental Metrics -->
-            <div class="col-12">
-                <div class="card border-0 bg-body-tertiary">
-                    <div class="card-body p-3">
-                        <h6 class="mb-2"><i class="fas fa-coins me-2"></i>Rental Market Analysis</h6>
-                        <div class="row g-2 text-center mb-2">
-                            <div class="col-6 col-md-3">
-                                <div class="small text-muted">Yield</div>
-                                <div class="fw-semibold">${formatMetricValue(rental.rental_yield, '%')}</div>
-                            </div>
-                            <div class="col-6 col-md-3">
-                                <div class="small text-muted">Cap Rate</div>
-                                <div class="fw-semibold">${formatMetricValue(rental.cap_rate, '%')}</div>
-                            </div>
-                            <div class="col-6 col-md-3">
-                                <div class="small text-muted">Price/Rent</div>
-                                <div class="fw-semibold">${formatMetricValue(rental.price_to_rent_ratio)}</div>
-                            </div>
-                            <div class="col-6 col-md-3">
-                                <div class="small text-muted">Payback</div>
-                                <div class="fw-semibold">${formatMetricValue(rental.payback_period_years, 'y')}</div>
-                            </div>
-                        </div>
-                        <p class="mb-0 small">${rental.summary || humanizeEnumLabel(rental.investment_rating) || 'No rental analysis available'}</p>
-                    </div>
-                </div>
-            </div>
+    const sections = [
+        _aiSection('fa-tag', 'Price Analysis',
+            `<span class="badge ${verdictClass}">${humanizeEnumLabel(verdict)}</span>`,
+            priceAnalysis.summary ? `<p class="mb-0">${priceAnalysis.summary}</p>` : ''),
+        _aiSection('fa-chart-line', 'Investment Potential',
+            `<span class="badge bg-primary">${humanizeEnumLabel(investmentRating)}</span>`,
+            `${(investment.summary || investment.forecast) ? `<p class="mb-2">${investment.summary || investment.forecast}</p>` : ''}
+             ${renderListItems(investment.key_drivers, 'Key drivers', 'primary')}` .trim() || ''),
+        _aiSection('fa-triangle-exclamation', 'Risk Assessment',
+            `<span class="badge bg-warning text-dark">${humanizeEnumLabel(riskLevel)}</span>`,
+            `<p class="mb-2 text-body-secondary">${RISK_LEVEL_NOTE}</p>
+             ${riskDetail ? `
+                ${renderListItems(riskItems(risks.major_risks), 'Major risks', 'danger')}
+                ${renderListItems(riskItems(risks.minor_issues), 'Minor issues', 'warning')}
+                ${renderListItems(riskItems(risks.advantages), 'Advantages', 'success')}
+                ${risks.mitigation ? `<p class="mb-0"><span class="fw-semibold">Mitigation:</span> ${risks.mitigation}</p>` : ''}
+             ` : '<p class="mb-0">This provider listed no specific risks for this listing.</p>'}`),
+        _aiSection('fa-coins', 'Rental Market Analysis', '', rentalBody),
+        _aiSection('fa-arrow-trend-up', 'Market Price Dynamics',
+            `<span class="badge ${trendClass}">${humanizeEnumLabel(trend)}</span>`,
+            market.trend_analysis ? `<p class="mb-0">${market.trend_analysis}</p>` : ''),
+        _aiSection('fa-layer-group', 'Similar Objects', '', renderSimilarProperties(similar)),
+    ];
 
-            <!-- Market Dynamics -->
-            <div class="col-12">
-                <div class="card border-0 bg-body-tertiary">
-                    <div class="card-body p-3">
-                        <div class="d-flex justify-content-between align-items-start mb-2">
-                            <h6 class="mb-0"><i class="fas fa-arrow-trend-up me-2"></i>Market Price Dynamics</h6>
-                            <span class="badge ${trendClass}">${humanizeEnumLabel(trend)}</span>
-                        </div>
-                        <p class="mb-0 small">${market.trend_analysis || 'No market analysis available'}</p>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Similar Objects -->
-            <div class="col-12">
-                <div class="card border-0 bg-body-tertiary">
-                    <div class="card-body p-3">
-                        <h6 class="mb-2"><i class="fas fa-layer-group me-2"></i>Similar Objects</h6>
-                        ${renderSimilarProperties(similar)}
-                    </div>
-                </div>
-            </div>
-        </div>
-    `;
+    return `${_aiProvenanceHtml(meta)}${verdictStrip}${prosConsHtml}${rentalMissingLine}${sections.join('')}`;
 }
 
 function showTransientAlert(containerId, type, message, autoCloseMs = 4500) {
@@ -1862,7 +1953,7 @@ function _normalizeAnalysisData(raw) {
     return { _raw_text: String(raw) };
 }
 
-function renderAnalysisInto(targetId, rawData, placeholderId) {
+function renderAnalysisInto(targetId, rawData, placeholderId, meta) {
     const target = document.getElementById(targetId);
     if (!target) return;
 
@@ -1883,7 +1974,7 @@ function renderAnalysisInto(targetId, rawData, placeholderId) {
     }
 
     try {
-        target.innerHTML = renderStructuredAIAnalysis(normalized);
+        target.innerHTML = renderStructuredAIAnalysis(normalized, meta);
     } catch (e) {
         target.innerHTML = `<div class="alert alert-warning mb-0">Error rendering analysis: ${escapeHtml(String((e && e.message) || e))}</div>`;
     }
@@ -1895,6 +1986,11 @@ window.propertyData = {{ property.to_dict() | tojson }};
 // Existing analyses (if present)
 window.__EXISTING_CLAUDE_ANALYSIS__ = {% if property.ai_analysis %}{{ property.ai_analysis|tojson|safe }}{% else %}null{% endif %};
 window.__EXISTING_OPENAI_ANALYSIS__ = {% if openai_analysis %}{{ openai_analysis|tojson|safe }}{% else %}null{% endif %};
+/* Provenance for the verdict-first cards (D9): model + date from the stored
+   variant rows. Absent pieces render as "not recorded", never guessed. One
+   line per assignment — tests/js_harness.py neutralizes exactly that shape. */
+window.__CLAUDE_ANALYSIS_META__ = { model: {{ claude_model|tojson }}, dateIso: {{ (claude_analysis_date.isoformat() if claude_analysis_date else None)|tojson }} };
+window.__OPENAI_ANALYSIS_META__ = { model: {{ openai_model|tojson }}, dateIso: {{ (openai_analysis_date.isoformat() if openai_analysis_date else None)|tojson }} };
 /* Seeded from the server so a click that lands before the comparison request
    returns still knows whether ChatGPT is worth calling; refreshAiComparison()
    keeps it current afterwards. */
@@ -1903,8 +1999,8 @@ window.__OPENAI_CONFIGURED__ = {{ 'true' if openai_configured else 'false' }};
 // Initialize structured AI analysis on page load
 document.addEventListener('DOMContentLoaded', function() {
     refreshAiComparison();
-    renderAnalysisInto('ai-claude-structured-analysis', window.__EXISTING_CLAUDE_ANALYSIS__, 'ai-claude-placeholder');
-    renderAnalysisInto('ai-chatgpt-structured-analysis', window.__EXISTING_OPENAI_ANALYSIS__, 'ai-chatgpt-placeholder');
+    renderAnalysisInto('ai-claude-structured-analysis', window.__EXISTING_CLAUDE_ANALYSIS__, 'ai-claude-placeholder', window.__CLAUDE_ANALYSIS_META__);
+    renderAnalysisInto('ai-chatgpt-structured-analysis', window.__EXISTING_OPENAI_ANALYSIS__, 'ai-chatgpt-placeholder', window.__OPENAI_ANALYSIS_META__);
     wireCopyButtons();
 });
 
@@ -1986,8 +2082,12 @@ async function runClaudeAnalysis(propertyId) {
 
     const applyAnalysis = (analysis) => {
         window.__EXISTING_CLAUDE_ANALYSIS__ = analysis;
+        /* A run that just finished is dated now; its model id arrives with
+           the next comparison refresh, so it stays "not recorded" here
+           rather than inheriting the previous variant's. */
+        window.__CLAUDE_ANALYSIS_META__ = { model: null, dateIso: new Date().toISOString() };
         if (target) {
-            target.innerHTML = renderStructuredAIAnalysis(_normalizeAnalysisData(analysis));
+            target.innerHTML = renderStructuredAIAnalysis(_normalizeAnalysisData(analysis), window.__CLAUDE_ANALYSIS_META__);
         }
         if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
             window.IdealistaApp.showNotification('Claude analysis generated', 'success', 3000);
@@ -2056,13 +2156,15 @@ async function refreshAiComparison() {
     const statusEl = document.getElementById('ai-compare-status');
     const tableEl = document.getElementById('ai-compare-table');
     const tbody = document.getElementById('ai-compare-tbody');
+    const verdictsTbody = document.getElementById('ai-compare-verdicts-tbody');
+    const detailsEl = document.getElementById('ai-compare-details');
     const chatgptHint = document.getElementById('ai-chatgpt-config-hint');
 
     const claudeModelLabel = document.getElementById('ai-claude-model-label');
     const chatgptModelLabel = document.getElementById('ai-chatgpt-model-label');
     const baselineHead = document.getElementById('ai-compare-baseline-head');
 
-    if (!statusEl || !tableEl || !tbody) return;
+    if (!statusEl || !tableEl || !tbody || !verdictsTbody) return;
 
     const run = ++_aiCompareRun;
     statusEl.textContent = 'Loading…';
@@ -2149,50 +2251,66 @@ async function refreshAiComparison() {
         /* Built off-DOM and swapped in as one piece below, so no overlapping
            run can append onto rows another one already drew. */
         const rows = document.createDocumentFragment();
+        const verdictRows = document.createDocumentFragment();
 
         const ch = claude?.highlights || {};
         const gh = gpt?.highlights || {};
 
-        /* The verdicts come first: they are what both providers always answer,
-           and on a listing where neither model would price the rent they are
-           the whole of the comparison. */
-        _appendSection(rows, 'Verdicts');
-        _appendRow(
-            rows,
-            'Price verdict',
-            claudeGenerated ? _formatMetricValue(ch.price_verdict) : MISSING,
-            gptGenerated ? _formatMetricValue(gh.price_verdict) : MISSING,
-            MISSING
-        );
-        _appendRow(
-            rows,
-            'Investment potential',
-            claudeGenerated ? _formatMetricValue(ch.investment_potential_rating) : MISSING,
-            gptGenerated ? _formatMetricValue(gh.investment_potential_rating) : MISSING,
-            MISSING
-        );
-        _appendRow(
-            rows,
-            'Risk level',
-            claudeGenerated ? _formatMetricValue(ch.risk_level) : MISSING,
-            gptGenerated ? _formatMetricValue(gh.risk_level) : MISSING,
-            MISSING,
-            RISK_LEVEL_NOTE
-        );
-        _appendRow(
-            rows,
-            'Market trend',
-            claudeGenerated ? _formatMetricValue(ch.market_trend) : MISSING,
-            gptGenerated ? _formatMetricValue(gh.market_trend) : MISSING,
-            MISSING
-        );
-        _appendRow(
-            rows,
-            'Investment rating',
-            claudeGenerated ? _formatMetricValue(c.investment_rating) : MISSING,
-            gptGenerated ? _formatMetricValue(g.investment_rating) : MISSING,
-            _formatMetricValue(expected.investment_rating)
-        );
+        /* Verdict rows as badge pairs (D10). Everything is textContent-built —
+           a provider's enum is data, never markup. The "differs" chip on the
+           label is the panel's whole point: agreement is quiet, disagreement
+           is a mark you can scan for. */
+        const _verdictBadge = (raw, classFor) => {
+            const span = document.createElement('span');
+            span.className = `badge ${classFor ? classFor(raw) : 'bg-secondary'}`;
+            span.textContent = _formatMetricValue(raw);
+            return span;
+        };
+        const _appendVerdictRow = (label, claudeRaw, gptRaw, classFor, note, baselineRaw) => {
+            const tr = document.createElement('tr');
+            const td0 = document.createElement('td');
+            td0.className = 'fw-semibold small';
+            td0.textContent = label;
+            if (claudeGenerated && gptGenerated && claudeRaw !== gptRaw) {
+                const differs = document.createElement('span');
+                differs.className = 'badge text-bg-light border ms-1';
+                differs.textContent = '≠';
+                differs.title = 'The providers disagree here';
+                td0.appendChild(differs);
+            }
+            if (note) {
+                const hint = document.createElement('div');
+                hint.className = 'small fw-normal text-body-secondary';
+                hint.textContent = note;
+                td0.appendChild(hint);
+            }
+            const _sideCell = (generated, raw) => {
+                const td = document.createElement('td');
+                if (generated && raw !== null && raw !== undefined && raw !== '') {
+                    td.appendChild(_verdictBadge(raw, classFor));
+                } else {
+                    td.className = 'text-body-secondary';
+                    td.textContent = MISSING;
+                }
+                return td;
+            };
+            tr.appendChild(td0);
+            tr.appendChild(_sideCell(claudeGenerated, claudeRaw));
+            tr.appendChild(_sideCell(gptGenerated, gptRaw));
+            if (baselineAvailable) {
+                const td3 = document.createElement('td');
+                td3.className = 'text-body-secondary';
+                td3.textContent = _formatMetricValue(baselineRaw) || MISSING;
+                tr.appendChild(td3);
+            }
+            verdictRows.appendChild(tr);
+        };
+
+        _appendVerdictRow('Price verdict', ch.price_verdict, gh.price_verdict, getPriceVerdictClass);
+        _appendVerdictRow('Investment potential', ch.investment_potential_rating, gh.investment_potential_rating, () => 'bg-primary');
+        _appendVerdictRow('Risk level', ch.risk_level, gh.risk_level, () => 'bg-warning text-dark', RISK_LEVEL_NOTE);
+        _appendVerdictRow('Market trend', ch.market_trend, gh.market_trend, getPriceTrendClass);
+        _appendVerdictRow('Investment rating', c.investment_rating, g.investment_rating, () => 'bg-secondary', null, expected.investment_rating);
 
         _appendSection(rows, 'Rental figures');
         _appendRow(
@@ -2293,8 +2411,11 @@ async function refreshAiComparison() {
             MISSING
         );
 
+        verdictsTbody.innerHTML = '';
+        verdictsTbody.appendChild(verdictRows);
         tbody.innerHTML = '';
         tbody.appendChild(rows);
+        if (detailsEl) detailsEl.style.display = '';
 
         const claudeModel = data.claude_model || 'unknown';
         if (claudeModelLabel) claudeModelLabel.textContent = `Powered by Claude (${claudeModel})`;
@@ -2399,8 +2520,11 @@ async function generateChatGPTAnalysis(propertyId) {
 
         const applyAnalysis = (analysis) => {
             window.__EXISTING_OPENAI_ANALYSIS__ = analysis;
+            /* Same contract as the Claude side: fresh date, model id left to
+               the comparison endpoint. */
+            window.__OPENAI_ANALYSIS_META__ = { model: null, dateIso: new Date().toISOString() };
             if (target) {
-                target.innerHTML = renderStructuredAIAnalysis(_normalizeAnalysisData(analysis));
+                target.innerHTML = renderStructuredAIAnalysis(_normalizeAnalysisData(analysis), window.__OPENAI_ANALYSIS_META__);
             }
             if (window.IdealistaApp && typeof window.IdealistaApp.showNotification === 'function') {
                 window.IdealistaApp.showNotification('ChatGPT analysis generated', 'success');

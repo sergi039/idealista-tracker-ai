@@ -336,6 +336,76 @@
     padding: 0.25rem 0.45rem;
 }
 
+/* The beach line carries a place name where the target lines carry a 3-4
+   letter abbreviation; without a cap it is the widest thing in the cell and
+   drags the whole Travel column with it. text-truncate needs the bound. */
+.properties-travel-times .properties-beach-name {
+    max-width: 110px;
+}
+
+/* Walk-Score-style ring on the detail page (proposal D7): the SVG draws the
+   arc, this centers the number inside it. */
+.score-ring {
+    position: relative;
+    display: inline-flex;
+}
+
+.score-ring svg {
+    display: block;
+}
+
+.score-ring .score-ring-value {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Score breakdown rows (proposal D8): a fixed label column keeps the bars
+   comparable between rows, tabular numerals keep the math column steady. */
+.score-breakdown .score-breakdown-label {
+    flex: 0 0 44px;
+}
+
+.score-breakdown .score-breakdown-math {
+    font-variant-numeric: tabular-nums;
+    font-size: 0.72rem;
+}
+
+/* Verdict-first AI sections (proposal D9): a native <details> whose summary
+   row is the card header. The default triangle marker goes away in favor of
+   a caret that turns when the section opens. */
+.ai-section summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.ai-section summary::-webkit-details-marker {
+    display: none;
+}
+
+.ai-section summary .ai-section-caret {
+    transition: transform 0.15s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ai-section summary .ai-section-caret {
+        transition: none;
+    }
+}
+
+.ai-section[open] summary .ai-section-caret {
+    transform: rotate(90deg);
+}
+
 /* Column geometry for the list table. It lives here instead of in inline
    `style="min-width: … !important"` attributes because the tablet media
    queries further down have to relax these widths, and no stylesheet can

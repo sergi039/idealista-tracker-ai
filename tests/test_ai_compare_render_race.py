@@ -112,19 +112,35 @@ _NEW = _payload("EXCELLENT", "HIGH")
 
 @pytest.mark.parametrize("template_name", TEMPLATES)
 class TestOverlappingRefreshesUnderNode:
+    # The property template split its verdict rows into an always-visible
+    # tbody whose cells are badges (proposal D10, 2026-08-13); the land
+    # template still renders one table. Reading both tbodies — the second is
+    # simply empty where it does not exist — keeps one driver for both, and a
+    # badge cell's text lives in its child span.
+    _READ_BOTH = (
+        "const badgeRowsOf = (id) => document.getElementById(id).childNodes.map(\n"
+        "  (tr) => tr.childNodes.map(\n"
+        "    (td) => td.textContent || (td.childNodes[0] ? td.childNodes[0].textContent : '')\n"
+        "  )\n"
+        ");\n"
+        "const allRows = () => rowsOf('ai-compare-tbody')"
+        ".concat(badgeRowsOf('ai-compare-verdicts-tbody'));\n"
+    )
+
     def _overlap(self, template_name: str) -> dict:
         """Start two refreshes, answer the newer one first, the older last."""
         driver = (
             f"const OLD = {json.dumps(_OLD)};\n"
             f"const NEW = {json.dumps(_NEW)};\n"
-            "const first = refreshAiComparison();\n"
+            + self._READ_BOTH
+            + "const first = refreshAiComparison();\n"
             "const second = refreshAiComparison();\n"
             "Promise.resolve().then(() => {\n"
             "  respond(1, NEW);\n"
             "  respond(0, OLD);\n"
             "});\n"
             "Promise.all([first, second]).then(() => {\n"
-            "  console.log(JSON.stringify({ rows: rowsOf('ai-compare-tbody') }));\n"
+            "  console.log(JSON.stringify({ rows: allRows() }));\n"
             "});\n"
         )
         return run_node(template_name, driver)
@@ -152,11 +168,12 @@ class TestOverlappingRefreshesUnderNode:
         """The guard must not make the ordinary one-refresh path draw nothing."""
         driver = (
             f"const NEW = {json.dumps(_NEW)};\n"
-            "const only = refreshAiComparison();\n"
+            + self._READ_BOTH
+            + "const only = refreshAiComparison();\n"
             "Promise.resolve().then(() => respond(0, NEW));\n"
             "only.then(() => {\n"
             "  console.log(JSON.stringify({\n"
-            "    rows: rowsOf('ai-compare-tbody'),\n"
+            "    rows: allRows(),\n"
             "    display: document.getElementById('ai-compare-table').style.display,\n"
             "  }));\n"
             "});\n"

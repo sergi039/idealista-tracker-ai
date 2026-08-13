@@ -243,20 +243,30 @@ class TestThePanelShowsWhatTheBadgeIsBasedOn:
                 "baseline": {"available": False, "reason": "none in this test"},
             },
         }
+        # The verdict rows moved to their own always-visible tbody with badge
+        # cells (proposal D10, 2026-08-13); a badge cell's text lives in its
+        # child span, so the reader falls through to it.
         result = run_node(
             TEMPLATE,
             f"const PAYLOAD = {json.dumps(payload)};\n"
+            "const badgeRowsOf = (id) => document.getElementById(id).childNodes.map(\n"
+            "  (tr) => tr.childNodes.map(\n"
+            "    (td) => td.textContent || (td.childNodes[0] ? td.childNodes[0].textContent : '')\n"
+            "  )\n"
+            ");\n"
             "refreshAiComparison().then(() => {\n"
             "  console.log(JSON.stringify({\n"
+            "    verdictRows: badgeRowsOf('ai-compare-verdicts-tbody'),\n"
             "    rows: rowsOf('ai-compare-tbody'),\n"
-            "    notes: notesOf('ai-compare-tbody'),\n"
+            "    notes: notesOf('ai-compare-verdicts-tbody'),\n"
             "  }));\n"
             "});\n"
             "Promise.resolve().then(() => respond(0, PAYLOAD));\n",
         )
 
+        verdict_rows = {row[0]: row for row in result["verdictRows"] if row}
+        assert verdict_rows["Risk level"][1:3] == ["Medium", "High"]
         rows = {row[0]: row for row in result["rows"] if row}
-        assert rows["Risk level"][1:3] == ["Medium", "High"]
         assert rows["Key risks"][1:3] == ["Construction obligation", "—"], (
             "a provider that listed no risks must read as missing, not as none"
         )
@@ -270,5 +280,8 @@ def test_the_note_is_written_once_and_used_in_both_places():
     source = read_template(TEMPLATE)
 
     assert source.count("const RISK_LEVEL_NOTE =") == 1
-    assert source.count("${RISK_LEVEL_NOTE}") == 1  # the panel
-    assert source.count("            RISK_LEVEL_NOTE\n") == 1  # the table row
+    # The verdict-first panel (D9) states it twice — the strip badge's tooltip
+    # and the Risk Assessment body — and the comparison's verdict row takes it
+    # as an argument. Still one definition, shared by every surface.
+    assert source.count("${RISK_LEVEL_NOTE}") == 2  # strip tooltip + panel body
+    assert source.count(", RISK_LEVEL_NOTE)") == 1  # the comparison verdict row
