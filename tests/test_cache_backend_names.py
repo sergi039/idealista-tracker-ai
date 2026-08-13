@@ -13,6 +13,12 @@ show as a red required `pytest` check.
 
 These tests fail if the short names come back, and if `init_cache` ever emits a
 DeprecationWarning again.
+
+The second half covers where that name is *read* from. Both reporting helpers
+used to read `cache.config` - the `Cache()` constructor argument, which this
+module never sets - so `get_cache_stats()` always answered "unknown" and
+`clear_cache_pattern()` always took its unsupported branch, reporting success at
+clearing nothing on a Redis deployment.
 """
 
 from __future__ import annotations
@@ -27,8 +33,45 @@ from utils.cache import (
     REDIS_CACHE_BACKEND,
     SIMPLE_CACHE_BACKEND,
     _backend_name,
+    active_backend_name,
+    cache,
+    clear_cache_pattern,
+    get_cache_stats,
     init_cache,
 )
+
+
+class _FakeRedisClient:
+    """The two attributes the Redis branches actually use."""
+
+    def __init__(self, keys=()):
+        self.keys = list(keys)
+        self.deleted = []
+
+    def scan_iter(self, match=None):
+        self.match = match
+        return iter(self.keys)
+
+    def delete(self, key):
+        self.deleted.append(key)
+
+    def info(self):
+        return {
+            "used_memory_human": "1.5M",
+            "connected_clients": 3,
+            "total_commands_processed": 42,
+        }
+
+
+def _app_with_redis_backend(monkeypatch, client):
+    """An app whose configured cache object looks like the Redis backend."""
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+    app = Flask(__name__)
+    init_cache(app)
+
+    fake_backend = type("FakeRedisCache", (), {"_write_client": client})()
+    app.extensions["cache"][cache] = fake_backend
+    return app
 
 
 def _init_and_collect_warnings(monkeypatch, redis_url):
@@ -107,3 +150,75 @@ class TestBackendNameReadsEitherSpelling:
             REDIS_CACHE_BACKEND: "redis",
             SIMPLE_CACHE_BACKEND: "simple",
         }
+
+
+class TestTheBackendIsReadFromTheRunningApp:
+    """`cache.config` is the constructor argument and is always None here."""
+
+    def test_it_reads_the_app_config_not_the_cache_config(self, monkeypatch):
+        monkeypatch.delenv("REDIS_URL", raising=False)
+        app = Flask(__name__)
+        init_cache(app)
+
+        assert cache.config is None, (
+            "if flask-caching starts populating this, revisit active_backend_name"
+        )
+        with app.app_context():
+            assert active_backend_name() == "simple"
+
+    def test_a_redis_app_reports_redis(self, monkeypatch):
+        app = _app_with_redis_backend(monkeypatch, _FakeRedisClient())
+
+        with app.app_context():
+            assert active_backend_name() == "redis"
+
+    def test_outside_an_application_context_it_answers_unknown(self):
+        assert active_backend_name() == "unknown"
+
+
+class TestCacheStatsReportTheRealBackend:
+    def test_the_in_memory_backend_is_named(self, monkeypatch):
+        monkeypatch.delenv("REDIS_URL", raising=False)
+        app = Flask(__name__)
+        init_cache(app)
+
+        with app.app_context():
+            assert get_cache_stats() == {"backend": "simple", "available": True}
+
+    def test_redis_stats_are_collected(self, monkeypatch):
+        client = _FakeRedisClient()
+        app = _app_with_redis_backend(monkeypatch, client)
+
+        with app.app_context():
+            stats = get_cache_stats()
+
+        assert stats["backend"] == "redis"
+        assert stats["used_memory"] == "1.5M"
+        assert stats["connected_clients"] == 3
+        assert stats["total_commands"] == 42
+
+
+class TestPatternClearingReachesRedis:
+    def test_it_deletes_every_matching_key(self, monkeypatch):
+        client = _FakeRedisClient(keys=["api:a", "api:b"])
+        app = _app_with_redis_backend(monkeypatch, client)
+
+        with app.app_context():
+            clear_cache_pattern("api:*")
+
+        assert client.match == "api:*"
+        assert client.deleted == ["api:a", "api:b"], (
+            "the Redis branch was never reached - this is the CACHE-002 defect"
+        )
+
+    def test_the_in_memory_backend_clears_nothing_and_says_so(
+        self, monkeypatch, caplog
+    ):
+        monkeypatch.delenv("REDIS_URL", raising=False)
+        app = Flask(__name__)
+        init_cache(app)
+
+        with app.app_context(), caplog.at_level("WARNING"):
+            clear_cache_pattern("api:*")
+
+        assert "not supported" in caplog.text
