@@ -387,10 +387,12 @@ and TODO.md; respect it if you ever run both side by side.
   Three jobs — `pytest` does `uv sync --frozen` + `uv run pytest tests/ -v`
   on Python 3.11; `no-source-bundles` fails when an archive or source dump
   is tracked (issue #29); `ruff` runs `ruff check .` and `ruff format
-  --check .` on the same uv setup (issue #81). `pytest` and
-  `no-source-bundles` are *required* status checks on `main` (strict: the
-  branch must be up to date); `ruff` is not required unless the owner adds
-  the context to branch protection, so read the run before merging.
+  --check .` on the same uv setup (issue #81). **All three are *required*
+  status checks on `main`** (strict: the branch must be up to date), so a
+  red `ruff` blocks the merge exactly as a red `pytest` does — run
+  `uv run ruff check .` and `uv run ruff format --check .` before you push,
+  or the PR costs a cycle. `ruff` was the optional one until the owner added
+  the context; this file said so until issue #264.
 - Run `uv run pytest tests/ -q` locally and paste the real output before
   claiming done. That is a standing owner requirement in its own right,
   not a stand-in for CI.

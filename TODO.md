@@ -30,8 +30,9 @@ This is the active backlog for the **new universal build** (`http://localhost:50
 ## P1 — CI / quality gates
 
 - [x] Add minimal CI workflow (GitHub Actions): `.github/workflows/ci.yml` runs `uv sync --frozen` + `uv run pytest tests/ -v` on push to `main` and on every PR, actions pinned by SHA. [#31](https://github.com/sergi039/idealista-tracker-ai/issues/31) closed 2026-08-07. Source: AgentsRoom audit 2026-08-07 (`Skills/docs/agentsroom-projects.md` §6).
-- [ ] Follow-ups noted in #31 but not built: coverage step (`pytest tests/ --cov=app --cov-report=term`) and a `ruff check` lint job.
-- [ ] Make the CI jobs (`pytest`, `no-source-bundles`) required status checks on `main` — they run on every PR today, but nothing blocks a merge over a red run.
+- [x] The `ruff check` lint job noted as a #31 follow-up: built in issue #81.
+- [ ] The other #31 follow-up, still not built: a coverage step (`pytest tests/ --cov=app --cov-report=term`).
+- [x] Make the CI jobs required status checks on `main`. Done, and wider than written here: `pytest`, `no-source-bundles` **and** `ruff` are all required, strict (the branch must be up to date). A red run of any of the three blocks the merge.
 
 ## P2 — UX polish
 
