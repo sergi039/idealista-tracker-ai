@@ -58,6 +58,31 @@ class TestUnrecognizedTextPassesThrough:
         result = clean_description_for_display(text)
         assert result == {"text": text, "stripped": False}
 
+    def test_leading_figures_without_an_alert_opening_stay(self):
+        # Diff-review finding (2026-08-13): the token loop must be licensed
+        # by a recognized opener, or a listing's own leading figure is eaten.
+        for text in (
+            "320 m2 plot with amazing views",
+            "99,000 € negotiable. Sale of country estate",
+            "20 minutes from Oviedo, this farm has everything",
+        ):
+            assert clean_description_for_display(text) == {
+                "text": text,
+                "stripped": False,
+            }
+
+    def test_tokens_never_bite_into_words(self):
+        # "3 bed" must not match inside "3 bedroom", "20 m" not inside
+        # "20 minutes" — the (?=\s|$) boundary pins it (diff review).
+        text = (
+            "Hello Sergioalicante, 1 new listing that matches your search "
+            "criteria 89,000 € 234 €/m² 4 bed. 380 m2 3 bedroom stone house "
+            "with garden"
+        )
+        result = clean_description_for_display(text)
+        assert result["stripped"] is True
+        assert result["text"] == "3 bedroom stone house with garden"
+
     def test_greeting_alone_is_not_boilerplate(self):
         # "Hello" without the alert's `<name>,` shape stays.
         text = "Hello and welcome to this unique property in Navia."

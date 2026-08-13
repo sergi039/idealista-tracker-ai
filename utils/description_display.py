@@ -30,7 +30,10 @@ _PRICE_DROP_RE = re.compile(
 
 # The token run after the opening: prices, areas, bed counts, €/m², the ↓N%
 # drop marker. Numbers and units only — words such as "urban" or "buildable"
-# stay, because a real description can begin with them.
+# stay, because a real description can begin with them. The (?=\s|$) boundary
+# is load-bearing: without it "3 bed" matched inside "3 bedroom" and "20 m"
+# inside "20 minutes", so the loop bit into the listing's own first word
+# (found by the Phase-1 diff review, 2026-08-13).
 _NOISE_TOKEN_RE = re.compile(
     r"^(?:"
     r"[\d.,]+\s*€(?:/m²|/m2)?"  # 99,000 €  ·  309 €/m²
@@ -38,7 +41,7 @@ _NOISE_TOKEN_RE = re.compile(
     r"|\d+\s*bed\.?"  # 5 bed.
     r"|↓\s*\d+%"  # ↓10%
     r"|€"
-    r")\s*",
+    r")(?=\s|$)\s*",
     re.IGNORECASE,
 )
 
@@ -57,6 +60,13 @@ def clean_description_for_display(text) -> dict:
     cleaned = text
     for pattern in (_SALUTATION_RE, _PRICE_DROP_RE, _CRITERIA_RE):
         cleaned = pattern.sub("", cleaned, count=1)
+
+    # Only an opening the patterns positively recognized licenses the token
+    # loop: a description that merely *starts* with a figure ("320 m2 plot
+    # with views") is the listing's own text, and eating its numbers is the
+    # guessing this module promises not to do (diff review, 2026-08-13).
+    if cleaned == text:
+        return {"text": text, "stripped": False}
 
     # The price-drop alert repeats the figures after the sentence; the
     # criteria alert leads with them. Either way they are tokens, eaten one

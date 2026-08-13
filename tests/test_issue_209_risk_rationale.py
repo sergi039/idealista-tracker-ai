@@ -275,6 +275,63 @@ class TestThePanelShowsWhatTheBadgeIsBasedOn:
         assert any("not calibrated between providers" in note for note in notes)
 
 
+class TestTheDisagreeChipMeansDisagreement:
+    """The ≠ chip fires only on two answers that differ as values: a case
+    variant is the same answer, and a missing answer disagrees with nothing
+    (Phase-1 diff review, 2026-08-13)."""
+
+    def _notes_for(self, claude_highlights, gpt_highlights):
+        payload = {
+            "success": True,
+            "has_claude": True,
+            "has_chatgpt": True,
+            "openai_configured": True,
+            "claude_model": "claude-test",
+            "chatgpt_model": "gpt-test",
+            "comparison": {
+                "claude": {
+                    "metrics": {},
+                    "highlights": claude_highlights,
+                    "schema": {"found": 8, "total": 8},
+                    "numeric_coverage": {"found": 0, "total": 4},
+                },
+                "chatgpt": {
+                    "metrics": {},
+                    "highlights": gpt_highlights,
+                    "schema": {"found": 8, "total": 8},
+                    "numeric_coverage": {"found": 0, "total": 4},
+                },
+                "expected": None,
+                "baseline": {"available": False, "reason": "none in this test"},
+            },
+        }
+        result = run_node(
+            TEMPLATE,
+            f"const PAYLOAD = {json.dumps(payload)};\n"
+            "refreshAiComparison().then(() => {\n"
+            "  console.log(JSON.stringify({\n"
+            "    notes: notesOf('ai-compare-verdicts-tbody'),\n"
+            "  }));\n"
+            "});\n"
+            "Promise.resolve().then(() => respond(0, PAYLOAD));\n",
+        )
+        return [note for row in result["notes"] for note in row]
+
+    def test_case_variants_are_the_same_answer(self):
+        notes = self._notes_for({"risk_level": "MEDIUM"}, {"risk_level": "Medium"})
+        assert "≠" not in notes
+
+    def test_a_missing_answer_is_not_a_disagreement(self):
+        notes = self._notes_for({"market_trend": "GROWING"}, {"market_trend": None})
+        assert "≠" not in notes
+
+    def test_two_different_answers_still_flag(self):
+        notes = self._notes_for(
+            {"price_verdict": "UNDERPRICED"}, {"price_verdict": "OVERPRICED"}
+        )
+        assert "≠" in notes
+
+
 def test_the_note_is_written_once_and_used_in_both_places():
     """Two wordings drift apart; the panel and the table share the constant."""
     source = read_template(TEMPLATE)
