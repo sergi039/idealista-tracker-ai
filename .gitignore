@@ -64,9 +64,5 @@ static/all_code.txt
 *.tar.gz
 *.tgz
 .mcp.json
-.agentsroom/handoff-transcript-*.txt
-.agentsroom/handoff-summary-*.md
-# AgentsRoom: machine-local binding/caches and agent worktrees (see Skills/docs/agentsroom-setup.md)
-.agentsroom/
 .worktrees/
 .kimi-code/mcp.json
