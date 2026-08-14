@@ -611,6 +611,10 @@ def test_manual_enrichment_measures_before_it_scores(app, monkeypatch):
             scoring_service=StubScoring(),
             sea_distance_service=StubSea(),
             enrichment_service=StubAmenities(),
+            # The sea-view step (#299) reaches Overpass/OpenTopoData through
+            # its own module; stubbed for the same offline reason as
+            # StubAmenities. Its wiring has its own suite.
+            sea_view_calculator=lambda prop, commit=False: None,
         ).enrich_property(prop)
 
         property_id = prop.id

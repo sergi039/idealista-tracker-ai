@@ -43,6 +43,7 @@ class PropertyEnrichmentService:
         enrichment_service: Optional[EnrichmentService] = None,
         quality_of_life_service: Optional["QualityOfLifeService"] = None,
         pool_service: Optional["PoolService"] = None,
+        sea_view_calculator=None,
     ):
         self.location_service = location_service or PropertyLocationService()
         self.travel_service = travel_service or PropertyTravelService()
@@ -61,6 +62,15 @@ class PropertyEnrichmentService:
         self.pool_service = pool_service or PoolService(
             enrichment_service=self.enrichment_service,
             travel_service=self.travel_service,
+        )
+        # The sea-view half is module functions, not a class, but the
+        # injection point exists for the reason every other half has one: a
+        # test replaces the step that reaches Overpass and OpenTopoData
+        # through its own module, whose transport the amenity mocks above
+        # never cover. The default is the same evaluate+apply pair the
+        # backfill uses (services/sea_view_service.py).
+        self.sea_view_calculator = (
+            sea_view_calculator or sea_view_service.calculate_for_property
         )
 
     def enrich_free_sources(self, prop: Property, *, commit: bool) -> None:
@@ -113,7 +123,7 @@ class PropertyEnrichmentService:
         # either way -- `apply_to_property` refuses to overwrite
         # `source == "manual"` (see services/sea_view_service.py).
         try:
-            sea_view_service.calculate_for_property(prop, commit=commit)
+            self.sea_view_calculator(prop, commit=commit)
         except Exception as e:
             logger.warning(
                 "Sea-view evaluation failed for %s: %s",
