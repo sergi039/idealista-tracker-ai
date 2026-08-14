@@ -35,7 +35,10 @@ from services.profile_selection import (
     parse_profile_selection,
     resolve_profile_selection,
 )
-from utils.idealista_extractors import MUNICIPALITY_TRUNCATION_MARKERS
+from utils.idealista_extractors import (
+    MUNICIPALITY_TRUNCATION_MARKERS,
+    is_truncated_municipality,
+)
 from utils.redirects import safe_referrer_redirect
 
 logger = logging.getLogger(__name__)
@@ -2379,7 +2382,15 @@ def municipalities():
         rows = service.build_rows(properties)
         rows = service.sort_rows(rows, sort_by, descending=(order == "desc"))
 
-        unnamed = sum(1 for p in properties if not (p.municipality or "").strip())
+        # Truncated email artifacts ("Ovi...", issue #298) count with the
+        # unnamed listings: build_rows skips both, for the same reason -- a
+        # value that names no municipality cannot be compared by one.
+        unnamed = sum(
+            1
+            for p in properties
+            if not (p.municipality or "").strip()
+            or is_truncated_municipality(p.municipality)
+        )
         return render_template(
             "municipalities.html",
             rows=rows,

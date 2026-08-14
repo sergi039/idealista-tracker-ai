@@ -27,6 +27,7 @@ from utils.idealista_extractors import (
     extract_url,
     is_truncated_municipality,
     resolve_truncated_municipality,
+    truncation_stem_ends_at_connective,
 )
 
 logger = logging.getLogger(__name__)
@@ -263,6 +264,21 @@ class PropertyIMAPService:
         options exclude it (routes/main_routes.py).
         """
         if not municipality or not is_truncated_municipality(municipality):
+            return municipality
+
+        if truncation_stem_ends_at_connective(municipality):
+            # The wrong-pick shape: the stem ends at a generic connective
+            # (de/del/la/...), where "exactly one stored name starts with it"
+            # proves nothing -- the universe is only what ingestion has seen,
+            # so "San Juan de..." for the never-stored San Juan de la Arena
+            # would resolve to the stored San Juan de Alicante. Keep the
+            # marker; the repair tool takes an explicit operator mapping.
+            logger.warning(
+                "Keeping truncated municipality %r verbatim: its stem ends at "
+                "a generic connective, where a unique prefix match would pick "
+                "whichever sibling ingestion happens to know",
+                municipality,
+            )
             return municipality
 
         known = [
