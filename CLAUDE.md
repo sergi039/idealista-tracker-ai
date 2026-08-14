@@ -57,6 +57,13 @@ and the test harness inherits `PATH`, so which one it runs is not pinned. CI
 is green on the same commits. Confirm it is that crash and that CI agrees
 before you consider `SKIP_LOCAL_CI=1`, and say which you did.
 
+**Three clean re-runs in isolation do not clear it** — that is the trap. The
+file passes alone in half a second every time; a session that re-ran it three
+times, got green three times and wrote "flake" was reading the evidence
+backwards, because a crash that only happens under a full-suite run cannot be
+reproduced by not running the full suite. Read the failure message instead:
+this one names the signal and the line.
+
 The hook's shared-`.git/config` canary (issue #74) compares config keys and
 skips the four a parallel session writes (`branch.<name>.remote`, `.merge`,
 `.rebase`, `.vscode-merge-base`): sessions share this clone, so a parallel
