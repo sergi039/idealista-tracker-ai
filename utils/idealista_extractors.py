@@ -1,6 +1,6 @@
 import html
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 _PROPERTY_ID_RE = re.compile(r"/inmueble/(\d+)", re.IGNORECASE)
@@ -416,6 +416,108 @@ def extract_municipality_from_title(title: Optional[str]) -> Optional[str]:
     if len(candidate) > 80:
         return None
     return candidate or None
+
+
+# Idealista alert emails cut long location strings mid-name and append an
+# ellipsis -- sometimes three dots, sometimes the single U+2026 character.
+# Ingestion used to store that verbatim, so the /properties municipality
+# filter offered "Ovi..." and "Oviedo" as two different municipalities, and
+# filtering by the full name silently missed the truncated rows (issue #298).
+# The marker itself is the truncation flag: a stored municipality ending in
+# one is explicitly non-canonical, never offered as a filter choice
+# (routes/main_routes.py), and resolved to the full name only when exactly
+# one already-known municipality can establish it.
+MUNICIPALITY_TRUNCATION_MARKERS = ("...", "…")
+
+# Below this many characters a "unique" prefix match proves nothing: with a
+# handful of municipalities per letter, "O..." would resolve to whatever
+# single O-name the table happens to hold today. 3 keeps the real cases
+# ("Ovi..." -> "Oviedo") and refuses the coin flips.
+MIN_TRUNCATION_STEM_LEN = 3
+
+# A stem cut at a bare connective is the wrong-pick shape: Spanish
+# municipality names share long generic prefixes, and the "known" universe is
+# only what ingestion happens to have stored, not Spain. "San Juan de..." for
+# the never-stored San Juan de la Arena would match the stored San Juan de
+# Alicante uniquely -- and confidently record the wrong region; same shape for
+# "Soto de..." -> "Soto Del Barco" and "San Martin de..." -> "San Martín del
+# Rey Aurelio". A stem ending anywhere inside a distinctive word ("Ovi",
+# "Rojal", "...Huerces - Ru") does not have this failure mode, so
+# auto-resolution stays for those.
+TRUNCATION_STEM_CONNECTIVES = frozenset({"de", "del", "la", "las", "los", "el"})
+
+
+def is_truncated_municipality(value: Optional[str]) -> bool:
+    """Whether the email's truncation marker ends this municipality value."""
+    text = str(value or "").rstrip()
+    return text.endswith(MUNICIPALITY_TRUNCATION_MARKERS)
+
+
+def municipality_truncation_stem(value: Optional[str]) -> Optional[str]:
+    """The name fragment in front of the truncation marker, or None.
+
+    Trailing whitespace goes with the marker: the email cut the name at an
+    arbitrary point, so "Mieres de ..." must offer the stem "Mieres de", not
+    "Mieres de " (which is a prefix of no full name).
+    """
+    if not is_truncated_municipality(value):
+        return None
+    stem = str(value).rstrip().rstrip(".…").rstrip()
+    return stem or None
+
+
+def truncation_stem_ends_at_connective(value: Optional[str]) -> bool:
+    """Whether the truncated stem's last full word is a generic connective.
+
+    See TRUNCATION_STEM_CONNECTIVES: such a stem is exactly where a unique
+    prefix match picks whichever sibling ingestion happens to know, so
+    `resolve_truncated_municipality` refuses it and the repair tool asks for
+    an explicit operator mapping instead.
+    """
+    stem = municipality_truncation_stem(value)
+    if stem is None:
+        return False
+    words = stem.casefold().split()
+    return bool(words) and words[-1] in TRUNCATION_STEM_CONNECTIVES
+
+
+def resolve_truncated_municipality(
+    value: Optional[str], known: Iterable[Optional[str]]
+) -> Optional[str]:
+    """Resolve a truncated municipality against already-known full names.
+
+    Returns the full name when exactly one municipality in `known` starts
+    with the truncated stem, and None otherwise -- an ambiguous or unmatched
+    stem is never guessed (the #98 rule: missing data stays explicit).
+    Matching is casefolded because the email and the stored rows disagree on
+    casing ("Mieres del Cam..." vs the stored "Mieres Del Camino"), and
+    `known` entries that are themselves truncated are never resolution
+    targets. Stored rows also disagree on casing with each other ("Corvera
+    De Asturias" / "Corvera de Asturias"), so uniqueness is measured on the
+    casefolded name and the deterministic `min()` surface form is returned.
+    A stem whose last word is a bare connective ("San Juan de...") is
+    refused outright -- see TRUNCATION_STEM_CONNECTIVES for the wrong-pick
+    hazard that shape carries.
+    """
+    stem = municipality_truncation_stem(value)
+    if stem is None or len(stem) < MIN_TRUNCATION_STEM_LEN:
+        return None
+    if truncation_stem_ends_at_connective(value):
+        return None
+
+    folded_stem = stem.casefold()
+    matches: Dict[str, set] = {}
+    for name in known:
+        cleaned = str(name or "").strip()
+        if not cleaned or is_truncated_municipality(cleaned):
+            continue
+        if cleaned.casefold().startswith(folded_stem):
+            matches.setdefault(cleaned.casefold(), set()).add(cleaned)
+
+    if len(matches) != 1:
+        return None
+    (surface_forms,) = matches.values()
+    return min(surface_forms)
 
 
 def extract_bedrooms(text: str) -> Optional[int]:

@@ -25,6 +25,9 @@ from utils.idealista_extractors import (
     extract_price_change,
     extract_property_attributes,
     extract_url,
+    is_truncated_municipality,
+    resolve_truncated_municipality,
+    truncation_stem_ends_at_connective,
 )
 
 logger = logging.getLogger(__name__)
@@ -245,6 +248,59 @@ class PropertyIMAPService:
                 return {str(c).strip().lower() for c in raw if str(c).strip()}
             return set()
 
+    @staticmethod
+    def _resolve_municipality_truncation(
+        municipality: Optional[str],
+    ) -> Optional[str]:
+        """Resolve a municipality the alert email cut off ("Ovi...").
+
+        Idealista truncates long location strings with an ellipsis and this
+        pipeline stored them verbatim, so the /properties filter offered
+        "Ovi..." and "Oviedo" as two municipalities and filtering by the full
+        name missed the truncated rows (issue #298). When exactly one
+        municipality already stored starts with the truncated stem, that is
+        the name the email cut; anything else keeps the marker -- the value
+        stays visibly non-canonical rather than guessed, and the filter
+        options exclude it (routes/main_routes.py).
+        """
+        if not municipality or not is_truncated_municipality(municipality):
+            return municipality
+
+        if truncation_stem_ends_at_connective(municipality):
+            # The wrong-pick shape: the stem ends at a generic connective
+            # (de/del/la/...), where "exactly one stored name starts with it"
+            # proves nothing -- the universe is only what ingestion has seen,
+            # so "San Juan de..." for the never-stored San Juan de la Arena
+            # would resolve to the stored San Juan de Alicante. Keep the
+            # marker; the repair tool takes an explicit operator mapping.
+            logger.warning(
+                "Keeping truncated municipality %r verbatim: its stem ends at "
+                "a generic connective, where a unique prefix match would pick "
+                "whichever sibling ingestion happens to know",
+                municipality,
+            )
+            return municipality
+
+        known = [
+            row[0]
+            for row in db.session.query(Property.municipality).distinct().all()
+            if row[0]
+        ]
+        resolved = resolve_truncated_municipality(municipality, known)
+        if resolved:
+            logger.info(
+                "Resolved truncated municipality %r to stored full name %r",
+                municipality,
+                resolved,
+            )
+            return resolved
+        logger.info(
+            "Keeping truncated municipality %r verbatim: no unique stored "
+            "full name starts with its stem",
+            municipality,
+        )
+        return municipality
+
     def get_idealista_emails(
         self, max_results: Optional[int] = None
     ) -> List[Dict[str, Any]]:
@@ -460,7 +516,7 @@ class PropertyIMAPService:
                             or (subject or "").strip()
                             or None
                         )
-                        municipality = (
+                        municipality = self._resolve_municipality_truncation(
                             extract_municipality_from_title(listing_title)
                             if listing_title
                             else None

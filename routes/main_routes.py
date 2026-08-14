@@ -19,7 +19,7 @@ from flask import (
 # below would answer 500 for it: every one of them re-raises it first so an
 # unknown id stays a 404 (issue #136).
 from werkzeug.exceptions import HTTPException
-from sqlalchemy import or_, case, func
+from sqlalchemy import and_, or_, case, func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
@@ -34,6 +34,10 @@ from services.profile_selection import (
     empty_profile_selection,
     parse_profile_selection,
     resolve_profile_selection,
+)
+from utils.idealista_extractors import (
+    MUNICIPALITY_TRUNCATION_MARKERS,
+    is_truncated_municipality,
 )
 from utils.redirects import safe_referrer_redirect
 
@@ -700,6 +704,23 @@ def _unclassified_clause(column):
     return or_(column.is_(None), column == "")
 
 
+def _not_truncated_clause(column):
+    """Values that do not end in the alert email's truncation marker.
+
+    Idealista alert emails cut long municipality names to "Ovi..." and
+    ingestion stored them verbatim (issue #298). Ingestion now resolves those
+    against stored full names when the match is unique, but an unresolvable
+    one keeps its marker -- explicitly truncated, never guessed -- and must
+    not be offered in the dropdown as a municipality of its own next to the
+    full names. `_keep_applied_choice` still keeps one that is already
+    applied, so a hand-typed URL keeps agreeing with its dropdown. The
+    markers hold no LIKE wildcard (`%`/`_`), so no escaping is needed.
+    """
+    return and_(
+        *[column.notlike(f"%{marker}") for marker in MUNICIPALITY_TRUNCATION_MARKERS]
+    )
+
+
 def _visible_distinct_values(column, profile_selection, extra_filter=None):
     """Distinct non-empty values of `column` within the subscriptions shown."""
     query = apply_profile_filter(
@@ -775,7 +796,11 @@ def _property_filter_options(
             subtype_filter,
         ),
         "municipalities": _keep_applied_choice(
-            _visible_distinct_values(Property.municipality, profile_selection),
+            _visible_distinct_values(
+                Property.municipality,
+                profile_selection,
+                _not_truncated_clause(Property.municipality),
+            ),
             municipality_filter,
         ),
         "has_unclassified_category": _selection_has_unclassified(
@@ -2357,7 +2382,15 @@ def municipalities():
         rows = service.build_rows(properties)
         rows = service.sort_rows(rows, sort_by, descending=(order == "desc"))
 
-        unnamed = sum(1 for p in properties if not (p.municipality or "").strip())
+        # Truncated email artifacts ("Ovi...", issue #298) count with the
+        # unnamed listings: build_rows skips both, for the same reason -- a
+        # value that names no municipality cannot be compared by one.
+        unnamed = sum(
+            1
+            for p in properties
+            if not (p.municipality or "").strip()
+            or is_truncated_municipality(p.municipality)
+        )
         return render_template(
             "municipalities.html",
             rows=rows,
