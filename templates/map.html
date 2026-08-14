@@ -403,28 +403,49 @@ document.addEventListener('DOMContentLoaded', function() {
     // popup the full 50px from the left and left it hanging 46px past the right
     // edge, cutting off the price, the municipality and the Google Maps button.
     // So ask only for the clearance the map can still give once the popup fits.
-    function autoPanPaddingFor(mapWidth) {
+    function autoPanPaddingFor(mapWidth, mapHeight) {
         // The popup's width is fixed rather than content-driven: maxWidth (300)
         // caps the content, and the wrapper adds its margins (26 + 16) plus its
         // own padding and border. Measured at 345.
         const POPUP_BOX_WIDTH = 345;
+        // Height does vary with content. This is a generous upper bound —
+        // measured 222 for a listing with six travel badges — and it is used
+        // only to check that the vertical clearance below is affordable.
+        const POPUP_BOX_HEIGHT = 280;
         const WANTED_LEFT = 50;   // clears the zoom control
         const WANTED_RIGHT = 75;  // clears the close button over the layer switcher
+        // Measured down from the map's top edge at 375px: the zoom control ends
+        // at 74, the close button over the layer switcher ends at 102.
+        const TOP_CONTROLS_DEPTH = 110;
+        const EDGE = 20;
 
-        const spare = Math.max(0, mapWidth - POPUP_BOX_WIDTH);
-        return {
-            left: Math.min(WANTED_LEFT, Math.floor(spare * 0.4)),
-            right: Math.min(WANTED_RIGHT, Math.floor(spare * 0.6))
-        };
+        const spareX = Math.max(0, mapWidth - POPUP_BOX_WIDTH);
+        const left = Math.min(WANTED_LEFT, Math.floor(spareX * 0.4));
+        const right = Math.min(WANTED_RIGHT, Math.floor(spareX * 0.6));
+
+        // A narrow map cannot keep the popup *beside* the corner controls — at
+        // 375px the popup is 345 wide in a 349 box, so there are 4px to share —
+        // and the zoom control then covered the first 26px of the title. Width
+        // is the constraint there, not height: the same map is 562 tall for a
+        // 222 tall popup. So when the popup cannot sit beside the controls,
+        // put it below them, asking only for what the height can give.
+        const fitsBesideControls = left >= WANTED_LEFT && right >= WANTED_RIGHT;
+        const spareY = Math.max(0, mapHeight - POPUP_BOX_HEIGHT);
+        const top = fitsBesideControls
+            ? EDGE
+            : Math.min(TOP_CONTROLS_DEPTH, Math.floor(spareY * 0.6));
+
+        return { left, right, top, bottom: EDGE };
     }
 
     function applyPopupAutoPan() {
-        const pad = autoPanPaddingFor(map.getSize().x);
+        const size = map.getSize();
+        const pad = autoPanPaddingFor(size.x, size.y);
         markerById.forEach(function(entry) {
             const popup = entry.marker.getPopup();
             if (!popup) return;
-            popup.options.autoPanPaddingTopLeft = L.point(pad.left, 20);
-            popup.options.autoPanPaddingBottomRight = L.point(pad.right, 20);
+            popup.options.autoPanPaddingTopLeft = L.point(pad.left, pad.top);
+            popup.options.autoPanPaddingBottomRight = L.point(pad.right, pad.bottom);
         });
     }
 
