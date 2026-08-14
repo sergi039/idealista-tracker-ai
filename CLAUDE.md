@@ -45,6 +45,18 @@ Bypass a single push with `SKIP_LOCAL_CI=1 git push`. `.github/workflows/
 ci.yml` stays the merge gate for autopilot; since issue #81 it runs the same
 ruff commands, so the two really are in sync.
 
+**A red `tests/test_merge_bot_dry_run.py` on this Mac is not a flaky test.**
+It fails only in full-suite runs, with a different test each time, because the
+`git` binary itself dies: `merge_bot.sh: line 624: Segmentation fault: 11
+git fetch --quiet origin "$BASE_BRANCH"` (`merge_bot.sh` then aborts the pass
+correctly, and the test reports the non-zero exit). Two sessions called it a
+flake on 2026-08-14 before anyone read the message. Three gits are installed
+here — `/opt/homebrew/bin/git` 2.49.0, `/usr/local/bin/git` 2.13.2 (the 2017
+one the deploy-watcher plist already warns about) and `/usr/bin/git` 2.50.1 —
+and the test harness inherits `PATH`, so which one it runs is not pinned. CI
+is green on the same commits. Confirm it is that crash and that CI agrees
+before you consider `SKIP_LOCAL_CI=1`, and say which you did.
+
 The hook's shared-`.git/config` canary (issue #74) compares config keys and
 skips the four a parallel session writes (`branch.<name>.remote`, `.merge`,
 `.rebase`, `.vscode-merge-base`): sessions share this clone, so a parallel
@@ -112,6 +124,35 @@ A single pull skips it with `SKIP_AUTO_REBUILD=1 git pull`.
 that assert their own arguments — an earlier version answered anything, and a
 mutation run kept 12 tests green while pointing the hook at the wrong
 container, the wrong compose file and a dead port.
+
+### Building by hand in the shared checkout
+
+**`docker compose up -d --build` snapshots the whole working tree, so run
+`git status --porcelain` first and read it.** `Dockerfile` copies with
+`COPY . .`, and several agent sessions share `/Users/ss/IdealistaRank`. A
+build you start to look at your own change therefore bakes in every other
+session's uncommitted files — including one that is half-written, because
+nobody edits atomically.
+
+That is not a hypothetical: it is what actually happened on 2026-08-14. A
+session working on `templates/map.html` rebuilt at 11:59:24 to see its own
+change on `/map`, 65 seconds into an 80-second window in which another session
+had `templates/property_detail.html` mid-refactor with one stray `{% endif %}`
+in it. The template was fixed 15 seconds after that build. The builder checked
+`/map`, saw it fine, and moved on; every `/properties/<id>` was a 302 with an
+error flash for the next 15 minutes, and the owner found it, not us.
+
+So, before a hand build: check the tree is yours, parse what you are about to
+bake (`.githooks/post-merge` does exactly this and can be read as the
+reference), and **check a page that renders a template afterwards — not
+`/api/healthz`, which renders none and stayed green through the whole
+incident.** Check the page *your* change does not touch, too: the builder
+above verified the only page that could not have caught the defect.
+
+If the tree holds someone else's work in progress and you only need to see
+your own, the cheap way out is a `git worktree` with its own
+`COMPOSE_CONTAINER_PREFIX` and `APP_HOST_PORT` (docs/DEV_RULES.md), not a
+build of the shared tree.
 
 **There is exactly one listing surface: `/properties`** (owner decision,
 2026-08-09, superseding the 2026-08-08 one that kept `/lands` as a second,
