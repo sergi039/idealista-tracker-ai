@@ -62,13 +62,44 @@
         background: #212529;
     }
     .leaflet-popup-content {
-        margin: 12px 16px;
+        /* Leaflet's own default right margin is 24px because its close button
+           is a 24px box positioned over this content and wins hit-testing.
+           Keep that clearance: anything at the content's top-right otherwise
+           runs under a control that closes the popup. */
+        margin: 12px 26px 12px 16px;
         min-width: 250px;
     }
     .property-popup h6 {
         margin-bottom: 10px;
         font-weight: 600;
         color: #fff;
+    }
+    .property-popup .links .map-favorite-btn {
+        font-size: 0.8em;
+        padding: 4px 10px;
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+    /* Hover must not recolour the star: colour is what reports the favorite
+       state, and a hover colour would still be showing right after a click
+       removed the favorite, since the pointer is necessarily still on it. */
+    .property-popup .map-favorite-btn i.fa-star {
+        display: inline-block;
+        transition: transform 0.12s ease;
+    }
+    .property-popup .map-favorite-btn:hover i.fa-star {
+        transform: scale(1.2);
+    }
+    .property-popup .map-favorite-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+    }
+    /* Slight grow on hover so the dot is easier to hit */
+    .custom-marker > div {
+        transition: transform 0.12s ease;
+    }
+    .custom-marker:hover > div {
+        transform: scale(1.2);
     }
     .property-popup .info-row {
         display: flex;
@@ -170,8 +201,8 @@
         position: absolute;
         left: 50%;
         top: 50%;
-        width: 44px;
-        height: 44px;
+        width: 52px;
+        height: 52px;
         border-radius: 50%;
         border: 2px solid rgba(13, 202, 240, 0.9);
         box-shadow: 0 0 16px rgba(13, 202, 240, 0.65);
@@ -179,10 +210,7 @@
         pointer-events: none;
     }
 
-    /* Close map control */
-    .leaflet-control-closemap {
-        margin-top: 48px; /* sit under zoom controls */
-    }
+    /* Close map control — top-right corner, above the layer switcher */
     .leaflet-control-closemap a {
         background: rgba(33, 37, 41, 0.9);
         color: #fff;
@@ -231,6 +259,32 @@ document.addEventListener('DOMContentLoaded', function() {
         "Satellite": satellite,
         "Hybrid": hybrid
     };
+
+    // Close control goes in first so it takes the very top-right corner and the
+    // layer switcher sits under it.
+    const CloseControl = L.Control.extend({
+        options: { position: 'topright' },
+        onAdd: function() {
+            const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control leaflet-control-closemap');
+            const link = L.DomUtil.create('a', '', container);
+            link.href = '#';
+            link.title = 'Close map';
+            link.innerHTML = '<i class="fas fa-times"></i>';
+
+            L.DomEvent.on(link, 'click', L.DomEvent.stop)
+                .on(link, 'click', function() {
+                    if (window.history.length > 1) {
+                        window.history.back();
+                    } else {
+                        window.location.href = '/properties';
+                    }
+                });
+
+            return container;
+        }
+    });
+
+    map.addControl(new CloseControl());
 
     L.control.layers(baseLayers, null, { position: 'topright' }).addTo(map);
 
@@ -305,29 +359,25 @@ document.addEventListener('DOMContentLoaded', function() {
         const isFocused = options.isFocused === true;
         const baseColor = !score ? '#6c757d' : score >= 70 ? '#198754' : score >= 50 ? '#ffc107' : '#dc3545';
         const color = isFocused ? '#0dcaf0' : baseColor;
-        const size = isFocused ? 18 : 12;
+        const size = isFocused ? 24 : 18;
         const border = isFocused ? 3 : 2;
         const className = isFocused ? 'custom-marker custom-marker-focus' : 'custom-marker';
         return L.divIcon({
-            html: `<div style="background-color: ${color}; width: ${size}px; height: ${size}px; border-radius: 50%; border: ${border}px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
+            html: `<div style="background-color: ${color}; width: ${size}px; height: ${size}px; border-radius: 50%; border: ${border}px solid white; box-shadow: 0 2px 5px rgba(0,0,0,0.4);"></div>`,
             className,
             iconSize: [size + border * 2, size + border * 2],
             iconAnchor: [(size + border * 2) / 2, (size + border * 2) / 2],
-            popupAnchor: [0, -8]
+            popupAnchor: [0, -(size / 2 + border)]
         });
     }
 
     const markerById = new Map();
 
-    // Add markers
-    markers.forEach(function(prop) {
-        const propertyId = Number(prop.id);
-        if (!Number.isFinite(propertyId)) return;
-
+    function buildPopupContent(prop) {
         const typeLabel = [prop.category, prop.subtype].filter(Boolean).join(' / ');
         const travelBlock = renderTravelBadges(prop.travel);
 
-        const popupContent = `
+        return `
             <div class="property-popup">
                 <h6>${escapeHtml(prop.title)}</h6>
                 <div class="d-flex gap-2 mb-2">
@@ -350,6 +400,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 ` : ''}
                 ${travelBlock}
                 <div class="links">
+                    ${/* Leading position puts the star at the popup's
+                          bottom-left — the one corner no map control reaches,
+                          and controls always win hit-testing over popups. */ ''}
+                    <button type="button"
+                            class="btn btn-outline-light btn-sm map-favorite-btn"
+                            data-property-id="${Number(prop.id)}"
+                            title="${prop.is_favorite ? 'Remove from favorites' : 'Add to favorites'}">
+                        <i class="fas fa-star ${prop.is_favorite ? 'text-warning' : 'text-muted'}"></i>
+                    </button>
                     <a href="/properties/${prop.id}" class="btn btn-primary btn-sm">
                         <i class="fas fa-eye me-1"></i>Details
                     </a>
@@ -364,15 +423,73 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
             </div>
         `;
+    }
 
+    // Add markers
+    markers.forEach(function(prop) {
+        const propertyId = Number(prop.id);
+        if (!Number.isFinite(propertyId)) return;
+
+        // Content is a function so a reopened popup reflects the latest
+        // favorite state after a toggle.
         const marker = L.marker([prop.lat, prop.lon], {
             icon: createIcon(prop.score)
-        }).bindPopup(popupContent, {
-            maxWidth: 300
+        }).bindPopup(() => buildPopupContent(prop), {
+            maxWidth: 300,
+            // Control corners sit at z-index 1000 while the popup pane sits at
+            // 700 inside .leaflet-map-pane's own stacking context, so a popup
+            // under a control loses hit-testing and cannot be raised over it
+            // with z-index. Keeping the popup clear of the corners on open is
+            // the protection; the bottom-right pad exceeds the width of the
+            // top-right control stack (close button over layer switcher).
+            autoPanPaddingTopLeft: [50, 20],
+            autoPanPaddingBottomRight: [75, 20]
         });
 
-        markerById.set(propertyId, { marker, score: prop.score });
+        markerById.set(propertyId, { marker, score: prop.score, prop });
         markerCluster.addLayer(marker);
+    });
+
+    // Favorite toggle inside popups. Popup DOM is created on each open, so a
+    // delegated listener is the only binding that survives.
+    document.addEventListener('click', async function(e) {
+        const btn = e.target.closest('.map-favorite-btn');
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (btn.disabled) return;
+
+        const propertyId = Number(btn.getAttribute('data-property-id'));
+        const entry = markerById.get(propertyId);
+        if (!entry) return;
+
+        btn.disabled = true;
+        try {
+            const response = await fetch(`/api/property/${propertyId}/favorite`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            if (!data || data.success !== true) {
+                throw new Error(data && data.error ? data.error : 'Toggle favorite failed');
+            }
+
+            entry.prop.is_favorite = Boolean(data.is_favorite);
+            const icon = btn.querySelector('i.fa-star');
+            if (icon) {
+                icon.classList.toggle('text-warning', entry.prop.is_favorite);
+                icon.classList.toggle('text-muted', !entry.prop.is_favorite);
+            }
+            btn.title = entry.prop.is_favorite ? 'Remove from favorites' : 'Add to favorites';
+        } catch (error) {
+            console.error('Error toggling favorite:', error);
+            if (window.IdealistaApp && typeof IdealistaApp.showNotification === 'function') {
+                IdealistaApp.showNotification('Failed to toggle favorite', 'error');
+            }
+        } finally {
+            btn.disabled = false;
+        }
     });
 
     map.addLayer(markerCluster);
@@ -422,30 +539,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Add a close/back control on the map
-    const CloseControl = L.Control.extend({
-        options: { position: 'topleft' },
-        onAdd: function() {
-            const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control leaflet-control-closemap');
-            const link = L.DomUtil.create('a', '', container);
-            link.href = '#';
-            link.title = 'Close map';
-            link.innerHTML = '<i class="fas fa-times"></i>';
-
-            L.DomEvent.on(link, 'click', L.DomEvent.stop)
-                .on(link, 'click', function() {
-                    if (window.history.length > 1) {
-                        window.history.back();
-                    } else {
-                        window.location.href = '/properties';
-                    }
-                });
-
-            return container;
-        }
-    });
-
-    map.addControl(new CloseControl());
 });
 </script>
 {% endblock %}
