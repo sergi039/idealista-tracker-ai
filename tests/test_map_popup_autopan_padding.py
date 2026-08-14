@@ -196,6 +196,25 @@ def test_popup_box_width_constant_still_matches_the_template():
     )
 
 
+def test_the_wiring_is_actually_installed():
+    """Every test above drives wirePopupAutoPan() directly.
+
+    That proves what the function does and nothing about whether the page ever
+    calls it: reverting the call site to the old `map.on('resize', ...)` leaves
+    the whole file green and the function dead. This is the drift that carried
+    the #295 defect past green tests.
+    """
+    html = read_template("map.html")
+    assert "wirePopupAutoPan(map);" in html, (
+        "map.html no longer installs wirePopupAutoPan(), so popups keep the "
+        "padding measured before the map had its final size"
+    )
+    assert "map.on('resize', applyPopupAutoPan);" not in html, (
+        "the old resize-only wiring is back; it sets the padding but never "
+        "re-adjusts the popup that is open, which is what #297 fixed"
+    )
+
+
 def _run_wiring(map_size_at_open):
     """Drive the real wirePopupAutoPan() with a stub map and popup.
 
@@ -216,7 +235,16 @@ def _run_wiring(map_size_at_open):
         on(name, fn) {{ (this._handlers[name] = this._handlers[name] || []).push(fn); }},
         fire(name, e) {{ (this._handlers[name] || []).forEach((fn) => fn(e)); }},
     }};
-    const popup = {{ options: {{}}, updates: 0, update() {{ this.updates++; }} }};
+    // The stub records the padding *in effect at each update()*, not just the
+    // call count. Leaflet re-reads the padding inside update(), so a handler
+    // that updates before refreshing it is the very bug #297 fixed — and a
+    // counter alone cannot tell the two orders apart.
+    const popup = {{
+        options: {{}},
+        seenAtUpdate: [],
+        update() {{ this.seenAtUpdate.push(JSON.parse(JSON.stringify(this.options))); }},
+        get updates() {{ return this.seenAtUpdate.length; }},
+    }};
     const markerById = new Map([[1, {{ marker: {{ getPopup: () => popup }} }}]]);
 
     applyPopupAutoPan();                           // padding from the wrong size
@@ -240,6 +268,7 @@ def _run_wiring(map_size_at_open):
         stale, afterOpen, updatesAfterOpen,
         afterResize, updatesAfterResize,
         updatesAfterClose: popup.updates,
+        seenAtUpdate: popup.seenAtUpdate,
     }}));
     """
     result = subprocess.run(
@@ -271,6 +300,15 @@ def test_opening_a_popup_refreshes_padding_measured_before_layout_settled():
         "the popup must be re-laid out after the padding changes — Leaflet "
         f"reads it only while panning; got {out['updatesAfterOpen']} update(s)"
     )
+    # The one that matters: Leaflet re-reads the padding *inside* update(), so
+    # the refresh has to happen first. Updating and then refreshing leaves the
+    # popup positioned by the stale value — exactly the bug #297 fixed — and a
+    # call count cannot tell the two orders apart.
+    assert out["seenAtUpdate"][0]["autoPanPaddingTopLeft"]["y"] > TOP_CONTROLS_DEPTH, (
+        "the popup was re-laid out while the stale padding was still in effect: "
+        f"update() saw {out['seenAtUpdate'][0]}. Refresh the padding before "
+        "calling update(), not after."
+    )
 
 
 def test_resizing_re_adjusts_the_popup_that_is_open():
@@ -280,6 +318,10 @@ def test_resizing_re_adjusts_the_popup_that_is_open():
     )
     assert out["updatesAfterResize"] == 2, (
         f"the open popup must be re-adjusted on resize; got {out}"
+    )
+    assert out["seenAtUpdate"][1]["autoPanPaddingTopLeft"] == {"x": 50, "y": 20}, (
+        "the resize re-adjusted the popup before recomputing the padding for "
+        f"the new size: update() saw {out['seenAtUpdate'][1]}"
     )
 
 
