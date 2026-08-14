@@ -45,24 +45,29 @@ Bypass a single push with `SKIP_LOCAL_CI=1 git push`. `.github/workflows/
 ci.yml` stays the merge gate for autopilot; since issue #81 it runs the same
 ruff commands, so the two really are in sync.
 
-**A red `tests/test_merge_bot_dry_run.py` on this Mac is not a flaky test.**
-It fails only in full-suite runs, with a different test each time, because the
-`git` binary itself dies: `merge_bot.sh: line 624: Segmentation fault: 11
-git fetch --quiet origin "$BASE_BRANCH"` (`merge_bot.sh` then aborts the pass
-correctly, and the test reports the non-zero exit). Two sessions called it a
-flake on 2026-08-14 before anyone read the message. Three gits are installed
-here — `/opt/homebrew/bin/git` 2.49.0, `/usr/local/bin/git` 2.13.2 (the 2017
-one the deploy-watcher plist already warns about) and `/usr/bin/git` 2.50.1 —
-and the test harness inherits `PATH`, so which one it runs is not pinned. CI
-is green on the same commits. Confirm it is that crash and that CI agrees
-before you consider `SKIP_LOCAL_CI=1`, and say which you did.
+**A shell stub written by a test needs its shebang at byte 0** (issue #284,
+fixed 2026-08-14). `tests/test_merge_bot_dry_run.py` failed only under
+full-suite runs, never in isolation, with a different test each time and a
+message naming a binary that was never involved:
+`merge_bot.sh: line 624: Segmentation fault: 11 git fetch ...`. There is no
+git there — the harness's `git` is a bash stub and `bin_dir` leads `PATH`.
+`_write_executable` dedented the stub bodies without `lstrip`, so line 1 was
+blank and the `#!/bin/bash` under it was not a shebang; `execve` returned
+ENOEXEC, bash re-executed each stub with *itself*, and Homebrew bash's locale
+init (gettext → CoreFoundation) segfaults on the child side of a fork in a
+multi-threaded parent. Apple's `/bin/bash` links neither library, which is why
+the crash needed this Mac *and* a full-suite run. The three sibling test files
+now assert the shebang, because three diverging copies of `_write_executable`
+is how the one that mattered lost it.
 
-**Three clean re-runs in isolation do not clear it** — that is the trap. The
-file passes alone in half a second every time; a session that re-ran it three
-times, got green three times and wrote "flake" was reading the evidence
-backwards, because a crash that only happens under a full-suite run cannot be
-reproduced by not running the full suite. Read the failure message instead:
-this one names the signal and the line.
+Two lessons outlive that fix. **Three clean re-runs in isolation clear
+nothing**: the file passed alone in half a second every time, so a session
+that re-ran it three times and wrote "flake" had proved only that it was not
+running the thing that crashed. And **the shell attributes a crash to the
+command it was executing, not to the thing that died** — the crash reports
+were named `bash`, 14 of them, one carrying the exact pid from a captured
+failure. Reading the message got the symptom right and the cause wrong; the
+crash reports got it right.
 
 The hook's shared-`.git/config` canary (issue #74) compares config keys and
 skips the four a parallel session writes (`branch.<name>.remote`, `.merge`,
