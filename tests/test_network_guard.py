@@ -20,6 +20,7 @@ it has to prove.
 from __future__ import annotations
 
 import socket
+import threading
 
 import pytest
 import requests
@@ -77,6 +78,45 @@ class TestTheInternetIsRefused:
             f"transport helper would be unattributable: {caller}"
         )
         assert caller.count(" <- ") < network_guard.CALLER_FRAMES
+
+    def test_a_stack_with_no_repository_frame_says_so(self):
+        """A frame filename is not always a path: the interpreter uses
+        `<string>`, `<stdin>`, `<frozen runpy>`. `Path.resolve()` hangs those
+        off the current directory -- which during a run is the repository root
+        -- so without the `<` filter in `_caller()` they pass the
+        `relative_to(REPO_ROOT)` test and get reported as lines of this
+        repository. `<frozen runpy>:88` is not a file anyone can open.
+
+        The filter is two lines and a refactor can drop it silently, which is
+        why this exists. The connect is made from exec'd code running on a
+        thread, so every frame under it belongs to the standard library or to
+        nothing at all, and the honest answer is the fallback.
+        """
+        source = compile(
+            "import socket\n"
+            "def leak(errors):\n"
+            "    try:\n"
+            "        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:\n"
+            "            s.connect((HOST, 80))\n"
+            "    except BaseException as exc:\n"
+            "        errors.append(exc)\n",
+            "<string>",
+            "exec",
+        )
+        namespace: dict = {"HOST": PUBLIC_V4}
+        exec(source, namespace)
+
+        errors: list[BaseException] = []
+        with network_guard.capture_attempts() as attempts:
+            thread = threading.Thread(target=namespace["leak"], args=(errors,))
+            thread.start()
+            thread.join(timeout=10)
+
+        assert [type(error) for error in errors] == [NetworkAccessDuringTest]
+        assert attempts[0].caller == "<outside this repository>", (
+            "a synthetic frame was reported as a line of this repository: "
+            f"{attempts[0].caller}"
+        )
 
     def test_an_ipv6_connect_is_refused_and_bracketed(self):
         """`2001:db8::1:443` is not "that host, that port" -- it is a valid and
