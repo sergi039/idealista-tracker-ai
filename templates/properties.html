@@ -110,9 +110,18 @@
                 {% set status = tdata.status if tdata else None %}
                 {% set caption = TRAVEL_ABBR.get(tt.key) or (tt.label|truncate(8, True, '')) %}
                 {% set tooltip = tt.label ~ (' (' ~ travel_mode ~ ')' if travel_mode else '') ~ (': ' ~ place_name if place_name else '') ~ ((' (%.1f km)'|format(distance_km)) if distance_km else '') %}
+                {# The route from the listing, via the one tested builder
+                   (proposal D24): the old href pasted the free-text place name
+                   into the URL path — unencoded, and resolvable to the wrong
+                   town. Preset targets carry the destination under `place`,
+                   custom targets at the top level; no destination, no link. #}
+                {% set _place = tdata.get('place') if (tdata is mapping and tdata.get('place') is mapping) else {} %}
+                {% set _dest_lat = _place.get('lat') if _place.get('lat') is not none else (tdata.get('lat') if tdata is mapping else None) %}
+                {% set _dest_lon = _place.get('lon') if _place.get('lon') is not none else (tdata.get('lon') if tdata is mapping else None) %}
+                {% set route_url = maps_directions_url(p.location_lat, p.location_lon, _dest_lat, _dest_lon, _place.get('place_id')) %}
                 {% if minutes %}
-                    {% if p.location_lat and p.location_lon %}
-                        <a href="https://www.google.com/maps/dir/{{ p.location_lat }},{{ p.location_lon }}/{{ place_name or tt.label }}"
+                    {% if route_url %}
+                        <a href="{{ route_url }}"
                            target="_blank" rel="noopener"
                            class="text-decoration-none d-inline-flex align-items-center"
                            title="{{ tooltip }}">
@@ -135,6 +144,51 @@
                     </span>
                 {% endif %}
             {% endfor %}
+            {# Nearest beach as a fourth line (proposal D1, approved 13.08.2026).
+               Three states, kept apart per #98: a measured beach links to the
+               route; a *measured* "nothing within the limit" (none_within_limit,
+               or not_found — Places answered empty) says so; a lookup that never
+               answered (`unavailable`) reads "not measured". A row with no
+               beaches key at all predates the feature and shows nothing.
+               Beaches stay informational — no score reads them (2026-08-11). #}
+            {% set _beaches = travel.get('beaches') if travel.get('beaches') is mapping else {} %}
+            {% set _beach_items = _beaches.get('items') if (_beaches.get('items') is iterable and _beaches.get('items') is not string) else [] %}
+            {% set _beach = _beach_items[0] if (_beach_items and _beach_items[0] is mapping) else {} %}
+            {% if _beach.get('duration_min') is not none %}
+                {% set _second = _beach_items[1] if (_beach_items|length > 1 and _beach_items[1] is mapping) else {} %}
+                {% set _beach_name = _beach.get('name') or t('nearest_beach') %}
+                {% set _beach_tooltip = _beach_name
+                    ~ ((' (%.1f km)'|format(_beach.get('distance_km'))) if _beach.get('distance_km') is not none else '')
+                    ~ ((' · ' ~ t('next_beach') ~ ': ' ~ (_second.get('name') or '?') ~ ', ' ~ _second.get('duration_min') ~ 'min') if _second.get('duration_min') is not none else '') %}
+                {% set _beach_route = maps_directions_url(p.location_lat, p.location_lon, _beach.get('lat'), _beach.get('lon'), _beach.get('place_id')) %}
+                {% if _beach_route %}
+                    <a href="{{ _beach_route }}" target="_blank" rel="noopener"
+                       class="text-decoration-none d-inline-flex align-items-center"
+                       title="{{ _beach_tooltip }}">
+                        <i class="fas fa-umbrella-beach me-1 text-primary"></i>
+                        <span class="fw-bold">{{ '~' if _beach.get('estimated') }}{{ _beach.get('duration_min') }}min</span>
+                        <small class="text-muted ms-1 text-truncate properties-beach-name">{{ _beach_name }}</small>
+                    </a>
+                {% else %}
+                    <span class="d-inline-flex align-items-center" title="{{ _beach_tooltip }}">
+                        <i class="fas fa-umbrella-beach me-1 text-primary"></i>
+                        <span class="fw-bold">{{ '~' if _beach.get('estimated') }}{{ _beach.get('duration_min') }}min</span>
+                        <small class="text-muted ms-1 text-truncate properties-beach-name">{{ _beach_name }}</small>
+                    </span>
+                {% endif %}
+            {% elif _beaches.get('status') in ('none_within_limit', 'not_found') %}
+                <span class="d-inline-flex align-items-center text-muted"
+                      title="{{ t('beach_none_within_tooltip') }}">
+                    <i class="fas fa-umbrella-beach me-1"></i>
+                    <small>{{ t('beach_none_within') }} {{ _beaches.get('max_drive_min') or 20 }} min</small>
+                </span>
+            {% elif _beaches.get('status') == 'unavailable' %}
+                <span class="d-inline-flex align-items-center text-muted"
+                      title="{{ t('beach_not_measured_tooltip') }}">
+                    <i class="fas fa-umbrella-beach me-1"></i>-
+                    <small class="ms-1">{{ t('beach_short') }}</small>
+                </span>
+            {% endif %}
             {% set hidden_travel_count = (display_targets|length) - (visible_travel_targets|length) %}
             {% if hidden_travel_count > 0 %}
                 <small class="text-muted" title="{{ hidden_travel_count }} more targets in the details view">

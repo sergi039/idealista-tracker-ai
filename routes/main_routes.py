@@ -1,6 +1,7 @@
 import logging
 import math
 import uuid
+from datetime import timezone
 from decimal import Decimal
 from flask import (
     Blueprint,
@@ -955,6 +956,16 @@ def property_detail(property_id):
             .order_by(PropertyAiAnalysisVariant.created_at.desc())
             .first()
         )
+        # The claude analysis itself renders from `property.ai_analysis`; the
+        # variant row is fetched only for its provenance (model, date), which
+        # every AI card now shows so a stale opinion reads as stale (D9).
+        claude_variant = (
+            PropertyAiAnalysisVariant.query.filter_by(
+                property_id=property_id, provider="claude"
+            )
+            .order_by(PropertyAiAnalysisVariant.created_at.desc())
+            .first()
+        )
 
         # Profile-driven travel targets for consistent UI display (sidebar).
         travel_display_targets = []
@@ -1025,6 +1036,21 @@ def property_detail(property_id):
             openai_configured=bool(getattr(Config, "AI_BRIDGE_TOKEN", None)),
             openai_analysis=(openai_variant.analysis if openai_variant else None),
             openai_model=(openai_variant.model if openai_variant else None),
+            # created_at is naive UTC; an offset-less ISO string is read as
+            # *local* time by JS `new Date()`, shifting the provenance date
+            # and the 30-day stale cutoff (diff review, 2026-08-13). The
+            # explicit +00:00 makes the browser parse it as the UTC it is.
+            openai_analysis_date=(
+                openai_variant.created_at.replace(tzinfo=timezone.utc).isoformat()
+                if openai_variant and openai_variant.created_at
+                else None
+            ),
+            claude_model=(claude_variant.model if claude_variant else None),
+            claude_analysis_date=(
+                claude_variant.created_at.replace(tzinfo=timezone.utc).isoformat()
+                if claude_variant and claude_variant.created_at
+                else None
+            ),
             travel_display_targets=travel_display_targets,
             sea_view_verdict=sea_view_service.read_verdict(prop),
         )

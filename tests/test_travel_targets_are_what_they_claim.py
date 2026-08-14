@@ -400,7 +400,11 @@ class TestTheTravelCardShowsWhatWasMeasured:
         body = re.sub(
             r"\s+", " ", client.get(f"/properties/{listing}").get_data(as_text=True)
         )
-        row = body[body.index("Supermercados Alimerka") :][:300]
+        # Anchor inside the Travel Times card: the hero chip row (D6) names
+        # the place earlier in the DOM, and the propertyData JSON blob names
+        # it again later — only the card row carries the min/km badges.
+        travel_card = body[body.index("Travel Times") :]
+        row = travel_card[travel_card.index("Supermercados Alimerka") :][:300]
 
         assert "0min" in row
         assert "0.0km" in row

@@ -331,8 +331,11 @@ class TestTheBlockOnThePropertyPage:
         body = self._body(client, prop)
 
         assert "Playa de Rodiles" in body
+        # The link now comes from utils/maps_urls.py (proposal D24): same
+        # official search form, but urlencoded (comma → %2C) and with the
+        # coordinate normalised to six decimals.
         assert (
-            "https://www.google.com/maps/search/?api=1&amp;query=43.531,-5.383"
+            "https://www.google.com/maps/search/?api=1&amp;query=43.531000%2C-5.383000"
             "&amp;query_place_id=PLACE_RODILES" in body
         )
         assert "7min" in body and "5.2km" in body

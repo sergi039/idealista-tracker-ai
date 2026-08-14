@@ -112,12 +112,20 @@ class TestNoInventedWalkingTimeAnywhere:
 
 class TestAZeroRowIsStillDrawn:
     def test_a_zero_travel_time_is_shown_not_hidden(self, app, client):
-        """A police station two minutes away, and a supermarket at the door."""
+        """A police station two minutes away, and a supermarket at the door.
+
+        The surface moved with the Transport card's removal (proposal D12,
+        2026-08-13): the police preset now renders as a Travel Times row,
+        and the zero-is-a-measurement contract is pinned there instead.
+        """
         listing = _property(source_email_id="zero-travel", travel=_targets(police=0))
 
         body = client.get(f"/properties/{listing}").get_data(as_text=True)
 
-        assert "Police Station Distance" in body, (
+        assert "police place" in body, (
+            "the police preset must survive the Transport card's removal"
+        )
+        assert "0min" in body, (
             "a zero-minute drive is a measurement; the row must survive it"
         )
 
