@@ -118,20 +118,128 @@ def test_the_callback_runs_once_and_the_listeners_are_released():
     )
 
 
-def test_the_focus_flow_waits_instead_of_guessing_at_300ms():
-    """Pin the call sites: the helper is worthless if the page stops using it.
+def _drive_show_focused(body):
+    """Run the real showFocusedPopup() against stubs and a controlled clock."""
+    source = extract_inline_script("map.html")
+    script = f"""
+    let now = 0;
+    const pending = [];
+    const setTimeout = (fn, ms) => {{ const t = {{at: now + (ms || 0), fn, dead: false}}; pending.push(t); return t; }};
+    const clearTimeout = (t) => {{ if (t) t.dead = true; }};
+    const tick = (ms) => {{
+        const until = now + ms;
+        for (;;) {{
+            const due = pending.filter((t) => !t.dead && t.at <= until).sort((a, b) => a.at - b.at)[0];
+            if (!due) break;
+            due.dead = true; now = due.at; due.fn();
+        }}
+        now = until;
+    }};
 
-    Reverting either one leaves every test above green.
+    const log = [];
+    const popup = {{
+        open: false,
+        isOpen() {{ return this.open; }},
+        update() {{ log.push('update'); }},
+    }};
+    const focusLayer = {{
+        setIcon() {{}},
+        setZIndexOffset() {{}},
+        openPopup() {{ popup.open = true; log.push('openPopup'); }},
+        getPopup: () => popup,
+    }};
+    const focusEntry = {{ score: 50, marker: focusLayer }};
+    const markerCluster = {{ getVisibleParent: () => null }};
+    const createIcon = () => ({{}});
+    const applyPopupAutoPan = () => log.push('applyPopupAutoPan');
+    const map = {{
+        handlers: {{}},
+        on(names, fn) {{ names.split(' ').forEach((n) => ((this.handlers[n] = this.handlers[n] || []).push(fn))); }},
+        off(names, fn) {{ names.split(' ').forEach((n) => {{
+            this.handlers[n] = (this.handlers[n] || []).filter((f) => f !== fn);
+        }}); }},
+        fire(n) {{ (this.handlers[n] || []).slice().forEach((f) => f()); }},
+    }};
+
+    {function_source(source, "whenMapSettles")}
+    {function_source(source, "showFocusedPopup")}
+
+    const out = {{}};
+    {body}
+    out.log = log;
+    console.log(JSON.stringify(out));
     """
-    html = read_template("map.html")
-    assert "whenMapSettles(map, showFocused)" in html, (
-        "the focus flow no longer waits for the map after zoomToShowLayer"
+    result = subprocess.run(
+        [NODE, "-e", script], capture_output=True, text=True, timeout=30
     )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_the_popup_is_not_re_adjusted_while_the_map_is_still_moving():
+    """The whole defect, as behaviour rather than as text.
+
+    Inlining the re-adjust straight after openPopup() — which is #297 exactly —
+    reads almost the same in the file and is wrong. Only the ordering shows it:
+    re-running the pan while the map is still moving computes from a position
+    the map is leaving, and measured on a built image the popup then opened
+    57px down with its close button under the layer switcher.
+    """
+    out = _drive_show_focused("""
+        showFocusedPopup(map, focusLayer, focusEntry);
+        out.rightAfterOpen = log.slice();
+        map.fire('move');
+        tick(150); map.fire('move');
+        tick(150);
+        out.whileMoving = log.slice();
+        tick(400);
+        out.afterSettling = log.slice();
+    """)
+
+    assert out["rightAfterOpen"] == ["openPopup"], (
+        "the popup was re-adjusted in the same breath as opening it, before the "
+        f"map could come to rest: {out['rightAfterOpen']}"
+    )
+    assert out["whileMoving"] == ["openPopup"], (
+        f"the re-adjust ran while the map was still moving: {out['whileMoving']}"
+    )
+    assert out["afterSettling"] == ["openPopup", "applyPopupAutoPan", "update"], (
+        "once the map is at rest the popup must have its padding refreshed and "
+        f"its pan re-run, in that order; got {out['afterSettling']}"
+    )
+
+
+def test_a_popup_closed_before_the_map_settles_is_left_alone():
+    out = _drive_show_focused("""
+        showFocusedPopup(map, focusLayer, focusEntry);
+        popup.open = false;          // the user closed it while the map moved
+        tick(1000);
+    """)
+    assert out["log"] == ["openPopup"], (
+        f"a closed popup must not be re-adjusted; got {out['log']}"
+    )
+
+
+def test_the_flat_timer_is_gone():
+    """The 300ms guess is the thing this change replaces."""
+    html = read_template("map.html")
     assert "}, 300);" not in html, (
         "the flat 300ms timer is back; it is a guess at how long setView takes "
         "and says nothing about the animation zoomToShowLayer starts"
     )
-    assert "popup.update()" in html, (
-        "nothing re-runs the popup's pan once the map has come to rest, which "
-        "is what actually moves it clear of the controls"
+
+
+def test_the_cluster_wrapper_still_waits_for_the_map():
+    """The outer wait, pinned separately from the inner one.
+
+    zoomToShowLayer runs its own animation, so its callback must be handed to
+    whenMapSettles rather than called straight through.
+    """
+    html = read_template("map.html")
+    assert (
+        "whenMapSettles(map, () => showFocusedPopup(map, focusLayer, focusEntry))"
+        in html
+    ), (
+        "zoomToShowLayer's callback no longer waits for the map to settle "
+        "before showing the focused popup"
     )

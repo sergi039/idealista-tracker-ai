@@ -452,10 +452,13 @@ document.addEventListener('DOMContentLoaded', function() {
         let quietTimer = null;
         let done = false;
 
+        let capTimer = null;
+
         const finish = () => {
             if (done) return;
             done = true;
             if (quietTimer) clearTimeout(quietTimer);
+            if (capTimer) clearTimeout(capTimer);
             map.off(events, arm);
             fn();
         };
@@ -467,7 +470,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         map.on(events, arm);
         arm();
-        setTimeout(finish, maxWaitMs);
+        capTimer = setTimeout(finish, maxWaitMs);
     }
 
     function applyPopupAutoPan() {
@@ -613,7 +616,12 @@ document.addEventListener('DOMContentLoaded', function() {
             const latlng = focusLayer.getLatLng();
             map.setView(latlng, 12);
 
-            const showFocused = () => {
+            // A named declaration, not an inline arrow, so a test can drive it
+            // against a stub map and assert *when* the re-adjust happens. The
+            // text of this file cannot show that: inlining the body below
+            // straight after openPopup() reads almost the same and is the whole
+            // defect.
+            function showFocusedPopup(map, focusLayer, focusEntry) {
                 const visibleParent = markerCluster.getVisibleParent(focusLayer);
                 if (visibleParent && visibleParent !== focusLayer && visibleParent.spiderfy) {
                     visibleParent.spiderfy();
@@ -631,7 +639,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 // opened 57px down with the close button under the layer
                 // switcher; re-running the pan once the map had settled put it
                 // at 110, clear of every control. An immediate re-run does not
-                // do it — at that point the map has not finished moving.
+                // do it — at that point the map has not finished moving, which
+                // is exactly how #297 failed.
                 whenMapSettles(map, () => {
                     const popup = focusLayer.getPopup();
                     if (popup && popup.isOpen()) {
@@ -639,7 +648,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         popup.update();
                     }
                 });
-            };
+            }
 
             // Ensure the marker is visible even if it's currently clustered.
             // zoomToShowLayer starts an animation of its own, so wait that one
@@ -647,10 +656,10 @@ document.addEventListener('DOMContentLoaded', function() {
             whenMapSettles(map, () => {
                 if (typeof markerCluster.zoomToShowLayer === 'function') {
                     markerCluster.zoomToShowLayer(focusLayer, () => {
-                        whenMapSettles(map, showFocused);
+                        whenMapSettles(map, () => showFocusedPopup(map, focusLayer, focusEntry));
                     });
                 } else {
-                    showFocused();
+                    showFocusedPopup(map, focusLayer, focusEntry);
                 }
             });
         } else if (markers.length > 0) {
