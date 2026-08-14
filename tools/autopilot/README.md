@@ -88,6 +88,18 @@ To stop it:
 launchctl unload ~/Library/LaunchAgents/com.idealista.deploy-watcher.plist
 ```
 
+**On a machine with this watcher, nothing else deploys.** `.githooks/post-merge`
+rebuilds the running container when main lands in a clone, but it detects this
+LaunchAgent (`~/Library/LaunchAgents/com.idealista.deploy-watcher.plist`, or
+`launchctl list`) and stands down where it is installed. That is not politeness
+about ordering: the watcher takes its rollback checkpoint at *tick* time, so an
+image built behind its back between two ticks becomes the build it would roll
+back **to**, quietly destroying the last known good one. The hook exists for
+machines with no deployer — the shared agent checkout on the laptop, which this
+watcher rightly refuses to deploy because it sits on a branch with uncommitted
+files. Both take this same deploy lock, so a hand-run of either never overlaps
+the other.
+
 ## Why it is shaped like this
 
 **One agent per issue.** PRs #57 and #58 both fixed issue #17, in different
