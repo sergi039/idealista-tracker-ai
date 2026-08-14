@@ -45,6 +45,30 @@ Bypass a single push with `SKIP_LOCAL_CI=1 git push`. `.github/workflows/
 ci.yml` stays the merge gate for autopilot; since issue #81 it runs the same
 ruff commands, so the two really are in sync.
 
+**A shell stub written by a test needs its shebang at byte 0** (issue #284,
+fixed 2026-08-14). `tests/test_merge_bot_dry_run.py` failed only under
+full-suite runs, never in isolation, with a different test each time and a
+message naming a binary that was never involved:
+`merge_bot.sh: line 624: Segmentation fault: 11 git fetch ...`. There is no
+git there — the harness's `git` is a bash stub and `bin_dir` leads `PATH`.
+`_write_executable` dedented the stub bodies without `lstrip`, so line 1 was
+blank and the `#!/bin/bash` under it was not a shebang; `execve` returned
+ENOEXEC, bash re-executed each stub with *itself*, and Homebrew bash's locale
+init (gettext → CoreFoundation) segfaults on the child side of a fork in a
+multi-threaded parent. Apple's `/bin/bash` links neither library, which is why
+the crash needed this Mac *and* a full-suite run. The three sibling test files
+now assert the shebang, because three diverging copies of `_write_executable`
+is how the one that mattered lost it.
+
+Two lessons outlive that fix. **Three clean re-runs in isolation clear
+nothing**: the file passed alone in half a second every time, so a session
+that re-ran it three times and wrote "flake" had proved only that it was not
+running the thing that crashed. And **the shell attributes a crash to the
+command it was executing, not to the thing that died** — the crash reports
+were named `bash`, 14 of them, one carrying the exact pid from a captured
+failure. Reading the message got the symptom right and the cause wrong; the
+crash reports got it right.
+
 The hook's shared-`.git/config` canary (issue #74) compares config keys and
 skips the four a parallel session writes (`branch.<name>.remote`, `.merge`,
 `.rebase`, `.vscode-merge-base`): sessions share this clone, so a parallel
@@ -112,6 +136,45 @@ A single pull skips it with `SKIP_AUTO_REBUILD=1 git pull`.
 that assert their own arguments — an earlier version answered anything, and a
 mutation run kept 12 tests green while pointing the hook at the wrong
 container, the wrong compose file and a dead port.
+
+### Building by hand in the shared checkout
+
+**`docker compose up -d --build` snapshots the whole working tree, so run
+`git status --porcelain` first and read it.** `Dockerfile` copies with
+`COPY . .`, and several agent sessions share `/Users/ss/IdealistaRank`. A
+build you start to look at your own change therefore bakes in every other
+session's uncommitted files — including one that is half-written, because
+nobody edits atomically.
+
+That is not a hypothetical: it is what actually happened on 2026-08-14. A
+session working on `templates/map.html` rebuilt at 11:59:24 to see its own
+change on `/map`, 65 seconds into an 80-second window in which another session
+had `templates/property_detail.html` mid-refactor with one stray `{% endif %}`
+in it. The template was fixed 15 seconds after that build. The builder checked
+`/map`, saw it fine, and moved on; every `/properties/<id>` was a 302 with an
+error flash for the next 15 minutes, and the owner found it, not us.
+
+So, before a hand build: check the tree is yours, parse what you are about to
+bake (`.githooks/post-merge` does exactly this and can be read as the
+reference), and **check a page that renders a template afterwards — not
+`/api/healthz`, which renders none and stayed green through the whole
+incident.** Check the page *your* change does not touch, too: the builder
+above verified the only page that could not have caught the defect.
+
+**A hand build also kills whatever is running inside the container**, and
+unlike a deploy it leaves no trace at all: `docker compose up -d --build`
+recreates `idealista-app`, so an hours-long backfill in there dies mid-row and
+nothing logs it. `docker top idealista-app` answers the question in one
+command — run it. The in-flight machinery the watcher grew for this (#283)
+lives inside `deploy_watcher.sh` and does not reach a build you start by hand,
+so here the check is yours to make. A killed backfill is recoverable — the
+tools commit per row and skip finished ones — but only if someone knows to
+restart it.
+
+If the tree holds someone else's work in progress and you only need to see
+your own, the cheap way out is a `git worktree` with its own
+`COMPOSE_CONTAINER_PREFIX` and `APP_HOST_PORT` (docs/DEV_RULES.md), not a
+build of the shared tree.
 
 **There is exactly one listing surface: `/properties`** (owner decision,
 2026-08-09, superseding the 2026-08-08 one that kept `/lands` as a second,
