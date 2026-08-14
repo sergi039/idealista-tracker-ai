@@ -449,37 +449,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Setting the padding is not enough on its own: Leaflet reads it once, in
-    // the `_adjustPan` that runs while the popup opens. Two things then go
-    // wrong on their own schedule.
-    //
-    // The map is not always at its final size when the markers are built, so
-    // the padding computed then can be the wrong one — and `?focus=` opens its
-    // popup 300ms later, early enough to use it. Measured on the deployed
-    // build at 414px: the popup opened 73px down with the layer switcher, which
-    // reaches 102px down, drawn across it, while the padding it *held* said
-    // 110. Any later map movement snapped it to 110, which is how the stale
-    // value gives itself away.
-    //
-    // So make the padding current as each popup opens and re-run the pan with
-    // it, and re-adjust an already-open popup when the map is resized.
-    function wirePopupAutoPan(map) {
-        let open = null;
-        map.on('popupopen', function(e) {
-            open = e.popup;
-            applyPopupAutoPan();
-            e.popup.update();
-        });
-        map.on('popupclose', function() {
-            open = null;
-        });
-        // A rotated phone or a resized window changes what the map can spare.
-        map.on('resize', function() {
-            applyPopupAutoPan();
-            if (open) open.update();
-        });
-    }
-
     function buildPopupContent(prop) {
         const typeLabel = [prop.category, prop.subtype].filter(Boolean).join(' / ');
         const travelBlock = renderTravelBadges(prop.travel);
@@ -594,7 +563,8 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     applyPopupAutoPan();
-    wirePopupAutoPan(map);
+    // A rotated phone or a resized window changes what the map can spare.
+    map.on('resize', applyPopupAutoPan);
 
     map.addLayer(markerCluster);
 
