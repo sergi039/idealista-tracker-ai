@@ -88,6 +88,16 @@ To stop it:
 launchctl unload ~/Library/LaunchAgents/com.idealista.deploy-watcher.plist
 ```
 
+**The watcher is not the only thing that rebuilds.** `.githooks/post-merge`
+rebuilds the running container whenever main lands in a clone by merge or
+pull — that is how a shared agent checkout, which the watcher rightly refuses
+to deploy because it sits on a branch with uncommitted files, still keeps its
+container current. The two never collide: the hook takes this same deploy
+lock, and the watcher holds it across its own `git merge --ff-only`, so the
+hook it fires there yields immediately. The hook never writes
+`data/.deployed_sha`, so a hand-pull rebuild costs one redundant redeploy on
+the next tick rather than a marker naming a build the watcher did not make.
+
 ## Why it is shaped like this
 
 **One agent per issue.** PRs #57 and #58 both fixed issue #17, in different

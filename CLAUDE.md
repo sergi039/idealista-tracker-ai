@@ -61,6 +61,35 @@ pinned version for CI, the hook and you. Rule selection is explicit in
 not stable across releases — do not delete it expecting the default to be
 equivalent.
 
+### Keeping the container current
+
+The same installer enables `.githooks/post-merge`: **when main lands in a
+clone, the running container is rebuilt from it.** The image is a `COPY . .`
+snapshot and nothing re-takes it, so a merged fix does not reach the app until
+someone rebuilds — on 2026-08-14 a container served a template that had been
+fixed 15 seconds after the build, through the fix, its commit and its merge,
+for 15 minutes. `/api/healthz` cannot catch that: it renders no template, and
+`routes/main_routes.py` turns a `TemplateSyntaxError` into a redirect.
+
+The hook is narrow on purpose. It acts only on `main`, only when the app
+container is already running, only when the merge touched a path the build
+context contains, and never while a deploy holds the autopilot lock — the
+watcher's own `git merge --ff-only` fires this hook, and the lock is what
+tells the two apart. Before building it parses every template and **refuses**
+rather than snapshot one that does not, because `COPY . .` takes the working
+tree: in a shared checkout that includes a parallel session's half-finished
+edit, which is exactly how the 2026-08-14 image was made. Uncommitted files
+are named in the output rather than allowed to ride in quietly. A single pull
+skips it with `SKIP_AUTO_REBUILD=1 git pull`;
+`tests/test_post_merge_hook.py` pins all of it.
+
+This is the laptop's answer, not a replacement for
+`tools/autopilot/deploy_watcher.sh`: the watcher polls main on the Mac mini
+every five minutes with a health check and a rollback, and correctly refuses
+to deploy a checkout that is on a branch or dirty — which is what a shared
+agent checkout looks like nearly all the time. The hook writes no
+`data/.deployed_sha`; that marker has exactly one writer.
+
 **There is exactly one listing surface: `/properties`** (owner decision,
 2026-08-09, superseding the 2026-08-08 one that kept `/lands` as a second,
 archived page). `/`, the navbar and `/lands` itself all lead there, and that

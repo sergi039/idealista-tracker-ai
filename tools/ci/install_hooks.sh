@@ -23,6 +23,7 @@ if [ -n "$current" ] && [ "$current" != ".githooks" ]; then
 fi
 
 git config core.hooksPath .githooks
-chmod +x .githooks/pre-push tools/ci/local_ci.sh
+chmod +x .githooks/pre-push .githooks/post-merge tools/ci/local_ci.sh
 
-echo "core.hooksPath set to .githooks (local CI gate active on git push)"
+echo "core.hooksPath set to .githooks (local CI gate active on git push,"
+echo "container rebuilt on a merge that brings main into this clone)"

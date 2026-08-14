@@ -1,0 +1,197 @@
+#!/bin/bash
+# Post-merge gate: rebuild the running container when main lands in this
+# clone, so the app never serves an image older than the checkout.
+#
+# Why this exists (2026-08-14). The image is built by `COPY . .`, so it is a
+# snapshot of whatever the working tree held at build time, and nothing
+# re-takes that snapshot on its own. That day a broken half-applied edit was
+# snapshotted at 11:59 by a *different* session building to look at its own
+# change - the checkout is shared. The edit was fixed 15 seconds later
+# (11:59:39), committed at 12:03 and merged at 12:10, and the container went
+# on serving the 11:59 image through all three, because none of them rebuild
+# anything. Every /properties/<id> page redirected with an error flash for 15
+# minutes while /api/healthz stayed green - it renders no template, so it
+# cannot see a broken one.
+#
+# The Mac mini already solves this with tools/autopilot/deploy_watcher.sh on a
+# 5-minute timer. This clone cannot use it: agents work here on their own
+# branches with uncommitted files, and the watcher deliberately refuses to
+# deploy someone's working tree. A hook fires at the one moment that is
+# unambiguous instead - main just landed here.
+#
+# Scope is deliberately narrow. It rebuilds only when
+#   - HEAD is main: a branch build stays whatever the agent built for it,
+#   - the app container is already running: never start a stack someone stopped,
+#   - the merge touched a path the build context actually contains,
+#   - no deploy holds the autopilot lock. The watcher's own `git merge
+#     --ff-only` fires this hook, and the lock is what tells the two apart.
+#
+# It does not write data/.deployed_sha: that marker is the watcher's
+# bookkeeping and has exactly one writer. On a machine running both, a
+# hand-pull rebuild here costs the watcher one redundant redeploy on its next
+# tick - which its own comments prefer over a marker that might lie.
+#
+# Enabled per-clone by tools/ci/install_hooks.sh (core.hooksPath=.githooks).
+# Bypass one pull: SKIP_AUTO_REBUILD=1 git pull
+
+set -u
+
+log() { printf 'post-merge: %s\n' "$*"; }
+
+if [ "${SKIP_AUTO_REBUILD:-0}" = "1" ]; then
+    log "SKIP_AUTO_REBUILD=1 set, leaving the container alone"
+    exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$repo_root" ] || [ ! -d "$repo_root" ]; then
+    log "not inside a work tree, nothing to rebuild"
+    exit 0
+fi
+
+target_branch="${AUTO_REBUILD_BRANCH:-main}"
+branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+if [ "$branch" != "$target_branch" ]; then
+    log "on '${branch:-unknown}', not '${target_branch}' - a branch build stays whatever was built for it"
+    exit 0
+fi
+
+# What the merge actually moved. git writes ORIG_HEAD before the merge; with no
+# range to read, "cannot tell" has to mean rebuild.
+changed=""
+have_range=0
+if git rev-parse -q --verify ORIG_HEAD >/dev/null 2>&1; then
+    if changed="$(git diff --name-only ORIG_HEAD HEAD 2>/dev/null)"; then
+        have_range=1
+    fi
+fi
+
+if [ "$have_range" = "1" ]; then
+    if [ -z "$changed" ]; then
+        log "merge moved no files - nothing to rebuild"
+        exit 0
+    fi
+    # Only paths .dockerignore provably keeps out of the build context. Its
+    # `*.md` is a root-level pattern (docker matches per path element), so
+    # docs/*.md is NOT excluded and is not listed here: a rebuild it does not
+    # need costs nine seconds, and a skip that is wrong costs another stale
+    # container.
+    if ! printf '%s\n' "$changed" | grep -qvE '^[^/]*\.md$|^tests/|^attached_assets/'; then
+        log "merge touched only paths the build context excludes - image unchanged"
+        exit 0
+    fi
+fi
+
+cd "$repo_root" || exit 0
+
+compose_file="${AUTO_REBUILD_COMPOSE_FILE:-docker-compose.yml}"
+container="${COMPOSE_CONTAINER_PREFIX:-idealista}-app"
+health_url="${AUTO_REBUILD_HEALTH_URL:-http://127.0.0.1:5001/api/healthz}"
+health_timeout="${AUTO_REBUILD_HEALTH_TIMEOUT:-120}"
+
+if ! command -v docker >/dev/null 2>&1; then
+    log "docker is not on PATH - cannot rebuild ${container}"
+    exit 0
+fi
+
+if [ -z "$(docker ps --filter "name=^/${container}$" --format '{{.Names}}' 2>/dev/null)" ]; then
+    log "${container} is not running - leaving it stopped"
+    exit 0
+fi
+
+# The watcher holds this while it deploys, and its `git merge --ff-only` runs
+# this hook. Failing to take it means a deploy is already under way and will
+# rebuild; taking it means no deploy can start on top of this build.
+lock_lib="${repo_root}/tools/autopilot/lib/lock.sh"
+if [ -r "$lock_lib" ]; then
+    # shellcheck source=tools/autopilot/lib/lock.sh
+    . "$lock_lib"
+    if ! autopilot_acquire_lock "${AUTOPILOT_LOCK_DIR:-/tmp/idealista-autopilot-deploy.lock.d}"; then
+        log "a deploy is already in progress - it will rebuild, skipping"
+        exit 0
+    fi
+fi
+
+# A syntactically broken template is invisible to the build, to healthz and to
+# the route (routes/main_routes.py turns TemplateSyntaxError into a redirect),
+# so it is caught here or not at all. It matters most for exactly the case that
+# caused this hook: uncommitted work from a parallel session riding into the
+# snapshot.
+python_bin=""
+for cand in "${AUTO_REBUILD_PYTHON:-}" "${repo_root}/.venv/bin/python" python3; do
+    [ -n "$cand" ] || continue
+    if command -v "$cand" >/dev/null 2>&1; then
+        python_bin="$cand"
+        break
+    fi
+done
+
+if [ -z "$python_bin" ]; then
+    log "no python found - skipping the template check (the build is NOT verified)"
+else
+    parse_out="$(
+        "$python_bin" - <<'PY' 2>&1
+import pathlib
+import sys
+
+try:
+    from jinja2 import Environment
+except ImportError:
+    sys.exit(2)
+
+env = Environment()
+broken = []
+for path in sorted(pathlib.Path("templates").rglob("*.html")):
+    try:
+        env.parse(path.read_text(), name=str(path), filename=str(path))
+    except Exception as exc:  # noqa: BLE001 - report whatever jinja raises
+        broken.append(f"{path}: {exc}")
+
+if broken:
+    print("\n".join(broken))
+    sys.exit(1)
+PY
+    )"
+    parse_rc=$?
+    if [ "$parse_rc" = "1" ]; then
+        log "REFUSING TO BUILD - a template does not parse:"
+        printf '  %s\n' "$parse_out"
+        log "the container still serves the previous image; fix the template and pull again"
+        exit 0
+    elif [ "$parse_rc" = "2" ]; then
+        log "jinja2 not importable by ${python_bin} - skipping the template check"
+    fi
+fi
+
+# `COPY . .` takes the working tree, not HEAD. Uncommitted files - including a
+# parallel session's - land in the image, so name them rather than let them
+# ride in silently.
+dirty="$(git status --porcelain 2>/dev/null || true)"
+if [ -n "$dirty" ]; then
+    log "WARNING: the working tree is dirty; these files go into the image as they are:"
+    printf '%s\n' "$dirty" | sed 's/^/  /'
+fi
+
+sha="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+log "rebuilding ${container} at ${sha:0:7} ..."
+if ! docker compose -f "$compose_file" up -d --build; then
+    log "REBUILD FAILED - the container is still serving the previous image"
+    log "  retry by hand: docker compose -f ${compose_file} up -d --build"
+    exit 0
+fi
+
+deadline=$((SECONDS + health_timeout))
+while [ "$SECONDS" -lt "$deadline" ]; do
+    body="$(curl -fsS --max-time 10 "$health_url" 2>/dev/null || true)"
+    case "$body" in
+        *'"ok":true'*)
+            log "rebuilt ${sha:0:7}, health OK: ${body}"
+            exit 0
+            ;;
+    esac
+    sleep 5
+done
+
+log "REBUILT ${sha:0:7} BUT ${health_url} DID NOT REPORT ok:true WITHIN ${health_timeout}s"
+log "  look at it: docker compose -f ${compose_file} logs --tail 50 app"
+exit 0
