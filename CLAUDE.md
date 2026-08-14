@@ -56,9 +56,9 @@ blank and the `#!/bin/bash` under it was not a shebang; `execve` returned
 ENOEXEC, bash re-executed each stub with *itself*, and Homebrew bash's locale
 init (gettext → CoreFoundation) segfaults on the child side of a fork in a
 multi-threaded parent. Apple's `/bin/bash` links neither library, which is why
-the crash needed this Mac *and* a full-suite run. The three sibling test files
-now assert the shebang, because three diverging copies of `_write_executable`
-is how the one that mattered lost it.
+the crash needed this Mac *and* a full-suite run. All three merge_bot test
+files now assert the shebang, because three diverging copies of
+`_write_executable` is how the one that mattered lost it.
 
 Two lessons outlive that fix. **Three clean re-runs in isolation clear
 nothing**: the file passed alone in half a second every time, so a session
