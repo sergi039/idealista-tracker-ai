@@ -275,6 +275,26 @@
             </div>
         </div>
 
+        {# Turning the pool criterion on is a two-step save (proposal D17):
+           the weight save above answers with a dry-run preview, and this
+           banner carries the explicit confirm that actually rescores. #}
+        {% if session.get('pending_scoring_profile') == profile.id %}
+            <div class="alert alert-warning d-flex flex-wrap align-items-center justify-content-between gap-2">
+                <div>
+                    <i class="fas fa-person-swimming me-1"></i>
+                    A pool-scoring preview is pending — see the message above.
+                    Confirming rescored every listing in this subscription.
+                </div>
+                <form method="POST" class="mb-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <input type="hidden" name="action" value="confirm_pool_scoring">
+                    <button type="submit" class="btn btn-sm btn-warning">
+                        Confirm pool scoring
+                    </button>
+                </form>
+            </div>
+        {% endif %}
+
         {# The one place these weights are edited. They used to be a raw JSON
            textarea, which is why /criteria — a page for a different scorer
            entirely — looked like the place to tune scoring (#239). Every field

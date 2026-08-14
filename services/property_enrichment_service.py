@@ -9,6 +9,7 @@ from models import Property
 from services.enrichment_service import EnrichmentService
 from services.property_location_service import PropertyLocationService
 from services.property_scoring_service import PropertyScoringService
+from services.pool_service import PoolService
 from services.property_travel_service import PropertyTravelService, travel_api_state
 from services.quality_of_life_service import QualityOfLifeService
 from services.sea_distance_service import SeaDistanceService
@@ -35,6 +36,7 @@ class PropertyEnrichmentService:
         sea_distance_service: Optional[SeaDistanceService] = None,
         enrichment_service: Optional[EnrichmentService] = None,
         quality_of_life_service: Optional["QualityOfLifeService"] = None,
+        pool_service: Optional["PoolService"] = None,
     ):
         self.location_service = location_service or PropertyLocationService()
         self.travel_service = travel_service or PropertyTravelService()
@@ -47,6 +49,12 @@ class PropertyEnrichmentService:
         # EnrichmentService instance, so one gate paces both lookups.
         self.quality_of_life_service = quality_of_life_service or QualityOfLifeService(
             enrichment_service=self.enrichment_service
+        )
+        # Same sharing for the pool lookup (Overpass) and its drive times
+        # (the travel service's own Distance Matrix client and caches).
+        self.pool_service = pool_service or PoolService(
+            enrichment_service=self.enrichment_service,
+            travel_service=self.travel_service,
         )
 
     def enrich_property(
@@ -139,6 +147,18 @@ class PropertyEnrichmentService:
 
         ok = self.travel_service.calculate_for_property(prop, commit=False)
         travel_state = travel_api_state(prop)
+
+        # Pool discovery + drive times (proposal D17): OSM via the shared
+        # gate plus ≤3 Distance Matrix elements (and, only on the empty
+        # path, one budgeted Text Search). Before scoring, because
+        # `pool_score` reads it — though it ships at weight 0, so nothing
+        # moves until the owner turns it on. A failure never fails the run.
+        try:
+            self.pool_service.enrich(prop, commit=False)
+        except Exception as e:
+            logger.warning(
+                "Pool enrichment failed for %s: %s", getattr(prop, "id", None), e
+            )
 
         if recalc_scoring:
             try:

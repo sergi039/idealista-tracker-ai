@@ -1170,6 +1170,50 @@ class PropertyTravelService:
             estimated=True,
         )
 
+    def measure_drive_minutes(
+        self, lat: float, lon: float, points: List[tuple]
+    ) -> List[Dict[str, Any]]:
+        """Drive minutes to a few coordinate pairs (proposal D17's pool path).
+
+        Returns one `{"minutes": int|None, "refused": bool}` per point, and
+        that shape is the #98 rule in miniature: Google answering
+        ZERO_RESULTS (no road route) is a *measurement* with no minutes,
+        while a refused request is `refused=True` — collapsing both to None
+        would make an unreachable pool look like an unanswered call and
+        re-bill it on every rerun. Answers cache 7 days; a batch containing
+        any refusal is never cached.
+        """
+        if not points:
+            return []
+        destinations = [f"{float(p[0])},{float(p[1])}" for p in points]
+        cache_key = (
+            "drive_minutes_v2:"
+            + hashlib.md5("|".join(destinations).encode()).hexdigest()[:10]
+        )
+        cached = get_cached_enrichment_data(lat, lon, cache_key)
+        if isinstance(cached, list) and len(cached) == len(destinations):
+            return cached
+
+        results = self._distance_matrix_batch(lat, lon, destinations, mode="driving")
+        readings: List[Dict[str, Any]] = []
+        for result in results:
+            if result.failure is not None:
+                readings.append({"minutes": None, "refused": True})
+            elif result.duration_s is None:
+                readings.append({"minutes": None, "refused": False})
+            else:
+                readings.append(
+                    {"minutes": int(round(result.duration_s / 60.0)), "refused": False}
+                )
+        if not any(reading["refused"] for reading in readings):
+            try:
+                cache_enrichment_data(
+                    lat, lon, cache_key, readings, timeout=60 * 60 * 24 * 7
+                )
+            except Exception:
+                logger.warning("Could not cache drive minutes", exc_info=True)
+        return readings
+
     def _distance_matrix_batch(
         self, lat: float, lon: float, destinations: List[str], mode: str
     ) -> List[DistanceResult]:

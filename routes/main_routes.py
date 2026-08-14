@@ -1,13 +1,14 @@
 import logging
 import math
 import uuid
-from datetime import timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 from flask import (
     Blueprint,
     render_template,
     request,
     redirect,
+    session,
     url_for,
     flash,
     jsonify,
@@ -1429,12 +1430,119 @@ def edit_profile(profile_id):
                 )
                 return redirect(url_for("main.edit_profile", profile_id=profile_id))
 
+            # Turning the pool criterion ON is the one save that re-scores
+            # every listing in the subscription by design (proposal D17, the
+            # agreed weight-0 shipping rule): it must not happen from a save
+            # that merely *looked* like the others. The transition to a
+            # positive pool weight therefore shows a dry-run preview first
+            # and commits only on the explicit confirm below.
+            def _pool_weight_enabled(cats: dict) -> bool:
+                # Every level is isinstance-guarded: `categories` can hold a
+                # hand-written category whose branch is a scalar (#239 keeps
+                # unmanaged keys), and a crash here would take the whole save
+                # down (diff review, 2026-08-14).
+                if not isinstance(cats, dict):
+                    return False
+                for cat_cfg in cats.values():
+                    if not isinstance(cat_cfg, dict):
+                        continue
+                    for branch in ("investment", "lifestyle"):
+                        branch_cfg = cat_cfg.get(branch)
+                        if not isinstance(branch_cfg, dict):
+                            continue
+                        weight = branch_cfg.get("pool_score")
+                        if (
+                            isinstance(weight, (int, float))
+                            and not isinstance(weight, bool)
+                            and weight > 0
+                        ):
+                            return True
+                return False
+
+            stored_before = (
+                profile.scoring_config
+                if isinstance(profile.scoring_config, dict)
+                else {}
+            )
+            pool_turning_on = _pool_weight_enabled(categories) and not (
+                _pool_weight_enabled(stored_before.get("categories") or {})
+            )
+
+            if pool_turning_on:
+                # Dry run: stage, rescore, measure, roll everything back.
+                # Every score column is diffed, not just lifestyle: the
+                # weight can be enabled on the investment branch, which moves
+                # investment and the combined total while lifestyle sits
+                # still — a preview reporting "0 would change" before a mass
+                # rescore is worse than none (diff review, 2026-08-14).
+                before = {
+                    p.id: (p.score_investment, p.score_lifestyle, p.score_total)
+                    for p in Property.query.filter_by(
+                        search_profile_id=profile.id
+                    ).all()
+                }
+                profile.scoring_config = stored or None
+                preview_service = PropertyScoringService()
+                changed = 0
+                deltas = []
+                for prop in Property.query.filter_by(
+                    search_profile_id=profile.id
+                ).all():
+                    preview_service.calculate_for_property(prop, commit=False)
+                    old = before.get(prop.id, (None, None, None))
+                    new = (
+                        prop.score_investment,
+                        prop.score_lifestyle,
+                        prop.score_total,
+                    )
+                    # A score appearing or disappearing is a change too: with
+                    # the pool weight on, a listing whose other components
+                    # were all unmeasured goes None → 100 (measured earlier
+                    # by this very preview, which is what caught it).
+                    row_changed = False
+                    for old_value, new_value in zip(old, new):
+                        if (old_value is None) != (new_value is None):
+                            row_changed = True
+                        elif old_value is not None and new_value is not None:
+                            if abs(float(new_value) - float(old_value)) >= 0.05:
+                                row_changed = True
+                    if row_changed:
+                        changed += 1
+                        # The combined total is the number the owner reads on
+                        # the list, so it is what the mean shift reports.
+                        if old[2] is not None and new[2] is not None:
+                            deltas.append(float(new[2]) - float(old[2]))
+                db.session.rollback()
+
+                session["pending_scoring_config"] = stored
+                session["pending_scoring_profile"] = profile.id
+                # What the preview diffed against. A normal save between
+                # preview and confirm would otherwise be silently reverted by
+                # the stale snapshot (diff review, 2026-08-14).
+                session["pending_scoring_baseline"] = stored_before or {}
+                mean_delta = (sum(deltas) / len(deltas)) if deltas else 0.0
+                flash(
+                    "Pool criterion preview: "
+                    f"{changed} of {len(before)} listings would change score "
+                    f"(mean total shift {mean_delta:+.1f}). Nothing is saved "
+                    "yet — press «Confirm pool scoring» below to apply.",
+                    "warning",
+                )
+                return redirect(url_for("main.edit_profile", profile_id=profile_id))
+
             # Staged, then rescored, then committed once. Committing the config
             # first meant a failure inside the loop left the weights stored, no
             # score recomputed, and a 500 telling the owner nothing was saved
             # (#256). The rescore reads the staged config through the session,
             # so it still sees the new weights.
             profile.scoring_config = stored or None
+
+            # This save supersedes any pending pool preview: confirming it
+            # afterwards would write the older snapshot over what was just
+            # stored (diff review, 2026-08-14).
+            session.pop("pending_scoring_config", None)
+            session.pop("pending_scoring_profile", None)
+            session.pop("pending_scoring_baseline", None)
 
             rescored = 0
             scoring_service = PropertyScoringService()
@@ -1445,6 +1553,49 @@ def edit_profile(profile_id):
 
             flash(
                 f"Scoring saved; {rescored} listings in this subscription rescored.",
+                "success",
+            )
+            return redirect(url_for("main.edit_profile", profile_id=profile_id))
+
+        if action == "confirm_pool_scoring":
+            from services.property_scoring_service import PropertyScoringService
+
+            pending = session.pop("pending_scoring_config", None)
+            pending_profile = session.pop("pending_scoring_profile", None)
+            baseline = session.pop("pending_scoring_baseline", None)
+            if not isinstance(pending, dict) or pending_profile != profile.id:
+                flash(
+                    "No pending pool-scoring preview for this subscription — "
+                    "save the weights again to get one.",
+                    "error",
+                )
+                return redirect(url_for("main.edit_profile", profile_id=profile_id))
+
+            # Belt and braces beside the pops above: if the stored config no
+            # longer matches what the preview diffed against, something else
+            # changed it and this snapshot would silently revert that change.
+            current = (
+                profile.scoring_config
+                if isinstance(profile.scoring_config, dict)
+                else {}
+            )
+            if isinstance(baseline, dict) and current != baseline:
+                flash(
+                    "The scoring changed since that preview — nothing applied. "
+                    "Save the weights again to get a fresh preview.",
+                    "error",
+                )
+                return redirect(url_for("main.edit_profile", profile_id=profile_id))
+
+            profile.scoring_config = pending or None
+            rescored = 0
+            scoring_service = PropertyScoringService()
+            for prop in Property.query.filter_by(search_profile_id=profile.id).all():
+                if scoring_service.calculate_for_property(prop, commit=False):
+                    rescored += 1
+            db.session.commit()
+            flash(
+                f"Pool criterion enabled; {rescored} listings rescored.",
                 "success",
             )
             return redirect(url_for("main.edit_profile", profile_id=profile_id))
@@ -1954,6 +2105,49 @@ def land_detail(land_id):
         return redirect(url_for("main.lands"))
 
 
+@main_bp.route("/properties/<int:property_id>/pool-absence", methods=["POST"])
+def set_pool_absence(property_id):
+    """The owner's hand-set 'no pool here' verdict (proposal D17).
+
+    The only path to a true pool-score 0: computed absence stays None
+    because one Text Search proves nothing about completeness. The flag
+    lives inside enrichment.pool, survives recomputes (pool_service keeps
+    it), and clearing it puts the property back on the computed path.
+    Rescores immediately so the flag never disagrees with the score.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from services.property_scoring_service import PropertyScoringService
+
+    prop = db.get_or_404(Property, property_id)
+    action = (request.form.get("pool_absence") or "").strip()
+    if action not in ("set", "clear"):
+        flash("Unknown pool-absence action.", "error")
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    enrichment = dict(prop.enrichment) if isinstance(prop.enrichment, dict) else {}
+    pool = (
+        dict(enrichment.get("pool")) if isinstance(enrichment.get("pool"), dict) else {}
+    )
+    if action == "set":
+        pool["owner_no_pool"] = {
+            "set_at": datetime.now(timezone.utc).isoformat(),
+            "source": "owner",
+        }
+        message = "Recorded: no usable pool near this property (score 0)."
+    else:
+        pool.pop("owner_no_pool", None)
+        message = "Cleared: the pool score follows the measurements again."
+    enrichment["pool"] = pool
+    prop.enrichment = enrichment
+    flag_modified(prop, "enrichment")
+
+    PropertyScoringService().calculate_for_property(prop, commit=False)
+    db.session.commit()
+    flash(message, "success")
+    return redirect(url_for("main.property_detail", property_id=property_id))
+
+
 @main_bp.route("/map")
 def map_view():
     """Interactive map view of all properties with coordinates"""
@@ -2112,6 +2306,7 @@ def map_view():
                     "url": prop.url,
                     "municipality": prop.municipality,
                     "travel": prop.travel if isinstance(prop.travel, dict) else None,
+                    "is_favorite": bool(prop.is_favorite),
                 }
             )
 
