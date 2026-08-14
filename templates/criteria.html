@@ -452,9 +452,9 @@
                                 {% endif %}
                             </small>
                             <form method="POST" action="{{ url_for('main.refresh_market_settings') }}" class="mb-0"
-                                  onsubmit="return confirm('Refresh market settings with AI? This runs one Claude request on the subscription bridge and may take a minute.');">
+                                  id="ai-refresh-form">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                                <button type="submit" class="btn btn-sm btn-outline-primary">
+                                <button type="submit" class="btn btn-sm btn-outline-primary" id="ai-refresh-button">
                                     <i class="fas fa-sync-alt me-1"></i>Refresh with AI
                                 </button>
                             </form>
@@ -850,6 +850,42 @@ document.addEventListener('DOMContentLoaded', function() {
         if (tabTrigger && window.bootstrap && bootstrap.Tab) {
             bootstrap.Tab.getOrCreateInstance(tabTrigger).show();
         }
+    }
+
+    // AI refresh: the POST runs one synchronous bridge call that takes a few
+    // minutes (issue #276), so once the owner confirms, the button becomes a
+    // spinner and stays disabled — a second press mid-wait would be a second
+    // paid bridge call. The synchronous form POST itself stays as is: a
+    // polling variant would need a state-changing JSON endpoint, and those
+    // are CSRF-exempt (see app.py).
+    const aiRefreshForm = document.getElementById('ai-refresh-form');
+    const aiRefreshBtn = document.getElementById('ai-refresh-button');
+    if (aiRefreshForm && aiRefreshBtn) {
+        const idleHtml = aiRefreshBtn.innerHTML;
+        aiRefreshForm.addEventListener('submit', function (event) {
+            if (aiRefreshBtn.disabled) {
+                event.preventDefault();
+                return;
+            }
+            if (!confirm('Refresh market settings with AI? This runs one Claude request on the subscription bridge and can take a few minutes.')) {
+                event.preventDefault();
+                return;
+            }
+            // Disabling inside the submit handler does not cancel the
+            // already-dispatched submission; it only blocks further presses.
+            aiRefreshBtn.disabled = true;
+            aiRefreshBtn.innerHTML =
+                '<span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>' +
+                'Refreshing… can take a few minutes';
+        });
+        // Coming back to a bfcache-restored page must not leave the button
+        // stuck on the spinner: the request it announced is long gone.
+        window.addEventListener('pageshow', function (event) {
+            if (event.persisted && aiRefreshBtn.disabled) {
+                aiRefreshBtn.disabled = false;
+                aiRefreshBtn.innerHTML = idleHtml;
+            }
+        });
     }
 
     // Reference cities add/remove UI
