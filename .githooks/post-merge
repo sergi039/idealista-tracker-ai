@@ -1,0 +1,345 @@
+#!/bin/bash
+# Post-merge gate: rebuild the running container when main lands in this
+# clone, so the app never serves an image older than the checkout.
+#
+# Why this exists (2026-08-14). The image is built by `COPY . .`, so it is a
+# snapshot of whatever the working tree held at build time, and nothing
+# re-takes that snapshot on its own. That day a broken half-applied edit was
+# snapshotted at 11:59 by a *different* session building to look at its own
+# change - the checkout is shared. The edit was fixed 15 seconds later
+# (11:59:39), committed at 12:03 and merged at 12:10, and the container went
+# on serving the 11:59 image through all three, because none of them rebuild
+# anything. Every /properties/<id> page redirected with an error flash for 15
+# minutes while /api/healthz stayed green - it renders no template, so it
+# cannot see a broken one.
+#
+# This hook is for machines that have no deployer. Where
+# tools/autopilot/deploy_watcher.sh is installed - the Mac mini - it stands
+# down entirely: the watcher polls main every 5 minutes, tags a rollback image,
+# rebuilds, health-checks and records data/.deployed_sha, and a rebuild started
+# behind its back would become the checkpoint it rolls back *to*. One deployer
+# per machine.
+#
+# Scope, deliberately narrow. It acts only when
+#   - HEAD is main: a branch build stays whatever the agent built for it,
+#   - this is the main worktree: a linked worktree is a different tree from the
+#     one the running stack was built from,
+#   - no deployer owns this machine (above),
+#   - the app container is already running: never start a stack someone stopped,
+#   - no deploy holds the autopilot lock.
+#
+# Before building it parses every template with jinja2 and every .py with ast,
+# and refuses rather than snapshot a tree that does not - `COPY . .` takes the
+# working tree, half-finished neighbours included. That is per-file syntax and
+# nothing more: a missing include, an unknown filter or a dropped jinja global
+# all parse and still render as the same 302. When no interpreter here can
+# import jinja2 the check cannot run at all, and a check that did not run must
+# never read as one that passed - so a dirty tree is refused outright and a
+# clean one is built with "not parsed locally" carried into the final line.
+#
+# The image the running container came from is tagged before the build, and a
+# rebuild is rolled back to it unless the app both answers healthz AND renders
+# a real page - healthz alone is what made the 2026-08-14 container look fine
+# for 15 minutes. The tree is never rolled back the way deploy_watcher.sh does
+# it: this checkout is shared, and a `git reset --hard` here would delete
+# another session's uncommitted work.
+#
+# It does not write data/.deployed_sha: that marker is the watcher's
+# bookkeeping and has exactly one writer.
+#
+# A wedged Docker daemon parks the `git pull` this runs inside, holding the
+# deploy lock, until the daemon answers. Ctrl-C is safe: the merge has already
+# landed, and the kernel drops the lock when this process dies.
+#
+# Enabled per-clone by tools/ci/install_hooks.sh (core.hooksPath=.githooks).
+# Bypass one pull: SKIP_AUTO_REBUILD=1 git pull
+
+set -u
+
+log() { printf 'post-merge: %s\n' "$*"; }
+
+if [ "${SKIP_AUTO_REBUILD:-0}" = "1" ]; then
+    log "SKIP_AUTO_REBUILD=1 set, leaving the container alone"
+    exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$repo_root" ] || [ ! -d "$repo_root" ]; then
+    log "not inside a work tree, nothing to rebuild"
+    exit 0
+fi
+
+# A linked worktree holds a different tree from the one the running stack was
+# built from, under the same container names. Rebuilding from here would put
+# this worktree's code behind the shared checkout's container.
+git_dir="$(git rev-parse --absolute-git-dir 2>/dev/null || true)"
+common_dir="$(cd "$(git rev-parse --git-common-dir 2>/dev/null || echo .)" 2>/dev/null && pwd || true)"
+if [ -n "$git_dir" ] && [ -n "$common_dir" ] && [ "$git_dir" != "$common_dir" ]; then
+    log "linked worktree - its tree is not what the running stack was built from, skipping"
+    exit 0
+fi
+
+target_branch="${AUTO_REBUILD_BRANCH:-main}"
+branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+if [ "$branch" != "$target_branch" ]; then
+    log "on '${branch:-unknown}', not '${target_branch}' - a branch build stays whatever was built for it"
+    exit 0
+fi
+
+# One deployer per machine. Where the watcher runs, it owns the rebuild, the
+# rollback image and the marker; a rebuild from here would silently become the
+# image its next tick tags as the last known good one.
+watcher_plist="${HOME:-/nonexistent}/Library/LaunchAgents/com.idealista.deploy-watcher.plist"
+if [ -f "$watcher_plist" ] ||
+    launchctl list 2>/dev/null | grep -q 'com\.idealista\.deploy-watcher'; then
+    log "deploy_watcher.sh owns this machine - leaving the rebuild to it (it has the rollback)"
+    exit 0
+fi
+
+cd "$repo_root" || exit 0
+
+compose_file="${AUTO_REBUILD_COMPOSE_FILE:-docker-compose.yml}"
+health_timeout="${AUTO_REBUILD_HEALTH_TIMEOUT:-120}"
+
+if ! command -v docker >/dev/null 2>&1; then
+    log "docker is not on PATH - cannot rebuild anything"
+    exit 0
+fi
+
+# The probes are bounded because they run inside someone's `git pull`; the build
+# below is not, because killing a `compose up` mid-flight can leave the stack
+# half-recreated and a cold build outlasts any fixed ceiling.
+docker_probe() {
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 10 docker "$@"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout 10 docker "$@"
+    else
+        docker "$@"
+    fi
+}
+
+# Ask compose which container the app service is, instead of rebuilding
+# ${COMPOSE_CONTAINER_PREFIX} out of this shell's environment: compose reads
+# that variable from the project's .env, which the dual-build contract in
+# docs/DEV_RULES.md sets per worktree. Guessing it means gating on one stack
+# and building another.
+container="$(docker_probe compose -f "$compose_file" ps --status running --format '{{.Name}}' app 2>/dev/null | head -1)"
+if [ -z "$container" ]; then
+    log "the app service of ${compose_file} is not running here - leaving it stopped"
+    exit 0
+fi
+
+# Same source for the published port: APP_HOST_PORT also lives in that .env.
+if [ -n "${AUTO_REBUILD_BASE_URL:-}" ]; then
+    base_url="${AUTO_REBUILD_BASE_URL%/}"
+else
+    mapped="$(docker_probe compose -f "$compose_file" port app 5001 2>/dev/null | head -1)"
+    port="${mapped##*:}"
+    case "$port" in
+        '' | *[!0-9]*) port=5001 ;;
+    esac
+    base_url="http://127.0.0.1:${port}"
+fi
+health_url="${base_url}/api/healthz"
+# healthz renders no template, and routes/main_routes.py turns a template
+# failure into a redirect with a flash - which is exactly why the 2026-08-14
+# container looked healthy for 15 minutes while every property page was
+# broken. So a rebuild is not accepted until a page that actually renders a
+# template answers 200; a 302 here is the failure, not a detail.
+render_url="${base_url}${AUTO_REBUILD_RENDER_PATH:-/properties}"
+
+# The image the running container was made from is what a rollback restores.
+image="$(docker_probe inspect --format '{{.Config.Image}}' "$container" 2>/dev/null | head -1)"
+image_base="$image"
+case "${image##*/}" in
+    *:*) image_base="${image%:*}" ;;
+esac
+# Deliberately NOT the watcher's ${image}:autopilot-rollback: two writers on one
+# checkpoint tag is how a bad build becomes the thing you roll back to.
+rollback_tag="${image_base}:post-merge-rollback"
+
+# Taking this means no deploy can start on top of the build below.
+lock_lib="${repo_root}/tools/autopilot/lib/lock.sh"
+if [ -r "$lock_lib" ]; then
+    # shellcheck source=tools/autopilot/lib/lock.sh
+    . "$lock_lib"
+    if ! autopilot_acquire_lock "${AUTOPILOT_LOCK_DIR:-/tmp/idealista-autopilot-deploy.lock.d}"; then
+        log "another rebuild holds the deploy lock - it is building this same main, skipping"
+        exit 0
+    fi
+fi
+
+# `COPY . .` takes the working tree, not HEAD. Uncommitted files - including a
+# parallel session's half-finished edit - land in the image, so name them
+# rather than let them ride in silently.
+dirty="$(git status --porcelain 2>/dev/null || true)"
+if [ -n "$dirty" ]; then
+    log "WARNING: the working tree is dirty; these files go into the image as they are:"
+    printf '%s\n' "$dirty" | sed 's/^/  /'
+fi
+
+# Syntax that a build cannot see, healthz cannot see (it renders no template)
+# and the route hides (routes/main_routes.py turns TemplateSyntaxError into a
+# redirect). Caught here or not at all. Needs an interpreter that can import
+# jinja2 - "python3 exists" is not that, so probe rather than assume.
+python_bin=""
+for cand in "${AUTO_REBUILD_PYTHON:-}" "${repo_root}/.venv/bin/python" python3; do
+    [ -n "$cand" ] || continue
+    command -v "$cand" >/dev/null 2>&1 || continue
+    if "$cand" -c 'import jinja2' >/dev/null 2>&1; then
+        python_bin="$cand"
+        break
+    fi
+done
+
+checked_note=""
+if [ -n "$python_bin" ]; then
+    gate_out="$(
+        "$python_bin" - <<'PY' 2>&1
+import ast
+import pathlib
+import sys
+
+from jinja2 import Environment
+
+SKIP = {".git", ".venv", "venv", "node_modules", "data", "__pycache__", ".pytest_cache"}
+problems = []
+
+templates = sorted(pathlib.Path("templates").rglob("*.html"))
+if not templates:
+    # An empty sweep must never read as a clean one - that is how a check
+    # reports success for something it never looked at.
+    print("templates/: no .html found - this is not a checkout of this app")
+    sys.exit(1)
+
+env = Environment()
+for path in templates:
+    try:
+        env.parse(path.read_text(), name=str(path), filename=str(path))
+    except Exception as exc:  # noqa: BLE001 - report whatever jinja raises
+        problems.append(f"{path}: {exc}")
+
+for path in sorted(pathlib.Path(".").rglob("*.py")):
+    if any(part in SKIP for part in path.parts):
+        continue
+    try:
+        ast.parse(path.read_text(), filename=str(path))
+    except SyntaxError as exc:
+        problems.append(f"{path}: {exc}")
+    except OSError:
+        continue
+
+if problems:
+    print("\n".join(problems))
+    sys.exit(1)
+PY
+    )"
+    gate_rc=$?
+    case "$gate_rc" in
+        0)
+            checked_note=""
+            ;;
+        1)
+            log "REFUSING TO BUILD - this tree does not parse:"
+            printf '  %s\n' "$gate_out"
+            log "the container still serves the previous image; fix it and pull again"
+            exit 0
+            ;;
+        *)
+            log "the pre-build check itself failed (exit ${gate_rc}) under ${python_bin}:"
+            printf '  %s\n' "$gate_out"
+            python_bin=""
+            ;;
+    esac
+fi
+
+if [ -z "$python_bin" ]; then
+    # Never let "could not check" read as "checked". With a dirty tree there is
+    # uncommitted code here that nothing has ever verified, so refuse; with a
+    # clean tree the image is main exactly as CI parsed it, so build and say
+    # plainly that nothing was parsed locally.
+    if [ -n "$dirty" ]; then
+        log "REFUSING TO BUILD - no interpreter here can import jinja2, so the working"
+        log "  tree cannot be checked, and it is dirty. Run 'uv sync', or set"
+        log "  AUTO_REBUILD_PYTHON to an interpreter that has jinja2."
+        exit 0
+    fi
+    checked_note=" (not parsed locally: no jinja2; clean tree, as CI checked it)"
+fi
+
+sha="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+
+# Checkpoint before the build: `up --build` overwrites the tag in place, so
+# without this the last working image is gone the moment a bad one is built.
+have_rollback=0
+if [ -n "$image" ] && docker tag "$image" "$rollback_tag" 2>/dev/null; then
+    have_rollback=1
+else
+    log "WARNING: could not tag the running image - a failed rebuild cannot be rolled back"
+fi
+
+healthy() {
+    local deadline=$((SECONDS + $1)) body
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        body="$(curl -fsS --max-time 10 "$health_url" 2>/dev/null || true)"
+        case "$body" in
+            *'"ok":true'*)
+                health_body="$body"
+                return 0
+                ;;
+        esac
+        sleep 5
+    done
+    return 1
+}
+
+# Anything but 200 is a failure, redirects included: that is the whole point.
+renders() {
+    render_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$render_url" 2>/dev/null || true)"
+    [ "$render_code" = "200" ]
+}
+
+# The image is rolled back, never the tree: this checkout is shared, and a
+# `git reset --hard` here would delete another session's uncommitted work.
+roll_back() {
+    if [ "$have_rollback" = "0" ]; then
+        log "  no saved image to roll back to - the app is on the new build"
+        return
+    fi
+    log "  rolling the image back to the previous build"
+    if ! docker tag "$rollback_tag" "$image" 2>/dev/null ||
+        ! docker compose -f "$compose_file" up -d --no-build; then
+        log "  ROLLBACK FAILED - THE APP IS DOWN, manual attention needed"
+        return
+    fi
+    if healthy "$health_timeout" && renders; then
+        log "  rollback verified - the previous build is serving again: ${health_body}"
+    else
+        log "  ROLLBACK IS ALSO UNHEALTHY - THE APP IS DOWN, manual attention needed"
+    fi
+}
+
+log "rebuilding ${container} at ${sha:0:7} ..."
+if ! docker compose -f "$compose_file" up -d --build; then
+    log "REBUILD FAILED at ${sha:0:7}"
+    roll_back
+    exit 0
+fi
+
+health_body=""
+render_code=""
+if healthy "$health_timeout"; then
+    if renders; then
+        log "rebuilt ${sha:0:7}${checked_note}: health ${health_body}, ${render_url} 200"
+        exit 0
+    fi
+    log "REBUILT ${sha:0:7}, healthz is green, BUT ${render_url} answered ${render_code:-nothing}"
+    log "  (a 302 is the app catching a template failure and redirecting - the 2026-08-14 shape)"
+else
+    log "REBUILT ${sha:0:7} BUT ${health_url} DID NOT REPORT ok:true WITHIN ${health_timeout}s"
+fi
+
+roll_back
+log "  logs: docker compose -f ${compose_file} logs --tail 50 app"
+exit 0
