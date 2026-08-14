@@ -759,8 +759,90 @@ class TestARefusalNeverErasesAMeasuredVerdict:
             ]
 
             assert detail["geometry"]["reused_measurement"] is True
-            assert detail["origin_unverified"] is True
+            # The label lives on the terrain: it is a fact about where that
+            # measurement was taken, not about this run.
+            assert detail["geometry"]["origin_unverified"] is True
             assert detail["last_attempt_reason"] == "coastline_source_unavailable"
+
+    def test_the_unverified_label_survives_a_second_outage(
+        self, app, reference_files, monkeypatch
+    ):
+        """The label must be sticky, not re-derived from the origin each run.
+
+        Repair #1 stamps the verdict with *today's* `origin` — correct, since
+        that is the coordinate the verdict now describes, and it gives later
+        runs real move-detection. But it also means repair #2 compares that
+        synthetic origin against the same coordinates, finds them equal, and
+        would drop the label while reusing the very same unverified terrain.
+        The row would then read as better-provenanced than it is — #98's shape
+        — so the label rides with the geometry until it is really re-measured.
+        """
+        with app.app_context():
+            legacy = self._measured_verdict("yes")
+            legacy["sea_view_detail"].pop("origin")
+            prop_id = self._stored("sea_view_legacy_twice", legacy)
+
+            first = self._recompute(prop_id, monkeypatch).enrichment["environment"]
+            assert first["sea_view_detail"]["geometry"]["origin_unverified"] is True
+            # Repair #1 recorded today's coordinates, which is what makes the
+            # second comparison agree — the precondition for the defect.
+            assert first["sea_view_detail"]["origin"] == {
+                "lat": COORD_LAT,
+                "lon": COORD_LON,
+            }
+
+            second = self._recompute(prop_id, monkeypatch).enrichment["environment"]
+
+            assert second["sea_view_detail"]["geometry"]["origin_unverified"] is True
+            assert second["sea_view_detail"]["geometry"]["reused_measurement"] is True
+            assert second["sea_view"] == sea_view_service.YES
+
+    def test_the_label_is_read_from_its_previous_home_too(
+        self, app, reference_files, monkeypatch
+    ):
+        """A row repaired by the first version of this guard keeps its label.
+
+        That version stamped `origin_unverified` on the top-level detail and
+        wrote today's `origin` beside it, so such a row now compares as
+        verified. Reading only the geometry would drop the label on its next
+        outage — the same defect, one shape further back.
+        """
+        with app.app_context():
+            previous = self._measured_verdict("yes")
+            previous["sea_view_detail"]["origin_unverified"] = True
+            prop_id = self._stored("sea_view_old_flag_home", previous)
+
+            geometry = self._recompute(prop_id, monkeypatch).enrichment["environment"][
+                "sea_view_detail"
+            ]["geometry"]
+
+            assert geometry["origin_unverified"] is True
+
+    def test_a_successful_re_measurement_clears_the_unverified_label(
+        self, app, reference_files, monkeypatch
+    ):
+        """Sticky is not permanent: real terrain replaces the borrowed one."""
+        with app.app_context():
+            legacy = self._measured_verdict("yes")
+            legacy["sea_view_detail"].pop("origin")
+            prop_id = self._stored("sea_view_legacy_remeasured", legacy)
+
+            repaired = self._recompute(prop_id, monkeypatch).enrichment["environment"]
+            assert repaired["sea_view_detail"]["geometry"]["origin_unverified"] is True
+
+            # Overpass answers this time: the terrain is measured afresh.
+            _mock_overpass_answering(monkeypatch)
+            _mock_coastline_empty(monkeypatch)
+            PropertyEnrichmentService().enrich_free_sources(
+                db.session.get(Property, prop_id), commit=True, use_ai=False
+            )
+
+            geometry = _reload(prop_id).enrichment["environment"]["sea_view_detail"][
+                "geometry"
+            ]
+            assert "origin_unverified" not in geometry
+            assert "reused_measurement" not in geometry
+            assert geometry["reason"] == "no_coastline_in_range"
 
     def test_two_outages_in_a_row_do_not_age_the_terrain_forward(
         self, app, reference_files, monkeypatch

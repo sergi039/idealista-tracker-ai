@@ -938,7 +938,10 @@ def repaired_with_stored_geometry(
     verdict from before origins were recorded cannot be checked -- it is
     reused, because erasing real verdicts on exactly the rows this rule
     protects is the worse failure, and the unverified provenance is stamped
-    (`origin_unverified`) rather than assumed away.
+    on the geometry (`origin_unverified`) rather than assumed away. That stamp
+    is sticky: it describes where the terrain was measured, so it rides with
+    the terrain through repeated outages and is cleared only by a successful
+    re-measurement.
 
     The refusal is never silent: the rebuilt verdict carries what this run
     would have said and why it was not trusted, the way a kept QoL part does.
@@ -977,6 +980,33 @@ def repaired_with_stored_geometry(
     reused_geometry["measured_at"] = stored_geometry.get(
         "measured_at"
     ) or stored_detail.get("computed_at")
+    # Unverified provenance travels *with the terrain*, and is sticky.
+    #
+    # It is a fact about where this measurement was taken, not about today's
+    # run, so it belongs on the geometry rather than beside it -- and deriving
+    # it afresh each time silently lost it on the second outage: repair #1
+    # stamps the verdict with today's `origin`, so repair #2 compares that
+    # synthetic origin against the same coordinates, finds them equal, and
+    # drops the flag while reusing the very same unverified terrain. The row
+    # then reads as better-provenanced than it is, which is #98's shape.
+    #
+    # Writing today's `origin` is still right: it is the coordinate this
+    # verdict describes, and it gives every later run real move-detection.
+    # The flag is what must survive, and only a successful re-measurement
+    # clears it -- a fresh `evaluate_geometry` result carries no flag at all.
+    # `dict(stored_geometry)` already carries the flag forward once it lives on
+    # the geometry; both `get`s below are deliberate anyway. The first states
+    # the intent, so a later rewrite that rebuilds this dict field by field
+    # cannot drop the stamp by accident. The second reads the flag's *previous*
+    # home: the first version of this repair stamped the top-level detail, and
+    # a row repaired by it would otherwise lose the label on its next outage --
+    # the same defect, one shape further back.
+    if (
+        agree is None
+        or stored_geometry.get("origin_unverified")
+        or stored_detail.get("origin_unverified")
+    ):
+        reused_geometry["origin_unverified"] = True
 
     state, source, combined_reason = combine(text_detail, reused_geometry)
     now = datetime.now(timezone.utc).isoformat()
@@ -993,8 +1023,6 @@ def repaired_with_stored_geometry(
         "last_attempt_reason": reason,
         "last_attempt_at": now,
     }
-    if agree is None:
-        repaired_detail["origin_unverified"] = True
     return {"sea_view": state, "sea_view_detail": repaired_detail}
 
 
@@ -1069,8 +1097,8 @@ def evaluate_property(
             "text": text_detail,
             "geometry": geometry_detail,
             # The coordinates this verdict describes, so a later refused run
-            # can tell whether the stored verdict is still about this place
-            # (`preserved_on_refusal`).
+            # can tell whether the stored terrain is still about this place
+            # (`repaired_with_stored_geometry`).
             "origin": origin,
             "computed_at": datetime.now(timezone.utc).isoformat(),
         },
