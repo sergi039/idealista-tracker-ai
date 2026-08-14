@@ -897,6 +897,17 @@ footer {
     line-height: 1.2;
 }
 
+/* Theme-aware muted table row (the /profiles "No subscription" bucket).
+   Bootstrap's .table-light pins #f8f9fa whatever the theme (issue #303): in
+   dark mode it was a white slab across a dark page, and the row's
+   .text-body-secondary text was near-white on that white. These variables are
+   how Bootstrap's own row variants plug into the cascade, and they flip with
+   the theme. */
+.table-row-muted {
+    --bs-table-bg: var(--bs-tertiary-bg);
+    --bs-table-color: var(--bs-body-color);
+}
+
 /* Theme-aware table header styling for Lands list view */
 .lands-table-head th {
     background-color: var(--bs-tertiary-bg);

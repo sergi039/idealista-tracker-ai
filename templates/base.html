@@ -87,7 +87,7 @@
                        subscription, so there is no second listing page to link. #}
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.map_view') }}">
-                            <i class="fas fa-map me-1"></i>Map
+                            <i class="fas fa-map me-1"></i>{{ t('map') }}
                         </a>
                     </li>
                     {# Its own entry, not a tab inside the list: the page
@@ -110,7 +110,7 @@
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.property_settings') }}">
-                            <i class="fas fa-gear me-1"></i>Settings
+                            <i class="fas fa-gear me-1"></i>{{ t('settings') }}
                         </a>
                     </li>
                 </ul>
