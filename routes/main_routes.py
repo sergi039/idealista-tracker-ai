@@ -240,6 +240,18 @@ def _investment_rating_expr(model):
     )
 
 
+def _nearest_beach_minutes(model):
+    """Drive minutes to the nearest measured beach; NULL without one.
+
+    Items are nearest-first (services/property_travel_service.py sorts and
+    dedupes them), so element 0 IS the nearest beach. Shared by the list sort
+    and the CSV export so the two allow-lists cannot drift apart. Live again
+    per issue #271 — the #98 placeholder said "not one row holds a travel
+    time", and the Phase-2 backfill made that false.
+    """
+    return model.travel["beaches"]["items"][0]["duration_min"].as_float()
+
+
 def _filter_by_investment_rating(query, model, raw_value):
     """Keep only rows whose investment rating starts with `raw_value`."""
     wanted = (raw_value or "").strip().upper()
@@ -788,6 +800,7 @@ def properties():
             "score_total": Property.score_total,
             "score_investment": Property.score_investment,
             "score_lifestyle": Property.score_lifestyle,
+            "travel_time_nearest_beach": _nearest_beach_minutes(Property),
         }
         if sort_by not in sort_columns and sort_by != "investment_metrics":
             sort_by = default_sort
@@ -3062,6 +3075,7 @@ def export_properties_csv():
             "score_total": Property.score_total,
             "score_investment": Property.score_investment,
             "score_lifestyle": Property.score_lifestyle,
+            "travel_time_nearest_beach": _nearest_beach_minutes(Property),
         }
         if sort_by == "investment_metrics":
             rank = _investment_rating_rank(Property)

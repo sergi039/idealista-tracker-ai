@@ -437,38 +437,35 @@ class TestSeaViewFilter:
         assert body.count("fa-water") >= 2
 
 
-class TestBeachControlsRemainUnavailable:
-    """The beach sort still has nothing behind it: #98, Google billing off.
+class TestBeachSortIsHonestAboutItsData:
+    """The #98 placeholder retired with issue #271: rows hold measured beach
+    times now, the option is selectable, and the sort really sorts (pinned in
+    tests/test_beach_sort_enabled.py). What survives here is the honesty
+    half: rows *without* a measurement must sort last, never pretending to a
+    beach distance nobody measured."""
 
-    Sea view came back because it needs no paid API; the beach sort does, so
-    the two are no longer the same story.
-    """
-
-    def test_beach_sort_is_never_offered_as_an_enabled_option(
+    def test_beach_sort_is_offered_as_an_enabled_option(
         self, client, scored_properties
     ):
         body = client.get("/properties").get_data(as_text=True)
-        for match in re.finditer(
+        matches = re.findall(
             r"<option[^>]*value=\"travel_time_nearest_beach\"[^>]*>", body
-        ):
-            assert "disabled" in match.group(0), (
-                "the beach sort has no data behind it on Property and must not "
-                "be selectable"
-            )
-
-    def test_beach_sort_parameter_does_not_pretend_to_sort(
-        self, client, scored_properties
-    ):
-        """`Property` has no beach travel time at all, so the page must fall
-        back to its documented default order rather than silently claim the
-        rows are sorted by distance to the beach."""
-        fallback = client.get("/properties?sort=travel_time_nearest_beach").get_data(
-            as_text=True
         )
-        default = client.get("/properties").get_data(as_text=True)
-        assert _order(
-            fallback, "LifestylePickUniqueTitle", "InvestorPickUniqueTitle"
-        ) == _order(default, "LifestylePickUniqueTitle", "InvestorPickUniqueTitle")
+        assert matches, "the beach sort option must be offered"
+        for match in matches:
+            assert "disabled" not in match
+
+    def test_unmeasured_rows_sort_last_not_arbitrarily(self, client, scored_properties):
+        """These fixtures carry no beach data at all, so under the beach sort
+        every row is in the nulls-last tail and the id tiebreaker keeps the
+        order stable — the page must not invent a beach order for them."""
+        body = client.get(
+            "/properties?sort=travel_time_nearest_beach&order=asc"
+        ).get_data(as_text=True)
+        assert _order(body, "InvestorPickUniqueTitle", "LifestylePickUniqueTitle"), (
+            "both rows are unmeasured: the id tiebreaker, not an invented "
+            "beach distance, decides their order"
+        )
 
 
 class TestSubscriptionContextSurvivesMapNavigation:
