@@ -32,6 +32,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "openpyxl>=3.1.5",
     "pytest>=8.4.2",
     "pytest-flask>=1.3.0",
     # Locked (uv.lock) so `uv run ruff` means one exact version for the CI

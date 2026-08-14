@@ -29,7 +29,16 @@ Thumbs.db
 
 # Project specific
 .last_seen_uid
-data/
+# data/ holds runtime artifacts (backfill snapshots, call ledgers) that must
+# never be committed — but the two importer-generated REFERENCE files below
+# are reviewed, small, and deploy with the code: the QoL card reads them.
+# Regenerate via utils/import_ine_data.py and utils/import_cnh_hospitals.py.
+# `data/*` rather than `data/`: git cannot re-include a file whose parent
+# *directory* is excluded, so the bare-directory form made the negations
+# silently dead.
+data/*
+!data/ine_municipal.json
+!data/hospitals_cnh.json
 instance/
 *.db
 *.sqlite

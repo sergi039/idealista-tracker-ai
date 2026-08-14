@@ -1148,6 +1148,166 @@
            readable on /lands/<id> for the mirrored rows. Do not bring the
            card back; extend the Travel Times card instead. #}
 
+        {# Quality of Life (Phase 2, agreed proposal D15/D16/D18/D20/D21):
+           INE socioeconomic context, supermarket reach, CNH hospitals.
+           Informational — no score reads it. Every part renders its own
+           status; a refusal or an unmatched municipality says so instead of
+           reading as an empty landscape (#98). Distances here are
+           straight-line and labeled so; drive times belong to the paid
+           Distance Matrix passes. #}
+        {% set _qol_enr = property.enrichment if property.enrichment is mapping else {} %}
+        {% set qol = _qol_enr.get('quality_of_life') if _qol_enr.get('quality_of_life') is mapping else None %}
+        {% if qol %}
+            {% set qol_muni = qol.get('municipality') if qol.get('municipality') is mapping else {} %}
+            {% set qol_shops = qol.get('supermarkets') if qol.get('supermarkets') is mapping else {} %}
+            {% set qol_hosp = qol.get('hospitals') if qol.get('hospitals') is mapping else {} %}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h6 class="card-title mb-0 compact-header" title="{{ t('qol_title') }}">
+                        <i class="fas fa-heart-pulse me-2"></i>{{ t('qol_title') }}
+                    </h6>
+                </div>
+                <div class="card-body">
+                    {# -- Municipality socioeconomic context (INE) -- #}
+                    <div class="small fw-bold text-body-secondary mb-1">
+                        {{ t('qol_municipality_context') }}
+                        {% if qol_muni.get('name_matched') %}
+                            <span class="fw-normal">— {{ qol_muni.get('name_matched') }}</span>
+                        {% endif %}
+                    </div>
+                    {% if qol_muni.get('status') == 'ok' %}
+                        {% if qol_muni.get('renta_media_persona') is not none %}
+                            <div class="d-flex justify-content-between align-items-center mb-1 small">
+                                <span title="{{ t('qol_renta_tooltip') }} ({{ qol_muni.get('renta_year') }})">
+                                    {{ t('qol_renta') }}
+                                </span>
+                                <span class="text-nowrap">
+                                    <span class="fw-bold">€{{ "{:,.0f}".format(qol_muni.get('renta_media_persona')) }}</span>
+                                    {% if qol_muni.get('renta_province_median') %}
+                                        {% set _renta_idx = (100 * qol_muni.get('renta_media_persona') / qol_muni.get('renta_province_median'))|round|int %}
+                                        <span class="badge {{ 'bg-success' if _renta_idx >= 100 else 'bg-warning text-dark' }} ms-1"
+                                              title="{{ t('qol_vs_province_tooltip') }}">{{ _renta_idx }}</span>
+                                    {% endif %}
+                                </span>
+                            </div>
+                        {% endif %}
+                        {% if qol_muni.get('population') is not none %}
+                            <div class="d-flex justify-content-between align-items-center mb-1 small">
+                                <span title="{{ t('qol_population_tooltip') }} ({{ qol_muni.get('population_year') }})">{{ t('qol_population') }}</span>
+                                <span class="text-nowrap">
+                                    <span class="fw-bold">{{ "{:,.0f}".format(qol_muni.get('population')) }}</span>
+                                    {% if qol_muni.get('population_5y_change_pct') is not none %}
+                                        {% set _pop_delta = qol_muni.get('population_5y_change_pct') %}
+                                        <span class="badge {{ 'bg-success' if _pop_delta >= 0 else 'bg-secondary' }} ms-1"
+                                              title="{{ t('qol_population_5y') }}">
+                                            <i class="fas {{ 'fa-arrow-trend-up' if _pop_delta >= 0 else 'fa-arrow-trend-down' }} me-1"></i>{{ '%+.1f'|format(_pop_delta) }}%
+                                        </span>
+                                    {% endif %}
+                                </span>
+                            </div>
+                        {% endif %}
+                    {% elif qol_muni.get('status') == 'not_matched' %}
+                        <div class="small text-body-secondary mb-1">{{ t('qol_municipality_not_matched') }}</div>
+                    {% elif qol_muni.get('status') == 'no_reference_data' %}
+                        <div class="small text-body-secondary mb-1">{{ t('qol_no_reference_data') }}</div>
+                    {% elif qol_muni.get('status') == 'no_municipality' %}
+                        <div class="small text-body-secondary mb-1">{{ t('qol_no_municipality') }}</div>
+                    {% else %}
+                        {# `unavailable` (a part that raised), or a status this
+                           template predates: a bare header must never read as
+                           an empty landscape (diff review, 2026-08-14). #}
+                        <div class="mb-1"><span class="badge bg-warning text-dark">{{ t('qol_not_measured') }}</span></div>
+                    {% endif %}
+
+                    <hr class="my-2">
+
+                    {# -- Supermarket reach (OSM, straight-line) -- #}
+                    <div class="small fw-bold text-body-secondary mb-1">
+                        {{ t('qol_supermarkets') }}
+                        <span class="fw-normal">({{ t('qol_straight_line') }})</span>
+                    </div>
+                    {% if qol_shops.get('status') == 'ok' %}
+                        {% for shop in (qol_shops.get('items') or [])[:3] %}
+                            {% set _shop_url = maps_place_url(shop.get('lat'), shop.get('lon')) %}
+                            <div class="d-flex justify-content-between align-items-center mb-1 small">
+                                {% if _shop_url %}
+                                    <a href="{{ _shop_url }}" target="_blank" rel="noopener"
+                                       class="text-decoration-none text-truncate me-2"
+                                       title="{{ shop.get('name') or t('qol_unnamed_shop') }} — Google Maps">
+                                        <i class="fas fa-basket-shopping me-1 text-primary"></i>{{ shop.get('name') or t('qol_unnamed_shop') }}
+                                    </a>
+                                {% else %}
+                                    <span class="text-truncate me-2">
+                                        <i class="fas fa-basket-shopping me-1 text-primary"></i>{{ shop.get('name') or t('qol_unnamed_shop') }}
+                                    </span>
+                                {% endif %}
+                                <span class="text-nowrap">
+                                    {% if shop.get('shop') == 'convenience' %}
+                                        <span class="badge bg-light text-dark border me-1" title="{{ t('qol_convenience_tooltip') }}">mini</span>
+                                    {% endif %}
+                                    <span class="badge bg-secondary">{{ shop.get('distance_km') }} km</span>
+                                </span>
+                            </div>
+                        {% endfor %}
+                    {% elif qol_shops.get('status') == 'osm_empty' %}
+                        <div class="small text-body-secondary mb-1">{{ t('qol_osm_empty') }}</div>
+                    {% elif qol_shops.get('status') == 'no_coordinates' %}
+                        <div class="small text-body-secondary mb-1">{{ t('qol_no_coordinates') }}</div>
+                    {% else %}
+                        <div class="mb-1"><span class="badge bg-warning text-dark">{{ t('qol_not_measured') }}</span></div>
+                    {% endif %}
+
+                    <hr class="my-2">
+
+                    {# -- Hospitals (CNH; descriptive local groupings, not
+                          official tiers — the tooltip says the derivation) -- #}
+                    <div class="small fw-bold text-body-secondary mb-1"
+                         title="{{ t('qol_hospital_grouping_note') }}">
+                        {{ t('qol_hospitals') }}
+                        <span class="fw-normal">({{ t('qol_straight_line') }})</span>
+                        <i class="fas fa-circle-info ms-1"></i>
+                    </div>
+                    {% if qol_hosp.get('status') == 'ok' %}
+                        {% for grouping_key, grouping_label in [
+                            ('teaching_high_tech', t('qol_hospital_teaching')),
+                            ('general_acute', t('qol_hospital_general')),
+                        ] %}
+                            {% set hosp = (qol_hosp.get('nearest') or {}).get(grouping_key) %}
+                            {% if hosp is mapping %}
+                                {% set _hosp_route = maps_directions_url(property.location_lat, property.location_lon, hosp.get('lat'), hosp.get('lon')) %}
+                                <div class="d-flex justify-content-between align-items-start mb-1 small">
+                                    <span class="me-2">
+                                        <span class="d-block text-body-secondary">{{ grouping_label }}</span>
+                                        {# Teaching is tri-state: an unknown
+                                           CNH flag renders — never a made-up
+                                           "no" (two catalogue rows carry
+                                           null; the sea-view rule again). #}
+                                        {% set _teach = t('yes') if hosp.get('teaching') else (t('no') if hosp.get('teaching') is sameas false else '—') %}
+                                        {% if _hosp_route %}
+                                            <a href="{{ _hosp_route }}" target="_blank" rel="noopener"
+                                               class="text-decoration-none"
+                                               title="{{ t('route_from_property') }} · {{ t('qol_hospital_fields') }}: {{ hosp.get('beds') }} / {{ _teach }} / {{ hosp.get('high_tech_count') }}{% if qol_hosp.get('source') %} · {{ qol_hosp.get('source') }}{% endif %}">
+                                                <i class="fas fa-hospital me-1 text-primary"></i>{{ hosp.get('name') }}
+                                            </a>
+                                        {% else %}
+                                            <span><i class="fas fa-hospital me-1 text-primary"></i>{{ hosp.get('name') }}</span>
+                                        {% endif %}
+                                    </span>
+                                    <span class="badge bg-secondary flex-shrink-0">{{ hosp.get('distance_km') }} km</span>
+                                </div>
+                            {% endif %}
+                        {% endfor %}
+                    {% elif qol_hosp.get('status') == 'no_reference_data' %}
+                        <div class="small text-body-secondary">{{ t('qol_no_reference_data') }}</div>
+                    {% elif qol_hosp.get('status') == 'no_coordinates' %}
+                        <div class="small text-body-secondary">{{ t('qol_no_coordinates') }}</div>
+                    {% else %}
+                        <div><span class="badge bg-warning text-dark">{{ t('qol_not_measured') }}</span></div>
+                    {% endif %}
+                </div>
+            </div>
+        {% endif %}
+
         {# The environment card is always rendered. Gating it on existing data
            meant the sea-view override -- the one control a human can use to
            correct the estimate -- was unreachable on every row that had no

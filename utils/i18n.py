@@ -122,6 +122,36 @@ TRANSLATIONS = {
         "no_photos": "No photos",
         "no_photos_tooltip": "The email alerts carry no images; photo sourcing is a separate decision",
         "route_from_property": "Route from this property",
+        # Quality-of-life card (Phase 2 slice).
+        "qol_title": "Quality of Life",
+        "qol_municipality_context": "Municipality",
+        "qol_renta": "Net income / person",
+        "qol_renta_tooltip": "INE ADRH, renta neta media por persona",
+        "qol_vs_province_tooltip": "Index vs province median = 100",
+        "qol_population": "Population",
+        "qol_population_tooltip": "INE Padrón",
+        "qol_population_5y": "5-year change",
+        "qol_municipality_not_matched": "Municipality not matched to INE data",
+        "qol_no_reference_data": "Reference data not imported yet",
+        "qol_supermarkets": "Supermarkets",
+        "qol_straight_line": "straight-line",
+        "qol_unnamed_shop": "Unnamed shop",
+        "qol_convenience_tooltip": "OSM shop=convenience — a small local shop",
+        "qol_osm_empty": "None found in OSM within 12 km — coverage uncertain",
+        "qol_not_measured": "Not measured",
+        "qol_no_municipality": "No municipality recorded for this listing",
+        "qol_no_coordinates": "No coordinates — not measured",
+        "qol_hospitals": "Hospitals",
+        # The vintage lives in the payload's own `source` field, not here —
+        # a translation string pinning "2025" would outlive a re-import.
+        "qol_hospital_grouping_note": (
+            "Local display grouping derived from National Hospital Catalogue "
+            "fields (beds / teaching accreditation / high-tech equipment) — "
+            "not an official tier"
+        ),
+        "qol_hospital_teaching": "Teaching / high-tech",
+        "qol_hospital_general": "General acute",
+        "qol_hospital_fields": "beds / teaching / high-tech",
         "investment_score": "Investment Score",
         "lifestyle_score": "Lifestyle Score",
         "criteria_breakdown": "Criteria Breakdown",
@@ -268,6 +298,35 @@ TRANSLATIONS = {
         "no_photos": "Sin fotos",
         "no_photos_tooltip": "Las alertas de correo no llevan imágenes; obtener fotos es una decisión aparte",
         "route_from_property": "Ruta desde esta propiedad",
+        # Quality-of-life card (Phase 2 slice).
+        "qol_title": "Calidad de Vida",
+        "qol_municipality_context": "Municipio",
+        "qol_renta": "Renta neta / persona",
+        "qol_renta_tooltip": "INE ADRH, renta neta media por persona",
+        "qol_vs_province_tooltip": "Índice sobre la mediana provincial = 100",
+        "qol_population": "Población",
+        "qol_population_tooltip": "INE Padrón",
+        "qol_population_5y": "Variación en 5 años",
+        "qol_municipality_not_matched": "Municipio sin correspondencia en datos INE",
+        "qol_no_reference_data": "Datos de referencia aún no importados",
+        "qol_supermarkets": "Supermercados",
+        "qol_straight_line": "línea recta",
+        "qol_unnamed_shop": "Tienda sin nombre",
+        "qol_convenience_tooltip": "OSM shop=convenience — tienda pequeña local",
+        "qol_osm_empty": "Ninguno en OSM en 12 km — cobertura no garantizada",
+        "qol_not_measured": "No medido",
+        "qol_no_municipality": "Sin municipio registrado para este anuncio",
+        "qol_no_coordinates": "Sin coordenadas — no medido",
+        "qol_hospitals": "Hospitales",
+        # La añada vive en el campo `source` del propio bloque, no aquí.
+        "qol_hospital_grouping_note": (
+            "Agrupación local derivada de campos del Catálogo Nacional de "
+            "Hospitales (camas / acreditación docente / alta tecnología) — "
+            "no es un nivel oficial"
+        ),
+        "qol_hospital_teaching": "Docente / alta tecnología",
+        "qol_hospital_general": "General de agudos",
+        "qol_hospital_fields": "camas / docente / alta tecnología",
         "investment_score": "Puntuación de Inversión",
         "lifestyle_score": "Puntuación de Estilo de Vida",
         "criteria_breakdown": "Desglose de Criterios",

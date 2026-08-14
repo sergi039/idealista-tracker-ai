@@ -28,15 +28,14 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-
-from sqlalchemy import or_
 
 from app import create_app, db
 from models import Property
 from services.property_scoring_service import PropertyScoringService
 from services.property_travel_service import PropertyTravelService
+from utils.enrich_scope import scoped_properties
 
 logger = logging.getLogger(__name__)
 
@@ -113,15 +112,9 @@ def needs_beaches(prop: Property) -> bool:
 
 def select_scope(days: int, include_all: bool = False) -> List[Property]:
     """Coordinates present, beaches missing/refused, and — unless --all —
-    created in the last `days` days or marked favorite (the owner's rule)."""
-    q = Property.query.filter(
-        Property.location_lat.isnot(None),
-        Property.location_lon.isnot(None),
-    )
-    if not include_all:
-        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
-        q = q.filter(or_(Property.created_at >= cutoff, Property.is_favorite.is_(True)))
-    return [p for p in q.order_by(Property.id.asc()).all() if needs_beaches(p)]
+    created in the last `days` days or marked favorite (the owner's rule,
+    shared with every Phase-2 backfill via utils/enrich_scope.py)."""
+    return scoped_properties(days=days, include_all=include_all, needs=needs_beaches)
 
 
 def run(
