@@ -68,27 +68,50 @@ clone, the running container is rebuilt from it.** The image is a `COPY . .`
 snapshot and nothing re-takes it, so a merged fix does not reach the app until
 someone rebuilds — on 2026-08-14 a container served a template that had been
 fixed 15 seconds after the build, through the fix, its commit and its merge,
-for 15 minutes. `/api/healthz` cannot catch that: it renders no template, and
-`routes/main_routes.py` turns a `TemplateSyntaxError` into a redirect.
+for 15 minutes.
 
-The hook is narrow on purpose. It acts only on `main`, only when the app
-container is already running, only when the merge touched a path the build
-context contains, and never while a deploy holds the autopilot lock — the
-watcher's own `git merge --ff-only` fires this hook, and the lock is what
-tells the two apart. Before building it parses every template and **refuses**
-rather than snapshot one that does not, because `COPY . .` takes the working
-tree: in a shared checkout that includes a parallel session's half-finished
-edit, which is exactly how the 2026-08-14 image was made. Uncommitted files
-are named in the output rather than allowed to ride in quietly. A single pull
-skips it with `SKIP_AUTO_REBUILD=1 git pull`;
-`tests/test_post_merge_hook.py` pins all of it.
+**One deployer per machine.** Where `tools/autopilot/deploy_watcher.sh` is
+installed — the Mac mini — the hook stands down completely and says so: the
+watcher polls main every five minutes, tags a rollback image, rebuilds,
+health-checks and writes `data/.deployed_sha`, and a rebuild started behind
+its back would become the image its next tick treats as the last known good
+one. The hook is the answer for a machine with no deployer, which is the
+laptop: the watcher correctly refuses a checkout that is on a branch or dirty,
+and a shared agent checkout is that nearly all the time. The hook never writes
+`data/.deployed_sha` — that marker has exactly one writer.
 
-This is the laptop's answer, not a replacement for
-`tools/autopilot/deploy_watcher.sh`: the watcher polls main on the Mac mini
-every five minutes with a health check and a rollback, and correctly refuses
-to deploy a checkout that is on a branch or dirty — which is what a shared
-agent checkout looks like nearly all the time. The hook writes no
-`data/.deployed_sha`; that marker has exactly one writer.
+Otherwise it acts only on `main`, only from the main worktree, only when the
+app service is running, and never while a deploy holds the autopilot lock. It
+does not guess the stack: `docker compose ps` and `docker compose port` name
+the container and the published port, because `COMPOSE_CONTAINER_PREFIX` and
+`APP_HOST_PORT` live in the project's `.env` (docs/DEV_RULES.md), not in the
+shell — guessing them gates one stack and rebuilds another.
+
+Before building it parses every template with jinja2 and every `.py` with
+`ast`, and **refuses** rather than snapshot a tree that does not parse:
+`COPY . .` takes the working tree, and in a shared checkout that includes a
+parallel session's half-finished edit, which is exactly how the 2026-08-14
+image was made. That is per-file syntax and nothing more — a missing include,
+an unknown filter or a dropped jinja global all parse and still fail at
+render. When no interpreter can import jinja2 the check cannot run at all, and
+a check that did not run must never read as one that passed: a dirty tree is
+refused outright, a clean one is built with *"not parsed locally"* carried
+into the final line. Uncommitted files are always named before they ride in.
+
+**A green `/api/healthz` is not acceptance.** It renders no template, and
+`routes/main_routes.py` turns a `TemplateSyntaxError` into a redirect — which
+is precisely why the 2026-08-14 container looked healthy for 15 minutes. So
+the hook also requires a page that renders a template (`/properties`) to
+answer **200**; a 302 is a failure. Failing either check rolls the *image*
+back to the tag taken before the build. It never rolls the tree back the way
+the watcher does: this checkout is shared, and `git reset --hard` would delete
+another session's uncommitted work.
+
+A single pull skips it with `SKIP_AUTO_REBUILD=1 git pull`.
+`tests/test_post_merge_hook.py` pins all of it, with `docker` and `curl` stubs
+that assert their own arguments — an earlier version answered anything, and a
+mutation run kept 12 tests green while pointing the hook at the wrong
+container, the wrong compose file and a dead port.
 
 **There is exactly one listing surface: `/properties`** (owner decision,
 2026-08-09, superseding the 2026-08-08 one that kept `/lands` as a second,
