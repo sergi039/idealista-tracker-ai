@@ -73,16 +73,37 @@ class PropertyEnrichmentService:
             sea_view_calculator or sea_view_service.calculate_for_property
         )
 
-    def enrich_free_sources(self, prop: Property, *, commit: bool) -> None:
+    def enrich_free_sources(
+        self, prop: Property, *, commit: bool, use_ai: bool
+    ) -> None:
         """The free pass: OSM amenities, quality-of-life, sea view (#299).
 
-        One home for the three enrichers that spend nothing -- the amenity
-        counts (#152), the QoL block (#275) and the sea-view verdict all come
-        from OpenStreetMap, OpenTopoData and local reference files, so there
-        is no billing argument for skipping them. Ingestion skipped them
-        anyway until #299, which is how every row ingested 13-14 Aug arrived
-        with no Extended Infrastructure card, no QoL block and no sea-view
-        verdict. Nothing here fires a paid Google call.
+        One home for the three enrichers that reach no billed API -- the
+        amenity counts (#152), the QoL block (#275) and the sea-view verdict
+        come from OpenStreetMap, OpenTopoData and local reference files, so
+        there is no billing argument for skipping them. Ingestion skipped
+        them anyway until #299, which is how every row ingested 13-14 Aug
+        arrived with no Extended Infrastructure card, no QoL block and no
+        sea-view verdict. No Google call is fired here at all.
+
+        `use_ai` is required, and it is the one part of this pass that is not
+        free of consequences. The sea-view *text* signal can ask the owner's
+        Claude subscription, through `tools/ai_bridge.py`, what a mention of
+        the sea means. That is a cold CLI run with a 600 s timeout (#201) --
+        seconds to minutes, per listing that says "vistas al mar", which in
+        Asturias and Galicia is most of them.
+
+        So the two callers differ deliberately:
+
+        * **ingestion passes False.** A scheduled overnight run over a batch
+          of alert emails would otherwise spawn one CLI per sea-mentioning
+          listing, unattended and unbounded, and the owner's rule is one
+          press, one subscription call. The keyword path is honest about it:
+          the verdict records `source: "keywords_only"`, and `likely` /
+          `unknown` stay correct states. `utils/backfill_sea_view.py` has
+          carried `--no-ai` for the same reason since it was written -- the
+          unattended path must not be bolder than the backfill.
+        * **the Enrich button passes True.** There is a press behind it.
 
         Pacing stays in the transports (each client hands its gate to
         `request_with_retries`), never in this loop. Each step fails
@@ -123,7 +144,7 @@ class PropertyEnrichmentService:
         # either way -- `apply_to_property` refuses to overwrite
         # `source == "manual"` (see services/sea_view_service.py).
         try:
-            self.sea_view_calculator(prop, commit=commit)
+            self.sea_view_calculator(prop, commit=commit, use_ai=use_ai)
         except Exception as e:
             logger.warning(
                 "Sea-view evaluation failed for %s: %s",
@@ -158,7 +179,11 @@ class PropertyEnrichmentService:
             # review, 2026-08-14); the sea-view text signal is computed and
             # its geometry honestly reads `unknown`. This path has no shared
             # commit to ride, so each step takes its own.
-            self.enrich_free_sources(prop, commit=True)
+            #
+            # `use_ai=True` because this method is the Enrich button: the
+            # text signal runs before the coordinate check, so it is the one
+            # part of the pass a coordinate-less row still gets in full.
+            self.enrich_free_sources(prop, commit=True, use_ai=True)
             return False
 
         # Enrichment does not touch `search_profile_id` (owner decision,
@@ -181,8 +206,10 @@ class PropertyEnrichmentService:
         # sea-view verdict (#299). All advisory and score-neutral; a refusal
         # is recorded as a refusal and never fails the run. It rides the
         # shared commit at the end, and a hand-set sea-view verdict is left
-        # alone by the sea-view writer itself.
-        self.enrich_free_sources(prop, commit=False)
+        # alone by the sea-view writer itself. `use_ai=True`: this method is
+        # what the Enrich button calls, so a subscription call here is one
+        # owner press, not an unattended loop.
+        self.enrich_free_sources(prop, commit=False, use_ai=True)
 
         ok = self.travel_service.calculate_for_property(prop, commit=False)
         travel_state = travel_api_state(prop)

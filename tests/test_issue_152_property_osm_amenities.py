@@ -139,7 +139,7 @@ class _StubSea:
         return None
 
 
-def _stub_sea_view(prop, *, commit=False):
+def _stub_sea_view(prop, *, commit=False, use_ai=True):
     """The sea-view step of the free pass (#299), stubbed offline.
 
     It reaches Overpass and OpenTopoData through its own module

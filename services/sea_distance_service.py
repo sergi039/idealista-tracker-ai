@@ -25,6 +25,7 @@ from models import Property
 from services.sea_view_service import (
     APPROXIMATE_COORD_SLACK_M,
     MAX_SEA_DISTANCE_M,
+    ORIGIN_TOLERANCE_DEG,
     SeaViewSourceError,
     fetch_coastline_points,
     haversine_m,
@@ -51,9 +52,10 @@ SOURCE = "osm_coastline"
 # top of its own maximum.
 SEARCH_RADIUS_M = MAX_SEA_DISTANCE_M + APPROXIMATE_COORD_SLACK_M
 
-# Coordinates are compared to decide whether a stored measurement still belongs
-# to this property; 1e-5 degrees is about a metre.
-ORIGIN_TOLERANCE_DEG = 1e-5
+# `ORIGIN_TOLERANCE_DEG` (about a metre) is imported above rather than
+# redefined: the sea-view verdict applies the same "does this stored result
+# still belong to these coordinates" rule to the same coastline, and two
+# copies of that number would drift apart.
 
 
 def _now_iso() -> str:

@@ -55,6 +55,26 @@ UNKNOWN = "unknown"
 
 VALID_STATES = (YES, LIKELY, NO, UNKNOWN)
 
+# A state the data can be trusted for. It survives a later outage as
+# last-known-good, exactly as a measured sea *distance* does: the coastline
+# does not move and the terrain does not either.
+MEASURED_STATES = (YES, LIKELY, NO)
+
+# The two `unknown` reasons that mean "a source refused", as opposed to the
+# ones that mean "we looked and cannot say" (`approximate_coordinates`,
+# `no_coordinates`, `no_elevation_at_property`). Only a refusal may be barred
+# from overwriting an earlier verdict -- a computed unknown is an answer about
+# this property and must land.
+SOURCE_REFUSAL_REASONS = frozenset(
+    {"coastline_source_unavailable", "elevation_source_unavailable"}
+)
+
+# Coordinates are compared to decide whether a stored verdict still belongs to
+# this property; 1e-5 degrees is about a metre. Defined here and imported by
+# services/sea_distance_service.py, which applies the same rule to the same
+# coastline -- one definition, because two would drift.
+ORIGIN_TOLERANCE_DEG = 1e-5
+
 # --- tuning constants -------------------------------------------------------
 
 # Past this the sea stops being a view and starts being a horizon smudge; it is
@@ -827,6 +847,105 @@ def normalize_state(value: Any) -> str:
     return UNKNOWN
 
 
+def _origin_of(prop) -> Optional[Dict[str, float]]:
+    """The coordinates a verdict was computed at, or None.
+
+    Stored beside the verdict so a later run can tell "this property's own
+    verdict" from one measured somewhere else -- the same provenance
+    `Property.enrichment["sea"]` keeps for the distance.
+    """
+    lat = getattr(prop, "location_lat", None)
+    lon = getattr(prop, "location_lon", None)
+    if lat is None or lon is None:
+        return None
+    try:
+        return {"lat": float(lat), "lon": float(lon)}
+    except (TypeError, ValueError):
+        return None
+
+
+def _refusal_reason(verdict: Dict[str, Any]) -> Optional[str]:
+    """The refusal that produced this verdict, or None if it was computed.
+
+    Only the geometry sources can refuse; a text signal the AI could not
+    classify falls back to keywords and still produces an answer.
+    """
+    if normalize_state(verdict.get("sea_view")) != UNKNOWN:
+        return None
+    detail = verdict.get("sea_view_detail")
+    detail = detail if isinstance(detail, dict) else {}
+    geometry = detail.get("geometry")
+    geometry = geometry if isinstance(geometry, dict) else {}
+    reason = geometry.get("reason") or detail.get("reason")
+    reason = str(reason) if reason else None
+    return reason if reason in SOURCE_REFUSAL_REASONS else None
+
+
+def preserved_on_refusal(
+    environment: Dict[str, Any], verdict: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """The stored verdict to keep instead of a refusal, or None to write.
+
+    A source that refused knows nothing about this property, so it must not
+    erase what an earlier run measured -- the rule `SeaDistanceService`
+    already applies to `enrichment["sea"]`, and the one #98 exists for. The
+    dangerous path is the second press of Enrich, not ingestion: a new row has
+    no verdict to lose, but a row already carrying a computed `yes` would have
+    had it overwritten with `unknown` the first time Overpass was busy.
+
+    Only a *measured* verdict is preserved (`yes`/`likely`/`no`), and only
+    when it belongs to these coordinates. A stored verdict from before origins
+    were recorded cannot be checked: it is kept, because erasing a real
+    verdict on the rows this rule exists for is the worse failure, and the
+    unverified provenance is stamped rather than assumed away. A verdict whose
+    origin *disagrees* was measured somewhere else and is not kept.
+
+    The refusal itself is never silent: the kept verdict carries what the
+    failed attempt was and when, the way a kept QoL part does.
+    """
+    reason = _refusal_reason(verdict)
+    if reason is None:
+        return None
+
+    stored_state = normalize_state(environment.get("sea_view"))
+    if stored_state not in MEASURED_STATES:
+        return None
+    stored_detail = environment.get("sea_view_detail")
+    if not isinstance(stored_detail, dict):
+        return None
+
+    new_detail = verdict.get("sea_view_detail")
+    new_detail = new_detail if isinstance(new_detail, dict) else {}
+    new_origin = new_detail.get("origin")
+    stored_origin = stored_detail.get("origin")
+
+    origin_verified = False
+    if isinstance(stored_origin, dict) and isinstance(new_origin, dict):
+        try:
+            moved = (
+                abs(float(stored_origin["lat"]) - float(new_origin["lat"]))
+                > ORIGIN_TOLERANCE_DEG
+                or abs(float(stored_origin["lon"]) - float(new_origin["lon"]))
+                > ORIGIN_TOLERANCE_DEG
+            )
+        except (KeyError, TypeError, ValueError):
+            # An unreadable origin proves nothing either way; fall through to
+            # the unverified branch rather than to a silent match.
+            moved = False
+        else:
+            if moved:
+                return None
+            origin_verified = True
+
+    kept_detail = dict(stored_detail)
+    kept_detail["last_attempt_state"] = UNKNOWN
+    kept_detail["last_attempt_reason"] = reason
+    kept_detail["last_attempt_at"] = datetime.now(timezone.utc).isoformat()
+    if not origin_verified:
+        kept_detail["origin_unverified"] = True
+    return {"sea_view": stored_state, "sea_view_detail": kept_detail}
+
+
 def read_verdict(prop) -> Dict[str, Any]:
     """The effective verdict for a property, for templates and the API."""
     environment = prop.environment if isinstance(prop.environment, dict) else {}
@@ -868,6 +987,7 @@ def evaluate_property(
         )
 
     state, source, reason = combine(text_detail, geometry_detail)
+    origin = _origin_of(prop)
 
     if manual is not None:
         # An owner who looked at the listing outranks both models. The computed
@@ -884,6 +1004,7 @@ def evaluate_property(
                 "computed_source": source,
                 "text": text_detail,
                 "geometry": geometry_detail,
+                "origin": origin,
                 "computed_at": datetime.now(timezone.utc).isoformat(),
             },
         }
@@ -895,6 +1016,10 @@ def evaluate_property(
             "reason": reason,
             "text": text_detail,
             "geometry": geometry_detail,
+            # The coordinates this verdict describes, so a later refused run
+            # can tell whether the stored verdict is still about this place
+            # (`preserved_on_refusal`).
+            "origin": origin,
             "computed_at": datetime.now(timezone.utc).isoformat(),
         },
     }
@@ -1001,6 +1126,21 @@ def apply_to_property(prop, verdict: Dict[str, Any], commit: bool = True) -> Non
                 # releases both the row lock and the transaction itself.
                 db.session.rollback()
             return
+
+        # A refused source must not erase a verdict an earlier run measured
+        # (#98's rule, as `SeaDistanceService` applies it to the distance).
+        # This lives here, in the one writer, rather than at a call site:
+        # `utils/backfill_sea_view.py` and every future caller would otherwise
+        # reopen the same hole.
+        kept = preserved_on_refusal(environment, verdict)
+        if kept is not None:
+            logger.info(
+                "Sea view for property %s could not be recomputed (%s); "
+                "keeping the verdict measured earlier",
+                getattr(prop, "id", None),
+                kept["sea_view_detail"].get("last_attempt_reason"),
+            )
+            verdict = kept
 
         environment.update(verdict)
         enrichment = dict(enrichment)

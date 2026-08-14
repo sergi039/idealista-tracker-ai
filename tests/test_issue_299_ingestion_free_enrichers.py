@@ -203,17 +203,29 @@ def _mock_coastline_refusing(monkeypatch):
     monkeypatch.setattr(sea_view_service, "fetch_coastline_points", _refuse)
 
 
-def _listing_email(idealista_id=990299):
+# Ordinary listing prose on this coast, and the reason the AI branch matters:
+# `evaluate_text` only consults the bridge when the text mentions the sea, so a
+# fixture without these words would make every "the bridge was not called"
+# assertion below pass without proving anything.
+SEA_TITLE = "Casa con vistas al mar en Navia"
+SEA_DESCRIPTION = "Vivienda con vistas al mar, finca y garaje. Cerca de la playa."
+
+# No sea words at all: the text signal short-circuits to `none`, so the verdict
+# is geometry's alone. Used where a *geometry* outcome is what is asserted.
+PLAIN_TITLE = "Casa rural en Navia"
+PLAIN_DESCRIPTION = "Casa con finca y huerta en Navia"
+
+
+def _listing_email(idealista_id=990299, title=PLAIN_TITLE, description=None):
     # The dict shape `get_idealista_emails()` produces for a listing email,
-    # as in tests/test_issue_25_ingestion_integrity.py. No sea words in the
-    # text, so the verdict below is geometry's alone.
+    # as in tests/test_issue_25_ingestion_integrity.py.
     return {
         "type": "listing",
         "source_email_id": f"imap_free_{idealista_id}",
         "email_received_at": INTERNAL_DATE,
         "email_subject": "New home in your search: Navia",
         "email_sender": "Idealista <noresponder@idealista.com>",
-        "title": "Casa rural en Navia",
+        "title": title,
         "url": f"https://www.idealista.com/inmueble/{idealista_id}/",
         "deal_type": "sale",
         "price": 250000.0,
@@ -223,10 +235,40 @@ def _listing_email(idealista_id=990299):
         "search_profile_id": None,
         "property_category": "house",
         "property_subtype": None,
-        "description": "Casa con finca en Navia",
+        "description": PLAIN_DESCRIPTION if description is None else description,
         "attributes": None,
         "idealista_property_id": idealista_id,
     }
+
+
+def _sea_listing_email(idealista_id=990300):
+    return _listing_email(
+        idealista_id=idealista_id, title=SEA_TITLE, description=SEA_DESCRIPTION
+    )
+
+
+def _mock_bridge(monkeypatch, claim="view"):
+    """The AI bridge, recording every call. Returns the call list.
+
+    `subscription_transport.complete` runs a cold Claude CLI on the owner's
+    subscription with a 600 s timeout (#201). An unattended ingest loop must
+    never reach it -- that is the blocker this suite exists for.
+
+    It **records** rather than raising, and that is deliberate: a mock that
+    raised `AssertionError` proved nothing, because `classify_text_with_ai`
+    catches `Exception` and falls back to the keyword path, so the run looked
+    identical whether or not the bridge had been called. Caught here by
+    mutating `use_ai=False` back to `True` and watching the suite stay green.
+    An empty call list is the only honest evidence.
+    """
+    calls = []
+
+    def _complete(prompt, provider=None, system=None, **kwargs):
+        calls.append({"provider": provider, "prompt": prompt})
+        return {"text": json.dumps({"claim": claim, "quote": "vistas al mar"})}
+
+    monkeypatch.setattr("services.subscription_transport.complete", _complete)
+    return calls
 
 
 def _run_ingestion(monkeypatch, emails):
@@ -277,6 +319,9 @@ class TestIngestionRunsTheFreePass:
             detail = environment["sea_view_detail"]
             assert detail["source"] == "geometry"
             assert detail["geometry"]["reason"] == "no_coastline_in_range"
+            # The coordinates it describes, so a later refused run can tell
+            # whether this verdict still belongs to the row.
+            assert detail["origin"] == {"lat": COORD_LAT, "lon": COORD_LON}
 
     def test_the_flag_keeps_the_pass_off(
         self, app, flags, geocoding_travel_stub, monkeypatch
@@ -296,6 +341,122 @@ class TestIngestionRunsTheFreePass:
             assert "quality_of_life" not in enrichment
             assert "environment" not in enrichment
             assert not (prop.infrastructure_extended or {})
+
+
+class TestTheAiBridgeIsNeverReachedUnattended:
+    """The blocker: one press, one subscription call — and ingestion is no press.
+
+    `sea_view_service.evaluate_text` asks the owner's Claude subscription what
+    a mention of the sea means, through `tools/ai_bridge.py` — a cold CLI run
+    with a 600 s timeout (#201). Ingestion runs unattended over a whole batch
+    of alert emails, so it must take the keyword path; the Enrich button, where
+    an owner pressed something, may still ask.
+    """
+
+    def test_the_fixture_text_really_reaches_the_ai_branch(self):
+        """Without this, every assertion below would pass vacuously.
+
+        `evaluate_text` returns `none` before consulting the bridge when the
+        text does not mention the sea at all, so a fixture with no sea words
+        proves nothing about who calls the bridge.
+        """
+        view_hits, proximity_hits = sea_view_service._matched_keywords(
+            f"{SEA_DESCRIPTION} {SEA_TITLE}"
+        )
+        assert view_hits, "the sea fixture must match VIEW_KEYWORDS"
+        assert proximity_hits, "and the proximity phrases too"
+        # And the plain fixture must stay plain, or the geometry-only
+        # assertions elsewhere in this file stop meaning what they say.
+        assert sea_view_service._matched_keywords(
+            f"{PLAIN_DESCRIPTION} {PLAIN_TITLE}"
+        ) == ([], [])
+
+    def test_ingestion_never_calls_the_bridge_even_for_a_sea_listing(
+        self, app, flags, geocoding_travel_stub, reference_files, monkeypatch
+    ):
+        with app.app_context():
+            _mock_overpass_answering(monkeypatch)
+            _mock_coastline_empty(monkeypatch)
+            calls = _mock_bridge(monkeypatch)
+
+            created = _run_ingestion(monkeypatch, [_sea_listing_email()])
+            assert created == 1
+
+            # The evidence that matters: the CLI was never spawned.
+            assert calls == []
+
+            prop = _reload(Property.query.one().id)
+            detail = prop.enrichment["environment"]["sea_view_detail"]
+            # The keyword path ran and says so; it is not silently "ai".
+            assert detail["text"]["source"] == "keywords_only"
+            # And it took that path by choice, not because a call failed:
+            # a swallowed bridge error would leave `ai_error` behind.
+            assert "ai_error" not in detail["text"]
+            assert detail["text"]["claim"] == sea_view_service.TEXT_VIEW
+            # And the verdict is still a real one: the listing claims a view,
+            # the terrain disagrees, so one unopposed source is `likely`.
+            assert prop.enrichment["environment"]["sea_view"] == (
+                sea_view_service.LIKELY
+            )
+
+    def test_ingestion_without_coordinates_still_never_calls_the_bridge(
+        self, app, flags, reference_files, monkeypatch
+    ):
+        """The text signal runs *before* the coordinate check, so a row that
+        never geocoded is the one path where the AI branch is all there is."""
+        with app.app_context():
+            monkeypatch.setattr(Config, "AUTO_TRAVEL_ENRICHMENT", False)
+            calls = _mock_bridge(monkeypatch)
+            monkeypatch.setattr(
+                "services.enrichment_service.request_with_retries",
+                Mock(side_effect=AssertionError("no coordinates, no Overpass")),
+            )
+
+            created = _run_ingestion(monkeypatch, [_sea_listing_email()])
+            assert created == 1
+
+            assert calls == []
+            prop = _reload(Property.query.one().id)
+            detail = prop.enrichment["environment"]["sea_view_detail"]
+            assert detail["text"]["source"] == "keywords_only"
+            assert "ai_error" not in detail["text"]
+            assert detail["geometry"]["reason"] == "no_coordinates"
+
+    def test_the_enrich_button_does_use_the_bridge(
+        self, app, reference_files, monkeypatch
+    ):
+        """The other half of the contract: a press may spend a CLI run."""
+        with app.app_context():
+            prop = Property(
+                source_email_id="enrich_button_ai",
+                title=SEA_TITLE,
+                description=SEA_DESCRIPTION,
+                municipality="Navia",
+                location_lat=COORD_LAT,
+                location_lon=COORD_LON,
+                location_accuracy="precise",
+            )
+            db.session.add(prop)
+            db.session.commit()
+
+            _mock_overpass_answering(monkeypatch)
+            _mock_coastline_empty(monkeypatch)
+            calls = _mock_bridge(monkeypatch, claim="proximity")
+
+            PropertyEnrichmentService(
+                location_service=Mock(),
+                travel_service=Mock(),
+                sea_distance_service=Mock(),
+                pool_service=Mock(),
+            ).enrich_property(prop, recalc_scoring=False)
+
+            assert len(calls) == 1
+            assert calls[0]["provider"] == "claude"
+            detail = _reload(prop.id).enrichment["environment"]["sea_view_detail"]
+            # The AI's reading is what was stored, not the keyword guess:
+            # "vistas al mar" matched, but the bridge called it proximity.
+            assert detail["text"]["source"] == "ai"
+            assert detail["text"]["claim"] == sea_view_service.TEXT_PROXIMITY
 
 
 class TestARefusalIsRecordedAndNeverFailsIngestion:
@@ -371,7 +532,9 @@ class TestAHandSetVerdictSurvives:
             _mock_coastline_empty(monkeypatch)
 
             prop = db.session.get(Property, prop_id)
-            PropertyEnrichmentService().enrich_free_sources(prop, commit=True)
+            PropertyEnrichmentService().enrich_free_sources(
+                prop, commit=True, use_ai=False
+            )
 
             prop = _reload(prop_id)
             environment = prop.enrichment["environment"]
@@ -383,6 +546,184 @@ class TestAHandSetVerdictSurvives:
                 "school": 1
             }
             assert prop.enrichment["quality_of_life"]["municipality"]["status"] == "ok"
+
+
+class TestARefusalNeverErasesAMeasuredVerdict:
+    """A source that refused knows nothing about this property.
+
+    The dangerous path is the *second* press of Enrich, not the first ingest:
+    a new row has no verdict to lose, but `enrich_property` now recomputes the
+    sea view on every press, so a row already carrying a computed `yes` would
+    have had it replaced with `unknown` the first time Overpass was busy.
+    `SeaDistanceService` has applied this rule to `enrichment["sea"]` since
+    #98; it lives in `apply_to_property`, the one writer, so the backfill and
+    every future caller inherit it.
+    """
+
+    def _stored(self, source_id, environment, lat=COORD_LAT, lon=COORD_LON):
+        prop = Property(
+            source_email_id=source_id,
+            # No sea words: the refusal must surface as `unknown`, and a
+            # view claim in the text would answer `likely` on its own.
+            title=PLAIN_TITLE,
+            description=PLAIN_DESCRIPTION,
+            municipality="Navia",
+            location_lat=lat,
+            location_lon=lon,
+            location_accuracy="precise",
+            enrichment={"environment": environment},
+        )
+        db.session.add(prop)
+        db.session.commit()
+        return prop.id
+
+    @staticmethod
+    def _measured_verdict(state="yes", lat=COORD_LAT, lon=COORD_LON):
+        return {
+            "sea_view": state,
+            "sea_view_detail": {
+                "source": "text+geometry",
+                "reason": "listing claims a view and terrain allows it",
+                "origin": {"lat": lat, "lon": lon},
+                "computed_at": "2026-08-10T09:00:00+00:00",
+            },
+        }
+
+    def _recompute(self, prop_id, monkeypatch):
+        _mock_overpass_answering(monkeypatch)
+        _mock_coastline_refusing(monkeypatch)
+        prop = db.session.get(Property, prop_id)
+        PropertyEnrichmentService().enrich_free_sources(prop, commit=True, use_ai=False)
+        return _reload(prop_id)
+
+    def test_a_refused_source_keeps_the_verdict_measured_earlier(
+        self, app, reference_files, monkeypatch
+    ):
+        with app.app_context():
+            prop_id = self._stored("sea_view_kept", self._measured_verdict("yes"))
+
+            environment = self._recompute(prop_id, monkeypatch).enrichment[
+                "environment"
+            ]
+
+            # Unchanged — and the failed attempt is stamped, not swallowed.
+            assert environment["sea_view"] == sea_view_service.YES
+            detail = environment["sea_view_detail"]
+            assert detail["source"] == "text+geometry"
+            assert detail["last_attempt_state"] == sea_view_service.UNKNOWN
+            assert detail["last_attempt_reason"] == "coastline_source_unavailable"
+            assert detail["last_attempt_at"]
+            assert "origin_unverified" not in detail
+
+    def test_a_verdict_measured_somewhere_else_is_not_kept(
+        self, app, reference_files, monkeypatch
+    ):
+        """Provenance is the point: the rule preserves *this* row's verdict."""
+        with app.app_context():
+            prop_id = self._stored(
+                "sea_view_moved",
+                self._measured_verdict("yes", lat=43.36, lon=-5.85),
+            )
+
+            environment = self._recompute(prop_id, monkeypatch).enrichment[
+                "environment"
+            ]
+
+            assert environment["sea_view"] == sea_view_service.UNKNOWN
+            assert (
+                environment["sea_view_detail"]["geometry"]["reason"]
+                == "coastline_source_unavailable"
+            )
+
+    def test_a_verdict_from_before_origins_were_recorded_is_kept_but_labelled(
+        self, app, reference_files, monkeypatch
+    ):
+        """Every verdict `utils/backfill_sea_view.py` wrote before this change
+        carries no origin. Erasing those is the failure the rule exists to
+        prevent, so they are kept — with the unverified provenance stamped
+        rather than assumed away."""
+        with app.app_context():
+            legacy = self._measured_verdict("no")
+            legacy["sea_view_detail"].pop("origin")
+            prop_id = self._stored("sea_view_legacy", legacy)
+
+            environment = self._recompute(prop_id, monkeypatch).enrichment[
+                "environment"
+            ]
+
+            assert environment["sea_view"] == sea_view_service.NO
+            assert environment["sea_view_detail"]["origin_unverified"] is True
+            assert environment["sea_view_detail"]["last_attempt_reason"] == (
+                "coastline_source_unavailable"
+            )
+
+    def test_a_stored_unknown_is_not_treated_as_a_measurement(
+        self, app, reference_files, monkeypatch
+    ):
+        """`unknown` is the absence of a verdict; there is nothing to keep."""
+        with app.app_context():
+            previous = self._measured_verdict("unknown")
+            previous["sea_view_detail"]["source"] = "none"
+            prop_id = self._stored("sea_view_unknown", previous)
+
+            environment = self._recompute(prop_id, monkeypatch).enrichment[
+                "environment"
+            ]
+
+            assert environment["sea_view"] == sea_view_service.UNKNOWN
+            assert environment["sea_view_detail"]["source"] == "none"
+            assert "last_attempt_reason" not in environment["sea_view_detail"]
+
+    def test_an_answering_source_still_overwrites(
+        self, app, reference_files, monkeypatch
+    ):
+        """The rule must not freeze a verdict: a source that answered wins."""
+        with app.app_context():
+            prop_id = self._stored("sea_view_recomputed", self._measured_verdict("yes"))
+
+            _mock_overpass_answering(monkeypatch)
+            _mock_coastline_empty(monkeypatch)
+            prop = db.session.get(Property, prop_id)
+            PropertyEnrichmentService().enrich_free_sources(
+                prop, commit=True, use_ai=False
+            )
+
+            environment = _reload(prop_id).enrichment["environment"]
+            assert environment["sea_view"] == sea_view_service.NO
+            assert environment["sea_view_detail"]["source"] == "geometry"
+
+    def test_a_computed_unknown_is_not_a_refusal(
+        self, app, reference_files, monkeypatch
+    ):
+        """An approximate coordinate is an answer about this row, so it lands.
+
+        Only the two source-refusal reasons are barred from overwriting; a
+        verdict we genuinely cannot compute must not hide behind an old one.
+        """
+        with app.app_context():
+            prop_id = self._stored("sea_view_approximate", self._measured_verdict("no"))
+            prop = db.session.get(Property, prop_id)
+            prop.location_accuracy = "approximate"
+            db.session.commit()
+
+            _mock_overpass_answering(monkeypatch)
+            # Sea within reach of the centroid: geometry cannot decide, and
+            # says so with `approximate_coordinates` rather than a refusal.
+            monkeypatch.setattr(
+                sea_view_service,
+                "fetch_coastline_points",
+                lambda lat, lon, session=None: [(COORD_LAT + 0.005, COORD_LON)],
+            )
+            PropertyEnrichmentService().enrich_free_sources(
+                db.session.get(Property, prop_id), commit=True, use_ai=False
+            )
+
+            environment = _reload(prop_id).enrichment["environment"]
+            assert environment["sea_view"] == sea_view_service.UNKNOWN
+            assert (
+                environment["sea_view_detail"]["geometry"]["reason"]
+                == "approximate_coordinates"
+            )
 
 
 class TestTheEnrichFlowComputesSeaView:

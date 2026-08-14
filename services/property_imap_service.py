@@ -800,6 +800,21 @@ class PropertyIMAPService:
                     # is paced by its transport's own gate, commits on its
                     # own, and records a refusal as a refusal; nothing in it
                     # may fail ingestion or hold the UID cursor back.
+                    #
+                    # `use_ai=False` is the load-bearing argument here. The
+                    # sea-view text signal can ask the owner's Claude
+                    # subscription what a mention of the sea means, and that
+                    # is a cold CLI run with a 600 s timeout (#201). This
+                    # loop runs unattended, twice a night, over however many
+                    # alert emails arrived; "vistas al mar" is ordinary
+                    # listing prose in Asturias and Galicia, so leaving the
+                    # default on would mean minutes of subscription work per
+                    # batch that nobody pressed a button for.
+                    # `utils/backfill_sea_view.py` has had `--no-ai` since it
+                    # was written, and an unattended ingest must not be
+                    # bolder than a backfill. The keyword path records that
+                    # it took it (`source: "keywords_only"`); the Enrich
+                    # button, where there is a press, still uses the AI.
                     if getattr(Config, "FREE_ENRICHMENT_ENABLED", True):
                         try:
                             from services.property_enrichment_service import (
@@ -807,7 +822,7 @@ class PropertyIMAPService:
                             )
 
                             PropertyEnrichmentService().enrich_free_sources(
-                                prop, commit=True
+                                prop, commit=True, use_ai=False
                             )
                         except Exception as free_error:
                             logger.warning(
