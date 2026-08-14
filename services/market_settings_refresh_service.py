@@ -114,8 +114,10 @@ Return ONLY JSON matching the schema, with:
 - rental_prices per location type: long-term rent in EUR per m2 per month.
 - sources_note: one sentence naming what the figures are based on.
 
-Base the figures on the most recent data you are confident about and keep
-them conservative; do not invent precision you do not have."""
+Base the figures on the most recent published data you are confident about,
+carried forward to today: construction costs and rents in Spain have risen
+every year since 2021, so understating a current figure is as wrong as
+overstating it. Do not invent precision you do not have."""
 
 
 def _require_number(value: Any, field: str) -> float:
