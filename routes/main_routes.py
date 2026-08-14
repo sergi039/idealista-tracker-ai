@@ -2682,6 +2682,53 @@ def update_market_settings():
     return redirect(url_for("main.criteria"))
 
 
+@main_bp.route("/criteria/refresh_market_settings", methods=["POST"])
+def refresh_market_settings():
+    """Refresh market settings with current-year figures via the AI bridge.
+
+    One user click is one Claude call on the subscription bridge. The service
+    refuses a partial or out-of-bounds answer, so a failed refresh leaves the
+    stored settings exactly as they were.
+    """
+    from services.market_settings_refresh_service import (
+        MarketSettingsRefreshError,
+        refresh_market_settings as run_market_refresh,
+    )
+    from services.subscription_transport import (
+        SubscriptionTransportError,
+        describe_failure,
+    )
+
+    try:
+        changes, sources_note = run_market_refresh()
+        if changes:
+            summary = f"{len(changes)} value(s) updated"
+        else:
+            summary = "current values confirmed, nothing changed"
+        note = f" {sources_note}" if sources_note else ""
+        flash(f"Market settings refreshed via AI: {summary}.{note}", "success")
+    except SubscriptionTransportError as exc:
+        logger.error("Market settings AI refresh failed at the bridge: %s", exc)
+        _kind, message = describe_failure(exc)
+        flash(f"Market settings refresh failed: {message}", "error")
+    except MarketSettingsRefreshError as exc:
+        db.session.rollback()
+        logger.error("Market settings AI refresh rejected: %s", exc)
+        flash(
+            f"Market settings refresh rejected: {exc}. Existing values were kept.",
+            "error",
+        )
+    except Exception:
+        db.session.rollback()
+        logger.error("Market settings AI refresh failed", exc_info=True)
+        flash(
+            "An error occurred while refreshing market settings. Check server logs.",
+            "error",
+        )
+
+    return redirect(url_for("main.criteria") + "#market-settings")
+
+
 @main_bp.route("/land/<int:land_id>/edit-environment", methods=["GET", "POST"])
 def edit_environment(land_id):
     """Edit environment data for a land"""
