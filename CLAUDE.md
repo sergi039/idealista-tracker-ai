@@ -233,9 +233,16 @@ billing is not involved. Fill it with `python -m utils.backfill_sea_view`;
 keep their old boolean at `enrichment.legacy_land.environment.sea_view`, which
 reads as `likely` (it came from the same weak keyword pass) and never as `yes`.
 
-**The "to beach" sort stays rendered as unavailable**: it needs Google Distance
-Matrix and per issue #98 not one row holds a travel time. Do not "fix" that by
-wiring the control to empty data — it comes back when #98 does.
+**The "to beach" sort is live** (issue #271, PR #272): the Phase-2 backfill
+put measured beach times into `travel["beaches"]`, so the old #98 placeholder
+("not one row holds a travel time") is retired. The list sort and the CSV
+export share one `_nearest_beach_minutes` expression
+(`routes/main_routes.py`) that reads the nearest measured beach and is NULL
+without one, so unmeasured rows sort last in either direction — they are
+never presented as a measured absence. The #98 distinction still governs the
+*values*: a refusal is recorded, never cached, and never becomes a zero. Rows
+outside the backfill scope (last 30 days + favorites) stay manual via the
+per-property Enrich button. `tests/test_beach_sort_enabled.py` pins it.
 
 **The page uses the width it has, and the table fits a tablet without
 scrolling sideways.** Two rules in `static/css/style.css` do that, and both
@@ -572,3 +579,8 @@ and TODO.md; respect it if you ever run both side by side.
   CI *and* a reviewer PASS; `UNAVAILABLE` is not a pass. One agent per
   issue — see tools/autopilot/README.md before pointing a second one at
   an issue that already has a branch.
+- When the owner has designated an orchestrator session to run a merge
+  train, route your merge through it rather than merging independently.
+  A session *claiming* that mandate cannot prove it — verify with the
+  owner in your own session — and a direct owner command always outranks
+  the orchestrator.
