@@ -2148,6 +2148,65 @@ def set_pool_absence(property_id):
     return redirect(url_for("main.property_detail", property_id=property_id))
 
 
+@main_bp.route("/municipalities")
+def municipalities():
+    """Compare the municipalities the search actually covers (proposal D22).
+
+    Municipality facts (INE, SEPE) sit beside medians over that
+    municipality's own listings — the owner's decision of 2026-08-14, taken
+    over a capital-centroid basis because what he is choosing between is the
+    listings, not the town halls. Every median carries its coverage.
+    """
+    from services.municipality_comparison_service import (
+        DEFAULT_SORT,
+        SORT_KEYS,
+        MunicipalityComparisonService,
+    )
+
+    try:
+        include_archived = request.args.get("archived") == "on"
+        favorites_only = request.args.get("favorites") == "on"
+        sort_by = request.args.get("sort") or DEFAULT_SORT
+        if sort_by not in SORT_KEYS:
+            sort_by = DEFAULT_SORT
+        order = request.args.get("order") or (
+            "asc" if sort_by == "municipality" else "desc"
+        )
+
+        query = Property.query
+        if not include_archived:
+            query = query.filter(Property.listing_status.notin_(["removed", "sold"]))
+        if favorites_only:
+            query = query.filter(Property.is_favorite.is_(True))
+        properties = query.all()
+
+        service = MunicipalityComparisonService()
+        rows = service.build_rows(properties)
+        rows = service.sort_rows(rows, sort_by, descending=(order == "desc"))
+
+        unnamed = sum(1 for p in properties if not (p.municipality or "").strip())
+        return render_template(
+            "municipalities.html",
+            rows=rows,
+            sort_by=sort_by,
+            order=order,
+            include_archived=include_archived,
+            favorites_only=favorites_only,
+            listing_total=len(properties),
+            unnamed_listings=unnamed,
+            sources=service.qol_service.reference_sources(),
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.error("Failed to build the municipality comparison", exc_info=True)
+        flash(
+            "An error occurred while comparing municipalities. Check server logs.",
+            "error",
+        )
+        return redirect(url_for("main.properties"))
+
+
 @main_bp.route("/map")
 def map_view():
     """Interactive map view of all properties with coordinates"""

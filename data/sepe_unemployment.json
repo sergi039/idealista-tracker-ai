@@ -1,0 +1,1975 @@
+{
+ "generated_at": "2026-08-14T11:25:14.085135+00:00",
+ "source": "SEPE Paro registrado por municipios, 2026 06, https://sede.sepe.gob.es/es/portaltrabaja/resources/sede/datos_abiertos/datos/Paro_por_municipios_2026_csv.csv",
+ "source_url": "https://sede.sepe.gob.es/es/portaltrabaja/resources/sede/datos_abiertos/datos/Paro_por_municipios_2026_csv.csv",
+ "dataset_page": "https://datos.gob.es/es/catalogo/ea0041513-paro-registrado-por-municipio",
+ "period": "2026-06",
+ "period_year_ago": "2025-06",
+ "suppression_note": "SEPE withholds municipal counts below five and publishes the literal \"<5\". Those are recorded as unemployed_total null with suppressed true — never as 0 and never as 5.",
+ "municipalities": {
+  "33001": {
+   "name": "Allande",
+   "unemployed_total": 35,
+   "unemployed_year_ago": 35
+  },
+  "33002": {
+   "name": "Aller",
+   "unemployed_total": 445,
+   "unemployed_year_ago": 526
+  },
+  "33003": {
+   "name": "Amieva",
+   "unemployed_total": 21,
+   "unemployed_year_ago": 22
+  },
+  "33004": {
+   "name": "Avilés",
+   "unemployed_total": 4083,
+   "unemployed_year_ago": 4225
+  },
+  "33005": {
+   "name": "Belmonte de Miranda",
+   "unemployed_total": 46,
+   "unemployed_year_ago": 43
+  },
+  "33006": {
+   "name": "Bimenes",
+   "unemployed_total": 77,
+   "unemployed_year_ago": 90
+  },
+  "33007": {
+   "name": "Boal",
+   "unemployed_total": 32,
+   "unemployed_year_ago": 39
+  },
+  "33008": {
+   "name": "Cabrales",
+   "unemployed_total": 37,
+   "unemployed_year_ago": 36
+  },
+  "33009": {
+   "name": "Cabranes",
+   "unemployed_total": 74,
+   "unemployed_year_ago": 56
+  },
+  "33010": {
+   "name": "Candamo",
+   "unemployed_total": 85,
+   "unemployed_year_ago": 73
+  },
+  "33011": {
+   "name": "Cangas del Narcea",
+   "unemployed_total": 382,
+   "unemployed_year_ago": 434
+  },
+  "33012": {
+   "name": "Cangas de Onís",
+   "unemployed_total": 182,
+   "unemployed_year_ago": 188
+  },
+  "33013": {
+   "name": "Caravia",
+   "unemployed_total": 8,
+   "unemployed_year_ago": 15
+  },
+  "33014": {
+   "name": "Carreño",
+   "unemployed_total": 376,
+   "unemployed_year_ago": 366
+  },
+  "33015": {
+   "name": "Caso",
+   "unemployed_total": 43,
+   "unemployed_year_ago": 47
+  },
+  "33016": {
+   "name": "Castrillón",
+   "unemployed_total": 847,
+   "unemployed_year_ago": 860
+  },
+  "33017": {
+   "name": "Castropol",
+   "unemployed_total": 76,
+   "unemployed_year_ago": 97
+  },
+  "33018": {
+   "name": "Coaña",
+   "unemployed_total": 84,
+   "unemployed_year_ago": 92
+  },
+  "33019": {
+   "name": "Colunga",
+   "unemployed_total": 73,
+   "unemployed_year_ago": 91
+  },
+  "33020": {
+   "name": "Corvera de Asturias",
+   "unemployed_total": 930,
+   "unemployed_year_ago": 930
+  },
+  "33021": {
+   "name": "Cudillero",
+   "unemployed_total": 184,
+   "unemployed_year_ago": 195
+  },
+  "33022": {
+   "name": "Degaña",
+   "unemployed_total": 33,
+   "unemployed_year_ago": 32
+  },
+  "33023": {
+   "name": "El Franco",
+   "unemployed_total": 98,
+   "unemployed_year_ago": 124
+  },
+  "33024": {
+   "name": "Gijón",
+   "unemployed_total": 13678,
+   "unemployed_year_ago": 14313
+  },
+  "33025": {
+   "name": "Gozón",
+   "unemployed_total": 369,
+   "unemployed_year_ago": 364
+  },
+  "33026": {
+   "name": "Grado",
+   "unemployed_total": 487,
+   "unemployed_year_ago": 452
+  },
+  "33027": {
+   "name": "Grandas de Salime",
+   "unemployed_total": 18,
+   "unemployed_year_ago": 21
+  },
+  "33028": {
+   "name": "Ibias",
+   "unemployed_total": 44,
+   "unemployed_year_ago": 30
+  },
+  "33029": {
+   "name": "Illano",
+   "unemployed_total": 5,
+   "unemployed_year_ago": 9
+  },
+  "33030": {
+   "name": "Illas",
+   "unemployed_total": 37,
+   "unemployed_year_ago": 35
+  },
+  "33031": {
+   "name": "Langreo",
+   "unemployed_total": 2778,
+   "unemployed_year_ago": 2844
+  },
+  "33032": {
+   "name": "Laviana",
+   "unemployed_total": 560,
+   "unemployed_year_ago": 568
+  },
+  "33033": {
+   "name": "Lena",
+   "unemployed_total": 560,
+   "unemployed_year_ago": 579
+  },
+  "33034": {
+   "name": "Valdés",
+   "unemployed_total": 340,
+   "unemployed_year_ago": 398
+  },
+  "33035": {
+   "name": "Llanera",
+   "unemployed_total": 582,
+   "unemployed_year_ago": 564
+  },
+  "33036": {
+   "name": "Llanes",
+   "unemployed_total": 408,
+   "unemployed_year_ago": 452
+  },
+  "33037": {
+   "name": "Mieres",
+   "unemployed_total": 2373,
+   "unemployed_year_ago": 2368
+  },
+  "33038": {
+   "name": "Morcín",
+   "unemployed_total": 94,
+   "unemployed_year_ago": 97
+  },
+  "33039": {
+   "name": "Muros de Nalón",
+   "unemployed_total": 85,
+   "unemployed_year_ago": 100
+  },
+  "33040": {
+   "name": "Nava",
+   "unemployed_total": 200,
+   "unemployed_year_ago": 219
+  },
+  "33041": {
+   "name": "Navia",
+   "unemployed_total": 227,
+   "unemployed_year_ago": 216
+  },
+  "33042": {
+   "name": "Noreña",
+   "unemployed_total": 225,
+   "unemployed_year_ago": 216
+  },
+  "33043": {
+   "name": "Onís",
+   "unemployed_total": 23,
+   "unemployed_year_ago": 22
+  },
+  "33044": {
+   "name": "Oviedo",
+   "unemployed_total": 10099,
+   "unemployed_year_ago": 10332
+  },
+  "33045": {
+   "name": "Parres",
+   "unemployed_total": 214,
+   "unemployed_year_ago": 214
+  },
+  "33046": {
+   "name": "Peñamellera Alta",
+   "unemployed_total": 13,
+   "unemployed_year_ago": 15
+  },
+  "33047": {
+   "name": "Peñamellera Baja",
+   "unemployed_total": 35,
+   "unemployed_year_ago": 30
+  },
+  "33048": {
+   "name": "Pesoz",
+   "unemployed_total": null,
+   "suppressed": true,
+   "unemployed_year_ago": 6
+  },
+  "33049": {
+   "name": "Piloña",
+   "unemployed_total": 322,
+   "unemployed_year_ago": 313
+  },
+  "33050": {
+   "name": "Ponga",
+   "unemployed_total": 22,
+   "unemployed_year_ago": 21
+  },
+  "33051": {
+   "name": "Pravia",
+   "unemployed_total": 441,
+   "unemployed_year_ago": 427
+  },
+  "33052": {
+   "name": "Proaza",
+   "unemployed_total": 21,
+   "unemployed_year_ago": 28
+  },
+  "33053": {
+   "name": "Quirós",
+   "unemployed_total": 44,
+   "unemployed_year_ago": 51
+  },
+  "33054": {
+   "name": "Las Regueras",
+   "unemployed_total": 55,
+   "unemployed_year_ago": 57
+  },
+  "33055": {
+   "name": "Ribadedeva",
+   "unemployed_total": 44,
+   "unemployed_year_ago": 44
+  },
+  "33056": {
+   "name": "Ribadesella",
+   "unemployed_total": 158,
+   "unemployed_year_ago": 147
+  },
+  "33057": {
+   "name": "Ribera de Arriba",
+   "unemployed_total": 125,
+   "unemployed_year_ago": 137
+  },
+  "33058": {
+   "name": "Riosa",
+   "unemployed_total": 62,
+   "unemployed_year_ago": 72
+  },
+  "33059": {
+   "name": "Salas",
+   "unemployed_total": 157,
+   "unemployed_year_ago": 176
+  },
+  "33060": {
+   "name": "San Martín del Rey Aurelio",
+   "unemployed_total": 1124,
+   "unemployed_year_ago": 1157
+  },
+  "33061": {
+   "name": "San Martín de Oscos",
+   "unemployed_total": 11,
+   "unemployed_year_ago": 9
+  },
+  "33062": {
+   "name": "Santa Eulalia de Oscos",
+   "unemployed_total": 20,
+   "unemployed_year_ago": 14
+  },
+  "33063": {
+   "name": "San Tirso de Abres",
+   "unemployed_total": 20,
+   "unemployed_year_ago": 11
+  },
+  "33064": {
+   "name": "Santo Adriano",
+   "unemployed_total": 15,
+   "unemployed_year_ago": 12
+  },
+  "33065": {
+   "name": "Sariego",
+   "unemployed_total": 50,
+   "unemployed_year_ago": 50
+  },
+  "33066": {
+   "name": "Siero",
+   "unemployed_total": 2336,
+   "unemployed_year_ago": 2450
+  },
+  "33067": {
+   "name": "Sobrescobio",
+   "unemployed_total": 26,
+   "unemployed_year_ago": 24
+  },
+  "33068": {
+   "name": "Somiedo",
+   "unemployed_total": 27,
+   "unemployed_year_ago": 13
+  },
+  "33069": {
+   "name": "Soto del Barco",
+   "unemployed_total": 164,
+   "unemployed_year_ago": 187
+  },
+  "33070": {
+   "name": "Tapia de Casariego",
+   "unemployed_total": 90,
+   "unemployed_year_ago": 122
+  },
+  "33071": {
+   "name": "Taramundi",
+   "unemployed_total": 10,
+   "unemployed_year_ago": 8
+  },
+  "33072": {
+   "name": "Teverga",
+   "unemployed_total": 48,
+   "unemployed_year_ago": 54
+  },
+  "33073": {
+   "name": "Tineo",
+   "unemployed_total": 300,
+   "unemployed_year_ago": 301
+  },
+  "33074": {
+   "name": "Vegadeo",
+   "unemployed_total": 158,
+   "unemployed_year_ago": 166
+  },
+  "33075": {
+   "name": "Villanueva de Oscos",
+   "unemployed_total": 12,
+   "unemployed_year_ago": 13
+  },
+  "33076": {
+   "name": "Villaviciosa",
+   "unemployed_total": 559,
+   "unemployed_year_ago": 547
+  },
+  "33077": {
+   "name": "Villayón",
+   "unemployed_total": 34,
+   "unemployed_year_ago": 27
+  },
+  "33078": {
+   "name": "Yernes y Tameza",
+   "unemployed_total": 8,
+   "unemployed_year_ago": 7
+  },
+  "15001": {
+   "name": "Abegondo",
+   "unemployed_total": 151,
+   "unemployed_year_ago": 148
+  },
+  "15002": {
+   "name": "Ames",
+   "unemployed_total": 1071,
+   "unemployed_year_ago": 1111
+  },
+  "15003": {
+   "name": "Aranga",
+   "unemployed_total": 43,
+   "unemployed_year_ago": 42
+  },
+  "15004": {
+   "name": "Ares",
+   "unemployed_total": 233,
+   "unemployed_year_ago": 243
+  },
+  "15005": {
+   "name": "Arteixo",
+   "unemployed_total": 1325,
+   "unemployed_year_ago": 1378
+  },
+  "15006": {
+   "name": "Arzúa",
+   "unemployed_total": 124,
+   "unemployed_year_ago": 132
+  },
+  "15007": {
+   "name": "A Baña",
+   "unemployed_total": 104,
+   "unemployed_year_ago": 101
+  },
+  "15008": {
+   "name": "Bergondo",
+   "unemployed_total": 219,
+   "unemployed_year_ago": 252
+  },
+  "15009": {
+   "name": "Betanzos",
+   "unemployed_total": 532,
+   "unemployed_year_ago": 541
+  },
+  "15010": {
+   "name": "Boimorto",
+   "unemployed_total": 34,
+   "unemployed_year_ago": 36
+  },
+  "15011": {
+   "name": "Boiro",
+   "unemployed_total": 506,
+   "unemployed_year_ago": 539
+  },
+  "15012": {
+   "name": "Boqueixón",
+   "unemployed_total": 81,
+   "unemployed_year_ago": 90
+  },
+  "15013": {
+   "name": "Brión",
+   "unemployed_total": 199,
+   "unemployed_year_ago": 185
+  },
+  "15014": {
+   "name": "Cabana de Bergantiños",
+   "unemployed_total": 82,
+   "unemployed_year_ago": 97
+  },
+  "15015": {
+   "name": "Cabanas",
+   "unemployed_total": 98,
+   "unemployed_year_ago": 108
+  },
+  "15016": {
+   "name": "Camariñas",
+   "unemployed_total": 184,
+   "unemployed_year_ago": 197
+  },
+  "15017": {
+   "name": "Cambre",
+   "unemployed_total": 1028,
+   "unemployed_year_ago": 1022
+  },
+  "15018": {
+   "name": "A Capela",
+   "unemployed_total": 42,
+   "unemployed_year_ago": 38
+  },
+  "15019": {
+   "name": "Carballo",
+   "unemployed_total": 1502,
+   "unemployed_year_ago": 1481
+  },
+  "15020": {
+   "name": "Carnota",
+   "unemployed_total": 125,
+   "unemployed_year_ago": 117
+  },
+  "15021": {
+   "name": "Carral",
+   "unemployed_total": 215,
+   "unemployed_year_ago": 186
+  },
+  "15022": {
+   "name": "Cedeira",
+   "unemployed_total": 258,
+   "unemployed_year_ago": 258
+  },
+  "15023": {
+   "name": "Cee",
+   "unemployed_total": 296,
+   "unemployed_year_ago": 313
+  },
+  "15024": {
+   "name": "Cerceda",
+   "unemployed_total": 136,
+   "unemployed_year_ago": 145
+  },
+  "15025": {
+   "name": "Cerdido",
+   "unemployed_total": 40,
+   "unemployed_year_ago": 32
+  },
+  "15027": {
+   "name": "Coirós",
+   "unemployed_total": 44,
+   "unemployed_year_ago": 49
+  },
+  "15028": {
+   "name": "Corcubión",
+   "unemployed_total": 71,
+   "unemployed_year_ago": 71
+  },
+  "15029": {
+   "name": "Coristanco",
+   "unemployed_total": 216,
+   "unemployed_year_ago": 229
+  },
+  "15030": {
+   "name": "A Coruña",
+   "unemployed_total": 11590,
+   "unemployed_year_ago": 11469
+  },
+  "15031": {
+   "name": "Culleredo",
+   "unemployed_total": 1281,
+   "unemployed_year_ago": 1276
+  },
+  "15032": {
+   "name": "Curtis",
+   "unemployed_total": 103,
+   "unemployed_year_ago": 103
+  },
+  "15033": {
+   "name": "Dodro",
+   "unemployed_total": 60,
+   "unemployed_year_ago": 62
+  },
+  "15034": {
+   "name": "Dumbría",
+   "unemployed_total": 76,
+   "unemployed_year_ago": 86
+  },
+  "15035": {
+   "name": "Fene",
+   "unemployed_total": 481,
+   "unemployed_year_ago": 487
+  },
+  "15036": {
+   "name": "Ferrol",
+   "unemployed_total": 3560,
+   "unemployed_year_ago": 3503
+  },
+  "15037": {
+   "name": "Fisterra",
+   "unemployed_total": 127,
+   "unemployed_year_ago": 144
+  },
+  "15038": {
+   "name": "Frades",
+   "unemployed_total": 40,
+   "unemployed_year_ago": 46
+  },
+  "15039": {
+   "name": "Irixoa",
+   "unemployed_total": 50,
+   "unemployed_year_ago": 38
+  },
+  "15040": {
+   "name": "Laxe",
+   "unemployed_total": 94,
+   "unemployed_year_ago": 105
+  },
+  "15041": {
+   "name": "A Laracha",
+   "unemployed_total": 296,
+   "unemployed_year_ago": 325
+  },
+  "15042": {
+   "name": "Lousame",
+   "unemployed_total": 94,
+   "unemployed_year_ago": 72
+  },
+  "15043": {
+   "name": "Malpica de Bergantiños",
+   "unemployed_total": 189,
+   "unemployed_year_ago": 199
+  },
+  "15044": {
+   "name": "Mañón",
+   "unemployed_total": 36,
+   "unemployed_year_ago": 37
+  },
+  "15045": {
+   "name": "Mazaricos",
+   "unemployed_total": 84,
+   "unemployed_year_ago": 65
+  },
+  "15046": {
+   "name": "Melide",
+   "unemployed_total": 241,
+   "unemployed_year_ago": 238
+  },
+  "15047": {
+   "name": "Mesía",
+   "unemployed_total": 43,
+   "unemployed_year_ago": 42
+  },
+  "15048": {
+   "name": "Miño",
+   "unemployed_total": 234,
+   "unemployed_year_ago": 234
+  },
+  "15049": {
+   "name": "Moeche",
+   "unemployed_total": 25,
+   "unemployed_year_ago": 33
+  },
+  "15050": {
+   "name": "Monfero",
+   "unemployed_total": 33,
+   "unemployed_year_ago": 33
+  },
+  "15051": {
+   "name": "Mugardos",
+   "unemployed_total": 223,
+   "unemployed_year_ago": 224
+  },
+  "15052": {
+   "name": "Muxía",
+   "unemployed_total": 101,
+   "unemployed_year_ago": 117
+  },
+  "15053": {
+   "name": "Muros",
+   "unemployed_total": 221,
+   "unemployed_year_ago": 230
+  },
+  "15054": {
+   "name": "Narón",
+   "unemployed_total": 1673,
+   "unemployed_year_ago": 1661
+  },
+  "15055": {
+   "name": "Neda",
+   "unemployed_total": 181,
+   "unemployed_year_ago": 200
+  },
+  "15056": {
+   "name": "Negreira",
+   "unemployed_total": 230,
+   "unemployed_year_ago": 259
+  },
+  "15057": {
+   "name": "Noia",
+   "unemployed_total": 418,
+   "unemployed_year_ago": 447
+  },
+  "15058": {
+   "name": "Oleiros",
+   "unemployed_total": 1149,
+   "unemployed_year_ago": 1240
+  },
+  "15059": {
+   "name": "Ordes",
+   "unemployed_total": 443,
+   "unemployed_year_ago": 427
+  },
+  "15060": {
+   "name": "Oroso",
+   "unemployed_total": 241,
+   "unemployed_year_ago": 229
+  },
+  "15061": {
+   "name": "Ortigueira",
+   "unemployed_total": 214,
+   "unemployed_year_ago": 214
+  },
+  "15062": {
+   "name": "Outes",
+   "unemployed_total": 163,
+   "unemployed_year_ago": 167
+  },
+  "15064": {
+   "name": "Paderne",
+   "unemployed_total": 59,
+   "unemployed_year_ago": 53
+  },
+  "15065": {
+   "name": "Padrón",
+   "unemployed_total": 281,
+   "unemployed_year_ago": 295
+  },
+  "15066": {
+   "name": "O Pino",
+   "unemployed_total": 106,
+   "unemployed_year_ago": 89
+  },
+  "15067": {
+   "name": "A Pobra do Caramiñal",
+   "unemployed_total": 257,
+   "unemployed_year_ago": 274
+  },
+  "15068": {
+   "name": "Ponteceso",
+   "unemployed_total": 146,
+   "unemployed_year_ago": 146
+  },
+  "15069": {
+   "name": "Pontedeume",
+   "unemployed_total": 269,
+   "unemployed_year_ago": 278
+  },
+  "15070": {
+   "name": "As Pontes de García Rodríguez",
+   "unemployed_total": 274,
+   "unemployed_year_ago": 290
+  },
+  "15071": {
+   "name": "Porto do Son",
+   "unemployed_total": 237,
+   "unemployed_year_ago": 230
+  },
+  "15072": {
+   "name": "Rianxo",
+   "unemployed_total": 293,
+   "unemployed_year_ago": 321
+  },
+  "15073": {
+   "name": "Ribeira",
+   "unemployed_total": 940,
+   "unemployed_year_ago": 999
+  },
+  "15074": {
+   "name": "Rois",
+   "unemployed_total": 108,
+   "unemployed_year_ago": 126
+  },
+  "15075": {
+   "name": "Sada",
+   "unemployed_total": 674,
+   "unemployed_year_ago": 662
+  },
+  "15076": {
+   "name": "San Sadurniño",
+   "unemployed_total": 74,
+   "unemployed_year_ago": 76
+  },
+  "15077": {
+   "name": "Santa Comba",
+   "unemployed_total": 352,
+   "unemployed_year_ago": 350
+  },
+  "15078": {
+   "name": "Santiago de Compostela",
+   "unemployed_total": 3216,
+   "unemployed_year_ago": 3187
+  },
+  "15079": {
+   "name": "Santiso",
+   "unemployed_total": 22,
+   "unemployed_year_ago": 31
+  },
+  "15080": {
+   "name": "Sobrado",
+   "unemployed_total": 33,
+   "unemployed_year_ago": 39
+  },
+  "15081": {
+   "name": "As Somozas",
+   "unemployed_total": 35,
+   "unemployed_year_ago": 31
+  },
+  "15082": {
+   "name": "Teo",
+   "unemployed_total": 559,
+   "unemployed_year_ago": 546
+  },
+  "15083": {
+   "name": "Toques",
+   "unemployed_total": 25,
+   "unemployed_year_ago": 28
+  },
+  "15084": {
+   "name": "Tordoia",
+   "unemployed_total": 76,
+   "unemployed_year_ago": 74
+  },
+  "15085": {
+   "name": "Touro",
+   "unemployed_total": 63,
+   "unemployed_year_ago": 82
+  },
+  "15086": {
+   "name": "Trazo",
+   "unemployed_total": 52,
+   "unemployed_year_ago": 46
+  },
+  "15087": {
+   "name": "Valdoviño",
+   "unemployed_total": 215,
+   "unemployed_year_ago": 250
+  },
+  "15088": {
+   "name": "Val do Dubra",
+   "unemployed_total": 94,
+   "unemployed_year_ago": 91
+  },
+  "15089": {
+   "name": "Vedra",
+   "unemployed_total": 106,
+   "unemployed_year_ago": 99
+  },
+  "15090": {
+   "name": "Vilasantar",
+   "unemployed_total": 39,
+   "unemployed_year_ago": 37
+  },
+  "15091": {
+   "name": "Vilarmaior",
+   "unemployed_total": 32,
+   "unemployed_year_ago": 27
+  },
+  "15092": {
+   "name": "Vimianzo",
+   "unemployed_total": 162,
+   "unemployed_year_ago": 169
+  },
+  "15093": {
+   "name": "Zas",
+   "unemployed_total": 90,
+   "unemployed_year_ago": 89
+  },
+  "15901": {
+   "name": "Cariño",
+   "unemployed_total": 118,
+   "unemployed_year_ago": 128
+  },
+  "15902": {
+   "name": "Oza-Cesuras",
+   "unemployed_total": 135,
+   "unemployed_year_ago": 151,
+   "composed_from": [
+    "15026",
+    "15063"
+   ]
+  },
+  "27001": {
+   "name": "Abadín",
+   "unemployed_total": 52,
+   "unemployed_year_ago": 51
+  },
+  "27002": {
+   "name": "Alfoz",
+   "unemployed_total": 36,
+   "unemployed_year_ago": 45
+  },
+  "27003": {
+   "name": "Antas de Ulla",
+   "unemployed_total": 49,
+   "unemployed_year_ago": 54
+  },
+  "27004": {
+   "name": "Baleira",
+   "unemployed_total": 16,
+   "unemployed_year_ago": 16
+  },
+  "27005": {
+   "name": "Barreiros",
+   "unemployed_total": 108,
+   "unemployed_year_ago": 107
+  },
+  "27006": {
+   "name": "Becerreá",
+   "unemployed_total": 83,
+   "unemployed_year_ago": 100
+  },
+  "27007": {
+   "name": "Begonte",
+   "unemployed_total": 76,
+   "unemployed_year_ago": 70
+  },
+  "27008": {
+   "name": "Bóveda",
+   "unemployed_total": 36,
+   "unemployed_year_ago": 33
+  },
+  "27009": {
+   "name": "Carballedo",
+   "unemployed_total": 46,
+   "unemployed_year_ago": 41
+  },
+  "27010": {
+   "name": "Castro de Rei",
+   "unemployed_total": 106,
+   "unemployed_year_ago": 96
+  },
+  "27011": {
+   "name": "Castroverde",
+   "unemployed_total": 35,
+   "unemployed_year_ago": 30
+  },
+  "27012": {
+   "name": "Cervantes",
+   "unemployed_total": 17,
+   "unemployed_year_ago": 20
+  },
+  "27013": {
+   "name": "Cervo",
+   "unemployed_total": 114,
+   "unemployed_year_ago": 112
+  },
+  "27014": {
+   "name": "O Corgo",
+   "unemployed_total": 59,
+   "unemployed_year_ago": 63
+  },
+  "27015": {
+   "name": "Cospeito",
+   "unemployed_total": 75,
+   "unemployed_year_ago": 68
+  },
+  "27016": {
+   "name": "Chantada",
+   "unemployed_total": 307,
+   "unemployed_year_ago": 298
+  },
+  "27017": {
+   "name": "Folgoso do Courel",
+   "unemployed_total": 27,
+   "unemployed_year_ago": 30
+  },
+  "27018": {
+   "name": "A Fonsagrada",
+   "unemployed_total": 78,
+   "unemployed_year_ago": 79
+  },
+  "27019": {
+   "name": "Foz",
+   "unemployed_total": 323,
+   "unemployed_year_ago": 316
+  },
+  "27020": {
+   "name": "Friol",
+   "unemployed_total": 64,
+   "unemployed_year_ago": 67
+  },
+  "27021": {
+   "name": "Xermade",
+   "unemployed_total": 33,
+   "unemployed_year_ago": 34
+  },
+  "27022": {
+   "name": "Guitiriz",
+   "unemployed_total": 139,
+   "unemployed_year_ago": 134
+  },
+  "27023": {
+   "name": "Guntín",
+   "unemployed_total": 44,
+   "unemployed_year_ago": 54
+  },
+  "27024": {
+   "name": "O Incio",
+   "unemployed_total": 35,
+   "unemployed_year_ago": 37
+  },
+  "27025": {
+   "name": "Xove",
+   "unemployed_total": 71,
+   "unemployed_year_ago": 66
+  },
+  "27026": {
+   "name": "Láncara",
+   "unemployed_total": 56,
+   "unemployed_year_ago": 76
+  },
+  "27027": {
+   "name": "Lourenzá",
+   "unemployed_total": 47,
+   "unemployed_year_ago": 51
+  },
+  "27028": {
+   "name": "Lugo",
+   "unemployed_total": 3947,
+   "unemployed_year_ago": 3790
+  },
+  "27029": {
+   "name": "Meira",
+   "unemployed_total": 46,
+   "unemployed_year_ago": 37
+  },
+  "27030": {
+   "name": "Mondoñedo",
+   "unemployed_total": 93,
+   "unemployed_year_ago": 72
+  },
+  "27031": {
+   "name": "Monforte de Lemos",
+   "unemployed_total": 901,
+   "unemployed_year_ago": 897
+  },
+  "27032": {
+   "name": "Monterroso",
+   "unemployed_total": 78,
+   "unemployed_year_ago": 92
+  },
+  "27033": {
+   "name": "Muras",
+   "unemployed_total": 17,
+   "unemployed_year_ago": 15
+  },
+  "27034": {
+   "name": "Navia de Suarna",
+   "unemployed_total": 14,
+   "unemployed_year_ago": 18
+  },
+  "27035": {
+   "name": "Negueira de Muñiz",
+   "unemployed_total": 19,
+   "unemployed_year_ago": 21
+  },
+  "27037": {
+   "name": "As Nogais",
+   "unemployed_total": 11,
+   "unemployed_year_ago": 19
+  },
+  "27038": {
+   "name": "Ourol",
+   "unemployed_total": 27,
+   "unemployed_year_ago": 41
+  },
+  "27039": {
+   "name": "Outeiro de Rei",
+   "unemployed_total": 116,
+   "unemployed_year_ago": 114
+  },
+  "27040": {
+   "name": "Palas de Rei",
+   "unemployed_total": 66,
+   "unemployed_year_ago": 61
+  },
+  "27041": {
+   "name": "Pantón",
+   "unemployed_total": 79,
+   "unemployed_year_ago": 81
+  },
+  "27042": {
+   "name": "Paradela",
+   "unemployed_total": 14,
+   "unemployed_year_ago": 15
+  },
+  "27043": {
+   "name": "O Páramo",
+   "unemployed_total": 20,
+   "unemployed_year_ago": 21
+  },
+  "27044": {
+   "name": "A Pastoriza",
+   "unemployed_total": 44,
+   "unemployed_year_ago": 43
+  },
+  "27045": {
+   "name": "Pedrafita do Cebreiro",
+   "unemployed_total": 11,
+   "unemployed_year_ago": 11
+  },
+  "27046": {
+   "name": "Pol",
+   "unemployed_total": 42,
+   "unemployed_year_ago": 28
+  },
+  "27047": {
+   "name": "A Pobra do Brollón",
+   "unemployed_total": 49,
+   "unemployed_year_ago": 55
+  },
+  "27048": {
+   "name": "A Pontenova",
+   "unemployed_total": 55,
+   "unemployed_year_ago": 51
+  },
+  "27049": {
+   "name": "Portomarín",
+   "unemployed_total": 14,
+   "unemployed_year_ago": 22
+  },
+  "27050": {
+   "name": "Quiroga",
+   "unemployed_total": 120,
+   "unemployed_year_ago": 122
+  },
+  "27051": {
+   "name": "Ribadeo",
+   "unemployed_total": 350,
+   "unemployed_year_ago": 349
+  },
+  "27052": {
+   "name": "Ribas de Sil",
+   "unemployed_total": 33,
+   "unemployed_year_ago": 36
+  },
+  "27053": {
+   "name": "Ribeira de Piquín",
+   "unemployed_total": 13,
+   "unemployed_year_ago": 13
+  },
+  "27054": {
+   "name": "Riotorto",
+   "unemployed_total": 26,
+   "unemployed_year_ago": 19
+  },
+  "27055": {
+   "name": "Samos",
+   "unemployed_total": 21,
+   "unemployed_year_ago": 16
+  },
+  "27056": {
+   "name": "Rábade",
+   "unemployed_total": 60,
+   "unemployed_year_ago": 63
+  },
+  "27057": {
+   "name": "Sarria",
+   "unemployed_total": 482,
+   "unemployed_year_ago": 465
+  },
+  "27058": {
+   "name": "O Saviñao",
+   "unemployed_total": 109,
+   "unemployed_year_ago": 114
+  },
+  "27059": {
+   "name": "Sober",
+   "unemployed_total": 44,
+   "unemployed_year_ago": 51
+  },
+  "27060": {
+   "name": "Taboada",
+   "unemployed_total": 55,
+   "unemployed_year_ago": 62
+  },
+  "27061": {
+   "name": "Trabada",
+   "unemployed_total": 15,
+   "unemployed_year_ago": 23
+  },
+  "27062": {
+   "name": "Triacastela",
+   "unemployed_total": 12,
+   "unemployed_year_ago": 11
+  },
+  "27063": {
+   "name": "O Valadouro",
+   "unemployed_total": 50,
+   "unemployed_year_ago": 49
+  },
+  "27064": {
+   "name": "O Vicedo",
+   "unemployed_total": 47,
+   "unemployed_year_ago": 61
+  },
+  "27065": {
+   "name": "Vilalba",
+   "unemployed_total": 391,
+   "unemployed_year_ago": 348
+  },
+  "27066": {
+   "name": "Viveiro",
+   "unemployed_total": 590,
+   "unemployed_year_ago": 613
+  },
+  "27901": {
+   "name": "Baralla",
+   "unemployed_total": 54,
+   "unemployed_year_ago": 55
+  },
+  "27902": {
+   "name": "Burela",
+   "unemployed_total": 340,
+   "unemployed_year_ago": 324
+  },
+  "32001": {
+   "name": "Allariz",
+   "unemployed_total": 218,
+   "unemployed_year_ago": 217
+  },
+  "32002": {
+   "name": "Amoeiro",
+   "unemployed_total": 64,
+   "unemployed_year_ago": 84
+  },
+  "32003": {
+   "name": "A Arnoia",
+   "unemployed_total": 22,
+   "unemployed_year_ago": 15
+  },
+  "32004": {
+   "name": "Avión",
+   "unemployed_total": 26,
+   "unemployed_year_ago": 36
+  },
+  "32005": {
+   "name": "Baltar",
+   "unemployed_total": 40,
+   "unemployed_year_ago": 29
+  },
+  "32006": {
+   "name": "Bande",
+   "unemployed_total": 49,
+   "unemployed_year_ago": 40
+  },
+  "32007": {
+   "name": "Baños de Molgas",
+   "unemployed_total": 50,
+   "unemployed_year_ago": 56
+  },
+  "32008": {
+   "name": "Barbadás",
+   "unemployed_total": 407,
+   "unemployed_year_ago": 374
+  },
+  "32009": {
+   "name": "O Barco de Valdeorras",
+   "unemployed_total": 569,
+   "unemployed_year_ago": 525
+  },
+  "32010": {
+   "name": "Beade",
+   "unemployed_total": 10,
+   "unemployed_year_ago": 13
+  },
+  "32011": {
+   "name": "Beariz",
+   "unemployed_total": 14,
+   "unemployed_year_ago": 21
+  },
+  "32012": {
+   "name": "Os Blancos",
+   "unemployed_total": 27,
+   "unemployed_year_ago": 28
+  },
+  "32013": {
+   "name": "Boborás",
+   "unemployed_total": 64,
+   "unemployed_year_ago": 61
+  },
+  "32014": {
+   "name": "A Bola",
+   "unemployed_total": 43,
+   "unemployed_year_ago": 46
+  },
+  "32015": {
+   "name": "O Bolo",
+   "unemployed_total": 22,
+   "unemployed_year_ago": 28
+  },
+  "32016": {
+   "name": "Calvos de Randín",
+   "unemployed_total": 22,
+   "unemployed_year_ago": 21
+  },
+  "32017": {
+   "name": "Carballeda de Valdeorras",
+   "unemployed_total": 41,
+   "unemployed_year_ago": 48
+  },
+  "32018": {
+   "name": "Carballeda de Avia",
+   "unemployed_total": 34,
+   "unemployed_year_ago": 39
+  },
+  "32019": {
+   "name": "O Carballiño",
+   "unemployed_total": 638,
+   "unemployed_year_ago": 615
+  },
+  "32020": {
+   "name": "Cartelle",
+   "unemployed_total": 104,
+   "unemployed_year_ago": 95
+  },
+  "32021": {
+   "name": "Castrelo do Val",
+   "unemployed_total": 33,
+   "unemployed_year_ago": 35
+  },
+  "32022": {
+   "name": "Castrelo de Miño",
+   "unemployed_total": 40,
+   "unemployed_year_ago": 44
+  },
+  "32023": {
+   "name": "Castro Caldelas",
+   "unemployed_total": 47,
+   "unemployed_year_ago": 53
+  },
+  "32024": {
+   "name": "Celanova",
+   "unemployed_total": 253,
+   "unemployed_year_ago": 267
+  },
+  "32025": {
+   "name": "Cenlle",
+   "unemployed_total": 31,
+   "unemployed_year_ago": 31
+  },
+  "32026": {
+   "name": "Coles",
+   "unemployed_total": 87,
+   "unemployed_year_ago": 89
+  },
+  "32027": {
+   "name": "Cortegada",
+   "unemployed_total": 40,
+   "unemployed_year_ago": 44
+  },
+  "32028": {
+   "name": "Cualedro",
+   "unemployed_total": 60,
+   "unemployed_year_ago": 66
+  },
+  "32029": {
+   "name": "Chandrexa de Queixa",
+   "unemployed_total": 7,
+   "unemployed_year_ago": 18
+  },
+  "32030": {
+   "name": "Entrimo",
+   "unemployed_total": 41,
+   "unemployed_year_ago": 41
+  },
+  "32031": {
+   "name": "Esgos",
+   "unemployed_total": 33,
+   "unemployed_year_ago": 35
+  },
+  "32032": {
+   "name": "Xinzo de Limia",
+   "unemployed_total": 539,
+   "unemployed_year_ago": 517
+  },
+  "32033": {
+   "name": "Gomesende",
+   "unemployed_total": 29,
+   "unemployed_year_ago": 30
+  },
+  "32034": {
+   "name": "A Gudiña",
+   "unemployed_total": 34,
+   "unemployed_year_ago": 31
+  },
+  "32035": {
+   "name": "O Irixo",
+   "unemployed_total": 31,
+   "unemployed_year_ago": 27
+  },
+  "32036": {
+   "name": "Xunqueira de Ambía",
+   "unemployed_total": 42,
+   "unemployed_year_ago": 49
+  },
+  "32037": {
+   "name": "Xunqueira de Espadanedo",
+   "unemployed_total": 32,
+   "unemployed_year_ago": 24
+  },
+  "32038": {
+   "name": "Larouco",
+   "unemployed_total": 17,
+   "unemployed_year_ago": 16
+  },
+  "32039": {
+   "name": "Laza",
+   "unemployed_total": 38,
+   "unemployed_year_ago": 43
+  },
+  "32040": {
+   "name": "Leiro",
+   "unemployed_total": 35,
+   "unemployed_year_ago": 47
+  },
+  "32041": {
+   "name": "Lobeira",
+   "unemployed_total": 18,
+   "unemployed_year_ago": 14
+  },
+  "32042": {
+   "name": "Lobios",
+   "unemployed_total": 64,
+   "unemployed_year_ago": 53
+  },
+  "32043": {
+   "name": "Maceda",
+   "unemployed_total": 122,
+   "unemployed_year_ago": 127
+  },
+  "32044": {
+   "name": "Manzaneda",
+   "unemployed_total": 8,
+   "unemployed_year_ago": 20
+  },
+  "32045": {
+   "name": "Maside",
+   "unemployed_total": 177,
+   "unemployed_year_ago": 155
+  },
+  "32046": {
+   "name": "Melón",
+   "unemployed_total": 27,
+   "unemployed_year_ago": 32
+  },
+  "32047": {
+   "name": "A Merca",
+   "unemployed_total": 61,
+   "unemployed_year_ago": 65
+  },
+  "32048": {
+   "name": "A Mezquita",
+   "unemployed_total": 33,
+   "unemployed_year_ago": 31
+  },
+  "32049": {
+   "name": "Montederramo",
+   "unemployed_total": 27,
+   "unemployed_year_ago": 22
+  },
+  "32050": {
+   "name": "Monterrei",
+   "unemployed_total": 126,
+   "unemployed_year_ago": 138
+  },
+  "32051": {
+   "name": "Muíños",
+   "unemployed_total": 36,
+   "unemployed_year_ago": 36
+  },
+  "32052": {
+   "name": "Nogueira de Ramuín",
+   "unemployed_total": 86,
+   "unemployed_year_ago": 85
+  },
+  "32053": {
+   "name": "Oímbra",
+   "unemployed_total": 54,
+   "unemployed_year_ago": 61
+  },
+  "32054": {
+   "name": "Ourense",
+   "unemployed_total": 5114,
+   "unemployed_year_ago": 5061
+  },
+  "32055": {
+   "name": "Paderne de Allariz",
+   "unemployed_total": 45,
+   "unemployed_year_ago": 43
+  },
+  "32056": {
+   "name": "Padrenda",
+   "unemployed_total": 75,
+   "unemployed_year_ago": 81
+  },
+  "32057": {
+   "name": "Parada de Sil",
+   "unemployed_total": 13,
+   "unemployed_year_ago": 15
+  },
+  "32058": {
+   "name": "O Pereiro de Aguiar",
+   "unemployed_total": 188,
+   "unemployed_year_ago": 170
+  },
+  "32059": {
+   "name": "A Peroxa",
+   "unemployed_total": 57,
+   "unemployed_year_ago": 57
+  },
+  "32060": {
+   "name": "Petín",
+   "unemployed_total": 43,
+   "unemployed_year_ago": 41
+  },
+  "32061": {
+   "name": "Piñor",
+   "unemployed_total": 39,
+   "unemployed_year_ago": 34
+  },
+  "32062": {
+   "name": "Porqueira",
+   "unemployed_total": 18,
+   "unemployed_year_ago": 20
+  },
+  "32063": {
+   "name": "A Pobra de Trives",
+   "unemployed_total": 75,
+   "unemployed_year_ago": 75
+  },
+  "32064": {
+   "name": "Pontedeva",
+   "unemployed_total": 16,
+   "unemployed_year_ago": 18
+  },
+  "32065": {
+   "name": "Punxín",
+   "unemployed_total": 31,
+   "unemployed_year_ago": 28
+  },
+  "32066": {
+   "name": "Quintela de Leirado",
+   "unemployed_total": 24,
+   "unemployed_year_ago": 33
+  },
+  "32067": {
+   "name": "Rairiz de Veiga",
+   "unemployed_total": 39,
+   "unemployed_year_ago": 39
+  },
+  "32068": {
+   "name": "Ramirás",
+   "unemployed_total": 66,
+   "unemployed_year_ago": 70
+  },
+  "32069": {
+   "name": "Ribadavia",
+   "unemployed_total": 176,
+   "unemployed_year_ago": 208
+  },
+  "32070": {
+   "name": "San Xoán de Río",
+   "unemployed_total": 13,
+   "unemployed_year_ago": 17
+  },
+  "32071": {
+   "name": "Riós",
+   "unemployed_total": 60,
+   "unemployed_year_ago": 65
+  },
+  "32072": {
+   "name": "A Rúa",
+   "unemployed_total": 142,
+   "unemployed_year_ago": 151
+  },
+  "32073": {
+   "name": "Rubiá",
+   "unemployed_total": 45,
+   "unemployed_year_ago": 49
+  },
+  "32074": {
+   "name": "San Amaro",
+   "unemployed_total": 31,
+   "unemployed_year_ago": 36
+  },
+  "32075": {
+   "name": "San Cibrao das Viñas",
+   "unemployed_total": 189,
+   "unemployed_year_ago": 169
+  },
+  "32076": {
+   "name": "San Cristovo de Cea",
+   "unemployed_total": 61,
+   "unemployed_year_ago": 57
+  },
+  "32077": {
+   "name": "Sandiás",
+   "unemployed_total": 39,
+   "unemployed_year_ago": 45
+  },
+  "32078": {
+   "name": "Sarreaus",
+   "unemployed_total": 26,
+   "unemployed_year_ago": 32
+  },
+  "32079": {
+   "name": "Taboadela",
+   "unemployed_total": 57,
+   "unemployed_year_ago": 52
+  },
+  "32080": {
+   "name": "A Teixeira",
+   "unemployed_total": 8,
+   "unemployed_year_ago": 6
+  },
+  "32081": {
+   "name": "Toén",
+   "unemployed_total": 74,
+   "unemployed_year_ago": 65
+  },
+  "32082": {
+   "name": "Trasmiras",
+   "unemployed_total": 34,
+   "unemployed_year_ago": 47
+  },
+  "32083": {
+   "name": "A Veiga",
+   "unemployed_total": 23,
+   "unemployed_year_ago": 29
+  },
+  "32084": {
+   "name": "Verea",
+   "unemployed_total": 45,
+   "unemployed_year_ago": 41
+  },
+  "32085": {
+   "name": "Verín",
+   "unemployed_total": 1001,
+   "unemployed_year_ago": 1004
+  },
+  "32086": {
+   "name": "Viana do Bolo",
+   "unemployed_total": 87,
+   "unemployed_year_ago": 93
+  },
+  "32087": {
+   "name": "Vilamarín",
+   "unemployed_total": 60,
+   "unemployed_year_ago": 56
+  },
+  "32088": {
+   "name": "Vilamartín de Valdeorras",
+   "unemployed_total": 55,
+   "unemployed_year_ago": 67
+  },
+  "32089": {
+   "name": "Vilar de Barrio",
+   "unemployed_total": 40,
+   "unemployed_year_ago": 42
+  },
+  "32090": {
+   "name": "Vilar de Santos",
+   "unemployed_total": 37,
+   "unemployed_year_ago": 31
+  },
+  "32091": {
+   "name": "Vilardevós",
+   "unemployed_total": 72,
+   "unemployed_year_ago": 69
+  },
+  "32092": {
+   "name": "Vilariño de Conso",
+   "unemployed_total": 8,
+   "unemployed_year_ago": 11
+  },
+  "36001": {
+   "name": "Arbo",
+   "unemployed_total": 104,
+   "unemployed_year_ago": 120
+  },
+  "36002": {
+   "name": "Barro",
+   "unemployed_total": 126,
+   "unemployed_year_ago": 132
+  },
+  "36003": {
+   "name": "Baiona",
+   "unemployed_total": 469,
+   "unemployed_year_ago": 475
+  },
+  "36004": {
+   "name": "Bueu",
+   "unemployed_total": 466,
+   "unemployed_year_ago": 432
+  },
+  "36005": {
+   "name": "Caldas de Reis",
+   "unemployed_total": 325,
+   "unemployed_year_ago": 342
+  },
+  "36006": {
+   "name": "Cambados",
+   "unemployed_total": 445,
+   "unemployed_year_ago": 490
+  },
+  "36007": {
+   "name": "Campo Lameiro",
+   "unemployed_total": 51,
+   "unemployed_year_ago": 55
+  },
+  "36008": {
+   "name": "Cangas",
+   "unemployed_total": 1109,
+   "unemployed_year_ago": 1159
+  },
+  "36009": {
+   "name": "A Cañiza",
+   "unemployed_total": 254,
+   "unemployed_year_ago": 245
+  },
+  "36010": {
+   "name": "Catoira",
+   "unemployed_total": 111,
+   "unemployed_year_ago": 119
+  },
+  "36013": {
+   "name": "Covelo",
+   "unemployed_total": 84,
+   "unemployed_year_ago": 107
+  },
+  "36014": {
+   "name": "Crecente",
+   "unemployed_total": 86,
+   "unemployed_year_ago": 96
+  },
+  "36015": {
+   "name": "Cuntis",
+   "unemployed_total": 174,
+   "unemployed_year_ago": 155
+  },
+  "36016": {
+   "name": "Dozón",
+   "unemployed_total": 15,
+   "unemployed_year_ago": 24
+  },
+  "36017": {
+   "name": "A Estrada",
+   "unemployed_total": 696,
+   "unemployed_year_ago": 676
+  },
+  "36018": {
+   "name": "Forcarei",
+   "unemployed_total": 88,
+   "unemployed_year_ago": 80
+  },
+  "36019": {
+   "name": "Fornelos de Montes",
+   "unemployed_total": 87,
+   "unemployed_year_ago": 86
+  },
+  "36020": {
+   "name": "Agolada",
+   "unemployed_total": 55,
+   "unemployed_year_ago": 60
+  },
+  "36021": {
+   "name": "Gondomar",
+   "unemployed_total": 571,
+   "unemployed_year_ago": 599
+  },
+  "36022": {
+   "name": "O Grove",
+   "unemployed_total": 236,
+   "unemployed_year_ago": 259
+  },
+  "36023": {
+   "name": "A Guarda",
+   "unemployed_total": 422,
+   "unemployed_year_ago": 415
+  },
+  "36024": {
+   "name": "Lalín",
+   "unemployed_total": 755,
+   "unemployed_year_ago": 723
+  },
+  "36025": {
+   "name": "A Lama",
+   "unemployed_total": 106,
+   "unemployed_year_ago": 112
+  },
+  "36026": {
+   "name": "Marín",
+   "unemployed_total": 968,
+   "unemployed_year_ago": 960
+  },
+  "36027": {
+   "name": "Meaño",
+   "unemployed_total": 116,
+   "unemployed_year_ago": 91
+  },
+  "36028": {
+   "name": "Meis",
+   "unemployed_total": 139,
+   "unemployed_year_ago": 147
+  },
+  "36029": {
+   "name": "Moaña",
+   "unemployed_total": 851,
+   "unemployed_year_ago": 874
+  },
+  "36030": {
+   "name": "Mondariz",
+   "unemployed_total": 226,
+   "unemployed_year_ago": 238
+  },
+  "36031": {
+   "name": "Mondariz-Balneario",
+   "unemployed_total": 38,
+   "unemployed_year_ago": 33
+  },
+  "36032": {
+   "name": "Moraña",
+   "unemployed_total": 145,
+   "unemployed_year_ago": 157
+  },
+  "36033": {
+   "name": "Mos",
+   "unemployed_total": 582,
+   "unemployed_year_ago": 595
+  },
+  "36034": {
+   "name": "As Neves",
+   "unemployed_total": 189,
+   "unemployed_year_ago": 213
+  },
+  "36035": {
+   "name": "Nigrán",
+   "unemployed_total": 636,
+   "unemployed_year_ago": 670
+  },
+  "36036": {
+   "name": "Oia",
+   "unemployed_total": 98,
+   "unemployed_year_ago": 107
+  },
+  "36037": {
+   "name": "Pazos de Borbén",
+   "unemployed_total": 133,
+   "unemployed_year_ago": 132
+  },
+  "36038": {
+   "name": "Pontevedra",
+   "unemployed_total": 3613,
+   "unemployed_year_ago": 3739
+  },
+  "36039": {
+   "name": "O Porriño",
+   "unemployed_total": 1006,
+   "unemployed_year_ago": 1053
+  },
+  "36040": {
+   "name": "Portas",
+   "unemployed_total": 98,
+   "unemployed_year_ago": 93
+  },
+  "36041": {
+   "name": "Poio",
+   "unemployed_total": 620,
+   "unemployed_year_ago": 679
+  },
+  "36042": {
+   "name": "Ponteareas",
+   "unemployed_total": 1244,
+   "unemployed_year_ago": 1284
+  },
+  "36043": {
+   "name": "Ponte Caldelas",
+   "unemployed_total": 304,
+   "unemployed_year_ago": 331
+  },
+  "36044": {
+   "name": "Pontecesures",
+   "unemployed_total": 125,
+   "unemployed_year_ago": 116
+  },
+  "36045": {
+   "name": "Redondela",
+   "unemployed_total": 1253,
+   "unemployed_year_ago": 1306
+  },
+  "36046": {
+   "name": "Ribadumia",
+   "unemployed_total": 136,
+   "unemployed_year_ago": 138
+  },
+  "36047": {
+   "name": "Rodeiro",
+   "unemployed_total": 40,
+   "unemployed_year_ago": 36
+  },
+  "36048": {
+   "name": "O Rosal",
+   "unemployed_total": 284,
+   "unemployed_year_ago": 277
+  },
+  "36049": {
+   "name": "Salceda de Caselas",
+   "unemployed_total": 401,
+   "unemployed_year_ago": 402
+  },
+  "36050": {
+   "name": "Salvaterra de Miño",
+   "unemployed_total": 518,
+   "unemployed_year_ago": 547
+  },
+  "36051": {
+   "name": "Sanxenxo",
+   "unemployed_total": 378,
+   "unemployed_year_ago": 407
+  },
+  "36052": {
+   "name": "Silleda",
+   "unemployed_total": 221,
+   "unemployed_year_ago": 254
+  },
+  "36053": {
+   "name": "Soutomaior",
+   "unemployed_total": 383,
+   "unemployed_year_ago": 398
+  },
+  "36054": {
+   "name": "Tomiño",
+   "unemployed_total": 610,
+   "unemployed_year_ago": 665
+  },
+  "36055": {
+   "name": "Tui",
+   "unemployed_total": 827,
+   "unemployed_year_ago": 860
+  },
+  "36056": {
+   "name": "Valga",
+   "unemployed_total": 196,
+   "unemployed_year_ago": 237
+  },
+  "36057": {
+   "name": "Vigo",
+   "unemployed_total": 13928,
+   "unemployed_year_ago": 14415
+  },
+  "36058": {
+   "name": "Vilaboa",
+   "unemployed_total": 229,
+   "unemployed_year_ago": 235
+  },
+  "36059": {
+   "name": "Vila de Cruces",
+   "unemployed_total": 133,
+   "unemployed_year_ago": 119
+  },
+  "36060": {
+   "name": "Vilagarcía de Arousa",
+   "unemployed_total": 1858,
+   "unemployed_year_ago": 1919
+  },
+  "36061": {
+   "name": "Vilanova de Arousa",
+   "unemployed_total": 413,
+   "unemployed_year_ago": 410
+  },
+  "36901": {
+   "name": "A Illa de Arousa",
+   "unemployed_total": 114,
+   "unemployed_year_ago": 121
+  },
+  "36902": {
+   "name": "Cerdedo-Cotobade",
+   "composed_from": [
+    "36011",
+    "36012"
+   ],
+   "unemployed_total": 180,
+   "unemployed_year_ago": 178
+  }
+ }
+}

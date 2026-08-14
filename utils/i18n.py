@@ -150,6 +150,9 @@ TRANSLATIONS = {
             "fields (beds / teaching accreditation / high-tech equipment) — "
             "not an official tier"
         ),
+        "qol_hospital_outside_coverage": (
+            "Outside the hospital catalogue's coverage (Asturias + Galicia)"
+        ),
         "qol_hospital_teaching": "Teaching / high-tech",
         "qol_hospital_general": "General acute",
         "qol_hospital_fields": "beds / teaching / high-tech",
@@ -163,6 +166,31 @@ TRANSLATIONS = {
             "OSM found none and one Places cross-check agreed; a single "
             "query proves nothing about completeness, so this is never a 0"
         ),
+        # Municipality comparison page (proposal D22).
+        "municipalities": "Municipalities",
+        "listings_lower": "listings",
+        "municipalities_listings": "Listings",
+        "municipalities_score": "Score",
+        "municipalities_index": "vs prov.",
+        "municipalities_unemployment": "Unempl. proxy",
+        "municipalities_unemployment_tooltip": (
+            "SEPE registered unemployed / population — a comparable ratio, "
+            "not the official unemployment rate"
+        ),
+        "municipalities_facts_label": "Municipality facts",
+        "municipalities_facts_note": "INE and SEPE figures for the municipality itself",
+        "municipalities_medians_label": "Listing medians",
+        "municipalities_medians_note": (
+            "median over this municipality's listings; the count in brackets "
+            "is how many were measured"
+        ),
+        "municipalities_coverage": "Measured listings",
+        "municipalities_none_measured": "Nothing measured yet",
+        "municipalities_archived": "Include archived",
+        "municipalities_archived_tooltip": "Also count removed and sold listings",
+        "municipalities_pool_indoor_tooltip": "Median to the nearest pool with indoor evidence",
+        "municipalities_unnamed_note": "listings carry no municipality and are not compared",
+        "municipalities_empty": "No listings to compare yet.",
         "pool_unroutable": "no road route",
         "pool_unroutable_tooltip": "Google answered: no driving route to this pool",
         "pool_owner_absence": "Owner confirmed: no usable pool",
@@ -345,6 +373,9 @@ TRANSLATIONS = {
             "Hospitales (camas / acreditación docente / alta tecnología) — "
             "no es un nivel oficial"
         ),
+        "qol_hospital_outside_coverage": (
+            "Fuera de la cobertura del catálogo de hospitales (Asturias + Galicia)"
+        ),
         "qol_hospital_teaching": "Docente / alta tecnología",
         "qol_hospital_general": "General de agudos",
         "qol_hospital_fields": "camas / docente / alta tecnología",
@@ -358,6 +389,32 @@ TRANSLATIONS = {
             "OSM no encontró ninguna y una comprobación en Places coincidió; "
             "una sola consulta no prueba exhaustividad, así que nunca es un 0"
         ),
+        # Municipality comparison page (proposal D22). "municipality" itself
+        # is already defined above with the table headers.
+        "municipalities": "Municipios",
+        "listings_lower": "anuncios",
+        "municipalities_listings": "Anuncios",
+        "municipalities_score": "Puntuación",
+        "municipalities_index": "vs prov.",
+        "municipalities_unemployment": "Paro (proxy)",
+        "municipalities_unemployment_tooltip": (
+            "Parados registrados SEPE / población — una razón comparable, "
+            "no la tasa oficial de paro"
+        ),
+        "municipalities_facts_label": "Datos del municipio",
+        "municipalities_facts_note": "Cifras del INE y del SEPE para el municipio",
+        "municipalities_medians_label": "Medianas de los anuncios",
+        "municipalities_medians_note": (
+            "mediana sobre los anuncios de este municipio; el número entre "
+            "paréntesis es cuántos se midieron"
+        ),
+        "municipalities_coverage": "Anuncios medidos",
+        "municipalities_none_measured": "Aún sin mediciones",
+        "municipalities_archived": "Incluir archivados",
+        "municipalities_archived_tooltip": "Contar también retirados y vendidos",
+        "municipalities_pool_indoor_tooltip": "Mediana a la piscina más cercana con indicios de cubierta",
+        "municipalities_unnamed_note": "anuncios no llevan municipio y no se comparan",
+        "municipalities_empty": "Aún no hay anuncios que comparar.",
         "pool_unroutable": "sin ruta por carretera",
         "pool_unroutable_tooltip": "Google respondió: sin ruta en coche a esta piscina",
         "pool_owner_absence": "Confirmado por el propietario: sin piscina útil",

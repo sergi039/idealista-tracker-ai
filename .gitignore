@@ -39,6 +39,7 @@ Thumbs.db
 data/*
 !data/ine_municipal.json
 !data/hospitals_cnh.json
+!data/sepe_unemployment.json
 instance/
 *.db
 *.sqlite
