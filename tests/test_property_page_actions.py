@@ -294,7 +294,11 @@ class TestTheGeocodedAddressIsShown:
         )
 
         body = client.get(f"/properties/{listing}").get_data(as_text=True)
-        header = body[: body.index("Overview")]
+        # From after the site chrome: the navbar carries its own city icon
+        # for the Municipalities page (2026-08-14), and this test is about
+        # the *property* header duplicating the municipality, not about the
+        # menu. Slicing from </nav> keeps the original guarantee exact.
+        header = body[body.index("</nav>") : body.index("Overview")]
 
         assert header.count("fa-city") == 0, (
             "the address already says Gijón; a second badge is the duplication "
@@ -322,7 +326,11 @@ class TestTheGeocodedAddressIsShown:
     def test_no_geocoding_means_no_address_line_and_no_invention(self, client, listing):
         """The other 168: a coordinate, and nothing a person would recognise."""
         body = client.get(f"/properties/{listing}").get_data(as_text=True)
-        header = body[: body.index("Overview")]
+        # From after the site chrome: the navbar carries its own city icon
+        # for the Municipalities page (2026-08-14), and this test is about
+        # the *property* header duplicating the municipality, not about the
+        # menu. Slicing from </nav> keeps the original guarantee exact.
+        header = body[body.index("</nav>") : body.index("Overview")]
 
         assert "fa-map-pin" not in header, (
             "an unresolved address is absent, never reconstructed from the coordinate"

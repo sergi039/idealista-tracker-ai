@@ -37,6 +37,9 @@ logger = logging.getLogger(__name__)
 _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 INE_DATA_PATH = os.path.join(_DATA_DIR, "ine_municipal.json")
 CNH_DATA_PATH = os.path.join(_DATA_DIR, "hospitals_cnh.json")
+# SEPE registered-unemployment counts per municipality (monthly). Optional:
+# the file may be absent, which reads as "no figure", never as zero.
+SEPE_DATA_PATH = os.path.join(_DATA_DIR, "sepe_unemployment.json")
 
 # The hospital groupings are *descriptive local display groupings* derived
 # from CNH fields (beds, teaching accreditation, high-tech equipment) — not
@@ -47,6 +50,14 @@ HOSPITAL_GROUPINGS = (
     "general_acute",
     "limited_recorded_capability",
 )
+
+# The CNH import covers five provinces (Asturias + Galicia). A listing
+# outside them still gets a "nearest hospital" from that file — measured at
+# 700 km for the owner's Alicante rows, which is a true distance to the
+# wrong catalogue, not a fact about the neighbourhood. Past this bound the
+# answer is reported as outside the reference data's coverage instead
+# (2026-08-14, seen on the municipalities page).
+HOSPITAL_COVERAGE_KM = 150.0
 
 # Statuses a rerun could improve — shared with the backfill's `needs` filter.
 # Everything else is an answer; re-asking does not change it.
@@ -73,6 +84,7 @@ class QualityOfLifeService:
         self._ine: Optional[dict] = None
         self._ine_index: Optional[Dict[str, str]] = None
         self._hospitals: Optional[dict] = None
+        self._sepe: Optional[dict] = None
 
     # -- reference data ----------------------------------------------------
 
@@ -99,6 +111,45 @@ class QualityOfLifeService:
             }
             self._ine_index = build_municipality_index(code_to_name)
         return self._ine_index
+
+    def reference_sources(self) -> Dict[str, Any]:
+        """What the reference files say about themselves, for the page footer.
+
+        A vintage the page prints must come from the data, not from a
+        translation string that would outlive the next import.
+        """
+        if self._sepe is None:
+            self._sepe = _load_json(SEPE_DATA_PATH) or {}
+        ine = self._ine_data() or {}
+        hospitals = self._hospitals if isinstance(self._hospitals, dict) else None
+        if hospitals is None:
+            self._hospital_rows()
+            hospitals = self._hospitals if isinstance(self._hospitals, dict) else {}
+        return {
+            "ine": (ine.get("source") or {}),
+            "hospitals": hospitals.get("source"),
+            "unemployment": {
+                "source": self._sepe.get("source"),
+                "period": self._sepe.get("period"),
+            },
+        }
+
+    def unemployment_for(self, ine_code: str) -> Optional[Dict[str, Any]]:
+        """The SEPE record for one INE code, with the file's own period.
+
+        Read here rather than in the comparison service so both surfaces
+        share one loader and one honest miss: no file, or no row for this
+        municipality, is None — the caller renders "—", never a zero.
+        """
+        if self._sepe is None:
+            self._sepe = _load_json(SEPE_DATA_PATH) or {}
+        municipalities = self._sepe.get("municipalities")
+        if not isinstance(municipalities, dict):
+            return None
+        record = municipalities.get(str(ine_code))
+        if not isinstance(record, dict):
+            return None
+        return {**record, "period": self._sepe.get("period")}
 
     def _hospital_rows(self) -> Optional[list]:
         if self._hospitals is None:
@@ -196,6 +247,15 @@ class QualityOfLifeService:
                 }
         if not nearest:
             return {"status": "no_reference_data"}
+        closest_km = min(entry["distance_km"] for entry in nearest.values())
+        if closest_km > HOSPITAL_COVERAGE_KM:
+            # Outside the catalogue's five provinces: the distance is real
+            # but it describes our reference file, not this location.
+            return {
+                "status": "outside_reference_coverage",
+                "nearest_km": closest_km,
+                "source": (self._hospitals or {}).get("source"),
+            }
         return {
             "status": "ok",
             "nearest": nearest,

@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t('municipalities') }}{% endblock %}
+
+{% block content %}
+{# One row per municipality that holds listings (proposal D22, owner spec
+   2026-08-14). Two kinds of column, and the header says which is which:
+   municipality FACTS come from INE/SEPE and describe the municipality
+   itself; LISTING MEDIANS are medians over that municipality's own
+   listings, each with the coverage it was computed from. A median over 2 of
+   30 listings is a different claim from one over 30 of 30, so the page
+   never hides the denominator. #}
+
+{% macro sort_link(key, label, tooltip='') -%}
+    {% set is_active = sort_by == key %}
+    {% set next_order = 'asc' if (is_active and order == 'desc') else ('desc' if key != 'municipality' else 'asc') %}
+    {% if is_active %}{% set next_order = 'asc' if order == 'desc' else 'desc' %}{% endif %}
+    <a href="{{ url_for('main.municipalities', sort=key, order=next_order,
+                        archived='on' if include_archived else none,
+                        favorites='on' if favorites_only else none) }}"
+       class="text-decoration-none text-body"
+       {% if tooltip %}title="{{ tooltip }}"{% endif %}>
+        {{ label }}{% if is_active %}<i class="fas fa-sort-{{ 'down' if order == 'desc' else 'up' }} ms-1"></i>{% endif %}
+    </a>
+{%- endmacro %}
+
+{# A median cell: the number, and the coverage behind it. Nothing measured
+   renders an em dash, never a zero. #}
+{% macro metric(cell, unit='', decimals=1) -%}
+    {% if cell and cell.median is not none %}
+        <span title="{{ t('municipalities_coverage') }}: {{ cell.measured }}/{{ cell.total }}">
+            {{ ('%.' ~ decimals ~ 'f')|format(cell.median) }}{{ unit }}
+            {% if cell.measured < cell.total %}
+                <small class="text-body-secondary">({{ cell.measured }})</small>
+            {% endif %}
+        </span>
+    {% else %}
+        <span class="text-body-secondary" title="{{ t('municipalities_none_measured') }}">&mdash;</span>
+    {% endif %}
+{%- endmacro %}
+
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+            <h1 class="h3 mb-0">
+                <i class="fas fa-city me-2"></i>{{ t('municipalities') }}
+                <small class="text-body-secondary ms-2 fw-normal">
+                    {{ rows|length }} · {{ listing_total }} {{ t('listings_lower') }}
+                </small>
+            </h1>
+            <div class="d-flex flex-wrap gap-2">
+                <a class="btn btn-sm {{ 'btn-warning' if favorites_only else 'btn-outline-secondary' }}"
+                   href="{{ url_for('main.municipalities', sort=sort_by, order=order,
+                                    archived='on' if include_archived else none,
+                                    favorites=none if favorites_only else 'on') }}">
+                    <i class="fas fa-star me-1"></i>{{ t('favorites') }}
+                </a>
+                <a class="btn btn-sm {{ 'btn-secondary' if include_archived else 'btn-outline-secondary' }}"
+                   href="{{ url_for('main.municipalities', sort=sort_by, order=order,
+                                    favorites='on' if favorites_only else none,
+                                    archived=none if include_archived else 'on') }}"
+                   title="{{ t('municipalities_archived_tooltip') }}">
+                    <i class="fas fa-box-archive me-1"></i>{{ t('municipalities_archived') }}
+                </a>
+            </div>
+        </div>
+
+        <div class="alert alert-light border small d-flex flex-wrap gap-3 py-2">
+            <span>
+                <i class="fas fa-landmark me-1 text-primary"></i>
+                <strong>{{ t('municipalities_facts_label') }}</strong>
+                — {{ t('municipalities_facts_note') }}
+            </span>
+            <span>
+                <i class="fas fa-list me-1 text-primary"></i>
+                <strong>{{ t('municipalities_medians_label') }}</strong>
+                — {{ t('municipalities_medians_note') }}
+            </span>
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle municipalities-table">
+                <thead>
+                    <tr class="text-body-secondary small">
+                        <th></th>
+                        <th class="text-center" colspan="4">{{ t('municipalities_facts_label') }}</th>
+                        <th class="text-center" colspan="9">{{ t('municipalities_medians_label') }}</th>
+                    </tr>
+                    <tr>
+                        <th>{{ sort_link('municipality', t('municipality')) }}</th>
+                        <th class="text-end">{{ sort_link('renta', t('qol_renta'), t('qol_renta_tooltip')) }}</th>
+                        <th class="text-end">{{ sort_link('renta_index', t('municipalities_index'), t('qol_vs_province_tooltip')) }}</th>
+                        <th class="text-end">{{ sort_link('population', t('qol_population'), t('qol_population_tooltip')) }}</th>
+                        <th class="text-end">{{ sort_link('unemployment', t('municipalities_unemployment'), t('municipalities_unemployment_tooltip')) }}</th>
+                        <th class="text-end">{{ sort_link('listings', t('municipalities_listings')) }}</th>
+                        <th class="text-end">{{ sort_link('price_per_m2', '€/m²') }}</th>
+                        <th class="text-end">{{ sort_link('score', t('municipalities_score')) }}</th>
+                        <th class="text-end">{{ sort_link('sea_km', t('distance_to_sea')) }}</th>
+                        <th class="text-end">{{ sort_link('beach_min', t('beach_distance')) }}</th>
+                        <th class="text-end">{{ sort_link('pool_min', t('pool_title')) }}</th>
+                        <th class="text-end">{{ sort_link('hospital_general_km', t('qol_hospital_general'), t('qol_hospital_grouping_note')) }}</th>
+                        <th class="text-end">{{ sort_link('supermarket_km', t('qol_supermarkets')) }}</th>
+                        <th class="text-end">{{ sort_link('airport_min', t('nearest_airport')) }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                        <tr>
+                            <td>
+                                <a href="{{ url_for('main.properties', municipality=row.name, profile_id='all') }}"
+                                   class="text-decoration-none fw-semibold">{{ row.name }}</a>
+                                {% if row.favorites %}
+                                    <span class="badge bg-warning text-dark ms-1" title="{{ t('favorites') }}">
+                                        <i class="fas fa-star"></i> {{ row.favorites }}
+                                    </span>
+                                {% endif %}
+                                {% if not row.ine %}
+                                    <span class="badge bg-light text-dark border ms-1"
+                                          title="{{ t('qol_municipality_not_matched') }}">INE &mdash;</span>
+                                {% endif %}
+                            </td>
+                            {# -- Municipality facts (INE / SEPE) -- #}
+                            <td class="text-end">
+                                {% if row.ine and row.ine.renta_media_persona %}
+                                    <span title="{{ row.ine.renta_year }}">€{{ "{:,.0f}".format(row.ine.renta_media_persona) }}</span>
+                                {% else %}<span class="text-body-secondary">&mdash;</span>{% endif %}
+                            </td>
+                            <td class="text-end">
+                                {% if row.ine and row.ine.renta_index %}
+                                    <span class="badge {{ 'bg-success' if row.ine.renta_index >= 100 else 'bg-warning text-dark' }}">
+                                        {{ row.ine.renta_index }}
+                                    </span>
+                                {% else %}<span class="text-body-secondary">&mdash;</span>{% endif %}
+                            </td>
+                            <td class="text-end">
+                                {% if row.ine and row.ine.population %}
+                                    <span title="{{ row.ine.population_year }}">{{ "{:,.0f}".format(row.ine.population) }}</span>
+                                    {% if row.ine.population_5y_change_pct is not none %}
+                                        <small class="{{ 'text-success' if row.ine.population_5y_change_pct >= 0 else 'text-body-secondary' }}"
+                                               title="{{ t('qol_population_5y') }}">
+                                            {{ '%+.1f'|format(row.ine.population_5y_change_pct) }}%
+                                        </small>
+                                    {% endif %}
+                                {% else %}<span class="text-body-secondary">&mdash;</span>{% endif %}
+                            </td>
+                            <td class="text-end">
+                                {% if row.unemployment and row.unemployment.proxy_pct is not none %}
+                                    <span title="{{ t('municipalities_unemployment_tooltip') }} · {{ row.unemployment.period }}">
+                                        {{ '%.1f'|format(row.unemployment.proxy_pct) }}%
+                                    </span>
+                                {% else %}<span class="text-body-secondary">&mdash;</span>{% endif %}
+                            </td>
+                            {# -- Listing medians -- #}
+                            <td class="text-end">{{ row.listings }}</td>
+                            <td class="text-end">{{ metric(row.price_per_m2, '', 0) }}</td>
+                            <td class="text-end">{{ metric(row.score, '', 1) }}</td>
+                            <td class="text-end">{{ metric(row.sea_km, ' km', 1) }}</td>
+                            <td class="text-end">{{ metric(row.beach_min, ' min', 0) }}</td>
+                            {# The indoor median lives in the tooltip: a second
+                               number in the cell read as a fraction. #}
+                            <td class="text-end"
+                                {% if row.pool_indoor_min and row.pool_indoor_min.median is not none %}
+                                    title="{{ t('municipalities_pool_indoor_tooltip') }}: {{ '%.0f'|format(row.pool_indoor_min.median) }} min"
+                                {% endif %}>
+                                {{ metric(row.pool_min, ' min', 0) }}
+                                {% if row.pool_indoor_min and row.pool_indoor_min.median is not none %}
+                                    <i class="fas fa-house text-body-secondary ms-1"></i>
+                                {% endif %}
+                            </td>
+                            <td class="text-end">{{ metric(row.hospital_general_km, ' km', 1) }}</td>
+                            <td class="text-end">{{ metric(row.supermarket_km, ' km', 1) }}</td>
+                            <td class="text-end">{{ metric(row.airport_min, ' min', 0) }}</td>
+                        </tr>
+                    {% else %}
+                        <tr>
+                            <td colspan="14" class="text-center text-body-secondary py-4">
+                                {{ t('municipalities_empty') }}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="small text-body-secondary mt-2">
+            {% if unnamed_listings %}
+                <div>
+                    <i class="fas fa-circle-info me-1"></i>
+                    {{ unnamed_listings }} {{ t('municipalities_unnamed_note') }}
+                </div>
+            {% endif %}
+            <div class="mt-1">
+                {% if sources.ine and sources.ine.renta %}<div>INE: {{ sources.ine.renta }}</div>{% endif %}
+                {% if sources.hospitals %}<div>{{ sources.hospitals }}</div>{% endif %}
+                {% if sources.unemployment and sources.unemployment.source %}
+                    <div>{{ sources.unemployment.source }}</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

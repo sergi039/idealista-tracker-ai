@@ -90,6 +90,14 @@
                             <i class="fas fa-map me-1"></i>Map
                         </a>
                     </li>
+                    {# Its own entry, not a tab inside the list: the page
+                       compares *municipalities*, and the owner asked for it
+                       in the menu (2026-08-14). #}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('main.municipalities') }}">
+                            <i class="fas fa-city me-1"></i>{{ t('municipalities') }}
+                        </a>
+                    </li>
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.criteria') }}">
                             <i class="fas fa-sliders-h me-1"></i>{{ t('scoring_criteria') }}

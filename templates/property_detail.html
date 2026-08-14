@@ -1300,6 +1300,11 @@
                         {% endfor %}
                     {% elif qol_hosp.get('status') == 'no_reference_data' %}
                         <div class="small text-body-secondary">{{ t('qol_no_reference_data') }}</div>
+                    {% elif qol_hosp.get('status') == 'outside_reference_coverage' %}
+                        <div class="small text-body-secondary">
+                            {{ t('qol_hospital_outside_coverage') }}
+                            ({{ '%.0f'|format(qol_hosp.get('nearest_km') or 0) }} km)
+                        </div>
                     {% elif qol_hosp.get('status') == 'no_coordinates' %}
                         <div class="small text-body-secondary">{{ t('qol_no_coordinates') }}</div>
                     {% else %}
