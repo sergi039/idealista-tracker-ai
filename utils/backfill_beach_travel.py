@@ -36,6 +36,7 @@ from models import Property
 from services.property_scoring_service import PropertyScoringService
 from services.property_travel_service import PropertyTravelService
 from utils.enrich_scope import scoped_properties
+from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
 
@@ -252,14 +253,18 @@ def main() -> None:
             logger.info("Nothing in scope; done.")
             return
 
-        _write_snapshot([_snapshot_row(p) for p in properties], args.snapshot)
         ledger_path = args.snapshot + ".ledger.jsonl"
-        report = run(
-            properties,
-            ledger_path,
-            max_rows=args.max_rows,
-            sleep_s=args.sleep,
-        )
+        # Resumable for the reason stated at the top of this module: per-row
+        # commit, an idempotent scope, and a ledger to reconcile against. That
+        # claim is what lets the deploy chain kill this run knowingly (#283).
+        with inflight("backfill_beach_travel", ledger=ledger_path, resumable=True):
+            _write_snapshot([_snapshot_row(p) for p in properties], args.snapshot)
+            report = run(
+                properties,
+                ledger_path,
+                max_rows=args.max_rows,
+                sleep_s=args.sleep,
+            )
         logger.info("Done: %s (ledger: %s)", report, ledger_path)
 
 

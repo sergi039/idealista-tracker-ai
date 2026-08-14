@@ -26,6 +26,7 @@ from models import Property
 from services.pool_service import PoolService
 from services.property_scoring_service import PropertyScoringService
 from utils.enrich_scope import scoped_properties
+from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +137,6 @@ def main() -> None:
         if not properties:
             return
 
-        _write_snapshot([_snapshot_row(p) for p in properties], args.snapshot)
         ledger_path = args.snapshot + ".ledger.jsonl"
 
         to_process = properties[: args.max_rows] if args.max_rows else properties
@@ -145,38 +145,47 @@ def main() -> None:
         scoring = PropertyScoringService()
         counts: Dict[str, int] = {}
         failed = 0
-        with open(ledger_path, "a", encoding="utf-8") as ledger:
-            for idx, prop in enumerate(to_process, start=1):
-                entry: Dict[str, Any] = {
-                    "id": prop.id,
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                }
-                try:
-                    part = service.enrich(prop, commit=False)
-                    scoring.calculate_for_property(prop, commit=False)
-                    db.session.commit()
-                    entry["status"] = part.get("status")
-                    entry["candidates"] = len(part.get("candidates") or [])
-                    entry["cross_check"] = (part.get("cross_check") or {}).get("ran")
-                except Exception as exc:
-                    db.session.rollback()
-                    failed += 1
-                    entry["status"] = "failed"
-                    entry["error"] = str(exc)[:200]
-                    logger.warning("Pool backfill failed for %s: %s", prop.id, exc)
-                counts[entry["status"]] = counts.get(entry["status"], 0) + 1
-                ledger.write(json.dumps(entry, ensure_ascii=False) + "\n")
-                ledger.flush()
-                if idx % 20 == 0:
-                    logger.info(
-                        "Progress %s/%s statuses=%s failed=%s",
-                        idx,
-                        len(to_process),
-                        counts,
-                        failed,
-                    )
-                if args.sleep:
-                    time.sleep(max(0.0, float(args.sleep)))
+        # Resumable: the commit below is per property and `needs_pool` drops a
+        # measured row from the scope, so a run the deploy chain kills repeats
+        # at most the property that was in flight (#283). The marker is taken
+        # before the snapshot, so a rerun that stops on the "snapshot exists"
+        # guard still reports the run it is a rerun of.
+        with inflight("backfill_pool", ledger=ledger_path, resumable=True):
+            _write_snapshot([_snapshot_row(p) for p in properties], args.snapshot)
+            with open(ledger_path, "a", encoding="utf-8") as ledger:
+                for idx, prop in enumerate(to_process, start=1):
+                    entry: Dict[str, Any] = {
+                        "id": prop.id,
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                    }
+                    try:
+                        part = service.enrich(prop, commit=False)
+                        scoring.calculate_for_property(prop, commit=False)
+                        db.session.commit()
+                        entry["status"] = part.get("status")
+                        entry["candidates"] = len(part.get("candidates") or [])
+                        entry["cross_check"] = (part.get("cross_check") or {}).get(
+                            "ran"
+                        )
+                    except Exception as exc:
+                        db.session.rollback()
+                        failed += 1
+                        entry["status"] = "failed"
+                        entry["error"] = str(exc)[:200]
+                        logger.warning("Pool backfill failed for %s: %s", prop.id, exc)
+                    counts[entry["status"]] = counts.get(entry["status"], 0) + 1
+                    ledger.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                    ledger.flush()
+                    if idx % 20 == 0:
+                        logger.info(
+                            "Progress %s/%s statuses=%s failed=%s",
+                            idx,
+                            len(to_process),
+                            counts,
+                            failed,
+                        )
+                    if args.sleep:
+                        time.sleep(max(0.0, float(args.sleep)))
 
         report = {
             "selected": len(properties),

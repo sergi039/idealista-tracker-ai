@@ -22,6 +22,7 @@ from app import create_app, db
 from models import Property
 from services.property_scoring_service import PropertyScoringService
 from services.sea_distance_service import SeaDistanceService
+from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
 
@@ -163,30 +164,37 @@ def main() -> None:
         counts: Dict[str, int] = {}
         failed = 0
 
-        for idx, prop in enumerate(properties, start=1):
-            try:
-                if args.dry_run:
-                    result = sea_service.measure(
-                        float(prop.location_lat), float(prop.location_lon)
+        # Only `--only-missing` skips rows already measured, so only that form
+        # survives a restart without repeating the coastline work (#283).
+        with inflight("recalc_sea_distance", resumable=bool(args.only_missing)):
+            for idx, prop in enumerate(properties, start=1):
+                try:
+                    if args.dry_run:
+                        result = sea_service.measure(
+                            float(prop.location_lat), float(prop.location_lon)
+                        )
+                    else:
+                        result = sea_service.update_property(prop, commit=False)
+                        scoring_service.calculate_for_property(prop, commit=False)
+                        db.session.commit()
+                    status = (result or {}).get("status", "disabled")
+                    counts[status] = counts.get(status, 0) + 1
+                except Exception as e:
+                    failed += 1
+                    logger.warning("Failed for property %s: %s", prop.id, e)
+                    db.session.rollback()
+
+                if idx % 25 == 0:
+                    logger.info(
+                        "Progress %s/%s statuses=%s failed=%s",
+                        idx,
+                        total,
+                        counts,
+                        failed,
                     )
-                else:
-                    result = sea_service.update_property(prop, commit=False)
-                    scoring_service.calculate_for_property(prop, commit=False)
-                    db.session.commit()
-                status = (result or {}).get("status", "disabled")
-                counts[status] = counts.get(status, 0) + 1
-            except Exception as e:
-                failed += 1
-                logger.warning("Failed for property %s: %s", prop.id, e)
-                db.session.rollback()
 
-            if idx % 25 == 0:
-                logger.info(
-                    "Progress %s/%s statuses=%s failed=%s", idx, total, counts, failed
-                )
-
-            if args.sleep:
-                time.sleep(max(0.0, float(args.sleep)))
+                if args.sleep:
+                    time.sleep(max(0.0, float(args.sleep)))
 
         logger.info(
             "Done. total=%s statuses=%s failed=%s dry_run=%s",

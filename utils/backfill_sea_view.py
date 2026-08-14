@@ -22,6 +22,7 @@ import requests
 from app import create_app, db
 from models import Property
 from services import sea_view_service
+from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
 
@@ -89,29 +90,33 @@ def main() -> None:
         failures = 0
         session = requests.Session()
 
-        for index, prop in enumerate(properties, start=1):
-            try:
-                verdict = sea_view_service.evaluate_property(
-                    prop, use_ai=not args.no_ai, session=session
-                )
-                if not args.dry_run:
-                    sea_view_service.apply_to_property(prop, verdict, commit=True)
-                states[verdict["sea_view"]] += 1
-                reasons[verdict["sea_view_detail"].get("reason", "")] += 1
-            except Exception:
-                failures += 1
-                logger.error(
-                    "Sea-view evaluation failed for %s", prop.id, exc_info=True
-                )
-                # `apply_to_property(commit=True)` requires a session with
-                # nothing pending, so one row's failure must not leave anything
-                # in flight for the next row to trip over.
-                db.session.rollback()
+        # Free, but hours long: a restart without --only-missing repeats every
+        # OpenTopoData and Overpass call at one per second. Only the scoped
+        # form is honestly resumable (#283).
+        with inflight("backfill_sea_view", resumable=bool(args.only_missing)):
+            for index, prop in enumerate(properties, start=1):
+                try:
+                    verdict = sea_view_service.evaluate_property(
+                        prop, use_ai=not args.no_ai, session=session
+                    )
+                    if not args.dry_run:
+                        sea_view_service.apply_to_property(prop, verdict, commit=True)
+                    states[verdict["sea_view"]] += 1
+                    reasons[verdict["sea_view_detail"].get("reason", "")] += 1
+                except Exception:
+                    failures += 1
+                    logger.error(
+                        "Sea-view evaluation failed for %s", prop.id, exc_info=True
+                    )
+                    # `apply_to_property(commit=True)` requires a session with
+                    # nothing pending, so one row's failure must not leave
+                    # anything in flight for the next row to trip over.
+                    db.session.rollback()
 
-            if index % 25 == 0 or index == total:
-                logger.info("%s/%s processed", index, total)
-            if args.sleep:
-                time.sleep(args.sleep)
+                if index % 25 == 0 or index == total:
+                    logger.info("%s/%s processed", index, total)
+                if args.sleep:
+                    time.sleep(args.sleep)
 
         logger.info("--- verdicts ---")
         for state in sea_view_service.VALID_STATES:

@@ -5,6 +5,7 @@ import time
 from app import create_app
 from models import Land
 from services.travel_time_service import TravelTimeService
+from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
 
@@ -48,23 +49,28 @@ def main() -> None:
         ok = 0
         fail = 0
 
-        for idx, land in enumerate(lands, start=1):
-            if not land.location_lat or not land.location_lon:
-                continue
-            try:
-                if service.calculate_travel_times(land.id):
-                    ok += 1
-                else:
+        # Only `--only-missing` makes a restart cheap: without it the scope is
+        # every land again, so an interrupted run re-bills Distance Matrix for
+        # everything it already did. The marker says so rather than guessing,
+        # and a deploy that reads `resumable: false` can be told to wait (#283).
+        with inflight("recalc_travel_times", resumable=bool(args.only_missing)):
+            for idx, land in enumerate(lands, start=1):
+                if not land.location_lat or not land.location_lon:
+                    continue
+                try:
+                    if service.calculate_travel_times(land.id):
+                        ok += 1
+                    else:
+                        fail += 1
+                except Exception as e:
                     fail += 1
-            except Exception as e:
-                fail += 1
-                logger.warning("Failed to recalc for land %s: %s", land.id, e)
+                    logger.warning("Failed to recalc for land %s: %s", land.id, e)
 
-            if idx % 10 == 0:
-                logger.info("Progress %s/%s ok=%s fail=%s", idx, total, ok, fail)
+                if idx % 10 == 0:
+                    logger.info("Progress %s/%s ok=%s fail=%s", idx, total, ok, fail)
 
-            if args.sleep:
-                time.sleep(max(0.0, float(args.sleep)))
+                if args.sleep:
+                    time.sleep(max(0.0, float(args.sleep)))
 
         logger.info("Done. total=%s ok=%s fail=%s", total, ok, fail)
 

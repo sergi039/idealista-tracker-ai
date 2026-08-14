@@ -35,6 +35,40 @@ DEPLOYED_MARKER="${AUTOPILOT_DEPLOYED_MARKER:-${REPO_DIR}/data/.deployed_sha}"
 HEALTH_TIMEOUT_SECONDS="${AUTOPILOT_HEALTH_TIMEOUT:-180}"
 HEALTH_POLL_SECONDS=5
 
+# healthz renders no template, so it cannot see a broken one: on 2026-08-14 a
+# TemplateSyntaxError turned every /properties/<id> into a redirect for 15
+# minutes while healthz stayed green. A page that renders is the other half of
+# "is this build serving", so one real page must answer 200 - not a redirect,
+# which is exactly what that defect produced. Derived from the health URL so a
+# test harness pointing healthz at a stub points this at the same stub; set
+# AUTOPILOT_PAGE_URL="" to skip it and be told the page is unverified.
+url_origin() {
+    local url="$1" rest
+    rest="${url#*://}"
+    printf '%s://%s' "${url%%://*}" "${rest%%/*}"
+}
+if [ -n "${AUTOPILOT_PAGE_URL+set}" ]; then
+    PAGE_URL="$AUTOPILOT_PAGE_URL"
+else
+    PAGE_URL="$(url_origin "$HEALTH_URL")/properties"
+fi
+
+# --- long-running work inside the container (#283) --------------------------
+# `docker compose up -d --build` recreates the app container, which kills
+# whatever is running in it. Observed twice on 2026-08-14: a pool backfill died
+# mid-flight and nothing anywhere said so. The watcher deliberately does not
+# decide whose work matters, so the default is unchanged - deploy, but name
+# what is being killed. AUTOPILOT_DEFER_ON_INFLIGHT=1 buys a bounded wait
+# instead, and the bound is the point: a deploy that never lands is also a
+# failure, just a quieter one.
+APP_CONTAINER="${AUTOPILOT_APP_CONTAINER:-${COMPOSE_CONTAINER_PREFIX:-idealista}-app}"
+INFLIGHT_DIR="${AUTOPILOT_INFLIGHT_DIR:-${REPO_DIR}/data/.inflight}"
+# Which container processes count as a job. Both spellings the repo uses.
+INFLIGHT_PATTERN="${AUTOPILOT_INFLIGHT_PATTERN:-python.*(-m +utils\.|utils/)}"
+DEFER_ON_INFLIGHT="${AUTOPILOT_DEFER_ON_INFLIGHT:-0}"
+DEFER_BUDGET="${AUTOPILOT_DEFER_BUDGET:-6}"
+DEFER_STATE="${AUTOPILOT_DEFER_STATE:-${REPO_DIR}/data/.deploy_deferrals}"
+
 log() {
     printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG_FILE"
 }
@@ -224,7 +258,7 @@ rollback() {
 
 check_health() {
     local deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
-    local body
+    local body code
     while [ $SECONDS -lt $deadline ]; do
         body="$(curl -fsS --max-time 10 "$HEALTH_URL" 2>/dev/null || true)"
         if [ -n "$body" ]; then
@@ -232,16 +266,197 @@ check_health() {
             # curl -f already swallowed it, but check the body too in case the
             # contract loosens.
             if printf '%s' "$body" | grep -q '"ok":true'; then
-                log "health OK: $body"
-                return 0
+                if [ -z "$PAGE_URL" ]; then
+                    log "health OK: $body"
+                    log "  (AUTOPILOT_PAGE_URL is empty - no page was rendered, so a broken template would pass)"
+                    return 0
+                fi
+                # No -L and no -f: a redirect is the failure being looked for,
+                # so the status code has to be read rather than followed.
+                code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$PAGE_URL" 2>/dev/null || true)"
+                if [ "$code" = "200" ]; then
+                    log "health OK: $body"
+                    log "  ${PAGE_URL} rendered (200)"
+                    return 0
+                fi
+                log "healthz is green but ${PAGE_URL} answered ${code:-no response}"
+            else
+                log "health not ready: $body"
             fi
-            log "health not ready: $body"
         fi
         sleep "$HEALTH_POLL_SECONDS"
     done
     log "health check timed out after ${HEALTH_TIMEOUT_SECONDS}s"
     return 1
 }
+
+# --- what is running inside the container ----------------------------------
+# `docker top` reads the container's process list from the host, so it needs
+# nothing installed in the image and covers jobs that know nothing about
+# markers - including anything started by hand with `docker exec`. It is
+# authoritative about liveness; the marker files are authoritative about
+# whether killing a job loses work. Both are needed.
+#
+# Output: one "<pid>\t<command>" line per matching process.
+inflight_processes() {
+    docker top "$APP_CONTAINER" 2>/dev/null \
+        | awk 'NR > 1 { pid = $2; $1=$2=$3=$4=$5=$6=$7=""; sub(/^ +/, ""); print pid "\t" $0 }' \
+        | grep -E "$INFLIGHT_PATTERN" || true
+}
+
+# The marker a job wrote for itself, if it wrote one. Prints
+# "<resumable>\t<ledger>"; an absent, unreadable or mismatched marker prints
+# "unknown\t". Unknown and false have to behave identically downstream - a
+# deploy cannot tell them apart, and guessing "resumable" is how work gets
+# lost silently.
+#
+# The marker is keyed by PID, and a PID left behind by a killed run can be
+# reused by an unrelated job in the container that replaced it. So the
+# marker's own module has to appear in the command line before its claim is
+# believed - otherwise a stale `resumable: true` could vouch for a job that
+# is nothing of the sort.
+inflight_marker() {
+    local pid="$1" command="$2"
+    python3 - "$INFLIGHT_DIR" "$pid" "$command" <<'PY' 2>/dev/null || printf 'unknown\t\n'
+import glob
+import json
+import os
+import sys
+
+directory, pid, command = sys.argv[1], sys.argv[2], sys.argv[3]
+for path in sorted(glob.glob(os.path.join(directory, f"*.{pid}.json"))):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        continue
+    if not isinstance(data, dict):
+        continue
+    module = data.get("module")
+    if not isinstance(module, str) or module not in command:
+        continue
+    resumable = "true" if data.get("resumable") is True else "false"
+    print(f"{resumable}\t{data.get('ledger') or ''}")
+    break
+else:
+    print("unknown\t")
+PY
+}
+
+# Logs every job in flight and sets `inflight_count` / `inflight_unsafe`.
+# `inflight_unsafe` counts the ones that did not claim to be resumable: those
+# are the jobs a deferral exists for.
+inflight_count=0
+inflight_unsafe=0
+survey_inflight() {
+    inflight_count=0
+    inflight_unsafe=0
+
+    if [ -z "$(docker ps --filter "name=^/${APP_CONTAINER}$" --format '{{.Names}}' 2>/dev/null)" ]; then
+        # Nothing is running, so nothing can be killed. Not an error: the very
+        # first deploy on a machine starts the container.
+        return 0
+    fi
+
+    local procs line pid command marker resumable ledger
+    procs="$(inflight_processes)"
+    [ -n "$procs" ] || return 0
+    log "long-running work is in flight inside ${APP_CONTAINER}:"
+
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        pid="${line%%$'\t'*}"
+        command="${line#*$'\t'}"
+        marker="$(inflight_marker "$pid" "$command")"
+        resumable="${marker%%$'\t'*}"
+        ledger="${marker#*$'\t'}"
+
+        inflight_count=$((inflight_count + 1))
+        case "$resumable" in
+            true)
+                log "  in flight (resumable): ${command}"
+                if [ -n "$ledger" ]; then
+                    log "      ledger: ${ledger}"
+                fi
+                ;;
+            false)
+                inflight_unsafe=$((inflight_unsafe + 1))
+                log "  in flight (NOT resumable - a restart repeats work already done): ${command}"
+                if [ -n "$ledger" ]; then
+                    log "      ledger: ${ledger}"
+                fi
+                ;;
+            *)
+                inflight_unsafe=$((inflight_unsafe + 1))
+                log "  in flight (no marker, so resumability is unknown): ${command}"
+                ;;
+        esac
+    done <<<"$procs"
+
+    return 0
+}
+
+# Deferrals are counted per target commit: a new commit is a new decision, and
+# a budget that carried over would expire against work it never waited for.
+read_deferrals() {
+    local sha="$1" recorded_sha recorded_count
+    read -r recorded_sha recorded_count <"$DEFER_STATE" 2>/dev/null || true
+    # Digits or nothing. This file lives in data/ where a human can edit it,
+    # and every later use is arithmetic: a non-numeric count would abort the
+    # watcher rather than merely be ignored.
+    case "${recorded_count:-}" in
+        '' | *[!0-9]*) printf '0'; return 0 ;;
+    esac
+    if [ "${recorded_sha:-}" = "$sha" ]; then
+        printf '%s' "$recorded_count"
+    else
+        printf '0'
+    fi
+}
+
+write_deferrals() {
+    local sha="$1" count="$2" tmp
+    tmp="$(mktemp "${DEFER_STATE}.XXXXXX")" || return 1
+    printf '%s %s\n' "$sha" "$count" >"$tmp" || { rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$DEFER_STATE" || { rm -f "$tmp"; return 1; }
+}
+
+# --- who is about to be killed ---------------------------------------------
+# Runs before the fast-forward, so a deferred tick leaves the checkout and the
+# deployment marker exactly as they were and the next tick decides afresh. The
+# rollback image was already re-tagged above; that is idempotent and costs a
+# deferred tick nothing.
+survey_inflight
+if [ "$inflight_count" != "0" ]; then
+    if [ "$DEFER_ON_INFLIGHT" != "1" ]; then
+        log "  deploying anyway (AUTOPILOT_DEFER_ON_INFLIGHT is off); the ${inflight_count} job(s) above will be killed"
+    elif [ "$inflight_unsafe" = "0" ]; then
+        log "  every job above reports itself resumable; deploying and killing them"
+    else
+        deferrals="$(read_deferrals "$remote_sha")"
+        if [ "$deferrals" -ge "$DEFER_BUDGET" ]; then
+            log "  deferral budget exhausted (${deferrals}/${DEFER_BUDGET} ticks waited for ${remote_sha:0:7})"
+            log "  deploying and killing the ${inflight_unsafe} job(s) that did not claim to be resumable"
+        else
+            deferrals=$((deferrals + 1))
+            if ! write_deferrals "$remote_sha" "$deferrals"; then
+                # Cannot count, so cannot bound. Deferring on a budget that
+                # cannot be counted is the unbounded wait this design refuses
+                # to have.
+                log "  ALERT: could not record the deferral in ${DEFER_STATE}"
+                log "  an unbounded wait is worse than a killed job - deploying now"
+            else
+                log "  deferring this tick (${deferrals}/${DEFER_BUDGET}) - ${inflight_unsafe} job(s) would lose work"
+                log "  set AUTOPILOT_DEFER_ON_INFLIGHT=0 to deploy immediately instead"
+                exit 0
+            fi
+        fi
+    fi
+fi
+# Every path that reaches here is deploying, so the count has served its
+# purpose - whatever it was waiting for is about to be killed or was never
+# there.
+rm -f "$DEFER_STATE" 2>/dev/null || true
 
 # --- deploy ----------------------------------------------------------------
 if ! git merge --ff-only "origin/${BRANCH}" >>"$LOG_FILE" 2>&1; then
