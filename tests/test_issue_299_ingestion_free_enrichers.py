@@ -560,13 +560,29 @@ class TestARefusalNeverErasesAMeasuredVerdict:
     every future caller inherit it.
     """
 
-    def _stored(self, source_id, environment, lat=COORD_LAT, lon=COORD_LON):
+    def _stored(
+        self,
+        source_id,
+        environment,
+        lat=COORD_LAT,
+        lon=COORD_LON,
+        title=SEA_TITLE,
+        description=SEA_DESCRIPTION,
+    ):
+        """A row that already carries a verdict, re-evaluated below.
+
+        The text defaults to the *sea* fixture on purpose. An earlier version
+        of this class used the plain one, reasoning that "a view claim in the
+        text would answer `likely` on its own" — true, and exactly why it had
+        to be tested: `combine()` turns a refused geometry plus a view claim
+        into `likely`, not `unknown`, so a guard keyed on the verdict being
+        `unknown` silently downgraded every measured `yes` on this coast. The
+        plain fixture stepped around the defect instead of at it.
+        """
         prop = Property(
             source_email_id=source_id,
-            # No sea words: the refusal must surface as `unknown`, and a
-            # view claim in the text would answer `likely` on its own.
-            title=PLAIN_TITLE,
-            description=PLAIN_DESCRIPTION,
+            title=title,
+            description=description,
             municipality="Navia",
             location_lat=lat,
             location_lon=lon,
@@ -578,12 +594,32 @@ class TestARefusalNeverErasesAMeasuredVerdict:
         return prop.id
 
     @staticmethod
-    def _measured_verdict(state="yes", lat=COORD_LAT, lon=COORD_LON):
+    def _measured_verdict(
+        state="yes",
+        lat=COORD_LAT,
+        lon=COORD_LON,
+        geometry_state=sea_view_service.LIKELY,
+        geometry_reason="clear_line_of_sight",
+        source="text+geometry",
+        reason="listing claims a view and terrain allows it",
+    ):
+        """The shape `evaluate_property` really writes, geometry block and all.
+
+        The geometry half is what the repair reuses, so a fixture without it
+        would test a row that cannot occur outside a hand-set verdict.
+        """
         return {
             "sea_view": state,
             "sea_view_detail": {
-                "source": "text+geometry",
-                "reason": "listing claims a view and terrain allows it",
+                "source": source,
+                "reason": reason,
+                "text": {"claim": "view", "source": "keywords_only"},
+                "geometry": {
+                    "state": geometry_state,
+                    "reason": geometry_reason,
+                    "distance_m": 1200.0,
+                    "coordinate_accuracy": "precise",
+                },
                 "origin": {"lat": lat, "lon": lon},
                 "computed_at": "2026-08-10T09:00:00+00:00",
             },
@@ -596,29 +632,71 @@ class TestARefusalNeverErasesAMeasuredVerdict:
         PropertyEnrichmentService().enrich_free_sources(prop, commit=True, use_ai=False)
         return _reload(prop_id)
 
-    def test_a_refused_source_keeps_the_verdict_measured_earlier(
+    def test_a_measured_yes_survives_a_refusal_on_a_sea_view_listing(
         self, app, reference_files, monkeypatch
     ):
+        """The review finding: `yes` must not decay to `likely` on a 504.
+
+        Text claims a view (as most listings here do) and the coastline
+        lookup refuses. Recombining the fresh text with the terrain measured
+        earlier gives back `yes`; trusting this run's refused geometry would
+        give `likely` — a quiet downgrade of a two-source verdict.
+        """
         with app.app_context():
-            prop_id = self._stored("sea_view_kept", self._measured_verdict("yes"))
+            prop_id = self._stored("sea_view_kept_yes", self._measured_verdict("yes"))
 
             environment = self._recompute(prop_id, monkeypatch).enrichment[
                 "environment"
             ]
 
-            # Unchanged — and the failed attempt is stamped, not swallowed.
             assert environment["sea_view"] == sea_view_service.YES
             detail = environment["sea_view_detail"]
             assert detail["source"] == "text+geometry"
-            assert detail["last_attempt_state"] == sea_view_service.UNKNOWN
+            # The terrain is the earlier measurement, labelled as reused.
+            assert detail["geometry"]["reused_measurement"] is True
+            assert detail["geometry"]["state"] == sea_view_service.LIKELY
+            # And the refusal is stamped: this run would have said `likely`.
+            assert detail["last_attempt_state"] == sea_view_service.LIKELY
             assert detail["last_attempt_reason"] == "coastline_source_unavailable"
             assert detail["last_attempt_at"]
             assert "origin_unverified" not in detail
 
-    def test_a_verdict_measured_somewhere_else_is_not_kept(
+    def test_the_specific_terrain_reason_is_not_replaced_by_a_generic_one(
         self, app, reference_files, monkeypatch
     ):
-        """Provenance is the point: the rule preserves *this* row's verdict."""
+        """A stored `likely` whose terrain disagreed keeps *why* it disagreed.
+
+        Trusting the refusal would rewrite "terrain disagrees
+        (no_coastline_in_range)" as "terrain not computable" — the same state,
+        a strictly worse record of how it was reached.
+        """
+        with app.app_context():
+            prop_id = self._stored(
+                "sea_view_kept_reason",
+                self._measured_verdict(
+                    "likely",
+                    geometry_state=sea_view_service.NO,
+                    geometry_reason="no_coastline_in_range",
+                    source="text",
+                    reason="listing claims a view, terrain disagrees "
+                    "(no_coastline_in_range)",
+                ),
+            )
+
+            detail = self._recompute(prop_id, monkeypatch).enrichment["environment"][
+                "sea_view_detail"
+            ]
+
+            assert detail["reason"] == (
+                "listing claims a view, terrain disagrees (no_coastline_in_range)"
+            )
+            assert "not computable" not in detail["reason"]
+            assert detail["last_attempt_reason"] == "coastline_source_unavailable"
+
+    def test_a_measurement_from_other_coordinates_is_not_reused(
+        self, app, reference_files, monkeypatch
+    ):
+        """Provenance is the point: the rule preserves *this* row's terrain."""
         with app.app_context():
             prop_id = self._stored(
                 "sea_view_moved",
@@ -629,57 +707,122 @@ class TestARefusalNeverErasesAMeasuredVerdict:
                 "environment"
             ]
 
-            assert environment["sea_view"] == sea_view_service.UNKNOWN
-            assert (
-                environment["sea_view_detail"]["geometry"]["reason"]
-                == "coastline_source_unavailable"
+            # Nothing reusable, so this run's own refusal stands: the text
+            # still claims a view, and the terrain is honestly not computable.
+            detail = environment["sea_view_detail"]
+            assert environment["sea_view"] == sea_view_service.LIKELY
+            assert detail["reason"] == "listing claims a view, terrain not computable"
+            assert detail["geometry"]["reason"] == "coastline_source_unavailable"
+            assert "reused_measurement" not in detail["geometry"]
+
+    def test_a_fresh_text_signal_is_honoured_over_the_reused_terrain(
+        self, app, reference_files, monkeypatch
+    ):
+        """Preserving the geometry half is not freezing the verdict.
+
+        The description no longer claims a view; the terrain measured earlier
+        still allows one. That is `likely` from geometry alone — a
+        whole-verdict rule would have re-asserted the stale `yes`.
+        """
+        with app.app_context():
+            prop_id = self._stored(
+                "sea_view_text_changed",
+                self._measured_verdict("yes"),
+                title=PLAIN_TITLE,
+                description=PLAIN_DESCRIPTION,
             )
 
-    def test_a_verdict_from_before_origins_were_recorded_is_kept_but_labelled(
+            environment = self._recompute(prop_id, monkeypatch).enrichment[
+                "environment"
+            ]
+
+            assert environment["sea_view"] == sea_view_service.LIKELY
+            detail = environment["sea_view_detail"]
+            assert detail["source"] == "geometry"
+            assert detail["text"]["claim"] == sea_view_service.TEXT_NONE
+            assert detail["geometry"]["reused_measurement"] is True
+
+    def test_a_verdict_from_before_origins_were_recorded_is_reused_but_labelled(
         self, app, reference_files, monkeypatch
     ):
         """Every verdict `utils/backfill_sea_view.py` wrote before this change
         carries no origin. Erasing those is the failure the rule exists to
-        prevent, so they are kept — with the unverified provenance stamped
-        rather than assumed away."""
+        prevent, so the terrain is reused — with the unverified provenance
+        stamped rather than assumed away."""
         with app.app_context():
-            legacy = self._measured_verdict("no")
+            legacy = self._measured_verdict("yes")
             legacy["sea_view_detail"].pop("origin")
             prop_id = self._stored("sea_view_legacy", legacy)
 
-            environment = self._recompute(prop_id, monkeypatch).enrichment[
-                "environment"
+            detail = self._recompute(prop_id, monkeypatch).enrichment["environment"][
+                "sea_view_detail"
             ]
 
-            assert environment["sea_view"] == sea_view_service.NO
-            assert environment["sea_view_detail"]["origin_unverified"] is True
-            assert environment["sea_view_detail"]["last_attempt_reason"] == (
-                "coastline_source_unavailable"
-            )
+            assert detail["geometry"]["reused_measurement"] is True
+            assert detail["origin_unverified"] is True
+            assert detail["last_attempt_reason"] == "coastline_source_unavailable"
 
-    def test_a_stored_unknown_is_not_treated_as_a_measurement(
+    def test_two_outages_in_a_row_do_not_age_the_terrain_forward(
         self, app, reference_files, monkeypatch
     ):
-        """`unknown` is the absence of a verdict; there is nothing to keep."""
+        """The reused terrain keeps the time it was actually measured.
+
+        On the second repair the stored `computed_at` is the *previous
+        repair*, so reading it as the measurement time would let a stale
+        terrain claim to be current — a slow-motion version of the staleness
+        the amenity card labels (#144).
+        """
         with app.app_context():
-            previous = self._measured_verdict("unknown")
-            previous["sea_view_detail"]["source"] = "none"
-            prop_id = self._stored("sea_view_unknown", previous)
+            prop_id = self._stored("sea_view_twice", self._measured_verdict("yes"))
+
+            first = self._recompute(prop_id, monkeypatch).enrichment["environment"]
+            second = self._recompute(prop_id, monkeypatch).enrichment["environment"]
+
+            measured_at = first["sea_view_detail"]["geometry"]["measured_at"]
+            assert measured_at == "2026-08-10T09:00:00+00:00"
+            assert second["sea_view_detail"]["geometry"]["measured_at"] == measured_at
+            assert second["sea_view"] == sea_view_service.YES
+
+    def test_a_stored_unknown_geometry_has_nothing_to_lend(
+        self, app, reference_files, monkeypatch
+    ):
+        """`unknown` terrain is the absence of a measurement, not one."""
+        with app.app_context():
+            previous = self._measured_verdict(
+                "unknown",
+                geometry_state=sea_view_service.UNKNOWN,
+                geometry_reason="elevation_source_unavailable",
+                source="none",
+                reason="elevation_source_unavailable",
+            )
+            prop_id = self._stored(
+                "sea_view_unknown",
+                previous,
+                title=PLAIN_TITLE,
+                description=PLAIN_DESCRIPTION,
+            )
 
             environment = self._recompute(prop_id, monkeypatch).enrichment[
                 "environment"
             ]
 
             assert environment["sea_view"] == sea_view_service.UNKNOWN
-            assert environment["sea_view_detail"]["source"] == "none"
-            assert "last_attempt_reason" not in environment["sea_view_detail"]
+            detail = environment["sea_view_detail"]
+            assert detail["geometry"]["reason"] == "coastline_source_unavailable"
+            assert "reused_measurement" not in detail["geometry"]
+            assert "last_attempt_reason" not in detail
 
     def test_an_answering_source_still_overwrites(
         self, app, reference_files, monkeypatch
     ):
         """The rule must not freeze a verdict: a source that answered wins."""
         with app.app_context():
-            prop_id = self._stored("sea_view_recomputed", self._measured_verdict("yes"))
+            prop_id = self._stored(
+                "sea_view_recomputed",
+                self._measured_verdict("yes"),
+                title=PLAIN_TITLE,
+                description=PLAIN_DESCRIPTION,
+            )
 
             _mock_overpass_answering(monkeypatch)
             _mock_coastline_empty(monkeypatch)
@@ -690,18 +833,26 @@ class TestARefusalNeverErasesAMeasuredVerdict:
 
             environment = _reload(prop_id).enrichment["environment"]
             assert environment["sea_view"] == sea_view_service.NO
-            assert environment["sea_view_detail"]["source"] == "geometry"
+            detail = environment["sea_view_detail"]
+            assert detail["source"] == "geometry"
+            assert detail["geometry"]["reason"] == "no_coastline_in_range"
+            assert "reused_measurement" not in detail["geometry"]
 
     def test_a_computed_unknown_is_not_a_refusal(
         self, app, reference_files, monkeypatch
     ):
         """An approximate coordinate is an answer about this row, so it lands.
 
-        Only the two source-refusal reasons are barred from overwriting; a
-        verdict we genuinely cannot compute must not hide behind an old one.
+        Only the two source-refusal reasons bar an overwrite; a verdict we
+        genuinely cannot compute must not hide behind an old measurement.
         """
         with app.app_context():
-            prop_id = self._stored("sea_view_approximate", self._measured_verdict("no"))
+            prop_id = self._stored(
+                "sea_view_approximate",
+                self._measured_verdict("yes"),
+                title=PLAIN_TITLE,
+                description=PLAIN_DESCRIPTION,
+            )
             prop = db.session.get(Property, prop_id)
             prop.location_accuracy = "approximate"
             db.session.commit()
@@ -720,10 +871,9 @@ class TestARefusalNeverErasesAMeasuredVerdict:
 
             environment = _reload(prop_id).enrichment["environment"]
             assert environment["sea_view"] == sea_view_service.UNKNOWN
-            assert (
-                environment["sea_view_detail"]["geometry"]["reason"]
-                == "approximate_coordinates"
-            )
+            detail = environment["sea_view_detail"]
+            assert detail["geometry"]["reason"] == "approximate_coordinates"
+            assert "reused_measurement" not in detail["geometry"]
 
 
 class TestTheEnrichFlowComputesSeaView:

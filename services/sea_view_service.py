@@ -55,10 +55,11 @@ UNKNOWN = "unknown"
 
 VALID_STATES = (YES, LIKELY, NO, UNKNOWN)
 
-# A state the data can be trusted for. It survives a later outage as
-# last-known-good, exactly as a measured sea *distance* does: the coastline
-# does not move and the terrain does not either.
-MEASURED_STATES = (YES, LIKELY, NO)
+# A *geometry* verdict the data can be trusted for. It survives a later outage
+# as last-known-good, exactly as a measured sea distance does: the coastline
+# does not move and the terrain does not either. Geometry never reaches `yes`
+# (bare-earth model), and `unknown` has nothing to lend.
+MEASURED_GEOMETRY_STATES = (LIKELY, NO)
 
 # The two `unknown` reasons that mean "a source refused", as opposed to the
 # ones that mean "we looked and cannot say" (`approximate_coordinates`,
@@ -864,86 +865,137 @@ def _origin_of(prop) -> Optional[Dict[str, float]]:
         return None
 
 
-def _refusal_reason(verdict: Dict[str, Any]) -> Optional[str]:
-    """The refusal that produced this verdict, or None if it was computed.
+def _geometry_refusal_reason(verdict: Dict[str, Any]) -> Optional[str]:
+    """The refusal that stopped the geometry half, or None if it was computed.
 
-    Only the geometry sources can refuse; a text signal the AI could not
-    classify falls back to keywords and still produces an answer.
+    Read off the *geometry* detail, never off the top-level state. `combine()`
+    turns a refused geometry into `likely` whenever the text claims a view --
+    "listing claims a view, terrain not computable" -- so a rule keyed on the
+    verdict being `unknown` misses the most common listing on this coast
+    (review of PR #306; the first version of this guard had exactly that hole).
     """
-    if normalize_state(verdict.get("sea_view")) != UNKNOWN:
-        return None
     detail = verdict.get("sea_view_detail")
     detail = detail if isinstance(detail, dict) else {}
     geometry = detail.get("geometry")
     geometry = geometry if isinstance(geometry, dict) else {}
-    reason = geometry.get("reason") or detail.get("reason")
+    reason = geometry.get("reason")
     reason = str(reason) if reason else None
     return reason if reason in SOURCE_REFUSAL_REASONS else None
 
 
-def preserved_on_refusal(
+def _origins_agree(
+    stored_detail: Dict[str, Any], new_detail: Dict[str, Any]
+) -> Optional[bool]:
+    """True/False when both origins are readable, None when one is missing."""
+    stored_origin = stored_detail.get("origin")
+    new_origin = new_detail.get("origin")
+    if not isinstance(stored_origin, dict) or not isinstance(new_origin, dict):
+        return None
+    try:
+        return (
+            abs(float(stored_origin["lat"]) - float(new_origin["lat"]))
+            <= ORIGIN_TOLERANCE_DEG
+            and abs(float(stored_origin["lon"]) - float(new_origin["lon"]))
+            <= ORIGIN_TOLERANCE_DEG
+        )
+    except (KeyError, TypeError, ValueError):
+        # An unreadable origin proves nothing either way -- neither a match
+        # nor a move.
+        return None
+
+
+def repaired_with_stored_geometry(
     environment: Dict[str, Any], verdict: Dict[str, Any]
 ) -> Optional[Dict[str, Any]]:
-    """The stored verdict to keep instead of a refusal, or None to write.
+    """Rebuild a verdict whose geometry refused, or None to store as computed.
 
     A source that refused knows nothing about this property, so it must not
     erase what an earlier run measured -- the rule `SeaDistanceService`
     already applies to `enrichment["sea"]`, and the one #98 exists for. The
-    dangerous path is the second press of Enrich, not ingestion: a new row has
-    no verdict to lose, but a row already carrying a computed `yes` would have
-    had it overwritten with `unknown` the first time Overpass was busy.
+    dangerous path is the *second* look at a row, not the first: a new listing
+    has no verdict to lose, but `utils/backfill_sea_view.py` re-evaluates
+    every row on an ordinary run and the Enrich button does the same on every
+    press, so one busy Overpass would rewrite verdicts that had been measured.
 
-    Only a *measured* verdict is preserved (`yes`/`likely`/`no`), and only
-    when it belongs to these coordinates. A stored verdict from before origins
-    were recorded cannot be checked: it is kept, because erasing a real
-    verdict on the rows this rule exists for is the worse failure, and the
-    unverified provenance is stamped rather than assumed away. A verdict whose
-    origin *disagrees* was measured somewhere else and is not kept.
+    What is preserved is the **measured geometry half**, not the whole
+    verdict, and the verdict is then recombined with this run's *fresh* text
+    signal. That matters three ways, all of them wrong under a whole-verdict
+    rule:
 
-    The refusal itself is never silent: the kept verdict carries what the
-    failed attempt was and when, the way a kept QoL part does.
+    * a stored `yes` (text claimed a view, terrain allowed it) survives a
+      refusal as `yes`, rather than decaying to the `likely` that
+      `combine()` produces from text alone;
+    * a text signal that legitimately changed -- the description was edited,
+      or the AI now reads "primera línea" as proximity -- is still honoured;
+    * the recorded reason stays the specific one the terrain gave
+      ("terrain disagrees (no_coastline_in_range)") instead of being replaced
+      by the generic "terrain not computable".
+
+    Only a geometry that actually decided something is reusable (`likely` or
+    `no`); a stored `unknown` geometry has nothing to lend. Reuse requires the
+    stored verdict to belong to these coordinates: a stored origin that
+    *disagrees* was measured somewhere else and is refused outright. A stored
+    verdict from before origins were recorded cannot be checked -- it is
+    reused, because erasing real verdicts on exactly the rows this rule
+    protects is the worse failure, and the unverified provenance is stamped
+    (`origin_unverified`) rather than assumed away.
+
+    The refusal is never silent: the rebuilt verdict carries what this run
+    would have said and why it was not trusted, the way a kept QoL part does.
     """
-    reason = _refusal_reason(verdict)
+    reason = _geometry_refusal_reason(verdict)
     if reason is None:
         return None
 
-    stored_state = normalize_state(environment.get("sea_view"))
-    if stored_state not in MEASURED_STATES:
-        return None
     stored_detail = environment.get("sea_view_detail")
     if not isinstance(stored_detail, dict):
+        return None
+    stored_geometry = stored_detail.get("geometry")
+    if not isinstance(stored_geometry, dict):
+        # Nothing measured to reuse. A legacy row carrying only the mirrored
+        # `Land` boolean lands here, and recomputing it is right: that boolean
+        # is the weak keyword pass this module replaced.
+        return None
+    if stored_geometry.get("state") not in MEASURED_GEOMETRY_STATES:
         return None
 
     new_detail = verdict.get("sea_view_detail")
     new_detail = new_detail if isinstance(new_detail, dict) else {}
-    new_origin = new_detail.get("origin")
-    stored_origin = stored_detail.get("origin")
+    agree = _origins_agree(stored_detail, new_detail)
+    if agree is False:
+        return None
 
-    origin_verified = False
-    if isinstance(stored_origin, dict) and isinstance(new_origin, dict):
-        try:
-            moved = (
-                abs(float(stored_origin["lat"]) - float(new_origin["lat"]))
-                > ORIGIN_TOLERANCE_DEG
-                or abs(float(stored_origin["lon"]) - float(new_origin["lon"]))
-                > ORIGIN_TOLERANCE_DEG
-            )
-        except (KeyError, TypeError, ValueError):
-            # An unreadable origin proves nothing either way; fall through to
-            # the unverified branch rather than to a silent match.
-            moved = False
-        else:
-            if moved:
-                return None
-            origin_verified = True
+    text_detail = new_detail.get("text")
+    text_detail = text_detail if isinstance(text_detail, dict) else {}
 
-    kept_detail = dict(stored_detail)
-    kept_detail["last_attempt_state"] = UNKNOWN
-    kept_detail["last_attempt_reason"] = reason
-    kept_detail["last_attempt_at"] = datetime.now(timezone.utc).isoformat()
-    if not origin_verified:
-        kept_detail["origin_unverified"] = True
-    return {"sea_view": stored_state, "sea_view_detail": kept_detail}
+    reused_geometry = dict(stored_geometry)
+    reused_geometry["reused_measurement"] = True
+    # When the terrain is reused a second time -- two outages in a row -- the
+    # stored detail's `computed_at` is the *previous repair*, not the
+    # measurement. Keep the first one, or the age of the terrain creeps
+    # forward every time a source refuses and ends up claiming to be current.
+    reused_geometry["measured_at"] = stored_geometry.get(
+        "measured_at"
+    ) or stored_detail.get("computed_at")
+
+    state, source, combined_reason = combine(text_detail, reused_geometry)
+    now = datetime.now(timezone.utc).isoformat()
+    repaired_detail: Dict[str, Any] = {
+        "source": source,
+        "reason": combined_reason,
+        "text": text_detail,
+        "geometry": reused_geometry,
+        "origin": new_detail.get("origin") or stored_detail.get("origin"),
+        "computed_at": now,
+        # What this run would have concluded had its refusal been trusted,
+        # and why it was not.
+        "last_attempt_state": normalize_state(verdict.get("sea_view")),
+        "last_attempt_reason": reason,
+        "last_attempt_at": now,
+    }
+    if agree is None:
+        repaired_detail["origin_unverified"] = True
+    return {"sea_view": state, "sea_view_detail": repaired_detail}
 
 
 def read_verdict(prop) -> Dict[str, Any]:
@@ -1127,20 +1179,21 @@ def apply_to_property(prop, verdict: Dict[str, Any], commit: bool = True) -> Non
                 db.session.rollback()
             return
 
-        # A refused source must not erase a verdict an earlier run measured
+        # A refused source must not erase a measurement an earlier run made
         # (#98's rule, as `SeaDistanceService` applies it to the distance).
         # This lives here, in the one writer, rather than at a call site:
         # `utils/backfill_sea_view.py` and every future caller would otherwise
         # reopen the same hole.
-        kept = preserved_on_refusal(environment, verdict)
-        if kept is not None:
+        repaired = repaired_with_stored_geometry(environment, verdict)
+        if repaired is not None:
             logger.info(
-                "Sea view for property %s could not be recomputed (%s); "
-                "keeping the verdict measured earlier",
+                "Sea view for property %s: geometry unavailable (%s); reusing "
+                "the terrain measured earlier, verdict %s",
                 getattr(prop, "id", None),
-                kept["sea_view_detail"].get("last_attempt_reason"),
+                repaired["sea_view_detail"].get("last_attempt_reason"),
+                repaired["sea_view"],
             )
-            verdict = kept
+            verdict = repaired
 
         environment.update(verdict)
         enrichment = dict(enrichment)
