@@ -91,7 +91,17 @@ def _write(repo: Path, relative: str, body: str) -> None:
 
 
 def _write_executable(path: Path, body: str) -> None:
-    path.write_text(textwrap.dedent(body).lstrip())
+    # `.lstrip()` is load-bearing: these bodies open with a newline, so dedent
+    # alone leaves a blank first line and the `#!/bin/bash` below it is not a
+    # shebang. bash then re-execs the stub with *itself* — under pytest that is
+    # Homebrew bash, which segfaults intermittently in its CoreFoundation
+    # locale init. See tests/test_merge_bot_dry_run.py for the full account;
+    # dropping the lstrip there cost a 6% flake rate on macOS.
+    text = textwrap.dedent(body).lstrip()
+    assert text.startswith("#!"), (
+        "stub needs a shebang on line 1, or bash re-execs itself"
+    )
+    path.write_text(text)
     path.chmod(0o755)
 
 

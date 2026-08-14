@@ -18,7 +18,23 @@ MERGE_SHA = "3" * 40
 
 
 def _write_executable(path: Path, body: str) -> None:
-    path.write_text(textwrap.dedent(body))
+    # `.lstrip()` is load-bearing, and its absence is a segfault on macOS
+    # (2026-08-14). These bodies open with a newline, so dedent alone leaves a
+    # blank first line and the `#!/bin/bash` below it is not a shebang. execve
+    # then fails ENOEXEC and bash re-execs the stub with *itself* — which under
+    # pytest is Homebrew bash 5.3.15, linked against gettext's libintl and
+    # CoreFoundation. Its startup locale init (set_default_lang ->
+    # libintl_setlocale -> CFLocaleCopyPreferredLanguages) reaches CFPreferences,
+    # which is not fork-safe and intermittently takes SIGSEGV; merge_bot.sh then
+    # correctly aborts the pass and the test reports the non-zero exit. With the
+    # shebang at byte 0 the kernel runs /bin/bash (Apple 3.2), which links
+    # neither library and never enters that path. The sibling merge_bot test
+    # files already lstrip for this reason.
+    text = textwrap.dedent(body).lstrip()
+    assert text.startswith("#!"), (
+        "stub needs a shebang on line 1, or bash re-execs itself"
+    )
+    path.write_text(text)
     path.chmod(0o755)
 
 
