@@ -139,6 +139,17 @@ class _StubSea:
         return None
 
 
+def _stub_sea_view(prop, *, commit=False, use_ai=True):
+    """The sea-view step of the free pass (#299), stubbed offline.
+
+    It reaches Overpass and OpenTopoData through its own module
+    (services/sea_view_service.py), which the `services.enrichment_service`
+    transport mocks in this suite never cover. Its wiring is pinned in
+    tests/test_issue_299_ingestion_free_enrichers.py.
+    """
+    return None
+
+
 def _enrichment_service_under_test(**overrides):
     """`PropertyEnrichmentService` with only the amenity half live."""
     from services.property_enrichment_service import PropertyEnrichmentService
@@ -148,6 +159,7 @@ def _enrichment_service_under_test(**overrides):
         "travel_service": _StubTravel(),
         "scoring_service": _StubScoring(),
         "sea_distance_service": _StubSea(),
+        "sea_view_calculator": _stub_sea_view,
     }
     kwargs.update(overrides)
     return PropertyEnrichmentService(**kwargs)

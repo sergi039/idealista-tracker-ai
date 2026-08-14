@@ -168,6 +168,10 @@ def test_enrichment_keeps_the_subscription_the_email_assigned(
             scoring_service=_NoopScoringService(),
             sea_distance_service=_NoopSeaDistanceService(),
             enrichment_service=_NoopEnrichmentService(),
+            # Offline for the same reason as the two stubs above: the
+            # sea-view step (#299) reaches Overpass/OpenTopoData through
+            # services/sea_view_service.py.
+            sea_view_calculator=lambda prop, commit=False, use_ai=True: None,
         ).enrich_property(prop, recalc_scoring=False)
 
         refreshed = db.session.get(Property, property_id)

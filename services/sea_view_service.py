@@ -55,6 +55,27 @@ UNKNOWN = "unknown"
 
 VALID_STATES = (YES, LIKELY, NO, UNKNOWN)
 
+# A *geometry* verdict the data can be trusted for. It survives a later outage
+# as last-known-good, exactly as a measured sea distance does: the coastline
+# does not move and the terrain does not either. Geometry never reaches `yes`
+# (bare-earth model), and `unknown` has nothing to lend.
+MEASURED_GEOMETRY_STATES = (LIKELY, NO)
+
+# The two `unknown` reasons that mean "a source refused", as opposed to the
+# ones that mean "we looked and cannot say" (`approximate_coordinates`,
+# `no_coordinates`, `no_elevation_at_property`). Only a refusal may be barred
+# from overwriting an earlier verdict -- a computed unknown is an answer about
+# this property and must land.
+SOURCE_REFUSAL_REASONS = frozenset(
+    {"coastline_source_unavailable", "elevation_source_unavailable"}
+)
+
+# Coordinates are compared to decide whether a stored verdict still belongs to
+# this property; 1e-5 degrees is about a metre. Defined here and imported by
+# services/sea_distance_service.py, which applies the same rule to the same
+# coastline -- one definition, because two would drift.
+ORIGIN_TOLERANCE_DEG = 1e-5
+
 # --- tuning constants -------------------------------------------------------
 
 # Past this the sea stops being a view and starts being a horizon smudge; it is
@@ -827,6 +848,184 @@ def normalize_state(value: Any) -> str:
     return UNKNOWN
 
 
+def _origin_of(prop) -> Optional[Dict[str, float]]:
+    """The coordinates a verdict was computed at, or None.
+
+    Stored beside the verdict so a later run can tell "this property's own
+    verdict" from one measured somewhere else -- the same provenance
+    `Property.enrichment["sea"]` keeps for the distance.
+    """
+    lat = getattr(prop, "location_lat", None)
+    lon = getattr(prop, "location_lon", None)
+    if lat is None or lon is None:
+        return None
+    try:
+        return {"lat": float(lat), "lon": float(lon)}
+    except (TypeError, ValueError):
+        return None
+
+
+def _geometry_refusal_reason(verdict: Dict[str, Any]) -> Optional[str]:
+    """The refusal that stopped the geometry half, or None if it was computed.
+
+    Read off the *geometry* detail, never off the top-level state. `combine()`
+    turns a refused geometry into `likely` whenever the text claims a view --
+    "listing claims a view, terrain not computable" -- so a rule keyed on the
+    verdict being `unknown` misses the most common listing on this coast
+    (review of PR #306; the first version of this guard had exactly that hole).
+    """
+    detail = verdict.get("sea_view_detail")
+    detail = detail if isinstance(detail, dict) else {}
+    geometry = detail.get("geometry")
+    geometry = geometry if isinstance(geometry, dict) else {}
+    reason = geometry.get("reason")
+    reason = str(reason) if reason else None
+    return reason if reason in SOURCE_REFUSAL_REASONS else None
+
+
+def _origins_agree(
+    stored_detail: Dict[str, Any], new_detail: Dict[str, Any]
+) -> Optional[bool]:
+    """True/False when both origins are readable, None when one is missing."""
+    stored_origin = stored_detail.get("origin")
+    new_origin = new_detail.get("origin")
+    if not isinstance(stored_origin, dict) or not isinstance(new_origin, dict):
+        return None
+    try:
+        return (
+            abs(float(stored_origin["lat"]) - float(new_origin["lat"]))
+            <= ORIGIN_TOLERANCE_DEG
+            and abs(float(stored_origin["lon"]) - float(new_origin["lon"]))
+            <= ORIGIN_TOLERANCE_DEG
+        )
+    except (KeyError, TypeError, ValueError):
+        # An unreadable origin proves nothing either way -- neither a match
+        # nor a move.
+        return None
+
+
+def repaired_with_stored_geometry(
+    environment: Dict[str, Any], verdict: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Rebuild a verdict whose geometry refused, or None to store as computed.
+
+    A source that refused knows nothing about this property, so it must not
+    erase what an earlier run measured -- the rule `SeaDistanceService`
+    already applies to `enrichment["sea"]`, and the one #98 exists for. The
+    dangerous path is the *second* look at a row, not the first: a new listing
+    has no verdict to lose, but `utils/backfill_sea_view.py` re-evaluates
+    every row on an ordinary run and the Enrich button does the same on every
+    press, so one busy Overpass would rewrite verdicts that had been measured.
+
+    What is preserved is the **measured geometry half**, not the whole
+    verdict, and the verdict is then recombined with this run's *fresh* text
+    signal. That matters three ways, all of them wrong under a whole-verdict
+    rule:
+
+    * a stored `yes` (text claimed a view, terrain allowed it) survives a
+      refusal as `yes`, rather than decaying to the `likely` that
+      `combine()` produces from text alone;
+    * a text signal that legitimately changed -- the description was edited,
+      or the AI now reads "primera línea" as proximity -- is still honoured;
+    * the recorded reason stays the specific one the terrain gave
+      ("terrain disagrees (no_coastline_in_range)") instead of being replaced
+      by the generic "terrain not computable".
+
+    Only a geometry that actually decided something is reusable (`likely` or
+    `no`); a stored `unknown` geometry has nothing to lend. Reuse requires the
+    stored verdict to belong to these coordinates: a stored origin that
+    *disagrees* was measured somewhere else and is refused outright. A stored
+    verdict from before origins were recorded cannot be checked -- it is
+    reused, because erasing real verdicts on exactly the rows this rule
+    protects is the worse failure, and the unverified provenance is stamped
+    on the geometry (`origin_unverified`) rather than assumed away. That stamp
+    is sticky: it describes where the terrain was measured, so it rides with
+    the terrain through repeated outages and is cleared only by a successful
+    re-measurement.
+
+    The refusal is never silent: the rebuilt verdict carries what this run
+    would have said and why it was not trusted, the way a kept QoL part does.
+    """
+    reason = _geometry_refusal_reason(verdict)
+    if reason is None:
+        return None
+
+    stored_detail = environment.get("sea_view_detail")
+    if not isinstance(stored_detail, dict):
+        return None
+    stored_geometry = stored_detail.get("geometry")
+    if not isinstance(stored_geometry, dict):
+        # Nothing measured to reuse. A legacy row carrying only the mirrored
+        # `Land` boolean lands here, and recomputing it is right: that boolean
+        # is the weak keyword pass this module replaced.
+        return None
+    if stored_geometry.get("state") not in MEASURED_GEOMETRY_STATES:
+        return None
+
+    new_detail = verdict.get("sea_view_detail")
+    new_detail = new_detail if isinstance(new_detail, dict) else {}
+    agree = _origins_agree(stored_detail, new_detail)
+    if agree is False:
+        return None
+
+    text_detail = new_detail.get("text")
+    text_detail = text_detail if isinstance(text_detail, dict) else {}
+
+    reused_geometry = dict(stored_geometry)
+    reused_geometry["reused_measurement"] = True
+    # When the terrain is reused a second time -- two outages in a row -- the
+    # stored detail's `computed_at` is the *previous repair*, not the
+    # measurement. Keep the first one, or the age of the terrain creeps
+    # forward every time a source refuses and ends up claiming to be current.
+    reused_geometry["measured_at"] = stored_geometry.get(
+        "measured_at"
+    ) or stored_detail.get("computed_at")
+    # Unverified provenance travels *with the terrain*, and is sticky.
+    #
+    # It is a fact about where this measurement was taken, not about today's
+    # run, so it belongs on the geometry rather than beside it -- and deriving
+    # it afresh each time silently lost it on the second outage: repair #1
+    # stamps the verdict with today's `origin`, so repair #2 compares that
+    # synthetic origin against the same coordinates, finds them equal, and
+    # drops the flag while reusing the very same unverified terrain. The row
+    # then reads as better-provenanced than it is, which is #98's shape.
+    #
+    # Writing today's `origin` is still right: it is the coordinate this
+    # verdict describes, and it gives every later run real move-detection.
+    # The flag is what must survive, and only a successful re-measurement
+    # clears it -- a fresh `evaluate_geometry` result carries no flag at all.
+    # `dict(stored_geometry)` already carries the flag forward once it lives on
+    # the geometry; both `get`s below are deliberate anyway. The first states
+    # the intent, so a later rewrite that rebuilds this dict field by field
+    # cannot drop the stamp by accident. The second reads the flag's *previous*
+    # home: the first version of this repair stamped the top-level detail, and
+    # a row repaired by it would otherwise lose the label on its next outage --
+    # the same defect, one shape further back.
+    if (
+        agree is None
+        or stored_geometry.get("origin_unverified")
+        or stored_detail.get("origin_unverified")
+    ):
+        reused_geometry["origin_unverified"] = True
+
+    state, source, combined_reason = combine(text_detail, reused_geometry)
+    now = datetime.now(timezone.utc).isoformat()
+    repaired_detail: Dict[str, Any] = {
+        "source": source,
+        "reason": combined_reason,
+        "text": text_detail,
+        "geometry": reused_geometry,
+        "origin": new_detail.get("origin") or stored_detail.get("origin"),
+        "computed_at": now,
+        # What this run would have concluded had its refusal been trusted,
+        # and why it was not.
+        "last_attempt_state": normalize_state(verdict.get("sea_view")),
+        "last_attempt_reason": reason,
+        "last_attempt_at": now,
+    }
+    return {"sea_view": state, "sea_view_detail": repaired_detail}
+
+
 def read_verdict(prop) -> Dict[str, Any]:
     """The effective verdict for a property, for templates and the API."""
     environment = prop.environment if isinstance(prop.environment, dict) else {}
@@ -868,6 +1067,7 @@ def evaluate_property(
         )
 
     state, source, reason = combine(text_detail, geometry_detail)
+    origin = _origin_of(prop)
 
     if manual is not None:
         # An owner who looked at the listing outranks both models. The computed
@@ -884,6 +1084,7 @@ def evaluate_property(
                 "computed_source": source,
                 "text": text_detail,
                 "geometry": geometry_detail,
+                "origin": origin,
                 "computed_at": datetime.now(timezone.utc).isoformat(),
             },
         }
@@ -895,6 +1096,10 @@ def evaluate_property(
             "reason": reason,
             "text": text_detail,
             "geometry": geometry_detail,
+            # The coordinates this verdict describes, so a later refused run
+            # can tell whether the stored terrain is still about this place
+            # (`repaired_with_stored_geometry`).
+            "origin": origin,
             "computed_at": datetime.now(timezone.utc).isoformat(),
         },
     }
@@ -1001,6 +1206,22 @@ def apply_to_property(prop, verdict: Dict[str, Any], commit: bool = True) -> Non
                 # releases both the row lock and the transaction itself.
                 db.session.rollback()
             return
+
+        # A refused source must not erase a measurement an earlier run made
+        # (#98's rule, as `SeaDistanceService` applies it to the distance).
+        # This lives here, in the one writer, rather than at a call site:
+        # `utils/backfill_sea_view.py` and every future caller would otherwise
+        # reopen the same hole.
+        repaired = repaired_with_stored_geometry(environment, verdict)
+        if repaired is not None:
+            logger.info(
+                "Sea view for property %s: geometry unavailable (%s); reusing "
+                "the terrain measured earlier, verdict %s",
+                getattr(prop, "id", None),
+                repaired["sea_view_detail"].get("last_attempt_reason"),
+                repaired["sea_view"],
+            )
+            verdict = repaired
 
         environment.update(verdict)
         enrichment = dict(enrichment)

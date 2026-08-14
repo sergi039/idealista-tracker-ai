@@ -6,6 +6,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app import db
 from models import Property
+from services import sea_view_service
 from services.enrichment_service import EnrichmentService
 from services.property_location_service import PropertyLocationService
 from services.property_scoring_service import PropertyScoringService
@@ -23,9 +24,14 @@ class PropertyEnrichmentService:
     Mirrors the legacy "Enrich with Google APIs" flow:
     - ensure coordinates (Geocoding)
     - measure distance to the sea (OpenStreetMap, free)
-    - count nearby amenities (OpenStreetMap, free)
+    - the free pass: nearby amenities, quality of life, sea-view verdict
+      (OpenStreetMap / OpenTopoData / local reference files, all free)
     - compute travel targets (Places + Distance Matrix, with fallback)
     - recompute scoring (local)
+
+    `enrich_free_sources` is that free pass on its own: ingestion runs it
+    per new row (#299) without re-firing the paid Google calls it already
+    made.
     """
 
     def __init__(
@@ -37,6 +43,7 @@ class PropertyEnrichmentService:
         enrichment_service: Optional[EnrichmentService] = None,
         quality_of_life_service: Optional["QualityOfLifeService"] = None,
         pool_service: Optional["PoolService"] = None,
+        sea_view_calculator=None,
     ):
         self.location_service = location_service or PropertyLocationService()
         self.travel_service = travel_service or PropertyTravelService()
@@ -56,6 +63,96 @@ class PropertyEnrichmentService:
             enrichment_service=self.enrichment_service,
             travel_service=self.travel_service,
         )
+        # The sea-view half is module functions, not a class, but the
+        # injection point exists for the reason every other half has one: a
+        # test replaces the step that reaches Overpass and OpenTopoData
+        # through its own module, whose transport the amenity mocks above
+        # never cover. The default is the same evaluate+apply pair the
+        # backfill uses (services/sea_view_service.py).
+        self.sea_view_calculator = (
+            sea_view_calculator or sea_view_service.calculate_for_property
+        )
+
+    def enrich_free_sources(
+        self, prop: Property, *, commit: bool, use_ai: bool
+    ) -> None:
+        """The free pass: OSM amenities, quality-of-life, sea view (#299).
+
+        One home for the three enrichers that reach no billed API -- the
+        amenity counts (#152), the QoL block (#275) and the sea-view verdict
+        come from OpenStreetMap, OpenTopoData and local reference files, so
+        there is no billing argument for skipping them. Ingestion skipped
+        them anyway until #299, which is how every row ingested 13-14 Aug
+        arrived with no Extended Infrastructure card, no QoL block and no
+        sea-view verdict. No Google call is fired here at all.
+
+        `use_ai` is required, and it is the one part of this pass that is not
+        free of consequences. The sea-view *text* signal can ask the owner's
+        Claude subscription, through `tools/ai_bridge.py`, what a mention of
+        the sea means. That is a cold CLI run with a 600 s timeout (#201) --
+        seconds to minutes, per listing that says "vistas al mar", which in
+        Asturias and Galicia is most of them.
+
+        So the two callers differ deliberately:
+
+        * **ingestion passes False.** A scheduled overnight run over a batch
+          of alert emails would otherwise spawn one CLI per sea-mentioning
+          listing, unattended and unbounded, and the owner's rule is one
+          press, one subscription call. The keyword path is honest about it:
+          the verdict records `source: "keywords_only"`, and `likely` /
+          `unknown` stay correct states. `utils/backfill_sea_view.py` has
+          carried `--no-ai` for the same reason since it was written -- the
+          unattended path must not be bolder than the backfill.
+        * **the Enrich button passes True.** There is a press behind it.
+
+        Pacing stays in the transports (each client hands its gate to
+        `request_with_retries`), never in this loop. Each step fails
+        independently, the writers themselves record a refusal as a refusal,
+        and no failure here may fail the caller's run.
+
+        With `commit=True` (ingestion) each step owns its commit, and a step
+        that raised rolls back so the next one starts on a clean session.
+        With `commit=False` (the Enrich flow) everything rides the caller's
+        transaction, so a failed step must not roll back -- that would
+        discard the caller's own pending work.
+        """
+        try:
+            self.enrichment_service.enrich_osm_amenities(prop, commit=commit)
+        except Exception as e:
+            logger.warning(
+                "OSM amenity lookup failed for %s: %s",
+                getattr(prop, "id", None),
+                e,
+            )
+            if commit:
+                db.session.rollback()
+
+        try:
+            self.quality_of_life_service.enrich(prop, commit=commit)
+        except Exception as e:
+            logger.warning(
+                "Quality-of-life enrichment failed for %s: %s",
+                getattr(prop, "id", None),
+                e,
+            )
+            if commit:
+                db.session.rollback()
+
+        # Sea view last: with commit=True its writer takes the row under
+        # FOR UPDATE and requires a session with nothing pending, which the
+        # per-step commits above guarantee. A hand-set verdict survives
+        # either way -- `apply_to_property` refuses to overwrite
+        # `source == "manual"` (see services/sea_view_service.py).
+        try:
+            self.sea_view_calculator(prop, commit=commit, use_ai=use_ai)
+        except Exception as e:
+            logger.warning(
+                "Sea-view evaluation failed for %s: %s",
+                getattr(prop, "id", None),
+                e,
+            )
+            if commit:
+                db.session.rollback()
 
     def enrich_property(
         self,
@@ -74,29 +171,19 @@ class PropertyEnrichmentService:
         # and the amenity lookup below already treats it as one.
         if prop.location_lat is None or prop.location_lon is None:
             # Geocoding could not place this listing, so nothing *paid* below
-            # can run. Record that the amenity lookup was never asked rather
-            # than leaving the section absent, which reads as "nothing nearby"
-            # (#152). The QoL block runs too: its INE municipality context
+            # can run. The free pass still does: the amenity lookup records
+            # that it was never asked rather than leaving the section absent,
+            # which reads as "nothing nearby" (#152); the QoL INE context
             # needs no coordinates at all, and its coordinate parts record
             # `no_coordinates` instead of silently never existing (diff
-            # review, 2026-08-14). This path has no shared commit to ride,
-            # so it takes its own.
-            try:
-                self.enrichment_service.enrich_osm_amenities(prop, commit=True)
-            except Exception as e:
-                logger.warning(
-                    "Could not record the amenity gap for %s: %s",
-                    getattr(prop, "id", None),
-                    e,
-                )
-            try:
-                self.quality_of_life_service.enrich(prop, commit=True)
-            except Exception as e:
-                logger.warning(
-                    "Quality-of-life enrichment failed for %s: %s",
-                    getattr(prop, "id", None),
-                    e,
-                )
+            # review, 2026-08-14); the sea-view text signal is computed and
+            # its geometry honestly reads `unknown`. This path has no shared
+            # commit to ride, so each step takes its own.
+            #
+            # `use_ai=True` because this method is the Enrich button: the
+            # text signal runs before the coordinate check, so it is the one
+            # part of the pass a coordinate-less row still gets in full.
+            self.enrich_free_sources(prop, commit=True, use_ai=True)
             return False
 
         # Enrichment does not touch `search_profile_id` (owner decision,
@@ -115,35 +202,14 @@ class PropertyEnrichmentService:
                 e,
             )
 
-        # Nearby amenities, from OpenStreetMap. Free and keyless, which is why
-        # this pass has no billing argument for leaving it out - and until #152
-        # it was left out anyway: the lookup existed only on the legacy `Land`
-        # endpoints, so most listings showed no Extended Infrastructure card at
-        # all. A refusal is recorded as a refusal and never fails the run:
-        # Overpass is a supplementary feed that answers 504 whenever both of
-        # its two per-IP slots are busy, and no score reads its counts.
-        try:
-            self.enrichment_service.enrich_osm_amenities(prop, commit=False)
-        except Exception as e:
-            logger.warning(
-                "OSM amenity lookup failed for %s: %s",
-                getattr(prop, "id", None),
-                e,
-            )
-
-        # Quality-of-life block (Phase 2, agreed proposal D15/D16/D18/D20):
-        # INE context, supermarket reach, CNH hospitals. Free — local
-        # reference files plus the shared Overpass client — advisory, and
-        # score-neutral; each part records its own status and a failure here
-        # never fails the run.
-        try:
-            self.quality_of_life_service.enrich(prop, commit=False)
-        except Exception as e:
-            logger.warning(
-                "Quality-of-life enrichment failed for %s: %s",
-                getattr(prop, "id", None),
-                e,
-            )
+        # The free pass: amenity counts (#152), the QoL block (#275) and the
+        # sea-view verdict (#299). All advisory and score-neutral; a refusal
+        # is recorded as a refusal and never fails the run. It rides the
+        # shared commit at the end, and a hand-set sea-view verdict is left
+        # alone by the sea-view writer itself. `use_ai=True`: this method is
+        # what the Enrich button calls, so a subscription call here is one
+        # owner press, not an unattended loop.
+        self.enrich_free_sources(prop, commit=False, use_ai=True)
 
         ok = self.travel_service.calculate_for_property(prop, commit=False)
         travel_state = travel_api_state(prop)

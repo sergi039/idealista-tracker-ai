@@ -845,6 +845,49 @@ class PropertyIMAPService:
                             )
                             db.session.rollback()
 
+                    # The free pass: OSM amenities (#152), quality of life
+                    # (#275) and the sea-view verdict. Ingestion ran the paid
+                    # enrichers and skipped these, so every new row arrived
+                    # with no Extended Infrastructure card, no QoL block and
+                    # no sea-view verdict (#299). It runs after the travel
+                    # step because that is what geocodes the row, and after
+                    # the sea-distance step because that warms the per-cell
+                    # coastline cache the sea-view geometry reads. Each step
+                    # is paced by its transport's own gate, commits on its
+                    # own, and records a refusal as a refusal; nothing in it
+                    # may fail ingestion or hold the UID cursor back.
+                    #
+                    # `use_ai=False` is the load-bearing argument here. The
+                    # sea-view text signal can ask the owner's Claude
+                    # subscription what a mention of the sea means, and that
+                    # is a cold CLI run with a 600 s timeout (#201). This
+                    # loop runs unattended, twice a night, over however many
+                    # alert emails arrived; "vistas al mar" is ordinary
+                    # listing prose in Asturias and Galicia, so leaving the
+                    # default on would mean minutes of subscription work per
+                    # batch that nobody pressed a button for.
+                    # `utils/backfill_sea_view.py` has had `--no-ai` since it
+                    # was written, and an unattended ingest must not be
+                    # bolder than a backfill. The keyword path records that
+                    # it took it (`source: "keywords_only"`); the Enrich
+                    # button, where there is a press, still uses the AI.
+                    if getattr(Config, "FREE_ENRICHMENT_ENABLED", True):
+                        try:
+                            from services.property_enrichment_service import (
+                                PropertyEnrichmentService,
+                            )
+
+                            PropertyEnrichmentService().enrich_free_sources(
+                                prop, commit=True, use_ai=False
+                            )
+                        except Exception as free_error:
+                            logger.warning(
+                                "Free enrichment failed for %s: %s",
+                                prop.id,
+                                free_error,
+                            )
+                            db.session.rollback()
+
                     if getattr(Config, "AUTO_PROPERTY_SCORING", False):
                         try:
                             from services.property_scoring_service import (

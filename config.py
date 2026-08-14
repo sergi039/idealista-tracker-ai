@@ -147,6 +147,19 @@ class Config:
     SEA_DISTANCE_ENABLED = (
         os.environ.get("SEA_DISTANCE_ENABLED", "true").lower() == "true"
     )
+    # The free pass at ingestion (issue #299): OSM amenities (#152), the
+    # quality-of-life block (#275) and the sea-view verdict. What "free"
+    # means here, precisely: Overpass (OpenStreetMap) for amenities,
+    # supermarkets and the coastline, OpenTopoData for elevation, and the
+    # local INE/CNH reference files -- no Google API, and no AI bridge,
+    # because ingestion calls the sea-view step with `use_ai=False` (see
+    # PropertyEnrichmentService.enrich_free_sources: the bridge is a cold CLI
+    # on the owner's subscription, #201, and this loop is unattended).
+    # So the default is on; like SEA_DISTANCE_ENABLED the flag exists so
+    # offline runs never reach for the network, not to save money.
+    FREE_ENRICHMENT_ENABLED = (
+        os.environ.get("FREE_ENRICHMENT_ENABLED", "true").lower() == "true"
+    )
 
     # How long a drive still counts as "at the beach" for the beaches block on
     # the property page. A beach further than this is not shown at all, so the
