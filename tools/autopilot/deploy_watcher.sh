@@ -297,11 +297,38 @@ check_health() {
 # authoritative about liveness; the marker files are authoritative about
 # whether killing a job loses work. Both are needed.
 #
-# Output: one "<pid>\t<command>" line per matching process.
+# One job is one line, even when it arrives as a process tree. Measured on the
+# mini 2026-08-14, a backfill started as `sh -c 'python -m utils.X ... >> log'`
+# shows up twice - the shell and the python it exec'd never replaced:
+#
+#   34107  sh -c python -m utils.backfill_pool --snapshot data/x.json >> ...
+#   34113  python -m utils.backfill_pool --snapshot data/x.json
+#
+# Reporting that as "the 2 job(s) above will be killed" is wrong in the way
+# this whole survey exists to prevent, and it is worse than cosmetic: the
+# marker records the *python* process's PID (`os.getpid()`), so the wrapper
+# finds no marker and reports `unknown` while its own child reports
+# `resumable`. One job, two contradictory verdicts, and with deferring on the
+# wrapper alone is enough to hold a deploy for a job that was safe to kill.
+#
+# So keep the leaves: drop any match that is the parent of another match. A
+# job with no wrapper has no matched child and survives untouched. (A job that
+# deliberately spawned a second `utils` module would lose its parent line;
+# nothing in this repository does that, and the leaf is the process doing the
+# work either way.)
+#
+# Output: one "<pid>\t<command>" line per matching job.
 inflight_processes() {
     docker top "$APP_CONTAINER" 2>/dev/null \
-        | awk 'NR > 1 { pid = $2; $1=$2=$3=$4=$5=$6=$7=""; sub(/^ +/, ""); print pid "\t" $0 }' \
-        | grep -E "$INFLIGHT_PATTERN" || true
+        | awk 'NR > 1 { pid = $2; ppid = $3; $1=$2=$3=$4=$5=$6=$7=""; sub(/^ +/, ""); print pid "\t" ppid "\t" $0 }' \
+        | grep -E "$INFLIGHT_PATTERN" \
+        | awk -F'\t' '
+            { pid[NR] = $1; ppid[NR] = $2; cmd[NR] = $3; n = NR }
+            END {
+                for (i = 1; i <= n; i++) is_parent[ppid[i]] = 1
+                for (i = 1; i <= n; i++)
+                    if (!(pid[i] in is_parent)) print pid[i] "\t" cmd[i]
+            }' || true
 }
 
 # The marker a job wrote for itself, if it wrote one. Prints
