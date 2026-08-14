@@ -9,7 +9,9 @@ TRANSLATIONS = {
         # Navigation
         "app_title": "Idealista Tracker AI",
         "properties": "Properties",
+        "map": "Map",
         "scoring_criteria": "Scoring Criteria",
+        "settings": "Settings",
         "manual_sync": "Manual Sync",
         # Saved searches ("subscriptions" in the owner's words)
         "subscription": "Subscription",
@@ -238,7 +240,9 @@ TRANSLATIONS = {
         # Navigation
         "app_title": "Idealista Tracker AI",
         "properties": "Propiedades",
+        "map": "Mapa",
         "scoring_criteria": "Criterios de Puntuación",
+        "settings": "Configuración",
         "manual_sync": "Sincronización Manual",
         "subscription": "Suscripción",
         "subscriptions": "Suscripciones",
