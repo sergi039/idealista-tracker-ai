@@ -529,7 +529,9 @@
                             <option value="title" {{ 'selected' if current_filters.sort_by == 'title' }}>{{ t('title')|title }}</option>
                             <option value="created_at" {{ 'selected' if current_filters.sort_by == 'created_at' }}>{{ t('date_added') }}</option>
                             {# No beach travel time exists on `Property` (#98). #}
-                            <option value="travel_time_nearest_beach" disabled>{{ t('beach_distance') }} &mdash; unavailable (#98)</option>
+                            {# Live again per issue #271: rows hold measured
+                               beach times now, and unmeasured ones sort last. #}
+                            <option value="travel_time_nearest_beach" {{ 'selected' if current_filters.sort_by == 'travel_time_nearest_beach' }}>{{ t('beach_distance') }}</option>
                         </select>
                         <select class="form-select properties-filter-order" name="order" aria-label="Sort direction">
                             <option value="desc" {{ 'selected' if current_filters.order == 'desc' }}>↓</option>
