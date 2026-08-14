@@ -154,6 +154,23 @@ set_inflight() {
     fi
 }
 
+set_inflight_wrapped() {
+    # The shape `docker exec ... sh -c 'python -m utils.X ... >> log'` really
+    # produces, measured on the mini 2026-08-14: the shell and the python it
+    # exec'd, both matching, the marker written by the python one.
+    # set_inflight_wrapped <inner-command> [marker-json]
+    local command="$1" marker="${2:-}"
+    rm -f "${INFLIGHT_DIR}"/*.json 2>/dev/null || true
+    {
+        printf 'UID PID PPID C STIME TTY TIME CMD\n'
+        printf 'appuser 4711 4700 0 12:00 ? 00:00:01 sh -c %s >> /app/data/run.log 2>&1\n' "$command"
+        printf 'appuser 4713 4711 0 12:00 ? 00:00:01 %s\n' "$command"
+    } >"$TOP_FILE"
+    if [ -n "$marker" ]; then
+        printf '%s\n' "$marker" >"${INFLIGHT_DIR}/job.4713.json"
+    fi
+}
+
 run_watcher() {
     printf '%s\n' "0000000000000000000000000000000000000000" >"$MARKER"
     : >"${WORK}/docker.log"
@@ -272,6 +289,32 @@ built && fail "scenario 7 believed a stale marker left by a different job"
 grep -q "no marker, so resumability is unknown" "${WORK}/watcher.log" \
     || fail "scenario 7 did not discard the mismatched marker"
 printf 'OK: a marker whose module does not match the process is not believed\n'
+
+# --- scenario 8: a shell-wrapped job is ONE job ----------------------------
+# `sh -c 'python -m utils.X ... >> log'` leaves the shell and its python both
+# running and both matching. Counting two is wrong in the way this survey
+# exists to prevent, and the marker sits on the python PID - so the wrapper
+# would report `unknown` while its own child reports `resumable`, and with
+# deferring on that alone would hold a deploy for a job that was safe to kill.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_inflight_wrapped "python -m utils.backfill_pool --snapshot data/p.json" \
+    '{"module":"backfill_pool","pid":4713,"resumable":true,"ledger":"data/p.json.ledger.jsonl"}'
+DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+# "in flight (" is the per-job prefix; the group header says "is in flight
+# inside <container>:" and must not be counted as a job.
+reported="$(grep -c "in flight (" "${WORK}/watcher.log" || true)"
+if [ "$reported" != "1" ]; then
+    fail "scenario 8 reported ${reported} jobs in flight; one process tree is one job"
+fi
+grep -q "in flight (resumable): python -m utils.backfill_pool" "${WORK}/watcher.log" \
+    || fail "scenario 8 kept the sh -c wrapper instead of the python doing the work"
+if grep -q "in flight (no marker" "${WORK}/watcher.log"; then
+    fail "scenario 8 still reports the wrapper, whose PID carries no marker"
+fi
+built || fail "scenario 8 deferred for a wrapper whose child is resumable"
+printf 'OK: a shell-wrapped job counts once, and its marker is still found\n'
 
 # --- scenario 6: healthz green, page broken ---------------------------------
 # The 15-minute incident: the route turns a TemplateSyntaxError into a redirect
