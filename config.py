@@ -147,6 +147,14 @@ class Config:
     SEA_DISTANCE_ENABLED = (
         os.environ.get("SEA_DISTANCE_ENABLED", "true").lower() == "true"
     )
+    # The free pass at ingestion (issue #299): OSM amenities (#152), the
+    # quality-of-life block (#275) and the sea-view verdict. All of it is
+    # keyless -- OpenStreetMap, OpenTopoData and local reference files -- so
+    # the default is on; like SEA_DISTANCE_ENABLED the flag exists so offline
+    # runs never reach for the network, not to save money.
+    FREE_ENRICHMENT_ENABLED = (
+        os.environ.get("FREE_ENRICHMENT_ENABLED", "true").lower() == "true"
+    )
 
     # How long a drive still counts as "at the beach" for the beaches block on
     # the property page. A beach further than this is not shown at all, so the

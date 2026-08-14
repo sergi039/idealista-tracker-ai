@@ -789,6 +789,34 @@ class PropertyIMAPService:
                             )
                             db.session.rollback()
 
+                    # The free pass: OSM amenities (#152), quality of life
+                    # (#275) and the sea-view verdict. Ingestion ran the paid
+                    # enrichers and skipped these, so every new row arrived
+                    # with no Extended Infrastructure card, no QoL block and
+                    # no sea-view verdict (#299). It runs after the travel
+                    # step because that is what geocodes the row, and after
+                    # the sea-distance step because that warms the per-cell
+                    # coastline cache the sea-view geometry reads. Each step
+                    # is paced by its transport's own gate, commits on its
+                    # own, and records a refusal as a refusal; nothing in it
+                    # may fail ingestion or hold the UID cursor back.
+                    if getattr(Config, "FREE_ENRICHMENT_ENABLED", True):
+                        try:
+                            from services.property_enrichment_service import (
+                                PropertyEnrichmentService,
+                            )
+
+                            PropertyEnrichmentService().enrich_free_sources(
+                                prop, commit=True
+                            )
+                        except Exception as free_error:
+                            logger.warning(
+                                "Free enrichment failed for %s: %s",
+                                prop.id,
+                                free_error,
+                            )
+                            db.session.rollback()
+
                     if getattr(Config, "AUTO_PROPERTY_SCORING", False):
                         try:
                             from services.property_scoring_service import (
