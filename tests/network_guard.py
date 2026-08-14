@@ -74,6 +74,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # AF_NETLINK, macOS's AF_SYSTEM -- is local plumbing by construction.
 ROUTABLE_FAMILIES = (socket.AF_INET, socket.AF_INET6)
 
+# How many frames of this repository to name in a refusal. Three reaches from
+# the transport helper, through the service that called it, to the test.
+CALLER_FRAMES = 3
+
 
 class NetworkAccessDuringTest(RuntimeError):
     """Raised in place of a connect to anything that is not this machine.
@@ -125,13 +129,18 @@ def _is_local(host: object) -> bool:
 
 
 def _caller() -> str:
-    """The innermost line of *this* repository that asked for the connect.
+    """The lines of *this* repository that led to the connect, innermost first.
 
     Reporting the frame that raised would name urllib3, which is never the
-    thing to fix. Frames inside .venv/site-packages and inside this module are
-    skipped, so the message points at `utils/geocoding.py:29` or at the test
-    itself.
+    thing to fix, so frames inside .venv/site-packages and inside this module
+    are skipped. Reporting only the innermost repository frame is not enough
+    either: nearly every request in this codebase goes through
+    `request_with_retries`, so one frame names utils/http.py for every leak
+    there has ever been. The frame above it is the one that identifies the
+    call -- `utils/geocoding.py:84` is the difference between "something made a
+    request" and "the Nominatim fallback did".
     """
+    chain: list[str] = []
     for frame in reversed(traceback.extract_stack()):
         path = Path(frame.filename)
         if path == Path(__file__):
@@ -142,8 +151,10 @@ def _caller() -> str:
             continue
         if relative.parts and relative.parts[0] in {".venv", "site-packages"}:
             continue
-        return f"{relative}:{frame.lineno}"
-    return "<outside this repository>"
+        chain.append(f"{relative}:{frame.lineno}")
+        if len(chain) == CALLER_FRAMES:
+            break
+    return " <- ".join(chain) if chain else "<outside this repository>"
 
 
 def _describe(host: object, port: object) -> str:

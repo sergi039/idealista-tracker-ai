@@ -54,6 +54,28 @@ class TestTheInternetIsRefused:
             f"the connect, not a frame inside urllib3: {attempts[0].caller}"
         )
 
+    def test_the_refusal_names_a_chain_of_repository_frames(self):
+        """One frame is not enough. Nearly every request in this codebase goes
+        through `request_with_retries`, so the innermost repository frame reads
+        `utils/http.py:159` for every leak there has ever been -- measured on
+        all nine of the ones PR #306 had. The frame above it is what says
+        *which* call it was."""
+
+        def transport(address):  # stands in for utils/http.py
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.connect(address)
+
+        with network_guard.capture_attempts() as attempts:
+            with pytest.raises(NetworkAccessDuringTest):
+                transport((PUBLIC_V4, 443))
+
+        caller = attempts[0].caller
+        assert " <- " in caller, (
+            f"only one frame was reported, so a leak through a shared "
+            f"transport helper would be unattributable: {caller}"
+        )
+        assert caller.count(" <- ") < network_guard.CALLER_FRAMES
+
     def test_an_ipv6_connect_is_refused_too(self):
         with network_guard.capture_attempts():
             with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as sock:
