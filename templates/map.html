@@ -30,6 +30,20 @@
             </div>
         {% endif %}
 
+        {# The caller asked for one listing and the map does not hold it. The
+           script below falls back to fitting every marker, which is
+           indistinguishable from a map that just did not zoom -- so the page
+           says what happened rather than letting the absence pass for normal
+           (issue #287). #}
+        {% if focus_notice %}
+            <div class="alert alert-warning py-2 px-3 small" id="map-focus-notice" data-reason="{{ focus_notice.reason }}">
+                <i class="fas fa-circle-exclamation me-1"></i>{{ focus_notice.text }}
+                {% if focus_notice.href %}
+                    <a href="{{ focus_notice.href }}" class="alert-link ms-1">{{ focus_notice.link_text }}</a>
+                {% endif %}
+            </div>
+        {% endif %}
+
         <div class="card">
             <div class="card-body p-0">
                 <div id="map" style="height: calc(100vh - 250px); min-height: 500px; border-radius: 0.375rem;"></div>

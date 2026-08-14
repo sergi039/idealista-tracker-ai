@@ -26,6 +26,7 @@ from app import db
 from services import sea_view_service
 from services.profile_selection import (
     MAX_SELECTED_PROFILE_IDS,
+    PROFILE_UNASSIGNED_SENTINEL,
     ProfileSelection,
     ProfileSelectionState,
     apply_profile_filter,
@@ -60,6 +61,11 @@ INVESTMENT_RATING_ORDER = ("BELOW", "MODERATE", "GOOD", "EXCELLENT")
 # What the Type / Subtype filters send for "classified as nothing at all".
 # A query-string sentinel, never a stored value.
 UNCLASSIFIED_FILTER = "__none__"
+
+# Listing statuses the "Hide removed" default leaves out of every listing
+# surface. Named because the map has to tell a reader that this, and not a
+# filter they set, is why the listing they asked to focus is absent (#287).
+DELISTED_LISTING_STATUSES = ("removed", "sold")
 
 
 SCORING_FIELD_PREFIX = "scoring"
@@ -317,8 +323,18 @@ def _filter_by_sea_view(query, model, raw_value):
     return query.filter(_sea_view_state_expr(model).in_(wanted))
 
 
-def _map_auto_profile_id(default_profile, profiles):
+def _map_auto_profile_id(default_profile, profiles, focus_property=None):
     """The map's own fallback when the request names no profile.
+
+    A `focus=<id>` settles it before any of the fallbacks below are consulted:
+    the caller asked for one listing, and only the subscription holding that
+    listing can answer. The fallbacks are about which subscription is most
+    useful to open cold, which is routinely not that one -- issue #287, where
+    the map icon on a property page linked here with `focus` and no
+    `profile_id`, the biggest subscription won, and the listing was quietly
+    left out of the marker set while the page fitted bounds over everything
+    else. An inactive subscription is a valid answer here: its listings are
+    real, and a link that names one asked for it explicitly.
 
     Deliberately different from `/properties`, which takes the richest active
     profile: a map is useless without coordinates, so the profile with the
@@ -330,6 +346,9 @@ def _map_auto_profile_id(default_profile, profiles):
     link_values`) or the user lands on a different subscription than the map
     just showed -- and the focused listing may not even be loaded there.
     """
+    if focus_property is not None and focus_property.search_profile_id is not None:
+        return int(focus_property.search_profile_id)
+
     mappable = (
         db.session.query(
             Property.search_profile_id,
@@ -339,7 +358,7 @@ def _map_auto_profile_id(default_profile, profiles):
         .join(SearchProfile, SearchProfile.id == Property.search_profile_id)
         .filter(SearchProfile.is_active.is_(True))
         .filter(Property.location_lat.isnot(None), Property.location_lon.isnot(None))
-        .filter(Property.listing_status.notin_(["removed", "sold"]))
+        .filter(Property.listing_status.notin_(DELISTED_LISTING_STATUSES))
         .group_by(Property.search_profile_id)
         .order_by(func.count(Property.id).desc(), func.max(Property.created_at).desc())
         .first()
@@ -365,6 +384,140 @@ def _map_auto_profile_id(default_profile, profiles):
     if profiles:
         return profiles[0].id
     return None
+
+
+# Widest id PostgreSQL accepts in the `properties.id` integer column. A larger
+# number in `?focus=` is not a listing anybody can have linked to, and handing
+# it to the driver raises rather than returning nothing.
+MAX_FOCUS_ID = 2_147_483_647
+
+
+def _parse_focus_id(raw):
+    """`?focus=` as a listing id, or None when the request names none.
+
+    Anything that is not a plain positive in-range integer reads as no focus
+    at all -- the same shape as the rest of the query string, where an
+    unparseable value falls back to the page default instead of failing.
+    """
+    token = str(raw if raw is not None else "").strip()
+    if not token.isdigit():
+        return None
+    value = int(token)
+    if not 0 < value <= MAX_FOCUS_ID:
+        return None
+    return value
+
+
+def _map_focus_link(profile_id, keep_filters=True):
+    """A `/map` URL for the same focused listing under a different subscription.
+
+    Rebuilt from `request.args` so the reader keeps everything else they had
+    -- including `focus` itself, which is already in there. Only `profile_id`
+    is replaced; with `keep_filters=False` the narrowing filters go too, which
+    is the only honest offer when one of *them* is what hid the listing.
+    """
+    dropped = {"profile_id"}
+    if not keep_filters:
+        dropped |= {
+            "category",
+            "subtype",
+            "municipality",
+            "search",
+            "inv_metr",
+            "sea_view",
+            "favorites",
+        }
+    args = {
+        key: (values[0] if len(values) == 1 else values)
+        for key, values in request.args.lists()
+        # `url_for` reads `endpoint` and every `_`-prefixed name as its own
+        # argument, so a query string carrying one would raise here instead of
+        # travelling. They are not filters; dropping them costs nothing.
+        if key not in dropped and key != "endpoint" and not key.startswith("_")
+    }
+    return url_for("main.map_view", profile_id=profile_id, **args)
+
+
+def _map_focus_notice(focus_id, focus_property, props, query_without_profile):
+    """Why the listing the caller asked to focus is not among the markers.
+
+    The page cannot stay silent about this. `templates/map.html` falls back to
+    fitting the bounds of every marker when the focused id is missing, which
+    looks exactly like a map that merely declined to zoom -- so in issue #287
+    the owner found the defect instead of us, and the two red dots they were
+    looking at belonged to a subscription the listing was never in.
+
+    The reasons are checked in the order the query applies them, so each one
+    is the *first* thing that excluded the listing rather than any true
+    statement about it. Returns None when there is nothing to explain: no
+    `focus` in the request, or the listing is on the map.
+    """
+    if focus_id is None or any(prop.id == focus_id for prop in props):
+        return None
+
+    label = f"Listing #{focus_id}"
+    if focus_property is None:
+        return {
+            "reason": "unknown",
+            "text": f"{label} was not found, so the map has nothing to focus on.",
+        }
+    if focus_property.location_lat is None or focus_property.location_lon is None:
+        return {
+            "reason": "no_coordinates",
+            "text": (
+                f"{label} has no coordinates yet, so it cannot be placed on the map."
+            ),
+        }
+    if focus_property.listing_status in DELISTED_LISTING_STATUSES:
+        return {
+            "reason": "delisted",
+            "text": (
+                f"{label} is marked {focus_property.listing_status}, "
+                "and the map leaves those out."
+            ),
+        }
+
+    # Every filter but the subscription one lets it through, so the
+    # subscription is the whole reason -- and the offer can keep the reader's
+    # filters, which are now proven not to exclude this listing.
+    if query_without_profile.filter(Property.id == focus_id).first() is not None:
+        profile_id = focus_property.search_profile_id
+        profile = (
+            db.session.get(SearchProfile, profile_id)
+            if profile_id is not None
+            else None
+        )
+        if profile_id is None:
+            return {
+                "reason": "other_subscription",
+                "text": f"{label} has no subscription, and this map is not showing those.",
+                "href": _map_focus_link(PROFILE_UNASSIGNED_SENTINEL),
+                "link_text": "Show it anyway",
+            }
+        name = (profile.name if profile else None) or f"subscription #{profile_id}"
+        return {
+            "reason": "other_subscription",
+            "text": (
+                f'{label} is in the "{name}" subscription, '
+                "which this map is not showing."
+            ),
+            "href": _map_focus_link(profile_id),
+            "link_text": "Show it there",
+        }
+
+    # Coordinates, status and subscription are all fine, so one of the
+    # narrowing filters is hiding it. Clearing them is guaranteed to work.
+    return {
+        "reason": "filtered",
+        "text": f"{label} is hidden by the filters on this map.",
+        "href": _map_focus_link(
+            focus_property.search_profile_id
+            if focus_property.search_profile_id is not None
+            else PROFILE_UNASSIGNED_SENTINEL,
+            keep_filters=False,
+        ),
+        "link_text": "Clear the filters and show it",
+    }
 
 
 def _profile_dropdown_options(profiles, resolved):
@@ -769,7 +922,9 @@ def properties():
             query = query.filter(Property.is_favorite.is_(True))
 
         if hide_removed_filter:
-            query = query.filter(Property.listing_status.notin_(["removed", "sold"]))
+            query = query.filter(
+                Property.listing_status.notin_(DELISTED_LISTING_STATUSES)
+            )
 
         # Listings with no subscription at all (issue #111). They are invisible
         # to every profile selection including `all`, so the page has to say
@@ -2175,7 +2330,9 @@ def municipalities():
 
         query = Property.query
         if not include_archived:
-            query = query.filter(Property.listing_status.notin_(["removed", "sold"]))
+            query = query.filter(
+                Property.listing_status.notin_(DELISTED_LISTING_STATUSES)
+            )
         if favorites_only:
             query = query.filter(Property.is_favorite.is_(True))
         properties = query.all()
@@ -2216,28 +2373,32 @@ def map_view():
         default_profile = SearchProfileService.get_default_profile(create=True)
         profiles = SearchProfileService.list_profiles(active_only=True)
 
+        # A `focus=<id>` is read before the subscription is resolved: it is
+        # what the auto fallback answers to (#287).
+        focus_id = _parse_focus_id(request.args.get("focus"))
+        focus_property = (
+            db.session.get(Property, focus_id) if focus_id is not None else None
+        )
+
         # Same `profile_id` contract as /properties (#104): auto | all |
         # selected(ids). Only the auto fallback differs -- the map prefers the
-        # profile with the most mappable rows.
+        # subscription holding the focused listing, then the one with the most
+        # mappable rows.
         selection = parse_profile_selection(request.args)
         profile_selection = resolve_profile_selection(
             selection,
             [profile.id for profile in profiles],
             auto_profile_id=(
-                _map_auto_profile_id(default_profile, profiles)
+                _map_auto_profile_id(default_profile, profiles, focus_property)
                 if selection.is_auto
                 else None
             ),
         )
         selected_profile_id = profile_selection.single_id
 
-        query = apply_profile_filter(
-            Property.query.filter(
-                Property.location_lat.isnot(None),
-                Property.location_lon.isnot(None),
-            ),
-            Property.search_profile_id,
-            profile_selection,
+        query = Property.query.filter(
+            Property.location_lat.isnot(None),
+            Property.location_lon.isnot(None),
         )
 
         category_filter = request.args.get("category", "")
@@ -2281,8 +2442,22 @@ def map_view():
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
 
-        query = query.filter(Property.listing_status.notin_(["removed", "sold"]))
+        query = query.filter(Property.listing_status.notin_(DELISTED_LISTING_STATUSES))
+
+        # The subscription filter goes on last so the query without it stays
+        # in hand. That is what separates a focused listing that is merely in
+        # another subscription -- the one case the page can offer a way out of
+        # -- from one no filter here would have let through (#287). Identical
+        # SQL either way: SQLAlchemy ANDs the clauses whatever their order.
+        query_without_profile = query
+        query = apply_profile_filter(
+            query, Property.search_profile_id, profile_selection
+        )
         props = query.all()
+
+        focus_notice = _map_focus_notice(
+            focus_id, focus_property, props, query_without_profile
+        )
 
         # Profile-driven travel targets for popup display.
         travel_display_targets = []
@@ -2377,6 +2552,7 @@ def map_view():
             profile_selection=profile_selection,
             list_view_profile_id=list(profile_selection.link_values),
             travel_display_targets=travel_display_targets,
+            focus_notice=focus_notice,
         )
 
     except Exception:
@@ -2390,6 +2566,7 @@ def map_view():
             profile_selection=empty_profile_selection(),
             list_view_profile_id=None,
             travel_display_targets=[],
+            focus_notice=None,
         )
 
 
@@ -3363,7 +3540,9 @@ def export_properties_csv():
             query = query.filter(Property.is_favorite.is_(True))
 
         if hide_removed_filter:
-            query = query.filter(Property.listing_status.notin_(["removed", "sold"]))
+            query = query.filter(
+                Property.listing_status.notin_(DELISTED_LISTING_STATUSES)
+            )
 
         # Same ordering as /properties, tiebreaker included: the export link
         # forwards whatever the page is sorted by, so an allow-list that does
