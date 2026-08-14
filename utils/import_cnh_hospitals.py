@@ -224,9 +224,25 @@ def _teaching_from_ad(value: Any) -> Optional[bool]:
     return None
 
 
+# The download cap bounds the *compressed* file; a crafted workbook could
+# still expand far past it. The declared decompressed sizes are checked
+# before openpyxl touches the archive (diff review, 2026-08-14).
+MAX_DECOMPRESSED_BYTES = 100 * 1024 * 1024
+
+
 def parse_workbook(xlsx_path: str) -> List[Dict[str, Any]]:
     """Parse the CNH workbook into hospital entries for the target provinces."""
     import openpyxl  # heavy and only needed for the parse phase
+
+    import zipfile
+
+    with zipfile.ZipFile(xlsx_path) as archive:
+        declared = sum(info.file_size for info in archive.infolist())
+    if declared > MAX_DECOMPRESSED_BYTES:
+        raise ValueError(
+            f"Workbook declares {declared} decompressed bytes "
+            f"(cap {MAX_DECOMPRESSED_BYTES}) — refusing to parse"
+        )
 
     wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
     for sheet in (DIRECTORIO_SHEET, ESTRUCTURA_SHEET):

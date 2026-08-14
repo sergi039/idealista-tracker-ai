@@ -217,6 +217,69 @@ class TestEnrichOrchestration:
         assert payload["municipality"]["status"] == "ok"
         assert payload["hospitals"]["status"] == "ok"
 
+    def test_a_refusal_never_overwrites_a_measured_part(self, app, reference_files):
+        """Sea-distance precedent, applied per part (diff review 2026-08-14):
+        the measured supermarkets stay through a later Overpass refusal, with
+        the failed attempt stamped beside them."""
+        prop = self._property()
+        items = [
+            {
+                "name": "Alimerka",
+                "shop": "supermarket",
+                "lat": 43.5,
+                "lon": -6.7,
+                "distance_km": 1.0,
+            }
+        ]
+        _service(OsmSupermarketReading(items=items)).enrich(prop, commit=False)
+        refusing = _service(
+            OsmSupermarketReading(
+                failure=GoogleApiFailure(reason="overpass_query_error")
+            )
+        )
+        payload = refusing.enrich(prop, commit=False)
+
+        shops = payload["supermarkets"]
+        assert shops["status"] == "ok", "the measured answer must survive"
+        assert shops["items"] == items
+        assert shops["last_attempt_status"] == "unavailable"
+        assert "last_attempt_at" in shops
+
+    def test_a_reference_collision_reads_unavailable_not_a_coin_flip(
+        self, app, tmp_path, monkeypatch
+    ):
+        """Two in-scope names normalizing to one key must raise through
+        build_index and surface as `unavailable`, never a silent wrong join."""
+        colliding = json.loads(json.dumps(INE_FIXTURE))
+        colliding["municipalities"]["27901"] = dict(
+            colliding["municipalities"]["33041"], province="27"
+        )
+        path = tmp_path / "ine_colliding.json"
+        path.write_text(json.dumps(colliding), encoding="utf-8")
+        monkeypatch.setattr(qol_module, "INE_DATA_PATH", str(path))
+        monkeypatch.setattr(qol_module, "CNH_DATA_PATH", str(tmp_path / "absent"))
+
+        prop = self._property()
+        payload = _service().enrich(prop, commit=False)
+        assert payload["municipality"]["status"] == "unavailable"
+
+    def test_coordinate_less_property_still_gets_the_ine_context(
+        self, app, reference_files
+    ):
+        """The INE part needs no coordinates; the coordinate parts say
+        `no_coordinates` instead of silently never existing."""
+        prop = Property(
+            source_email_id="qol-no-coords",
+            title="QolNoCoords",
+            municipality="Navia",
+        )
+        db.session.add(prop)
+        db.session.commit()
+        payload = _service().enrich(prop, commit=False)
+        assert payload["municipality"]["status"] == "ok"
+        assert payload["supermarkets"]["status"] == "no_coordinates"
+        assert payload["hospitals"]["status"] == "no_coordinates"
+
     def test_block_is_written_and_score_neutral(self, app, reference_files):
         prop = self._property()
         before = (prop.score_total, prop.score_investment, prop.score_lifestyle)

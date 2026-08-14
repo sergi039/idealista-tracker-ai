@@ -1210,6 +1210,13 @@
                         <div class="small text-body-secondary mb-1">{{ t('qol_municipality_not_matched') }}</div>
                     {% elif qol_muni.get('status') == 'no_reference_data' %}
                         <div class="small text-body-secondary mb-1">{{ t('qol_no_reference_data') }}</div>
+                    {% elif qol_muni.get('status') == 'no_municipality' %}
+                        <div class="small text-body-secondary mb-1">{{ t('qol_no_municipality') }}</div>
+                    {% else %}
+                        {# `unavailable` (a part that raised), or a status this
+                           template predates: a bare header must never read as
+                           an empty landscape (diff review, 2026-08-14). #}
+                        <div class="mb-1"><span class="badge bg-warning text-dark">{{ t('qol_not_measured') }}</span></div>
                     {% endif %}
 
                     <hr class="my-2">
@@ -1244,7 +1251,9 @@
                         {% endfor %}
                     {% elif qol_shops.get('status') == 'osm_empty' %}
                         <div class="small text-body-secondary mb-1">{{ t('qol_osm_empty') }}</div>
-                    {% elif qol_shops.get('status') == 'unavailable' %}
+                    {% elif qol_shops.get('status') == 'no_coordinates' %}
+                        <div class="small text-body-secondary mb-1">{{ t('qol_no_coordinates') }}</div>
+                    {% else %}
                         <div class="mb-1"><span class="badge bg-warning text-dark">{{ t('qol_not_measured') }}</span></div>
                     {% endif %}
 
@@ -1269,10 +1278,15 @@
                                 <div class="d-flex justify-content-between align-items-start mb-1 small">
                                     <span class="me-2">
                                         <span class="d-block text-body-secondary">{{ grouping_label }}</span>
+                                        {# Teaching is tri-state: an unknown
+                                           CNH flag renders — never a made-up
+                                           "no" (two catalogue rows carry
+                                           null; the sea-view rule again). #}
+                                        {% set _teach = t('yes') if hosp.get('teaching') else (t('no') if hosp.get('teaching') is sameas false else '—') %}
                                         {% if _hosp_route %}
                                             <a href="{{ _hosp_route }}" target="_blank" rel="noopener"
                                                class="text-decoration-none"
-                                               title="{{ t('route_from_property') }} · {{ t('qol_hospital_fields') }}: {{ hosp.get('beds') }} / {{ 'sí' if hosp.get('teaching') else 'no' }} / {{ hosp.get('high_tech_count') }}">
+                                               title="{{ t('route_from_property') }} · {{ t('qol_hospital_fields') }}: {{ hosp.get('beds') }} / {{ _teach }} / {{ hosp.get('high_tech_count') }}{% if qol_hosp.get('source') %} · {{ qol_hosp.get('source') }}{% endif %}">
                                                 <i class="fas fa-hospital me-1 text-primary"></i>{{ hosp.get('name') }}
                                             </a>
                                         {% else %}
@@ -1285,7 +1299,9 @@
                         {% endfor %}
                     {% elif qol_hosp.get('status') == 'no_reference_data' %}
                         <div class="small text-body-secondary">{{ t('qol_no_reference_data') }}</div>
-                    {% elif qol_hosp.get('status') == 'unavailable' %}
+                    {% elif qol_hosp.get('status') == 'no_coordinates' %}
+                        <div class="small text-body-secondary">{{ t('qol_no_coordinates') }}</div>
+                    {% else %}
                         <div><span class="badge bg-warning text-dark">{{ t('qol_not_measured') }}</span></div>
                     {% endif %}
                 </div>

@@ -140,6 +140,55 @@ class TestCardStates:
         body = client.get(f"/properties/{pid}").get_data(as_text=True)
         assert "Quality of Life" not in body
 
+    def test_every_reachable_status_renders_something(self, app, client):
+        """No status may render a bare section header (diff review,
+        2026-08-14): an empty shell under "Supermarkets" reads as nothing
+        nearby, which is the #98 mistake in card form."""
+        pid = _add(
+            {
+                "updated_at": "2026-08-14T00:00:00+00:00",
+                "municipality": {"status": "no_municipality"},
+                "supermarkets": {"status": "no_coordinates"},
+                "hospitals": {"status": "no_coordinates"},
+            }
+        )
+        body = client.get(f"/properties/{pid}").get_data(as_text=True)
+        assert "No municipality recorded" in body
+        assert body.count("No coordinates — not measured") == 2
+
+    def test_unknown_teaching_never_reads_as_no(self, app, client):
+        """Two CNH rows carry teaching=null; the tooltip renders the unknown
+        as '—', never a definite 'no' (the sea-view rule), and in English."""
+        qol = {
+            "updated_at": "2026-08-14T00:00:00+00:00",
+            "municipality": {"status": "not_matched", "queried": "X"},
+            "supermarkets": {"status": "osm_empty", "items": []},
+            "hospitals": {
+                "status": "ok",
+                "distance_basis": "straight_line",
+                "source": "CNH 2025 (fixture)",
+                "nearest": {
+                    "general_acute": {
+                        "name": "Hospital Ribera Juan Cardona",
+                        "municipality": "Ferrol",
+                        "beds": 190,
+                        "teaching": None,
+                        "high_tech_count": 0,
+                        "lat": 43.48,
+                        "lon": -8.23,
+                        "distance_km": 12.0,
+                    }
+                },
+            },
+        }
+        pid = _add(qol)
+        body = client.get(f"/properties/{pid}").get_data(as_text=True)
+        assert "190 / — / 0" in body
+        assert "sí" not in body
+        # The vintage comes from the payload's source field, not a pinned
+        # translation string.
+        assert "CNH 2025 (fixture)" in body
+
 
 class TestBackfillNeeds:
     def test_states(self, app):

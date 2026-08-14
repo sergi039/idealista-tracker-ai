@@ -139,10 +139,14 @@ TRANSLATIONS = {
         "qol_convenience_tooltip": "OSM shop=convenience — a small local shop",
         "qol_osm_empty": "None found in OSM within 12 km — coverage uncertain",
         "qol_not_measured": "Not measured",
+        "qol_no_municipality": "No municipality recorded for this listing",
+        "qol_no_coordinates": "No coordinates — not measured",
         "qol_hospitals": "Hospitals",
+        # The vintage lives in the payload's own `source` field, not here —
+        # a translation string pinning "2025" would outlive a re-import.
         "qol_hospital_grouping_note": (
-            "Local display grouping derived from CNH 2025 fields "
-            "(beds / teaching accreditation / high-tech equipment) — "
+            "Local display grouping derived from National Hospital Catalogue "
+            "fields (beds / teaching accreditation / high-tech equipment) — "
             "not an official tier"
         ),
         "qol_hospital_teaching": "Teaching / high-tech",
@@ -311,10 +315,13 @@ TRANSLATIONS = {
         "qol_convenience_tooltip": "OSM shop=convenience — tienda pequeña local",
         "qol_osm_empty": "Ninguno en OSM en 12 km — cobertura no garantizada",
         "qol_not_measured": "No medido",
+        "qol_no_municipality": "Sin municipio registrado para este anuncio",
+        "qol_no_coordinates": "Sin coordenadas — no medido",
         "qol_hospitals": "Hospitales",
+        # La añada vive en el campo `source` del propio bloque, no aquí.
         "qol_hospital_grouping_note": (
-            "Agrupación local derivada de campos del CNH 2025 "
-            "(camas / acreditación docente / alta tecnología) — "
+            "Agrupación local derivada de campos del Catálogo Nacional de "
+            "Hospitales (camas / acreditación docente / alta tecnología) — "
             "no es un nivel oficial"
         ),
         "qol_hospital_teaching": "Docente / alta tecnología",

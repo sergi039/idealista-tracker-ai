@@ -207,7 +207,15 @@ def _cell_value(cell: ET.Element, shared: List[str]) -> str:
     if v is None or v.text is None:
         return ""
     if kind == "s":
-        return shared[int(v.text)]
+        # Bounds-checked: a negative index would silently resolve through
+        # Python's negative indexing to the wrong string, and an oversized
+        # one would IndexError past FETCH_ERRORS (diff review, 2026-08-14).
+        index = int(v.text)
+        if not 0 <= index < len(shared):
+            raise ValueError(
+                f"Shared-string index {index} outside table of {len(shared)}"
+            )
+        return shared[index]
     return v.text
 
 
@@ -513,6 +521,10 @@ def write_atomic(path: str, document: Dict[str, Any]) -> None:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
+        # mkstemp creates 0600 whatever the umask; this file is committed
+        # reference data read inside the app container, so open it up to the
+        # conventional 0644 (diff review, 2026-08-14).
+        os.chmod(tmp_path, 0o644)
         os.replace(tmp_path, path)
     except BaseException:
         try:

@@ -21,21 +21,20 @@ from typing import Dict
 
 from app import create_app, db
 from models import Property
-from services.quality_of_life_service import QualityOfLifeService
+from services.quality_of_life_service import RETRYABLE_STATUSES, QualityOfLifeService
 from utils.enrich_scope import scoped_properties
 
 logger = logging.getLogger(__name__)
 
 
-# A rerun can help exactly these: a lookup that refused, or a part waiting on
-# a reference file. `not_matched`/`osm_empty`/`no_municipality` are answers —
-# re-asking does not change them, so they never pull a row back into scope
-# (this pass is not a way to re-query Overpass weekly for free).
-_RETRYABLE_STATUSES = {"unavailable", "no_reference_data"}
-
-
 def needs_quality_of_life(prop: Property) -> bool:
-    """No block yet, or any part a rerun could actually improve."""
+    """No block yet, or any part a rerun could actually improve.
+
+    `not_matched`/`osm_empty`/`no_municipality` are answers — re-asking does
+    not change them, so they never pull a row back into scope (this pass is
+    not a way to re-query Overpass weekly for free). A part kept from a
+    previous measurement with a stamped failed attempt is an answer too.
+    """
     enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
     block = enrichment.get("quality_of_life")
     if not isinstance(block, dict):
@@ -44,7 +43,7 @@ def needs_quality_of_life(prop: Property) -> bool:
         entry = block.get(part)
         if not isinstance(entry, dict):
             return True
-        if entry.get("status") in _RETRYABLE_STATUSES:
+        if entry.get("status") in RETRYABLE_STATUSES:
             return True
     return False
 

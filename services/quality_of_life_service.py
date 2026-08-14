@@ -29,8 +29,8 @@ from sqlalchemy.orm.attributes import flag_modified
 from models import Property
 from services.enrichment_service import EnrichmentService
 from services.sea_view_service import haversine_m
+from utils.municipality_codes import build_index as build_municipality_index
 from utils.municipality_codes import match as match_municipality
-from utils.municipality_codes import normalize as normalize_municipality
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,10 @@ HOSPITAL_GROUPINGS = (
     "general_acute",
     "limited_recorded_capability",
 )
+
+# Statuses a rerun could improve — shared with the backfill's `needs` filter.
+# Everything else is an answer; re-asking does not change it.
+RETRYABLE_STATUSES = frozenset({"unavailable", "no_reference_data"})
 
 
 def _load_json(path: str) -> Optional[dict]:
@@ -78,15 +82,22 @@ class QualityOfLifeService:
         return self._ine
 
     def _ine_name_index(self) -> Dict[str, str]:
-        """normalized municipality name -> INE code."""
+        """normalized municipality name -> INE code.
+
+        Built through `build_index`, whose collision guard is the point: two
+        in-scope names normalizing to one key would make every later match a
+        silent coin flip (diff review, 2026-08-14). A collision raises, the
+        per-part handler in enrich() records the part `unavailable`, and the
+        bad reference file gets fixed instead of quietly mis-joining.
+        """
         if self._ine_index is None:
-            index: Dict[str, str] = {}
             data = self._ine_data() or {}
-            for code, row in (data.get("municipalities") or {}).items():
-                name = (row or {}).get("name")
-                if name:
-                    index[normalize_municipality(name)] = code
-            self._ine_index = index
+            code_to_name = {
+                code: (row or {}).get("name")
+                for code, row in (data.get("municipalities") or {}).items()
+                if (row or {}).get("name")
+            }
+            self._ine_index = build_municipality_index(code_to_name)
         return self._ine_index
 
     def _hospital_rows(self) -> Optional[list]:
@@ -217,10 +228,30 @@ class QualityOfLifeService:
                 logger.error("QoL part %s failed for %s", key, prop.id, exc_info=True)
                 parts[key] = {"status": "unavailable", "reason": type(exc).__name__}
 
-        payload = dict(parts)
-        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
-
+        # A refusal never overwrites a previous measurement — the sea-distance
+        # precedent, applied per part (diff review, 2026-08-14): when the new
+        # part is retryable and the stored one holds an answer, the answer
+        # stays and the failed attempt is stamped beside it.
         enrichment = dict(prop.enrichment) if isinstance(prop.enrichment, dict) else {}
+        previous = enrichment.get("quality_of_life")
+        previous = previous if isinstance(previous, dict) else {}
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for key, new_part in list(parts.items()):
+            old_part = previous.get(key)
+            if (
+                new_part.get("status") in RETRYABLE_STATUSES
+                and isinstance(old_part, dict)
+                and old_part.get("status") not in RETRYABLE_STATUSES
+                and old_part.get("status") is not None
+            ):
+                kept = dict(old_part)
+                kept["last_attempt_status"] = new_part.get("status")
+                kept["last_attempt_at"] = now_iso
+                parts[key] = kept
+
+        payload = dict(parts)
+        payload["updated_at"] = now_iso
+
         enrichment["quality_of_life"] = payload
         prop.enrichment = enrichment
         flag_modified(prop, "enrichment")

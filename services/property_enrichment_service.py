@@ -65,16 +65,27 @@ class PropertyEnrichmentService:
         # `is None`, not truthiness: a coordinate of exactly 0 is a location,
         # and the amenity lookup below already treats it as one.
         if prop.location_lat is None or prop.location_lon is None:
-            # Geocoding could not place this listing, so nothing below can run.
-            # Record that the amenity lookup was never asked rather than
-            # leaving the section absent, which reads as "nothing nearby"
-            # (#152). This path has no shared commit to ride, so it takes its
-            # own.
+            # Geocoding could not place this listing, so nothing *paid* below
+            # can run. Record that the amenity lookup was never asked rather
+            # than leaving the section absent, which reads as "nothing nearby"
+            # (#152). The QoL block runs too: its INE municipality context
+            # needs no coordinates at all, and its coordinate parts record
+            # `no_coordinates` instead of silently never existing (diff
+            # review, 2026-08-14). This path has no shared commit to ride,
+            # so it takes its own.
             try:
                 self.enrichment_service.enrich_osm_amenities(prop, commit=True)
             except Exception as e:
                 logger.warning(
                     "Could not record the amenity gap for %s: %s",
+                    getattr(prop, "id", None),
+                    e,
+                )
+            try:
+                self.quality_of_life_service.enrich(prop, commit=True)
+            except Exception as e:
+                logger.warning(
+                    "Quality-of-life enrichment failed for %s: %s",
                     getattr(prop, "id", None),
                     e,
                 )
