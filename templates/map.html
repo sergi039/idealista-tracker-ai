@@ -438,6 +438,38 @@ document.addEventListener('DOMContentLoaded', function() {
         return { left, right, top, bottom: EDGE };
     }
 
+    // Run `fn` once the map has stopped moving, and not before.
+    //
+    // Leaflet's events say the map moved, never that it has finished for good,
+    // so settle on a quiet period after the last one. Two guards matter as much
+    // as the wait: a map already at the target view fires nothing and must
+    // still run `fn`, and a map that never goes quiet must not strand it.
+    function whenMapSettles(map, fn, options) {
+        const opts = options || {};
+        const quietMs = opts.quietMs || 200;
+        const maxWaitMs = opts.maxWaitMs || 3000;
+        const events = 'move zoom moveend zoomend';
+        let quietTimer = null;
+        let done = false;
+
+        const finish = () => {
+            if (done) return;
+            done = true;
+            if (quietTimer) clearTimeout(quietTimer);
+            map.off(events, arm);
+            fn();
+        };
+        const arm = () => {
+            if (done) return;
+            if (quietTimer) clearTimeout(quietTimer);
+            quietTimer = setTimeout(finish, quietMs);
+        };
+
+        map.on(events, arm);
+        arm();
+        setTimeout(finish, maxWaitMs);
+    }
+
     function applyPopupAutoPan() {
         const size = map.getSize();
         const pad = autoPanPaddingFor(size.x, size.y);
@@ -581,26 +613,46 @@ document.addEventListener('DOMContentLoaded', function() {
             const latlng = focusLayer.getLatLng();
             map.setView(latlng, 12);
 
-            setTimeout(() => {
-                const showFocused = () => {
-                    const visibleParent = markerCluster.getVisibleParent(focusLayer);
-                    if (visibleParent && visibleParent !== focusLayer && visibleParent.spiderfy) {
-                        visibleParent.spiderfy();
+            const showFocused = () => {
+                const visibleParent = markerCluster.getVisibleParent(focusLayer);
+                if (visibleParent && visibleParent !== focusLayer && visibleParent.spiderfy) {
+                    visibleParent.spiderfy();
+                }
+
+                // Change the focused land marker icon to make it obvious.
+                focusLayer.setIcon(createIcon(focusEntry.score, { isFocused: true }));
+                focusLayer.setZIndexOffset(1000);
+                focusLayer.openPopup();
+
+                // A popup positions itself from where the map is at the moment
+                // it opens, and the map is still coming to rest here: opening
+                // it lands the popup under the corner controls, and nothing
+                // moves it afterwards. Measured on a 375px viewport, the popup
+                // opened 57px down with the close button under the layer
+                // switcher; re-running the pan once the map had settled put it
+                // at 110, clear of every control. An immediate re-run does not
+                // do it — at that point the map has not finished moving.
+                whenMapSettles(map, () => {
+                    const popup = focusLayer.getPopup();
+                    if (popup && popup.isOpen()) {
+                        applyPopupAutoPan();
+                        popup.update();
                     }
+                });
+            };
 
-                    // Change the focused land marker icon to make it obvious.
-                    focusLayer.setIcon(createIcon(focusEntry.score, { isFocused: true }));
-                    focusLayer.setZIndexOffset(1000);
-                    focusLayer.openPopup();
-                };
-
-                // Ensure the marker is visible even if it's currently clustered.
+            // Ensure the marker is visible even if it's currently clustered.
+            // zoomToShowLayer starts an animation of its own, so wait that one
+            // out as well rather than guessing at a delay.
+            whenMapSettles(map, () => {
                 if (typeof markerCluster.zoomToShowLayer === 'function') {
-                    markerCluster.zoomToShowLayer(focusLayer, showFocused);
+                    markerCluster.zoomToShowLayer(focusLayer, () => {
+                        whenMapSettles(map, showFocused);
+                    });
                 } else {
                     showFocused();
                 }
-            }, 300);
+            });
         } else if (markers.length > 0) {
             const bounds = L.latLngBounds(markers.map(m => [m.lat, m.lon]));
             map.fitBounds(bounds, { padding: [20, 20] });
