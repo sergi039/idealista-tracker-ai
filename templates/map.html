@@ -373,6 +373,47 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const markerById = new Map();
 
+    const POPUP_MAX_WIDTH = 300;
+
+    // How much clearance an opening popup asks for, and how much it can have.
+    //
+    // Control corners sit at z-index 1000 while the popup pane sits at 700
+    // inside .leaflet-map-pane's own stacking context, so a popup under a
+    // control loses hit-testing and cannot be raised over it with z-index.
+    // Keeping the popup clear of the corners on open is the protection.
+    //
+    // But the padding has to stay *satisfiable*. Leaflet corrects the left edge
+    // after the right one, so when the popup plus the requested padding is
+    // wider than the map, the two corrections fight and which one wins is not
+    // determined: measured on a 375px viewport, one load in four placed the
+    // popup the full 50px from the left and left it hanging 46px past the right
+    // edge, cutting off the price, the municipality and the Google Maps button.
+    // So ask only for the clearance the map can still give once the popup fits.
+    function autoPanPaddingFor(mapWidth) {
+        // The popup's width is fixed rather than content-driven: maxWidth (300)
+        // caps the content, and the wrapper adds its margins (26 + 16) plus its
+        // own padding and border. Measured at 345.
+        const POPUP_BOX_WIDTH = 345;
+        const WANTED_LEFT = 50;   // clears the zoom control
+        const WANTED_RIGHT = 75;  // clears the close button over the layer switcher
+
+        const spare = Math.max(0, mapWidth - POPUP_BOX_WIDTH);
+        return {
+            left: Math.min(WANTED_LEFT, Math.floor(spare * 0.4)),
+            right: Math.min(WANTED_RIGHT, Math.floor(spare * 0.6))
+        };
+    }
+
+    function applyPopupAutoPan() {
+        const pad = autoPanPaddingFor(map.getSize().x);
+        markerById.forEach(function(entry) {
+            const popup = entry.marker.getPopup();
+            if (!popup) return;
+            popup.options.autoPanPaddingTopLeft = L.point(pad.left, 20);
+            popup.options.autoPanPaddingBottomRight = L.point(pad.right, 20);
+        });
+    }
+
     function buildPopupContent(prop) {
         const typeLabel = [prop.category, prop.subtype].filter(Boolean).join(' / ');
         const travelBlock = renderTravelBadges(prop.travel);
@@ -435,15 +476,9 @@ document.addEventListener('DOMContentLoaded', function() {
         const marker = L.marker([prop.lat, prop.lon], {
             icon: createIcon(prop.score)
         }).bindPopup(() => buildPopupContent(prop), {
-            maxWidth: 300,
-            // Control corners sit at z-index 1000 while the popup pane sits at
-            // 700 inside .leaflet-map-pane's own stacking context, so a popup
-            // under a control loses hit-testing and cannot be raised over it
-            // with z-index. Keeping the popup clear of the corners on open is
-            // the protection; the bottom-right pad exceeds the width of the
-            // top-right control stack (close button over layer switcher).
-            autoPanPaddingTopLeft: [50, 20],
-            autoPanPaddingBottomRight: [75, 20]
+            maxWidth: POPUP_MAX_WIDTH
+            // autoPan padding is not set here: it depends on the map's current
+            // width and is applied by applyPopupAutoPan() below.
         });
 
         markerById.set(propertyId, { marker, score: prop.score, prop });
@@ -491,6 +526,10 @@ document.addEventListener('DOMContentLoaded', function() {
             btn.disabled = false;
         }
     });
+
+    applyPopupAutoPan();
+    // A rotated phone or a resized window changes what the map can spare.
+    map.on('resize', applyPopupAutoPan);
 
     map.addLayer(markerCluster);
 
