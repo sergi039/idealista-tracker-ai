@@ -1170,6 +1170,41 @@ class PropertyTravelService:
             estimated=True,
         )
 
+    def measure_drive_minutes(
+        self, lat: float, lon: float, points: List[tuple]
+    ) -> List[Optional[int]]:
+        """Drive minutes to a few coordinate pairs — the pool criterion's
+        measurement path (proposal D17). ≤POOL_MEASURE_TOP_N elements per
+        property, cached 7 days like every other Distance Matrix answer;
+        a refused element is None, and refusals are never cached (#98).
+        """
+        if not points:
+            return []
+        destinations = [f"{float(p[0])},{float(p[1])}" for p in points]
+        cache_key = (
+            "drive_minutes_v1:"
+            + hashlib.md5("|".join(destinations).encode()).hexdigest()[:10]
+        )
+        cached = get_cached_enrichment_data(lat, lon, cache_key)
+        if isinstance(cached, list) and len(cached) == len(destinations):
+            return cached
+
+        results = self._distance_matrix_batch(lat, lon, destinations, mode="driving")
+        minutes: List[Optional[int]] = []
+        for result in results:
+            if result.failure is not None or result.duration_s is None:
+                minutes.append(None)
+            else:
+                minutes.append(int(round(result.duration_s / 60.0)))
+        if all(m is not None for m in minutes):
+            try:
+                cache_enrichment_data(
+                    lat, lon, cache_key, minutes, timeout=60 * 60 * 24 * 7
+                )
+            except Exception:
+                logger.warning("Could not cache drive minutes", exc_info=True)
+        return minutes
+
     def _distance_matrix_batch(
         self, lat: float, lon: float, destinations: List[str], mode: str
     ) -> List[DistanceResult]:

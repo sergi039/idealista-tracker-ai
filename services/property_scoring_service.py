@@ -130,6 +130,39 @@ def _resolve_sea_distance_config(
     return resolved, None
 
 
+def _resolve_pool_config(
+    raw: Any, defaults: Dict[str, float]
+) -> Tuple[Dict[str, float], Optional[str]]:
+    """Validate a per-profile pool override (best_min/worst_min/require_indoor).
+
+    Same contract as `_resolve_sea_distance_config`: free-form profile JSON,
+    so a bad value falls back to the defaults and says so. `require_indoor`
+    is numeric on purpose — the scoring form is numeric throughout — and only
+    0 (any pool) or 1 (indoor required, the daily-swimmer default) are legal.
+    """
+    if raw is None:
+        return dict(defaults), None
+    if not isinstance(raw, dict):
+        return dict(defaults), "pool override is not an object"
+
+    resolved = dict(defaults)
+    for key in ("best_min", "worst_min", "require_indoor"):
+        if raw.get(key) is None:
+            continue
+        value = _finite_float(raw.get(key))
+        if value is None:
+            return dict(defaults), f"{key} is not a finite number"
+        resolved[key] = value
+
+    if resolved["best_min"] < 0:
+        return dict(defaults), "best_min must not be negative"
+    if resolved["worst_min"] <= resolved["best_min"]:
+        return dict(defaults), "worst_min must be greater than best_min"
+    if resolved["require_indoor"] not in (0.0, 1.0):
+        return dict(defaults), "require_indoor must be 0 or 1"
+    return resolved, None
+
+
 def _linear_minutes_score(
     minutes: Optional[float], best: float, worst: float
 ) -> Optional[float]:
@@ -170,17 +203,24 @@ class HousingPropertyScorer(BasePropertyScorer):
         "travel_score": 0.25,
         "sea_score": 0.15,
         "size_score": 0.0,
+        "pool_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
         "travel_score": 0.45,
         "size_score": 0.3,
         "sea_score": 0.25,
         "value_score": 0.0,
+        "pool_score": 0.0,
     }
     DEFAULT_TRAVEL_MINUTES = {"best": 10.0, "worst": 60.0}
     # Straight-line metres to the coastline. 300 m is where the coastal premium
     # is still near its peak; past 10 km the literature no longer finds one.
     DEFAULT_SEA_DISTANCE = {"near_m": 300.0, "far_m": 10000.0}
+    # Drive minutes to a qualifying swimming pool (proposal D17): 10 min is a
+    # daily habit, 40 min is where it stops being one. `require_indoor` = 1
+    # counts only pools with indoor evidence — the owner swims year-round.
+    # Weightless (0.0) in every category until the owner turns it on.
+    DEFAULT_POOL = {"best_min": 10.0, "worst_min": 40.0, "require_indoor": 1.0}
 
     def calculate(
         self, prop: Property, profile: Optional[SearchProfile]
@@ -208,6 +248,16 @@ class HousingPropertyScorer(BasePropertyScorer):
                 "Ignoring sea_distance override for category %s: %s",
                 self.category,
                 sea_cfg_error,
+            )
+        pool_cfg, pool_cfg_error = _resolve_pool_config(
+            cat_cfg.get("pool") if isinstance(cat_cfg, dict) else None,
+            self.DEFAULT_POOL,
+        )
+        if pool_cfg_error:
+            logger.warning(
+                "Ignoring pool override for category %s: %s",
+                self.category,
+                pool_cfg_error,
             )
 
         # One unusable value must not take the whole subscription's scoring with
@@ -289,6 +339,14 @@ class HousingPropertyScorer(BasePropertyScorer):
         )
         if sea_cfg_error:
             sea_meta = {**sea_meta, "config_override_ignored": sea_cfg_error}
+        pool_score, pool_meta = self._pool_score(
+            prop,
+            best_min=pool_cfg["best_min"],
+            worst_min=pool_cfg["worst_min"],
+            require_indoor=bool(pool_cfg["require_indoor"]),
+        )
+        if pool_cfg_error:
+            pool_meta = {**pool_meta, "config_override_ignored": pool_cfg_error}
 
         investment = _weighted_average(
             {
@@ -302,6 +360,7 @@ class HousingPropertyScorer(BasePropertyScorer):
                 ),
                 "sea_score": (sea_score, investment_weights.get("sea_score", 0.0)),
                 "size_score": (size_score, investment_weights.get("size_score", 0.0)),
+                "pool_score": (pool_score, investment_weights.get("pool_score", 0.0)),
             }
         )
         lifestyle = _weighted_average(
@@ -313,6 +372,7 @@ class HousingPropertyScorer(BasePropertyScorer):
                 "size_score": (size_score, lifestyle_weights.get("size_score", 0.0)),
                 "sea_score": (sea_score, lifestyle_weights.get("sea_score", 0.0)),
                 "value_score": (value_score, lifestyle_weights.get("value_score", 0.0)),
+                "pool_score": (pool_score, lifestyle_weights.get("pool_score", 0.0)),
             }
         )
 
@@ -341,6 +401,7 @@ class HousingPropertyScorer(BasePropertyScorer):
                         "travel_score": travel_score,
                         "sea_score": sea_score,
                         "size_score": size_score,
+                        "pool_score": pool_score,
                     },
                 },
                 "lifestyle": {
@@ -351,6 +412,7 @@ class HousingPropertyScorer(BasePropertyScorer):
                         "size_score": size_score,
                         "sea_score": sea_score,
                         "value_score": value_score,
+                        "pool_score": pool_score,
                     },
                 },
             },
@@ -361,6 +423,7 @@ class HousingPropertyScorer(BasePropertyScorer):
                 "size": size_meta,
                 "travel": travel_meta,
                 "sea": sea_meta,
+                "pool": pool_meta,
             },
         }
 
@@ -550,6 +613,92 @@ class HousingPropertyScorer(BasePropertyScorer):
         score = _sea_distance_score(distance, near_m=near_m, far_m=far_m)
         return score, {**bounds, "status": "ok", "distance_m": distance}
 
+    def _pool_score(
+        self,
+        prop: Property,
+        best_min: float,
+        worst_min: float,
+        require_indoor: bool,
+    ) -> Tuple[Optional[float], Dict[str, Any]]:
+        """Drive minutes to the nearest qualifying pool (proposal D17).
+
+        The invariants the review pinned: only a *measured* drive time
+        scores; `unverified_absence` is None, never 0 — the single Text
+        Search cross-check proves nothing about completeness; the only path
+        to a true 0 is the owner's own hand-set flag, which outranks
+        everything and survives recomputes. With `require_indoor` the
+        qualifying set narrows to candidates whose indoor evidence is
+        `verified` or `likely` — evidence, not certainty, so the meta says
+        which candidate and on what grounds.
+        """
+        bounds = {
+            "best_min": best_min,
+            "worst_min": worst_min,
+            "require_indoor": require_indoor,
+        }
+        enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
+        pool = enrichment.get("pool")
+        if not isinstance(pool, dict):
+            return None, {**bounds, "status": "missing_pool_data"}
+
+        # The owner's verdict outranks every computed state (sea-view rule).
+        owner_flag = pool.get("owner_no_pool")
+        if isinstance(owner_flag, dict):
+            return 0.0, {
+                **bounds,
+                "status": "owner_verified_absence",
+                "set_at": owner_flag.get("set_at"),
+            }
+
+        status = pool.get("status")
+        if status == "unverified_absence":
+            return None, {**bounds, "status": status}
+        if status != "ok":
+            return None, {**bounds, "status": status or "unknown"}
+
+        candidates = pool.get("candidates")
+        candidates = candidates if isinstance(candidates, list) else []
+        best_candidate = None
+        best_minutes: Optional[float] = None
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            if require_indoor and candidate.get("indoor_status") not in (
+                "verified",
+                "likely",
+            ):
+                continue
+            minutes = _finite_float(candidate.get("drive_min"))
+            if minutes is None:
+                continue
+            if best_minutes is None or minutes < best_minutes:
+                best_minutes = minutes
+                best_candidate = candidate
+
+        if best_minutes is None:
+            # Measured pools exist but none passes the indoor requirement
+            # (or none was measured): not a measured absence of *qualifying*
+            # pools, so no score — and the meta says why.
+            return None, {
+                **bounds,
+                "status": "no_qualifying_candidate",
+                "candidates_seen": len(candidates),
+            }
+
+        score = _linear_minutes_score(best_minutes, best=best_min, worst=worst_min)
+        return score, {
+            **bounds,
+            "status": "ok",
+            "minutes": best_minutes,
+            "candidate": best_candidate.get("name") if best_candidate else None,
+            "indoor_status": best_candidate.get("indoor_status")
+            if best_candidate
+            else None,
+            "indoor_evidence": best_candidate.get("indoor_evidence")
+            if best_candidate
+            else None,
+        }
+
     def _travel_score(
         self,
         prop: Property,
@@ -616,12 +765,14 @@ class LandPropertyScorer(HousingPropertyScorer):
         "travel_score": 0.15,
         "sea_score": 0.15,
         "size_score": 0.0,
+        "pool_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
         "travel_score": 0.4,
         "size_score": 0.35,
         "sea_score": 0.25,
         "value_score": 0.0,
+        "pool_score": 0.0,
     }
 
 
@@ -636,12 +787,14 @@ class GaragePropertyScorer(HousingPropertyScorer):
         "travel_score": 0.1,
         "sea_score": 0.0,
         "size_score": 0.0,
+        "pool_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
         "travel_score": 0.7,
         "size_score": 0.3,
         "sea_score": 0.0,
         "value_score": 0.0,
+        "pool_score": 0.0,
     }
 
 
@@ -653,12 +806,14 @@ class CommercialPropertyScorer(HousingPropertyScorer):
         "travel_score": 0.15,
         "sea_score": 0.05,
         "size_score": 0.0,
+        "pool_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
         "travel_score": 0.55,
         "size_score": 0.35,
         "sea_score": 0.1,
         "value_score": 0.0,
+        "pool_score": 0.0,
     }
 
 
@@ -670,12 +825,14 @@ class BuildingPropertyScorer(HousingPropertyScorer):
         "travel_score": 0.15,
         "sea_score": 0.05,
         "size_score": 0.0,
+        "pool_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
         "travel_score": 0.55,
         "size_score": 0.35,
         "sea_score": 0.1,
         "value_score": 0.0,
+        "pool_score": 0.0,
     }
 
 
@@ -687,12 +844,14 @@ class NewDevelopmentPropertyScorer(HousingPropertyScorer):
         "travel_score": 0.25,
         "sea_score": 0.15,
         "size_score": 0.0,
+        "pool_score": 0.0,
     }
     DEFAULT_LIFESTYLE_WEIGHTS = {
         "travel_score": 0.45,
         "size_score": 0.3,
         "sea_score": 0.25,
         "value_score": 0.0,
+        "pool_score": 0.0,
     }
 
 
@@ -731,13 +890,22 @@ class PropertyScoringService:
     # subscription page builds its form from this rather than repeating the
     # scorer's own vocabulary, so a criterion added to a scorer cannot go on
     # being invisible in the UI that is supposed to configure it (#239).
-    WEIGHT_KEYS = ("value_score", "size_score", "travel_score", "sea_score")
+    WEIGHT_KEYS = (
+        "value_score",
+        "size_score",
+        "travel_score",
+        "sea_score",
+        "pool_score",
+    )
     EDITABLE_SECTIONS = {
         "investment": WEIGHT_KEYS,
         "lifestyle": WEIGHT_KEYS,
         "combined_mix": ("investment", "lifestyle"),
         "travel_minutes": ("best", "worst"),
         "sea_distance": ("near_m", "far_m"),
+        # require_indoor is numeric like every field here: 1 = only pools
+        # with indoor evidence count (the daily-swimmer default), 0 = any.
+        "pool": ("best_min", "worst_min", "require_indoor"),
     }
 
     def known_categories(self) -> list:
@@ -783,6 +951,14 @@ class PropertyScoringService:
                     scorer,
                     "DEFAULT_SEA_DISTANCE",
                     {"near_m": 300.0, "far_m": 10000.0},
+                ).items()
+            },
+            "pool": {
+                key: float(value)
+                for key, value in getattr(
+                    scorer,
+                    "DEFAULT_POOL",
+                    {"best_min": 10.0, "worst_min": 40.0, "require_indoor": 1.0},
                 ).items()
             },
         }

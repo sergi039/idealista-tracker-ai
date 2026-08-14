@@ -152,6 +152,23 @@ TRANSLATIONS = {
         "qol_hospital_teaching": "Teaching / high-tech",
         "qol_hospital_general": "General acute",
         "qol_hospital_fields": "beds / teaching / high-tech",
+        # Pool criterion (proposal D17).
+        "pool_title": "Swimming pool",
+        "pool_unnamed": "Unnamed pool",
+        "pool_indoor": "indoor",
+        "pool_indoor_likely": "indoor?",
+        "pool_unverified_absence": "No pool verified nearby — not scored",
+        "pool_unverified_tooltip": (
+            "OSM found none and one Places cross-check agreed; a single "
+            "query proves nothing about completeness, so this is never a 0"
+        ),
+        "pool_owner_absence": "Owner confirmed: no usable pool",
+        "pool_owner_absence_set": "Confirm: no usable pool here",
+        "pool_owner_absence_clear": "Clear the no-pool verdict",
+        "pool_owner_absence_tooltip": (
+            "The only way this property's pool score becomes 0 — "
+            "computed absence is never trusted that far"
+        ),
         "investment_score": "Investment Score",
         "lifestyle_score": "Lifestyle Score",
         "criteria_breakdown": "Criteria Breakdown",
@@ -327,6 +344,23 @@ TRANSLATIONS = {
         "qol_hospital_teaching": "Docente / alta tecnología",
         "qol_hospital_general": "General de agudos",
         "qol_hospital_fields": "camas / docente / alta tecnología",
+        # Pool criterion (proposal D17).
+        "pool_title": "Piscina",
+        "pool_unnamed": "Piscina sin nombre",
+        "pool_indoor": "cubierta",
+        "pool_indoor_likely": "¿cubierta?",
+        "pool_unverified_absence": "Sin piscina verificada cerca — no se puntúa",
+        "pool_unverified_tooltip": (
+            "OSM no encontró ninguna y una comprobación en Places coincidió; "
+            "una sola consulta no prueba exhaustividad, así que nunca es un 0"
+        ),
+        "pool_owner_absence": "Confirmado por el propietario: sin piscina útil",
+        "pool_owner_absence_set": "Confirmar: aquí no hay piscina útil",
+        "pool_owner_absence_clear": "Quitar el veredicto de sin piscina",
+        "pool_owner_absence_tooltip": (
+            "La única vía para que la puntuación de piscina sea 0 — "
+            "la ausencia calculada nunca llega tan lejos"
+        ),
         "investment_score": "Puntuación de Inversión",
         "lifestyle_score": "Puntuación de Estilo de Vida",
         "criteria_breakdown": "Desglose de Criterios",

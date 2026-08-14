@@ -1304,6 +1304,79 @@
                     {% else %}
                         <div><span class="badge bg-warning text-dark">{{ t('qol_not_measured') }}</span></div>
                     {% endif %}
+
+                    {# -- Swimming pool (proposal D17 — the one QoL datum that
+                          can score, at owner-enabled weight). Measured drive
+                          times with indoor *evidence*; absence is honest and
+                          zero comes only from the owner's own flag below. #}
+                    {% set qol_pool = _qol_enr.get('pool') if _qol_enr.get('pool') is mapping else None %}
+                    {% if qol_pool %}
+                        <hr class="my-2">
+                        <div class="small fw-bold text-body-secondary mb-1">
+                            {{ t('pool_title') }}
+                        </div>
+                        {% if qol_pool.get('owner_no_pool') is mapping %}
+                            <div class="small mb-1">
+                                <span class="badge bg-secondary">{{ t('pool_owner_absence') }}</span>
+                                <span class="text-body-secondary">({{ (qol_pool.get('owner_no_pool') or {}).get('set_at', '')[:10] }})</span>
+                            </div>
+                        {% elif qol_pool.get('status') == 'ok' %}
+                            {% for cand in (qol_pool.get('candidates') or [])[:3] %}
+                                {% set _pool_route = maps_directions_url(property.location_lat, property.location_lon, cand.get('lat'), cand.get('lon')) %}
+                                <div class="d-flex justify-content-between align-items-center mb-1 small">
+                                    {% if _pool_route %}
+                                        <a href="{{ _pool_route }}" target="_blank" rel="noopener"
+                                           class="text-decoration-none text-truncate me-2"
+                                           title="{{ t('route_from_property') }}{% if cand.get('indoor_evidence') %} · {{ cand.get('indoor_evidence') }}{% endif %}">
+                                            <i class="fas fa-person-swimming me-1 text-primary"></i>{{ cand.get('name') or t('pool_unnamed') }}
+                                        </a>
+                                    {% else %}
+                                        <span class="text-truncate me-2">
+                                            <i class="fas fa-person-swimming me-1 text-primary"></i>{{ cand.get('name') or t('pool_unnamed') }}
+                                        </span>
+                                    {% endif %}
+                                    <span class="text-nowrap">
+                                        {% if cand.get('indoor_status') == 'verified' %}
+                                            <span class="badge bg-success me-1" title="{{ cand.get('indoor_evidence') or '' }}">{{ t('pool_indoor') }}</span>
+                                        {% elif cand.get('indoor_status') == 'likely' %}
+                                            <span class="badge bg-info me-1" title="{{ cand.get('indoor_evidence') or '' }}">{{ t('pool_indoor_likely') }}</span>
+                                        {% endif %}
+                                        {% if cand.get('drive_min') is not none %}
+                                            <span class="badge bg-info">{{ cand.get('drive_min') }}min</span>
+                                        {% else %}
+                                            <span class="badge bg-light text-dark border">{{ '%.1f'|format(cand.get('straight_km')) }} km</span>
+                                        {% endif %}
+                                    </span>
+                                </div>
+                            {% endfor %}
+                        {% elif qol_pool.get('status') == 'unverified_absence' %}
+                            <div class="small text-body-secondary mb-1"
+                                 title="{{ t('pool_unverified_tooltip') }}">
+                                {{ t('pool_unverified_absence') }}
+                            </div>
+                        {% elif qol_pool.get('status') == 'no_coordinates' %}
+                            <div class="small text-body-secondary mb-1">{{ t('qol_no_coordinates') }}</div>
+                        {% else %}
+                            <div class="mb-1"><span class="badge bg-warning text-dark">{{ t('qol_not_measured') }}</span></div>
+                        {% endif %}
+                        <form method="POST"
+                              action="{{ url_for('main.set_pool_absence', property_id=property.id) }}"
+                              class="mt-1">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                            {% if qol_pool.get('owner_no_pool') is mapping %}
+                                <input type="hidden" name="pool_absence" value="clear">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                    {{ t('pool_owner_absence_clear') }}
+                                </button>
+                            {% else %}
+                                <input type="hidden" name="pool_absence" value="set">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary"
+                                        title="{{ t('pool_owner_absence_tooltip') }}">
+                                    {{ t('pool_owner_absence_set') }}
+                                </button>
+                            {% endif %}
+                        </form>
+                    {% endif %}
                 </div>
             </div>
         {% endif %}
