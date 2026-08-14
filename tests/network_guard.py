@@ -4,8 +4,10 @@ CLAUDE.md requires external APIs to be mocked in tests. Nothing enforced it,
 and an unmocked call is invisible from the outside: every caller in this
 codebase handles a failed request. `utils/geocoding.py` falls back from Google
 to Nominatim and then swallows the failure (utils/geocoding.py:71,
-utils/geocoding.py:109); an enrichment run reports `degraded` rather than
-failing (#153). So a test that reaches the public internet with the fake test
+utils/geocoding.py:109); a refused Overpass lookup only *degrades* an
+enrichment run, because Overpass is the advisory source there and no score
+reads it (#153 -- a refused Google call is decisive and does fail the run, so
+this hides the free APIs, not the paid ones). So a test that reaches the public internet with the fake test
 API key reaches the same verdict as one that mocks the transport, and pays for
 the round trip on every run, forever, while proving nothing about the code.
 
@@ -82,10 +84,17 @@ CALLER_FRAMES = 3
 class NetworkAccessDuringTest(RuntimeError):
     """Raised in place of a connect to anything that is not this machine.
 
-    A `RuntimeError` rather than an `OSError`: urllib3 and `requests` retry
-    OSError subclasses and would turn one refusal into three, and
-    `utils/http.py` retries `requests.RequestException`. Neither catches this,
-    so the guard costs one refusal and surfaces at the caller.
+    A `RuntimeError` rather than an `OSError`, for two reasons that were
+    checked rather than assumed. urllib3 catches `OSError` out of a connect and
+    re-raises it as `NewConnectionError`, which `requests` then wraps again --
+    the guard's message, the part that says which line to fix, would arrive
+    buried in two layers of somebody else's exception. And `utils/http.py`
+    retries `requests.RequestException` up to three times with a backoff
+    between them, so an OSError-shaped refusal would cost three refusals and
+    two sleeps. (urllib3's own retrying is not the problem: requests' default
+    adapter is `Retry(total=0)` and nothing here mounts another.) A
+    `RuntimeError` is caught by none of that, so one refusal stays one refusal
+    and reaches the caller intact.
     """
 
 
@@ -142,6 +151,11 @@ def _caller() -> str:
     """
     chain: list[str] = []
     for frame in reversed(traceback.extract_stack()):
+        # `<frozen runpy>`, `<string>`, `<stdin>`: not paths. Path.resolve()
+        # would hang them off the current directory, which during a run is the
+        # repository root, and they would be reported as repository frames.
+        if frame.filename.startswith("<"):
+            continue
         path = Path(frame.filename)
         if path == Path(__file__):
             continue
@@ -159,7 +173,12 @@ def _caller() -> str:
 
 def _describe(host: object, port: object) -> str:
     text = host.decode("ascii", "replace") if isinstance(host, bytes) else str(host)
-    return f"{text}:{port}" if port not in (None, "") else text
+    if port in (None, ""):
+        return text
+    # An IPv6 literal needs its brackets: `2001:db8::1:443` is not "that host,
+    # that port", it is a valid and *different* address, so a report without
+    # them names a destination nobody dialled.
+    return f"[{text}]:{port}" if ":" in text else f"{text}:{port}"
 
 
 def _refuse(destination: str) -> None:

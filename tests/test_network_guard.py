@@ -10,9 +10,11 @@ Every refusal here is deliberate, so each one runs inside
 `network_guard.capture_attempts()`: without it this file would report itself
 as the biggest leak in the run.
 
-Nothing in this file connects anywhere. The public addresses below are
+Nothing in this file leaves the machine. The public addresses below are
 documentation ranges (RFC 5737 / RFC 3849) and the guard raises before the
-real connect, so the assertions hold on a machine with no network at all.
+real connect, so the assertions hold on a machine with no network at all --
+but one test does connect for real, over loopback, because that is the thing
+it has to prove.
 """
 
 from __future__ import annotations
@@ -76,12 +78,16 @@ class TestTheInternetIsRefused:
         )
         assert caller.count(" <- ") < network_guard.CALLER_FRAMES
 
-    def test_an_ipv6_connect_is_refused_too(self):
-        with network_guard.capture_attempts():
+    def test_an_ipv6_connect_is_refused_and_bracketed(self):
+        """`2001:db8::1:443` is not "that host, that port" -- it is a valid and
+        different address, so an unbracketed report names a destination nobody
+        dialled."""
+        with network_guard.capture_attempts() as attempts:
             with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as sock:
                 with pytest.raises(NetworkAccessDuringTest) as excinfo:
                     sock.connect((PUBLIC_V6, 443, 0, 0))
         assert PUBLIC_V6 in str(excinfo.value)
+        assert attempts[0].destination == f"[{PUBLIC_V6}]:443"
 
     def test_connect_ex_is_refused_as_well(self):
         """`connect_ex` reports failure by return value rather than raising,
@@ -116,10 +122,15 @@ class TestTheInternetIsRefused:
 
 class TestWhatTheSuiteLegitimatelyUsesStillWorks:
     def test_a_real_loopback_connection_succeeds(self):
-        """tests/test_ai_bridge_isolation.py starts a bridge process on a free
-        loopback port and polls it over HTTP; the CI PostgreSQL service is
-        reached at 127.0.0.1:5432. Both would die with the guard's
-        exception if loopback were not exempt, so this connects for real."""
+        """tests/test_ai_bridge_isolation.py and tests/test_ai_bridge_schema.py
+        serve the bridge on 127.0.0.1:0 and drive it with real HTTP, and one of
+        them starts it as a process and polls a free loopback port. All of that
+        dies with the guard's exception if loopback stops being exempt, so this
+        connects for real rather than asserting about `_is_local`.
+
+        The CI PostgreSQL service is deliberately not part of this argument:
+        psycopg2 dials through libpq in C, so the guard never sees it either
+        way. Do not cite the database as a reason the exemption is needed."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
             server.bind(("127.0.0.1", 0))
             server.listen(1)
@@ -190,7 +201,12 @@ class TestWhichAddressesCountAsThisMachine:
             "8.8.8.8",
             "maps.googleapis.com",
             "overpass-api.de",
-            # Not loopback: a link-local address is another machine on the LAN.
+            # Link-local is refused, scope id and all. `fe80::1%lo0` really is
+            # macOS's own loopback interface, so this is a deliberate false
+            # positive: the guard drops the scope before parsing and cannot
+            # tell that one from `fe80::1%en0`, which is a machine on the LAN.
+            # Nothing in this suite uses either. Widen it only with a test that
+            # says which interface the address belongs to.
             "fe80::1%lo0",
             "169.254.169.254",
         ],
