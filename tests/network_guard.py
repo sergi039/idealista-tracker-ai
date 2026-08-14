@@ -7,9 +7,10 @@ to Nominatim and then swallows the failure (utils/geocoding.py:71,
 utils/geocoding.py:109); a refused Overpass lookup only *degrades* an
 enrichment run, because Overpass is the advisory source there and no score
 reads it (#153 -- a refused Google call is decisive and does fail the run, so
-this hides the free APIs, not the paid ones). So a test that reaches the public internet with the fake test
-API key reaches the same verdict as one that mocks the transport, and pays for
-the round trip on every run, forever, while proving nothing about the code.
+this hides the free APIs, not the paid ones). So a test that reaches the
+public internet with the fake test API key reaches the same verdict as one
+that mocks the transport, and pays for the round trip on every run, forever,
+while proving nothing about the code.
 
 PR #306 found one of these the hard way: the sea-view step it wired into
 ingestion reached live Overpass from three suites, and in the pre-push gate's
