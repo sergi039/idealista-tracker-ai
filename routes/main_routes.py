@@ -1,5 +1,6 @@
 import logging
 import math
+import re
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -391,18 +392,33 @@ def _map_auto_profile_id(default_profile, profiles, focus_property=None):
 # it to the driver raises rather than returning nothing.
 MAX_FOCUS_ID = 2_147_483_647
 
+# ASCII digits only, and spelled out rather than `\d`, which matches every
+# decimal digit in Unicode. `str.isdigit()` is wider still -- it accepts `²`
+# and `①`, which `int()` then rejects. See `_parse_focus_id`.
+_FOCUS_ID_TOKEN = re.compile(r"[0-9]+")
+
 
 def _parse_focus_id(raw):
     """`?focus=` as a listing id, or None when the request names none.
 
     Anything that is not a plain positive in-range integer reads as no focus
     at all -- the same shape as the rest of the query string, where an
-    unparseable value falls back to the page default instead of failing.
+    unparseable value falls back to the page default instead of failing. That
+    contract is only kept if *nothing* here raises: `map_view` wraps its body
+    in a blanket `except Exception` that flashes an error and renders an empty
+    map, so a `ValueError` in this parser would turn `?focus=<junk>` into a
+    broken page rather than a page without a focus. Both of `int()`'s refusals
+    are therefore handled here, the same way
+    `services.profile_selection.parse_profile_selection` handles them.
     """
     token = str(raw if raw is not None else "").strip()
-    if not token.isdigit():
+    if not _FOCUS_ID_TOKEN.fullmatch(token):
         return None
-    value = int(token)
+    try:
+        value = int(token)
+    except ValueError:
+        # Longer than CPython's 4300-digit conversion limit. Still not an id.
+        return None
     if not 0 < value <= MAX_FOCUS_ID:
         return None
     return value

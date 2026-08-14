@@ -204,11 +204,38 @@ class TestFocusResolvesTheSubscription:
         assert href is not None
         assert f"profile_id={world['houses_id']}" in href
 
-    def test_an_unparseable_focus_is_no_focus_at_all(self, client, world):
-        for raw in ("abc", "-3", "0", "9" * 40):
-            body = client.get(f"/map?focus={raw}").get_data(as_text=True)
-            assert _marker_ids(body) == world["coast_markers"], raw
-            assert _notice(body) is None, raw
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "abc",
+            "-3",
+            "0",
+            "9" * 40,
+            # `str.isdigit()` says yes to all three and `int()` says no: a
+            # digit-ish character (U+00B2), a numeric one (U+2460), and a
+            # non-ASCII decimal digit. The first guard here used `isdigit()`,
+            # which turned each of these into a ValueError inside the route's
+            # blanket `except` -- an error page with no markers at all.
+            "²",
+            "①",
+            "٣",
+            # Past CPython's 4300-digit int() conversion limit: the other
+            # ValueError, and the reason a length check alone is not enough.
+            "9" * 5000,
+        ],
+    )
+    def test_an_unparseable_focus_is_no_focus_at_all(self, client, world, raw):
+        """The page loses the focus, never the page.
+
+        `map_view` turns any exception into a flashed error and an empty map,
+        so a parser that raises makes `?focus=<junk>` strictly worse than
+        `?focus=` -- which is what these inputs did.
+        """
+        response = client.get(f"/map?focus={raw}")
+        assert response.status_code == 200, raw
+        body = response.get_data(as_text=True)
+        assert _marker_ids(body) == world["coast_markers"], raw
+        assert _notice(body) is None, raw
 
     def test_an_explicit_subscription_still_wins(self, client, world):
         """`focus` answers the *auto* fallback; it never overrides a choice."""
