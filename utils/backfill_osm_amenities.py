@@ -34,6 +34,7 @@ from services.enrichment_service import (
     OSM_STATUS_KEY,
     EnrichmentService,
 )
+from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
 
@@ -141,13 +142,17 @@ def main() -> None:
             args.dry_run,
         )
 
-        outcome = backfill(
-            properties,
-            EnrichmentService(),
-            only_missing=args.only_missing,
-            dry_run=args.dry_run,
-            sleep_s=args.sleep,
-        )
+        # Free, but paced at OVERPASS_MIN_INTERVAL_S: a restart without
+        # --only-missing re-queries every row it already answered. Only the
+        # scoped form is honestly resumable (#283).
+        with inflight("backfill_osm_amenities", resumable=bool(args.only_missing)):
+            outcome = backfill(
+                properties,
+                EnrichmentService(),
+                only_missing=args.only_missing,
+                dry_run=args.dry_run,
+                sleep_s=args.sleep,
+            )
 
         if args.dry_run:
             db.session.rollback()

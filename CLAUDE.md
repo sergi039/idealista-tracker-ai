@@ -468,6 +468,48 @@ and TODO.md; respect it if you ever run both side by side.
   whose grandchild does the work and survives a kill aimed at the wrapper —
   measured, five extra minutes of billed work nobody read.
   `tests/test_ai_bridge_isolation.py` fails if any of that is undone.
+- **A long job announces itself, and the deploy that kills it says so** (#283).
+  `docker compose up -d --build` recreates the app container and kills whatever
+  runs inside it; observed twice on 2026-08-14, when a pool backfill died
+  mid-flight and nothing recorded it — healthz was green either side and the
+  watcher logged an ordinary successful deploy. So every long `utils/*` entry
+  point wraps its loop in `utils/inflight.inflight(...)`, which writes
+  `data/.inflight/<module>.<pid>.json` while it runs and reports — on the next
+  start — any marker a killed predecessor left behind. `resumable=True` is a
+  *claim*: set it only where a restart really does resume, meaning a per-row
+  commit and a scope that finished rows leave (`needs_pool`, `needs_beaches`,
+  `--only-missing`). Where that depends on a flag, pass the flag
+  (`resumable=bool(args.only_missing)`), never a hopeful constant — a missing
+  or false marker makes `tools/autopilot/deploy_watcher.sh` treat the job as
+  losing work, and a wrong `True` is #98's defect wearing an ops costume.
+  The watcher's own liveness check is `docker top`, so a job that adopts
+  nothing is still *seen*; what it cannot supply is whether killing it costs
+  anything. **A marker is not a liveness check and must never be read as
+  one** — it outlives its process by design, because surviving the kill is
+  what lets the next run report the interruption. A file in `data/.inflight/`
+  therefore means "a run started and did not clean up", which is true of a
+  live job and of a corpse alike. `docker top idealista-app` is the question
+  "is anything running", there and before a hand build ("Building by hand in
+  the shared checkout" above); the marker only answers "and would killing it
+  cost anything". Deferring is opt-in and bounded
+  (`AUTOPILOT_DEFER_ON_INFLIGHT`, `AUTOPILOT_DEFER_BUDGET`) — a deploy that
+  never lands is a failure too. See `tools/autopilot/README.md`.
+- **A deploy is healthy when a page renders, not when healthz answers** (#283).
+  `/api/healthz` reports database, scheduler and schema and renders no
+  template, so it stayed green through the 15 minutes of 2026-08-14 in which a
+  `TemplateSyntaxError` turned every `/properties/<id>` into a redirect. The
+  watcher therefore also requires `AUTOPILOT_PAGE_URL` (default `/properties`
+  on the health URL's origin) to answer **200** — a redirect is the failure
+  being looked for, so do not add `-L` or accept 3xx. Do not "simplify" this
+  back to healthz alone, and do not solve it by making healthz render
+  something: it answers "can the app serve", and job liveness and template
+  health are different questions that must not be smuggled into it.
+  `.githooks/post-merge` reached the same rule the same day under its own name
+  (`AUTO_REBUILD_RENDER_PATH`, "Keeping the container current" above). Two
+  names for one idea is one too many, and the URLs are built differently
+  either side — the hook from `AUTO_REBUILD_BASE_URL`/the published port, the
+  watcher from its health URL — so unifying them is a real change and wants
+  its own ticket. Until then, change both or neither.
 - Preserve the scraping throttle in `services/listing_status_service.py`
   (randomized sleeps between listing fetches). No bulk re-scrape loops.
 - **There is no authentication** (owner decision, 2026-08-08): the admin

@@ -13,6 +13,7 @@ if ROOT_DIR not in sys.path:
 from app import create_app, db  # noqa: E402
 from models import Land  # noqa: E402
 from services.anthropic_service import get_anthropic_service  # noqa: E402
+from utils.inflight import inflight  # noqa: E402
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
@@ -123,76 +124,85 @@ def main() -> int:
             flush=True,
         )
 
-        for land in _iter_lands(args.batch_size):
-            if args.limit and processed >= args.limit:
-                break
+        # Without --force the scope skips lands that already carry a rating, so
+        # a killed run resumes where it stopped. With it, every land is in
+        # scope again and a restart pays Claude for work already done - so the
+        # marker reports that plainly rather than claiming resumability (#283).
+        with inflight("bulk_ai_analysis", resumable=not args.force):
+            for land in _iter_lands(args.batch_size):
+                if args.limit and processed >= args.limit:
+                    break
 
-            has_rating = _has_investment_rating(land)
-            if has_rating and not args.force:
-                skipped += 1
-                continue
+                has_rating = _has_investment_rating(land)
+                if has_rating and not args.force:
+                    skipped += 1
+                    continue
 
-            processed += 1
-            prefix = f"[{processed}] Land #{land.id}"
+                processed += 1
+                prefix = f"[{processed}] Land #{land.id}"
 
-            try:
-                existing = _as_dict(land.ai_analysis) if args.enrich else None
-                property_data = _build_property_data(land, existing_analysis=existing)
-                result = anthropic_service.analyze_property_structured(property_data)
-
-                if (
-                    result
-                    and result.get("status") == "success"
-                    and result.get("structured_analysis")
-                ):
-                    new_analysis = result.get("structured_analysis")
-                    if (
-                        args.enrich
-                        and existing
-                        and isinstance(existing, dict)
-                        and isinstance(new_analysis, dict)
-                    ):
-                        merged = dict(existing)
-                        merged.update(new_analysis)
-                        land.ai_analysis = merged
-                    else:
-                        land.ai_analysis = new_analysis
-
-                    db.session.commit()
-                    ok += 1
-
-                    rating_full = None
-                    try:
-                        rating_full = (
-                            _as_dict(land.ai_analysis)
-                            .get("rental_market_analysis", {})
-                            .get("investment_rating")
-                        )
-                    except Exception:
-                        rating_full = None
-                    rating_short = (
-                        str(rating_full).split("-")[0].strip().upper()
-                        if rating_full
-                        else "-"
+                try:
+                    existing = _as_dict(land.ai_analysis) if args.enrich else None
+                    property_data = _build_property_data(
+                        land, existing_analysis=existing
                     )
-                    print(f"{prefix} OK ({rating_short})", flush=True)
-                else:
+                    result = anthropic_service.analyze_property_structured(
+                        property_data
+                    )
+
+                    if (
+                        result
+                        and result.get("status") == "success"
+                        and result.get("structured_analysis")
+                    ):
+                        new_analysis = result.get("structured_analysis")
+                        if (
+                            args.enrich
+                            and existing
+                            and isinstance(existing, dict)
+                            and isinstance(new_analysis, dict)
+                        ):
+                            merged = dict(existing)
+                            merged.update(new_analysis)
+                            land.ai_analysis = merged
+                        else:
+                            land.ai_analysis = new_analysis
+
+                        db.session.commit()
+                        ok += 1
+
+                        rating_full = None
+                        try:
+                            rating_full = (
+                                _as_dict(land.ai_analysis)
+                                .get("rental_market_analysis", {})
+                                .get("investment_rating")
+                            )
+                        except Exception:
+                            rating_full = None
+                        rating_short = (
+                            str(rating_full).split("-")[0].strip().upper()
+                            if rating_full
+                            else "-"
+                        )
+                        print(f"{prefix} OK ({rating_short})", flush=True)
+                    else:
+                        failed += 1
+                        db.session.rollback()
+                        error = (
+                            (result or {}).get("error")
+                            if isinstance(result, dict)
+                            else "Unknown error"
+                        )
+                        print(f"{prefix} FAILED: {error}", file=sys.stderr, flush=True)
+
+                except Exception as e:
                     failed += 1
                     db.session.rollback()
-                    error = (
-                        (result or {}).get("error")
-                        if isinstance(result, dict)
-                        else "Unknown error"
-                    )
-                    print(f"{prefix} FAILED: {error}", file=sys.stderr, flush=True)
+                    print(f"{prefix} EXCEPTION: {e}", file=sys.stderr, flush=True)
 
-            except Exception as e:
-                failed += 1
-                db.session.rollback()
-                print(f"{prefix} EXCEPTION: {e}", file=sys.stderr, flush=True)
-
-            if args.sleep > 0:
-                time.sleep(args.sleep)
+                if args.sleep > 0:
+                    time.sleep(args.sleep)
 
         print(
             f"Done. processed={processed} ok={ok} failed={failed} skipped={skipped}",

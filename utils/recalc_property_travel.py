@@ -35,6 +35,7 @@ from app import create_app, db
 from models import Property
 from services.property_scoring_service import PropertyScoringService
 from services.property_travel_service import PropertyTravelService
+from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
 
@@ -185,40 +186,49 @@ def main() -> None:
         failed = 0
         changed_places: List[Dict[str, Any]] = []
 
-        for prop in properties:
-            before = _target_places(prop.travel)
-            try:
-                ok = travel_service.calculate_for_property(prop, commit=False)
-            except Exception:
-                logger.exception("Travel recalculation failed for property %s", prop.id)
-                db.session.rollback()
-                failed += 1
-                continue
+        # Never resumable: the scope is every matching property on each run,
+        # with no "already answered" filter, so an interrupted run re-bills
+        # Places and Distance Matrix for everything it finished - and the
+        # --report file is only written at the end, so that is lost outright.
+        # Narrow a restart with --ids by hand (#283).
+        with inflight("recalc_property_travel", resumable=False):
+            for prop in properties:
+                before = _target_places(prop.travel)
+                try:
+                    ok = travel_service.calculate_for_property(prop, commit=False)
+                except Exception:
+                    logger.exception(
+                        "Travel recalculation failed for property %s", prop.id
+                    )
+                    db.session.rollback()
+                    failed += 1
+                    continue
 
-            if not ok:
-                # Every target refused or unanswerable. `calculate_for_property`
-                # has already recorded that on the row; it is not a crash.
-                failed += 1
+                if not ok:
+                    # Every target refused or unanswerable.
+                    # `calculate_for_property` has already recorded that on the
+                    # row; it is not a crash.
+                    failed += 1
 
-            try:
-                scoring_service.calculate_for_property(prop, commit=False)
-            except Exception:
-                logger.exception("Rescoring failed for property %s", prop.id)
+                try:
+                    scoring_service.calculate_for_property(prop, commit=False)
+                except Exception:
+                    logger.exception("Rescoring failed for property %s", prop.id)
 
-            db.session.commit()
-            processed += 1
+                db.session.commit()
+                processed += 1
 
-            after = _target_places(prop.travel)
-            moved = {
-                key: {"before": before.get(key), "after": after.get(key)}
-                for key in sorted(set(before) | set(after))
-                if before.get(key) != after.get(key)
-            }
-            if moved:
-                changed_places.append({"id": prop.id, "targets": moved})
+                after = _target_places(prop.travel)
+                moved = {
+                    key: {"before": before.get(key), "after": after.get(key)}
+                    for key in sorted(set(before) | set(after))
+                    if before.get(key) != after.get(key)
+                }
+                if moved:
+                    changed_places.append({"id": prop.id, "targets": moved})
 
-            if args.sleep:
-                time.sleep(args.sleep)
+                if args.sleep:
+                    time.sleep(args.sleep)
 
         summary = {
             "processed": processed,

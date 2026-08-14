@@ -23,6 +23,7 @@ from app import create_app, db
 from models import Property
 from services.quality_of_life_service import RETRYABLE_STATUSES, QualityOfLifeService
 from utils.enrich_scope import scoped_properties
+from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
 
@@ -77,29 +78,33 @@ def main() -> None:
         service = QualityOfLifeService()
         status_counts: Dict[str, Dict[str, int]] = {}
         failed = 0
-        for idx, prop in enumerate(properties, start=1):
-            try:
-                payload = service.enrich(prop, commit=False)
-                db.session.commit()
-                for part in ("municipality", "supermarkets", "hospitals"):
-                    status = (payload.get(part) or {}).get("status") or "missing"
-                    per_part = status_counts.setdefault(part, {})
-                    per_part[status] = per_part.get(status, 0) + 1
-            except Exception as exc:
-                db.session.rollback()
-                failed += 1
-                logger.warning("QoL backfill failed for %s: %s", prop.id, exc)
+        # Resumable: per-row commit, and `needs_quality_of_life` drops a row
+        # once every part answered, so a killed run repeats one property at
+        # most (#283). It keeps no ledger, so the marker names none.
+        with inflight("backfill_quality_of_life", resumable=True):
+            for idx, prop in enumerate(properties, start=1):
+                try:
+                    payload = service.enrich(prop, commit=False)
+                    db.session.commit()
+                    for part in ("municipality", "supermarkets", "hospitals"):
+                        status = (payload.get(part) or {}).get("status") or "missing"
+                        per_part = status_counts.setdefault(part, {})
+                        per_part[status] = per_part.get(status, 0) + 1
+                except Exception as exc:
+                    db.session.rollback()
+                    failed += 1
+                    logger.warning("QoL backfill failed for %s: %s", prop.id, exc)
 
-            if idx % 20 == 0:
-                logger.info(
-                    "Progress %s/%s statuses=%s failed=%s",
-                    idx,
-                    len(properties),
-                    status_counts,
-                    failed,
-                )
-            if args.sleep:
-                time.sleep(max(0.0, float(args.sleep)))
+                if idx % 20 == 0:
+                    logger.info(
+                        "Progress %s/%s statuses=%s failed=%s",
+                        idx,
+                        len(properties),
+                        status_counts,
+                        failed,
+                    )
+                if args.sleep:
+                    time.sleep(max(0.0, float(args.sleep)))
 
         logger.info(
             "Done. total=%s statuses=%s failed=%s",

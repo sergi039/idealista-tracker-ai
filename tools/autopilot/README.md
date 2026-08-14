@@ -10,7 +10,7 @@ open issue ──▶ run_issue.sh ──▶ PR ──▶ CI (GitHub Actions)
                                         │
                                    merge_bot.sh ──▶ squash into main
                                         │
-                              deploy_watcher.sh ──▶ rebuild + /api/healthz
+                              deploy_watcher.sh ──▶ rebuild + healthz + /properties
                                         │
                                   unhealthy? ──▶ rollback
 ```
@@ -71,6 +71,77 @@ saved image does not: with no prior marker, that image can predate the checkout
 entirely, and claiming otherwise would make every later tick skip a redeploy
 the app actually needs. The marker is removed instead. One wasted rebuild beats
 a permanently wrong belief about what is running.
+
+## Healthy means a page rendered
+
+The health gate is `/api/healthz` **and** one real page. healthz reports
+database, scheduler and schema; it renders no template, so it cannot see a
+broken one. On 2026-08-14 a `TemplateSyntaxError` turned every
+`/properties/<id>` into a redirect for 15 minutes while healthz stayed green —
+`routes/main_routes.py` catches the error and redirects. So the watcher also
+fetches `AUTOPILOT_PAGE_URL` (default: the health URL's origin plus
+`/properties`) and requires **200**, not a redirect, which is exactly what that
+defect produced. Both must pass inside `AUTOPILOT_HEALTH_TIMEOUT`, on the
+deploy *and* on the rollback. Set `AUTOPILOT_PAGE_URL=""` to skip it; the log
+then says the build is unverified rather than saying nothing.
+
+## Long-running work inside the container
+
+`docker compose up -d --build` recreates the app container and kills whatever
+is running in it. Observed twice on 2026-08-14: a pool backfill
+(`python -m utils.backfill_pool`, hours long, paced by Overpass) died
+mid-flight and **nothing anywhere said so** — healthz was green before and
+after, the watcher logged an ordinary successful deploy, and the only way to
+learn what had completed was to read the backfill's own per-row ledger.
+
+Before it builds, the watcher now enumerates the container's processes with
+`docker top` — authoritative about liveness, and needs nothing installed in
+the image, so it also covers a job someone started by hand with `docker exec`.
+Each match is logged by name:
+
+```
+long-running work is in flight inside idealista-app:
+  in flight (resumable): python -m utils.backfill_pool --snapshot data/pool_backfill_20260814b.json
+      ledger: data/pool_backfill_20260814b.json.ledger.jsonl
+  deploying anyway (AUTOPILOT_DEFER_ON_INFLIGHT is off); the 1 job(s) above will be killed
+```
+
+**The default behaviour is unchanged.** The watcher deliberately does not make
+judgement calls about someone's working state, and holding a deploy trades a
+silent kill for a stalled deploy chain. What changes is that the postmortem
+exists without reading a ledger.
+
+Whether killing a job actually loses work is a question `docker top` cannot
+answer, so the job answers it: `utils/inflight.py` writes
+`data/.inflight/<module>.<pid>.json` on start and removes it on exit
+(`data/` is bind-mounted, which is how a file written inside the container is
+read on the host). `resumable: true` is a claim that an interrupted run
+resumes without losing or re-billing work — per-row commit, an idempotent
+scope that finished rows leave, and ideally a ledger. A missing marker means
+*unknown*, and unknown is treated exactly like `false`: a deploy cannot tell
+them apart, and guessing "resumable" is how work goes missing quietly.
+
+| Variable | Default | Does |
+|---|---|---|
+| `AUTOPILOT_DEFER_ON_INFLIGHT` | `0` | `1` = skip a tick when a job would lose work |
+| `AUTOPILOT_DEFER_BUDGET` | `6` | ticks (≈30 min) before deploying anyway |
+| `AUTOPILOT_INFLIGHT_PATTERN` | `python.*(-m +utils\.` &#124; `utils/)` | what counts as a job |
+| `AUTOPILOT_APP_CONTAINER` | `${COMPOSE_CONTAINER_PREFIX:-idealista}-app` | container to inspect |
+
+The deferral budget is bounded on purpose: a deploy that never lands is also
+a failure, just a quieter one. Deferrals are counted per target commit in
+`data/.deploy_deferrals`, so a new commit is a new decision; when the budget
+runs out the watcher deploys and says that it did. If the counter cannot be
+written it deploys immediately rather than wait on a bound it cannot enforce.
+
+The other half is the next run: a marker outlives its process precisely when
+the process was killed, so the next start of the same job finds it, reports
+what was interrupted and where its ledger stands, and clears it.
+
+`tools/autopilot/deploy_inflight_test.sh` (wrapped by
+`tests/test_deploy_watcher_inflight.py`) pins all of it — no job, a resumable
+job, a job with no marker, the bounded defer, and a green healthz over a
+redirecting page.
 
 ## Scheduled deploys
 
