@@ -156,6 +156,16 @@ reference), and **check a page that renders a template afterwards — not
 incident.** Check the page *your* change does not touch, too: the builder
 above verified the only page that could not have caught the defect.
 
+**A hand build also kills whatever is running inside the container**, and
+unlike a deploy it leaves no trace at all: `docker compose up -d --build`
+recreates `idealista-app`, so an hours-long backfill in there dies mid-row and
+nothing logs it. `docker top idealista-app` answers the question in one
+command — run it. The in-flight machinery the watcher grew for this (#283)
+lives inside `deploy_watcher.sh` and does not reach a build you start by hand,
+so here the check is yours to make. A killed backfill is recoverable — the
+tools commit per row and skip finished ones — but only if someone knows to
+restart it.
+
 If the tree holds someone else's work in progress and you only need to see
 your own, the cheap way out is a `git worktree` with its own
 `COMPOSE_CONTAINER_PREFIX` and `APP_HOST_PORT` (docs/DEV_RULES.md), not a
