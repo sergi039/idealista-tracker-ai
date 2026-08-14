@@ -10,6 +10,7 @@ the button's work is judged by.
 
 import copy
 import json
+import re
 
 import pytest
 
@@ -216,3 +217,55 @@ class TestCriteriaPageShowsTheStamp:
         assert "Last updated:" in body
         assert stamp in body
         assert "Refresh with AI" in body
+
+
+class TestRefreshButtonBusyState:
+    """Issue #276: the rendered page ships the button's busy-state wiring.
+
+    pytest cannot run the browser side, so these pin what the server can
+    prove about the page it serves — and the join points a quiet break
+    would sever. The getElementById literals are asserted alongside the
+    markup ids because a renamed id on either side leaves every handler
+    (confirm, disable, spinner, pageshow) silently unattached; the confirm
+    is pinned by its unique dialog text because the page carries five
+    other confirm() calls; and the no-inline-onsubmit check is scoped to
+    this form's open tag because inline onsubmit is a live pattern in
+    other templates.
+    """
+
+    def test_page_ships_the_busy_state_wiring(self, client):
+        response = client.get("/criteria")
+
+        assert response.status_code == 200
+        body = response.get_data(as_text=True)
+        assert 'id="ai-refresh-form"' in body
+        assert 'id="ai-refresh-button"' in body
+        # The join: the script must look up the ids the markup declares.
+        assert "getElementById('ai-refresh-form')" in body
+        assert "getElementById('ai-refresh-button')" in body
+        assert "aiRefreshBtn.disabled = true" in body
+        assert "spinner-border" in body
+        # A bfcache-restored page must reset the button (part 3 of the fix).
+        assert "pageshow" in body
+
+    def test_confirm_guard_survives_and_promises_minutes(self, client):
+        body = client.get("/criteria").get_data(as_text=True)
+
+        # The confirm guard is a ticket constraint (one press = one paid
+        # bridge call). Pinned by its unique dialog text: the spinner label
+        # also says "can take a few minutes", so that string alone would
+        # stay green with the confirm deleted.
+        assert "confirm('Refresh market settings with AI?" in body
+        assert "can take a few minutes" in body
+        # The wording the live 2.5-minute call disproved (issue #276).
+        assert "may take a minute" not in body
+
+    def test_refresh_form_has_no_inline_submit_handler(self, client):
+        body = client.get("/criteria").get_data(as_text=True)
+
+        # An inline handler here would stack a second dialog on the
+        # scripted one. Scoped to this form's open tag: inline onsubmit is
+        # a legitimate pattern elsewhere in the app.
+        form_tag = re.search(r'<form[^>]*id="ai-refresh-form"[^>]*>', body)
+        assert form_tag is not None
+        assert "onsubmit" not in form_tag.group(0)
