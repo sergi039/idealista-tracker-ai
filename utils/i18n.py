@@ -115,6 +115,7 @@ TRANSLATIONS = {
         "component_size": "Size",
         "component_travel": "Travel",
         "component_sea": "Sea",
+        "component_pool": "Pool",
         "component_not_measured": "not measured — excluded",
         "weight_renormalized_tooltip": "Effective weight after excluding unmeasured components",
         "combined_score": "Combined",
@@ -162,6 +163,8 @@ TRANSLATIONS = {
             "OSM found none and one Places cross-check agreed; a single "
             "query proves nothing about completeness, so this is never a 0"
         ),
+        "pool_unroutable": "no road route",
+        "pool_unroutable_tooltip": "Google answered: no driving route to this pool",
         "pool_owner_absence": "Owner confirmed: no usable pool",
         "pool_owner_absence_set": "Confirm: no usable pool here",
         "pool_owner_absence_clear": "Clear the no-pool verdict",
@@ -308,6 +311,7 @@ TRANSLATIONS = {
         "component_size": "Tamaño",
         "component_travel": "Viajes",
         "component_sea": "Mar",
+        "component_pool": "Piscina",
         "component_not_measured": "no medido — excluido",
         "weight_renormalized_tooltip": "Peso efectivo tras excluir componentes no medidos",
         "combined_score": "Combinada",
@@ -354,6 +358,8 @@ TRANSLATIONS = {
             "OSM no encontró ninguna y una comprobación en Places coincidió; "
             "una sola consulta no prueba exhaustividad, así que nunca es un 0"
         ),
+        "pool_unroutable": "sin ruta por carretera",
+        "pool_unroutable_tooltip": "Google respondió: sin ruta en coche a esta piscina",
         "pool_owner_absence": "Confirmado por el propietario: sin piscina útil",
         "pool_owner_absence_set": "Confirmar: aquí no hay piscina útil",
         "pool_owner_absence_clear": "Quitar el veredicto de sin piscina",

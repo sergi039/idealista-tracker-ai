@@ -77,10 +77,13 @@ class _FakeTravel:
         self.text_calls = 0
 
     def measure_drive_minutes(self, lat, lon, points):
+        """Mirrors the real reading shape: minutes + a refused flag, so an
+        unroutable answer and a refused request stay distinguishable."""
         self.measure_calls.append(points)
-        return (self.minutes + [None] * len(points))[: len(points)]
+        padded = (self.minutes + [None] * len(points))[: len(points)]
+        return [{"minutes": value, "refused": value is None} for value in padded]
 
-    def _nearest_place_text_search(self, lat, lon, query, place_types):
+    def _nearest_place_text_search(self, lat, lon, query, place_types, reject=None):
         self.text_calls += 1
         if self.text_fails:
             return SimpleNamespace(place=None, failure=SimpleNamespace(reason="denied"))
@@ -203,6 +206,221 @@ class TestAcceptanceMatrix:
         prop.enrichment = enrichment
         part = _service(elements=[SPORTS_CENTRE], minutes=[9]).enrich(prop)
         assert isinstance(part.get("owner_no_pool"), dict)
+
+
+class TestDiffReviewFixes:
+    """The eight confirmed findings of the 2026-08-14 review."""
+
+    def test_indoor_evidence_order_and_explicit_outdoor(self):
+        from services.pool_service import _indoor_evidence
+
+        # location=indoor is explicit and must not be shadowed by a building tag
+        assert _indoor_evidence({"building": "yes", "location": "indoor"}) == (
+            "verified",
+            "location=indoor",
+        )
+        # covered=no is an outdoor pool: no name or building may promote it
+        assert _indoor_evidence({"covered": "no", "building": "yes"})[0] == "unknown"
+        assert (
+            _indoor_evidence({"covered": "no", "name": "Piscina climatizada"})[0]
+            == "unknown"
+        )
+
+    def test_query_requires_a_name_server_side(self):
+        """The cap truncated before _qualifies could run (Gijón: 338 matched,
+        22 qualifying) — the name clause makes the sets ~equal."""
+        service = _service(elements=[])
+        captured = {}
+
+        def _capture(query):
+            captured["query"] = query
+            return [], None
+
+        service.enrichment_service._overpass_elements = _capture
+        service.discover_candidates(43.5, -6.8)
+        assert '["leisure"="swimming_pool"]["name"]' in captured["query"]
+        assert "out center tags 200;" in captured["query"]
+
+    def test_cross_check_rejects_a_hotel(self, app):
+        """An unfiltered Text Search accepts whatever ranks first (#171)."""
+        from services.pool_service import CROSS_CHECK_RULES
+
+        assert CROSS_CHECK_RULES.rejects({"name": "Hotel Spa Playa", "types": []})
+        assert not CROSS_CHECK_RULES.rejects(
+            {"name": "Piscina Municipal de Navia", "types": []}
+        )
+
+    def test_zero_results_is_a_measurement_not_a_refusal(self, app):
+        """Google answering 'no route' must not keep the row retryable."""
+        prop = _prop(title="zero")
+        travel = _FakeTravel()
+        travel.measure_drive_minutes = lambda lat, lon, points: [
+            {"minutes": None, "refused": False} for _ in points
+        ]
+        service = PoolService(
+            enrichment_service=_FakeEnrichment(elements=[SPORTS_CENTRE]),
+            travel_service=travel,
+        )
+        part = service.enrich(prop)
+        assert part["status"] == "ok"
+        assert part["candidates"][0]["unroutable"] is True
+        assert needs_pool(prop) is False
+
+    def test_an_indoor_candidate_always_gets_a_measurement_slot(self):
+        from services.pool_service import _select_for_measurement
+
+        outdoor = [
+            {"indoor_status": "unknown", "straight_km": km, "name": f"o{km}"}
+            for km in (1, 2, 3)
+        ]
+        indoor = {"indoor_status": "verified", "straight_km": 9, "name": "indoor"}
+        picked = _select_for_measurement(outdoor + [indoor])
+        assert indoor in picked
+        assert len(picked) == 3
+
+    def test_pool_block_renders_without_a_qol_block(self, app, client):
+        """The pool card — and the owner-flag control — must not hide behind
+        the QoL card's presence."""
+        prop = _prop(
+            title="standalone",
+            enrichment={
+                "pool": {
+                    "status": "ok",
+                    "candidates": [
+                        {
+                            "name": "Piscina Municipal",
+                            "indoor_status": "verified",
+                            "indoor_evidence": "covered=yes",
+                            "drive_min": 11,
+                            "lat": 43.5,
+                            "lon": -6.8,
+                            "straight_km": 8.0,
+                        }
+                    ],
+                }
+            },
+        )
+        body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
+        assert "Swimming pool" in body
+        assert "Piscina Municipal" in body
+        assert "pool-absence" in body, "the owner control must be reachable"
+
+    def test_score_breakdown_renders_the_pool_row(self, app, client):
+        prop = _prop(
+            title="breakdown",
+            scoring={
+                "profiles": {
+                    "lifestyle": {
+                        "score": 70,
+                        "weights": {"travel_score": 0.5, "pool_score": 0.5},
+                        "components": {"travel_score": 60, "pool_score": 80},
+                    }
+                },
+                "combined_mix": {"investment": 0.32, "lifestyle": 0.68},
+            },
+            score_lifestyle=70,
+            score_investment=70,
+        )
+        body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
+        assert ">Pool<" in body or "Pool" in body
+        assert "× 0.50" in body
+
+    def test_preview_reports_investment_only_changes(self, app, client):
+        profile = SearchProfile(
+            name="Land at Norte",
+            is_active=True,
+            is_default=True,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(profile)
+        db.session.commit()
+        prop = _prop(
+            title="inv-preview",
+            search_profile_id=profile.id,
+            price=100000,
+            area=200,
+            enrichment={
+                "pool": {
+                    "status": "ok",
+                    "candidates": [
+                        {"indoor_status": "verified", "drive_min": 5, "name": "P"}
+                    ],
+                }
+            },
+        )
+        PropertyScoringService().calculate_for_property(prop, commit=True)
+        resp = client.post(
+            f"/profiles/{profile.id}/edit",
+            data={
+                "action": "save_scoring_weights",
+                "scoring__housing__investment__pool_score": "0.2",
+            },
+            follow_redirects=True,
+        )
+        body = resp.get_data(as_text=True)
+        assert "0 of 1 listings would change" not in body, (
+            "an investment-branch enable must not preview as no-op"
+        )
+
+    def test_a_normal_save_invalidates_a_pending_preview(self, app, client):
+        profile = SearchProfile(
+            name="Land at Norte",
+            is_active=True,
+            is_default=True,
+            travel_targets={"presets": {}, "custom": []},
+        )
+        db.session.add(profile)
+        db.session.commit()
+        _prop(title="stale", search_profile_id=profile.id, price=100000, area=200)
+
+        client.post(
+            f"/profiles/{profile.id}/edit",
+            data={
+                "action": "save_scoring_weights",
+                "scoring__housing__lifestyle__pool_score": "0.2",
+            },
+        )
+        # A normal save in between must supersede the pending snapshot.
+        client.post(
+            f"/profiles/{profile.id}/edit",
+            data={
+                "action": "save_scoring_weights",
+                "scoring__housing__lifestyle__sea_score": "0.5",
+            },
+        )
+        client.post(
+            f"/profiles/{profile.id}/edit", data={"action": "confirm_pool_scoring"}
+        )
+        db.session.refresh(profile)
+        lifestyle = (
+            (profile.scoring_config or {})
+            .get("categories", {})
+            .get("housing", {})
+            .get("lifestyle", {})
+        )
+        assert lifestyle.get("sea_score") == 0.5, "the newer save must survive"
+        assert not lifestyle.get("pool_score"), "the stale snapshot must not apply"
+
+    def test_pool_weight_check_survives_a_scalar_branch(self, app, client):
+        """#239 keeps unmanaged keys: a hand-written category can hold a
+        scalar where a dict is expected, and the save must not crash."""
+        profile = SearchProfile(
+            name="Land at Norte",
+            is_active=True,
+            is_default=True,
+            travel_targets={"presets": {}, "custom": []},
+            scoring_config={"categories": {"custom_cat": {"investment": 5}}},
+        )
+        db.session.add(profile)
+        db.session.commit()
+        resp = client.post(
+            f"/profiles/{profile.id}/edit",
+            data={
+                "action": "save_scoring_weights",
+                "scoring__housing__lifestyle__sea_score": "0.3",
+            },
+        )
+        assert resp.status_code in (302, 303)
 
 
 class TestScorerInvariants:

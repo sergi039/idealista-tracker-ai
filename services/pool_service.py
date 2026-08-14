@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy.orm.attributes import flag_modified
 
 from models import Property
+from services import place_rules
 from services.enrichment_service import EnrichmentService
 from services.sea_view_service import haversine_m
 
@@ -54,12 +55,33 @@ MEASURED_STATUSES = frozenset({STATUS_OK, STATUS_UNVERIFIED_ABSENCE})
 
 CROSS_CHECK_QUERY = "piscina municipal climatizada"
 
+# What the cross-check may accept (diff review, 2026-08-14): the top Text
+# Search hit for a pool query near a resort can be the resort itself. Same
+# mechanism as every other place filter in the app — services/place_rules.py,
+# imported per #171, never copied.
+CROSS_CHECK_RULES = place_rules.PlaceRules(
+    require_name_patterns=("piscina", "pool", "nataci", "natación", "polideportivo"),
+    reject_name_patterns=("hotel", "camping", "spa", "balneario", "apartament"),
+    reject_types=("lodging", "campground", "spa"),
+)
+
 
 def _indoor_evidence(tags: Dict[str, Any]) -> Tuple[str, Optional[str]]:
-    """(indoor_status, evidence) — evidence names the tag or word that says so."""
+    """(indoor_status, evidence) — evidence names the tag or word that says so.
+
+    Order matters (diff review, 2026-08-14): the explicit tags speak first —
+    `covered=yes`/`location=indoor` are `verified`, and an explicit
+    `covered=no` is an *outdoor* pool, which no name or building may promote
+    to `likely`. Only in tag silence do the heuristics guess.
+    """
     covered = str(tags.get("covered") or "").lower()
     if covered == "yes":
         return "verified", "covered=yes"
+    location = str(tags.get("location") or "").lower()
+    if location == "indoor":
+        return "verified", "location=indoor"
+    if covered == "no":
+        return "unknown", "covered=no"
     name = str(tags.get("name") or "")
     lowered = name.lower()
     for word in ("climatizada", "climatizado", "cubierta", "cubierto"):
@@ -68,10 +90,29 @@ def _indoor_evidence(tags: Dict[str, Any]) -> Tuple[str, Optional[str]]:
     building = str(tags.get("building") or "").lower()
     if building and building not in ("no",):
         return "likely", f"building={building}"
-    location = str(tags.get("location") or "").lower()
-    if location == "indoor":
-        return "verified", "location=indoor"
     return "unknown", None
+
+
+def _select_for_measurement(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The ≤3 candidates worth a Distance Matrix element.
+
+    Nearest-first alone starved the require-indoor toggle: three outdoor
+    pools up front left a verified indoor one 4th and unmeasured, scoring
+    `no_qualifying_candidate` though the pool the owner would drive to
+    exists (diff review, 2026-08-14). So the nearest indoor-evidence
+    candidate always claims a slot when one exists.
+    """
+    top = candidates[:POOL_MEASURE_TOP_N]
+    has_indoor = any(c.get("indoor_status") in ("verified", "likely") for c in top)
+    if has_indoor:
+        return top
+    nearest_indoor = next(
+        (c for c in candidates if c.get("indoor_status") in ("verified", "likely")),
+        None,
+    )
+    if nearest_indoor is None:
+        return top
+    return top[: POOL_MEASURE_TOP_N - 1] + [nearest_indoor]
 
 
 def _qualifies(tags: Dict[str, Any]) -> bool:
@@ -119,13 +160,20 @@ class PoolService:
         Returns {"candidates": [...]} or {"failure_reason": str}.
         """
         around = f"around:{POOL_SEARCH_RADIUS_M},{lat},{lon}"
+        # The swimming_pool branch requires a ["name"] server-side: without it
+        # a dense area matches hundreds of unnamed garden basins and the
+        # element cap truncates in id order BEFORE _qualifies runs — measured
+        # live at Gijón (338 matched, 22 qualifying, relation-mapped municipal
+        # pools dropped systematically). With the name clause the server-side
+        # match set ≈ the qualifying set and the cap is headroom, not a
+        # truncation (diff review, 2026-08-14).
         query = f"""
         [out:json][timeout:25];
         (
           nwr["leisure"="sports_centre"]["sport"~"swimming"]({around});
-          nwr["leisure"="swimming_pool"]["access"!~"private|customers"]({around});
+          nwr["leisure"="swimming_pool"]["name"]["access"!~"private|customers"]({around});
         );
-        out center tags 60;
+        out center tags 200;
         """
         elements, failure = self.enrichment_service._overpass_elements(query)
         if failure is not None:
@@ -172,7 +220,14 @@ class PoolService:
         """
         try:
             lookup = self.travel_service._nearest_place_text_search(
-                lat, lon, CROSS_CHECK_QUERY, place_types=[]
+                lat,
+                lon,
+                CROSS_CHECK_QUERY,
+                place_types=[],
+                # The #171 lesson, imported not copied: an unfiltered Text
+                # Search accepts whatever ranks first. Only something that
+                # calls itself a pool qualifies, and lodgings never do.
+                reject=CROSS_CHECK_RULES,
             )
         except Exception:
             logger.warning("Pool cross-check failed", exc_info=True)
@@ -258,15 +313,24 @@ class PoolService:
                     "cross_check": cross_check,
                 }
 
-        to_measure = candidates[:POOL_MEASURE_TOP_N]
-        minutes = self.travel_service.measure_drive_minutes(
+        to_measure = _select_for_measurement(candidates)
+        readings = self.travel_service.measure_drive_minutes(
             lat, lon, [(c["lat"], c["lon"]) for c in to_measure]
         )
         measured_any = False
-        for candidate, drive in zip(to_measure, minutes):
-            if drive is not None:
-                candidate["drive_min"] = drive
-                measured_any = True
+        for candidate, reading in zip(to_measure, readings):
+            if not isinstance(reading, dict):
+                continue
+            if reading.get("refused"):
+                continue
+            measured_any = True
+            if reading.get("minutes") is not None:
+                candidate["drive_min"] = reading["minutes"]
+            else:
+                # Google *answered* that no route exists (ZERO_RESULTS): a
+                # measurement, not a refusal — the candidate is unreachable
+                # by road and must not keep the row in the retry scope.
+                candidate["unroutable"] = True
 
         return {
             "status": STATUS_OK if measured_any else STATUS_PENDING,
