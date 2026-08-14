@@ -438,10 +438,27 @@
             <!-- Market Settings Tab -->
             <div class="tab-pane fade" id="market-settings" role="tabpanel" aria-labelledby="market-settings-tab">
                 <div class="card border-primary">
-                    <div class="card-header bg-primary bg-opacity-10">
+                    <div class="card-header bg-primary bg-opacity-10 d-flex justify-content-between align-items-center flex-wrap gap-2">
                         <h5 class="card-title mb-0">
-                            <i class="fas fa-euro-sign me-2"></i>Market Analysis Settings (2025 defaults)
+                            <i class="fas fa-euro-sign me-2"></i>Market Analysis Settings
                         </h5>
+                        <div class="d-flex align-items-center gap-3">
+                            <small class="text-muted">
+                                Last updated:
+                                {% if market_settings and market_settings.updated_at %}
+                                    {{ market_settings.updated_at.strftime('%Y-%m-%d %H:%M') }} UTC
+                                {% else %}
+                                    never
+                                {% endif %}
+                            </small>
+                            <form method="POST" action="{{ url_for('main.refresh_market_settings') }}" class="mb-0"
+                                  onsubmit="return confirm('Refresh market settings with AI? This runs one Claude request on the subscription bridge and may take a minute.');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                <button type="submit" class="btn btn-sm btn-outline-primary">
+                                    <i class="fas fa-sync-alt me-1"></i>Refresh with AI
+                                </button>
+                            </form>
+                        </div>
                     </div>
                     <div class="card-body">
                         <p class="text-muted mb-4">
@@ -823,6 +840,18 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    // Re-open the tab named in the URL hash (the market-settings actions
+    // redirect to /criteria#market-settings; without this the page would
+    // land back on the Investment tab).
+    if (window.location.hash) {
+        const tabTrigger = document.querySelector(
+            '[data-bs-toggle="tab"][data-bs-target="' + CSS.escape(window.location.hash) + '"]'
+        );
+        if (tabTrigger && window.bootstrap && bootstrap.Tab) {
+            bootstrap.Tab.getOrCreateInstance(tabTrigger).show();
+        }
+    }
+
     // Reference cities add/remove UI
     const refForm = document.getElementById('reference-cities-form');
     const rows = document.getElementById('reference-cities-rows');
