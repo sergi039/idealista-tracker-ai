@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from models import Property
 from services.quality_of_life_service import QualityOfLifeService
+from utils.idealista_extractors import is_truncated_municipality
 
 logger = logging.getLogger(__name__)
 
@@ -198,10 +199,13 @@ class MunicipalityComparisonService:
         groups: Dict[str, Dict[str, Any]] = {}
         for prop in properties:
             name = (prop.municipality or "").strip()
-            if not name:
-                # A listing with no municipality cannot be compared by one;
-                # it is counted in the page's footnote instead of inventing
-                # a bucket for it.
+            if not name or is_truncated_municipality(name):
+                # A listing with no municipality cannot be compared by one,
+                # and a truncated email artifact ("Ovi...", issue #298) is
+                # not a municipality either -- its INE join can only ever
+                # say "not matched" next to the real Oviedo row. Both are
+                # counted in the page's footnote instead of inventing a
+                # bucket for them.
                 continue
             key = name.lower()
             group = groups.get(key)
