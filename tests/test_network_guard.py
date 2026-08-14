@@ -4,11 +4,11 @@ The guard under test is tests/network_guard.py, installed for the whole
 session from tests/conftest.py. These tests are what stops it from being
 quietly weakened: the two halves that matter are that a public destination is
 refused *and named*, and that the local plumbing the suite genuinely uses --
-loopback TCP, unix sockets, an allowlisted database host -- still works.
+loopback TCP, unix sockets -- still works.
 
 Every refusal here is deliberate, so each one runs inside
-`network_guard.capture_attempts()`: without it this file would appear in the
-session's own leak report as eleven tests that reached for the network.
+`network_guard.capture_attempts()`: without it this file would report itself
+as the biggest leak in the run.
 
 Nothing in this file connects anywhere. The public addresses below are
 documentation ranges (RFC 5737 / RFC 3849) and the guard raises before the
