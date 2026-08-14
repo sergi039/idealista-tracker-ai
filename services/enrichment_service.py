@@ -23,6 +23,7 @@ from utils.google_api import (
 from utils.http import HTTP_USER_AGENT, OVERPASS_GATE, request_with_retries
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 from config import Config
+from services.sea_view_service import haversine_m
 from services.place_rules import place_rules_from
 from services.scoring_service import ScoringService
 from services.search_profile_service import TRAVEL_PRESET_DEFS
@@ -108,6 +109,27 @@ class OsmAmenityReading:
     counts: Optional[Dict[str, int]] = None
     measured_at: Optional[str] = None
     failure: Optional[GoogleApiFailure] = None
+
+
+@dataclass(frozen=True)
+class OsmSupermarketReading:
+    """One supermarket-reach lookup (QoL slice, issue #271 follow-up).
+
+    Same contract as OsmAmenityReading: exactly one of `items`/`failure` set,
+    an empty list is a measured answer, a refusal never reads as one.
+    """
+
+    items: Optional[list] = None
+    measured_at: Optional[str] = None
+    failure: Optional[GoogleApiFailure] = None
+
+
+# The QoL card names the nearest supermarkets rather than counting them: the
+# 2 km amenity count above answers "is there one at the door", this answers
+# "where do you actually shop" — rural Asturias routinely means a 10 km drive.
+OSM_SUPERMARKET_CACHE_KEY = "osm_supermarket_reach_v1"
+OSM_SUPERMARKET_RADIUS_M = 12000
+OSM_SUPERMARKET_TOP_N = 5
 
 
 # Verdict for one `enrich_land` run, persisted in
@@ -1323,86 +1345,9 @@ class EnrichmentService:
             out center;
             """
 
-            try:
-                response = request_with_retries(
-                    requests.post,
-                    self.osm_overpass_url,
-                    data=overpass_query,
-                    headers={
-                        "Content-Type": "application/x-www-form-urlencoded",
-                        # Without this the default `python-requests/x.y.z` is
-                        # sent and every call comes back 406. See HTTP_USER_AGENT.
-                        "User-Agent": HTTP_USER_AGENT,
-                    },
-                    # A 504 here means "both slots are busy", and a slot frees
-                    # up in roughly a minute. The default half-second backoff
-                    # gives up long before then, so widen it: 8+16+32 out-waits
-                    # a typical turnover without stalling a bulk run for
-                    # minutes on a *fallback* source.
-                    max_attempts=4,
-                    backoff_base=8.0,
-                    backoff_max=90.0,
-                    timeout=60,
-                    logger=logger,
-                    # Both Overpass callers in this process share one gate, and
-                    # it covers every attempt: the retries are what a bulk run
-                    # spends most of its requests on.
-                    gate=OVERPASS_GATE,
-                )
-            except requests.RequestException as exc:
-                return OsmAmenityReading(failure=failure_from_exception(exc))
-
-            status_code = getattr(response, "status_code", None)
-            if status_code != 200:
-                return OsmAmenityReading(
-                    failure=GoogleApiFailure(
-                        reason=REASON_HTTP_ERROR,
-                        http_status=status_code
-                        if isinstance(status_code, int)
-                        else None,
-                    )
-                )
-
-            try:
-                osm_data = response.json()
-            except ValueError as exc:
-                return OsmAmenityReading(
-                    failure=GoogleApiFailure(
-                        reason=REASON_MALFORMED_RESPONSE, message=str(exc)
-                    )
-                )
-
-            if not isinstance(osm_data, dict):
-                return OsmAmenityReading(
-                    failure=GoogleApiFailure(
-                        reason=REASON_MALFORMED_RESPONSE,
-                        message=f"expected an object, got {type(osm_data).__name__}",
-                    )
-                )
-
-            # Overpass reports a server-side failure *inside a 200*: the body
-            # carries a `remark` ("runtime error: Query timed out in ...",
-            # "Query run out of memory") and, usually, an empty `elements`.
-            # Reading that as "nothing nearby" is the very defect this function
-            # exists to remove, and it would then be cached for a week.
-            remark = osm_data.get("remark")
-            if remark:
-                return OsmAmenityReading(
-                    failure=GoogleApiFailure(
-                        reason=OSM_REASON_QUERY_ERROR, message=str(remark)
-                    )
-                )
-
-            # No `elements` at all is not an empty answer either - a well-formed
-            # Overpass result always carries the key, even when it is empty.
-            elements = osm_data.get("elements")
-            if not isinstance(elements, list):
-                return OsmAmenityReading(
-                    failure=GoogleApiFailure(
-                        reason=REASON_MALFORMED_RESPONSE,
-                        message="response carries no elements list",
-                    )
-                )
+            elements, transport_failure = self._overpass_elements(overpass_query)
+            if transport_failure is not None:
+                return OsmAmenityReading(failure=transport_failure)
 
             amenity_counts: Dict[str, int] = {}
             for element in elements:
@@ -1437,6 +1382,172 @@ class EnrichmentService:
         except Exception as exc:
             logger.error("Failed to fetch OSM amenities", exc_info=True)
             return OsmAmenityReading(failure=failure_from_exception(exc))
+
+    def _overpass_elements(self, overpass_query: str):
+        """One Overpass round-trip: elements list, or why it refused.
+
+        Extracted from `_fetch_osm_amenities` so the supermarket-reach lookup
+        below cannot grow its own transport — the gate, the User-Agent and the
+        three measured refusals (#144: 406 for a bad UA, 504 while both per-IP
+        slots are busy, and a `remark` inside a 200) live exactly once.
+        Returns `(elements, None)` or `(None, failure)`.
+        """
+        try:
+            response = request_with_retries(
+                requests.post,
+                self.osm_overpass_url,
+                data=overpass_query,
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    # Without this the default `python-requests/x.y.z` is
+                    # sent and every call comes back 406. See HTTP_USER_AGENT.
+                    "User-Agent": HTTP_USER_AGENT,
+                },
+                # A 504 here means "both slots are busy", and a slot frees
+                # up in roughly a minute. The default half-second backoff
+                # gives up long before then, so widen it: 8+16+32 out-waits
+                # a typical turnover without stalling a bulk run for
+                # minutes on a *fallback* source.
+                max_attempts=4,
+                backoff_base=8.0,
+                backoff_max=90.0,
+                timeout=60,
+                logger=logger,
+                # Every Overpass caller in this process shares one gate, and
+                # it covers every attempt: the retries are what a bulk run
+                # spends most of its requests on.
+                gate=OVERPASS_GATE,
+            )
+        except requests.RequestException as exc:
+            return None, failure_from_exception(exc)
+
+        status_code = getattr(response, "status_code", None)
+        if status_code != 200:
+            return None, GoogleApiFailure(
+                reason=REASON_HTTP_ERROR,
+                http_status=status_code if isinstance(status_code, int) else None,
+            )
+
+        try:
+            osm_data = response.json()
+        except ValueError as exc:
+            return None, GoogleApiFailure(
+                reason=REASON_MALFORMED_RESPONSE, message=str(exc)
+            )
+
+        if not isinstance(osm_data, dict):
+            return None, GoogleApiFailure(
+                reason=REASON_MALFORMED_RESPONSE,
+                message=f"expected an object, got {type(osm_data).__name__}",
+            )
+
+        # Overpass reports a server-side failure *inside a 200*: the body
+        # carries a `remark` ("runtime error: Query timed out in ...",
+        # "Query run out of memory") and, usually, an empty `elements`.
+        # Reading that as "nothing nearby" is the very defect this method
+        # exists to remove, and it would then be cached for a week.
+        remark = osm_data.get("remark")
+        if remark:
+            return None, GoogleApiFailure(
+                reason=OSM_REASON_QUERY_ERROR, message=str(remark)
+            )
+
+        # No `elements` at all is not an empty answer either - a well-formed
+        # Overpass result always carries the key, even when it is empty.
+        elements = osm_data.get("elements")
+        if not isinstance(elements, list):
+            return None, GoogleApiFailure(
+                reason=REASON_MALFORMED_RESPONSE,
+                message="response carries no elements list",
+            )
+
+        return elements, None
+
+    def fetch_osm_supermarket_reach(self, lat: float, lon: float):
+        """The named supermarkets within driving reach, nearest first.
+
+        The QoL card's data (agreed proposal, D16 as amended in review round
+        2): factual rows — name, brand, shop type, straight-line km — sorted
+        by distance, no brand ranking. `shop=supermarket|convenience` within
+        12 km; an empty list is a measured answer (`osm_empty` upstream), a
+        refusal comes back as a failure and must never render as "none".
+        """
+        try:
+            cached = get_cached_enrichment_data(lat, lon, OSM_SUPERMARKET_CACHE_KEY)
+            if isinstance(cached, dict) and isinstance(cached.get("items"), list):
+                logger.debug("OSM supermarket cache hit for %s,%s", lat, lon)
+                return OsmSupermarketReading(
+                    items=cached["items"], measured_at=cached.get("measured_at")
+                )
+
+            around = f"around:{OSM_SUPERMARKET_RADIUS_M},{lat},{lon}"
+            overpass_query = f"""
+            [out:json][timeout:25];
+            (
+              node["shop"~"^(supermarket|convenience)$"]({around});
+              way["shop"~"^(supermarket|convenience)$"]({around});
+              relation["shop"~"^(supermarket|convenience)$"]({around});
+            );
+            out center tags;
+            """
+
+            elements, transport_failure = self._overpass_elements(overpass_query)
+            if transport_failure is not None:
+                return OsmSupermarketReading(failure=transport_failure)
+
+            items = []
+            for element in elements:
+                if not isinstance(element, dict):
+                    continue
+                tags = element.get("tags") or {}
+                el_lat = element.get("lat")
+                el_lon = element.get("lon")
+                if el_lat is None or el_lon is None:
+                    center = element.get("center") or {}
+                    el_lat = center.get("lat")
+                    el_lon = center.get("lon")
+                if el_lat is None or el_lon is None:
+                    continue
+                items.append(
+                    {
+                        # Unnamed shops stay explicit rather than dropped: a
+                        # village shop with no name tag is still a shop.
+                        "name": tags.get("name"),
+                        "brand": tags.get("brand"),
+                        "shop": tags.get("shop"),
+                        "lat": el_lat,
+                        "lon": el_lon,
+                        "distance_km": round(
+                            haversine_m(lat, lon, float(el_lat), float(el_lon))
+                            / 1000.0,
+                            1,
+                        ),
+                    }
+                )
+            items.sort(key=lambda item: item["distance_km"])
+            items = items[:OSM_SUPERMARKET_TOP_N]
+
+            measured_at = datetime.now(timezone.utc).isoformat()
+            try:
+                cache_enrichment_data(
+                    lat,
+                    lon,
+                    OSM_SUPERMARKET_CACHE_KEY,
+                    {"items": items, "measured_at": measured_at},
+                    timeout=60 * 60 * 24 * 7,
+                )
+            except Exception:
+                logger.warning(
+                    "Could not cache supermarket reach for %s,%s",
+                    lat,
+                    lon,
+                    exc_info=True,
+                )
+            return OsmSupermarketReading(items=items, measured_at=measured_at)
+
+        except Exception as exc:
+            logger.error("Failed to fetch OSM supermarket reach", exc_info=True)
+            return OsmSupermarketReading(failure=failure_from_exception(exc))
 
     def _enrich_with_osm_data(self, land) -> Optional[GoogleApiFailure]:
         """Write nearby-amenity counts onto a legacy `Land`.

@@ -1,0 +1,3546 @@
+{
+ "generated_at": "2026-08-14T06:35:25.647041+00:00",
+ "source": {
+  "renta": "INE ADRH jaxiT3 tables 30989/31088/31133/30860/31160 (wstempus JSON API), year 2023",
+  "population": "INE Padrón 'Cifras oficiales de población de los municipios' tables [('15', '2868'), ('27', '2880'), ('32', '2885'), ('33', '2886'), ('36', '2890')], years [2025]",
+  "codes": "INE diccionario26.xlsx (https://www.ine.es/daco/daco42/codmun/diccionario26.xlsx)"
+ },
+ "municipalities": {
+  "15001": {
+   "name": "Abegondo",
+   "province": "15",
+   "renta_media_persona": 14906,
+   "renta_year": 2023,
+   "population": 5631,
+   "population_5y_change_pct": 4.3,
+   "population_year": 2025
+  },
+  "15002": {
+   "name": "Ames",
+   "province": "15",
+   "renta_media_persona": 15004,
+   "renta_year": 2023,
+   "population": 33276,
+   "population_5y_change_pct": 3.7,
+   "population_year": 2025
+  },
+  "15003": {
+   "name": "Aranga",
+   "province": "15",
+   "renta_media_persona": 14728,
+   "renta_year": 2023,
+   "population": 1793,
+   "population_5y_change_pct": -2.2,
+   "population_year": 2025
+  },
+  "15004": {
+   "name": "Ares",
+   "province": "15",
+   "renta_media_persona": 15579,
+   "renta_year": 2023,
+   "population": 6275,
+   "population_5y_change_pct": 7.7,
+   "population_year": 2025
+  },
+  "15005": {
+   "name": "Arteixo",
+   "province": "15",
+   "renta_media_persona": 13920,
+   "renta_year": 2023,
+   "population": 34403,
+   "population_5y_change_pct": 5.1,
+   "population_year": 2025
+  },
+  "15006": {
+   "name": "Arzúa",
+   "province": "15",
+   "renta_media_persona": 13775,
+   "renta_year": 2023,
+   "population": 5916,
+   "population_5y_change_pct": -1.6,
+   "population_year": 2025
+  },
+  "15007": {
+   "name": "Baña, A",
+   "province": "15",
+   "renta_media_persona": 13641,
+   "renta_year": 2023,
+   "population": 3239,
+   "population_5y_change_pct": -5.2,
+   "population_year": 2025
+  },
+  "15008": {
+   "name": "Bergondo",
+   "province": "15",
+   "renta_media_persona": 17241,
+   "renta_year": 2023,
+   "population": 7135,
+   "population_5y_change_pct": 7.1,
+   "population_year": 2025
+  },
+  "15009": {
+   "name": "Betanzos",
+   "province": "15",
+   "renta_media_persona": 14407,
+   "renta_year": 2023,
+   "population": 13533,
+   "population_5y_change_pct": 3.7,
+   "population_year": 2025
+  },
+  "15010": {
+   "name": "Boimorto",
+   "province": "15",
+   "renta_media_persona": 13590,
+   "renta_year": 2023,
+   "population": 1803,
+   "population_5y_change_pct": -8.0,
+   "population_year": 2025
+  },
+  "15011": {
+   "name": "Boiro",
+   "province": "15",
+   "renta_media_persona": 13341,
+   "renta_year": 2023,
+   "population": 18967,
+   "population_5y_change_pct": 0.4,
+   "population_year": 2025
+  },
+  "15012": {
+   "name": "Boqueixón",
+   "province": "15",
+   "renta_media_persona": 14522,
+   "renta_year": 2023,
+   "population": 4219,
+   "population_5y_change_pct": 0.3,
+   "population_year": 2025
+  },
+  "15013": {
+   "name": "Brión",
+   "province": "15",
+   "renta_media_persona": 14930,
+   "renta_year": 2023,
+   "population": 8192,
+   "population_5y_change_pct": 3.4,
+   "population_year": 2025
+  },
+  "15014": {
+   "name": "Cabana de Bergantiños",
+   "province": "15",
+   "renta_media_persona": 13456,
+   "renta_year": 2023,
+   "population": 4067,
+   "population_5y_change_pct": -3.5,
+   "population_year": 2025
+  },
+  "15015": {
+   "name": "Cabanas",
+   "province": "15",
+   "renta_media_persona": 16471,
+   "renta_year": 2023,
+   "population": 3287,
+   "population_5y_change_pct": 0.4,
+   "population_year": 2025
+  },
+  "15016": {
+   "name": "Camariñas",
+   "province": "15",
+   "renta_media_persona": 11871,
+   "renta_year": 2023,
+   "population": 5075,
+   "population_5y_change_pct": -2.6,
+   "population_year": 2025
+  },
+  "15017": {
+   "name": "Cambre",
+   "province": "15",
+   "renta_media_persona": 15244,
+   "renta_year": 2023,
+   "population": 24765,
+   "population_5y_change_pct": 0.7,
+   "population_year": 2025
+  },
+  "15018": {
+   "name": "Capela, A",
+   "province": "15",
+   "renta_media_persona": 15515,
+   "renta_year": 2023,
+   "population": 1165,
+   "population_5y_change_pct": -4.6,
+   "population_year": 2025
+  },
+  "15019": {
+   "name": "Carballo",
+   "province": "15",
+   "renta_media_persona": 13292,
+   "renta_year": 2023,
+   "population": 32120,
+   "population_5y_change_pct": 2.2,
+   "population_year": 2025
+  },
+  "15020": {
+   "name": "Carnota",
+   "province": "15",
+   "renta_media_persona": 12947,
+   "renta_year": 2023,
+   "population": 3780,
+   "population_5y_change_pct": -3.1,
+   "population_year": 2025
+  },
+  "15021": {
+   "name": "Carral",
+   "province": "15",
+   "renta_media_persona": 14795,
+   "renta_year": 2023,
+   "population": 6840,
+   "population_5y_change_pct": 5.7,
+   "population_year": 2025
+  },
+  "15022": {
+   "name": "Cedeira",
+   "province": "15",
+   "renta_media_persona": 13001,
+   "renta_year": 2023,
+   "population": 6547,
+   "population_5y_change_pct": -1.9,
+   "population_year": 2025
+  },
+  "15023": {
+   "name": "Cee",
+   "province": "15",
+   "renta_media_persona": 13166,
+   "renta_year": 2023,
+   "population": 7731,
+   "population_5y_change_pct": 2.4,
+   "population_year": 2025
+  },
+  "15024": {
+   "name": "Cerceda",
+   "province": "15",
+   "renta_media_persona": 14854,
+   "renta_year": 2023,
+   "population": 5116,
+   "population_5y_change_pct": 2.2,
+   "population_year": 2025
+  },
+  "15025": {
+   "name": "Cerdido",
+   "province": "15",
+   "renta_media_persona": 12240,
+   "renta_year": 2023,
+   "population": 1006,
+   "population_5y_change_pct": -7.5,
+   "population_year": 2025
+  },
+  "15027": {
+   "name": "Coirós",
+   "province": "15",
+   "renta_media_persona": 15543,
+   "renta_year": 2023,
+   "population": 1945,
+   "population_5y_change_pct": 5.0,
+   "population_year": 2025
+  },
+  "15028": {
+   "name": "Corcubión",
+   "province": "15",
+   "renta_media_persona": 14092,
+   "renta_year": 2023,
+   "population": 1659,
+   "population_5y_change_pct": 4.3,
+   "population_year": 2025
+  },
+  "15029": {
+   "name": "Coristanco",
+   "province": "15",
+   "renta_media_persona": 12899,
+   "renta_year": 2023,
+   "population": 5710,
+   "population_5y_change_pct": -4.0,
+   "population_year": 2025
+  },
+  "15030": {
+   "name": "Coruña, A",
+   "province": "15",
+   "renta_media_persona": 17157,
+   "renta_year": 2023,
+   "population": 251543,
+   "population_5y_change_pct": 1.6,
+   "population_year": 2025
+  },
+  "15031": {
+   "name": "Culleredo",
+   "province": "15",
+   "renta_media_persona": 15320,
+   "renta_year": 2023,
+   "population": 31254,
+   "population_5y_change_pct": 1.9,
+   "population_year": 2025
+  },
+  "15032": {
+   "name": "Curtis",
+   "province": "15",
+   "renta_media_persona": 13651,
+   "renta_year": 2023,
+   "population": 4242,
+   "population_5y_change_pct": 4.7,
+   "population_year": 2025
+  },
+  "15033": {
+   "name": "Dodro",
+   "province": "15",
+   "renta_media_persona": 13254,
+   "renta_year": 2023,
+   "population": 2589,
+   "population_5y_change_pct": -5.9,
+   "population_year": 2025
+  },
+  "15034": {
+   "name": "Dumbría",
+   "province": "15",
+   "renta_media_persona": 13666,
+   "renta_year": 2023,
+   "population": 2716,
+   "population_5y_change_pct": -7.5,
+   "population_year": 2025
+  },
+  "15035": {
+   "name": "Fene",
+   "province": "15",
+   "renta_media_persona": 14838,
+   "renta_year": 2023,
+   "population": 12467,
+   "population_5y_change_pct": -3.1,
+   "population_year": 2025
+  },
+  "15036": {
+   "name": "Ferrol",
+   "province": "15",
+   "renta_media_persona": 15176,
+   "renta_year": 2023,
+   "population": 64367,
+   "population_5y_change_pct": -1.8,
+   "population_year": 2025
+  },
+  "15037": {
+   "name": "Fisterra",
+   "province": "15",
+   "renta_media_persona": 11826,
+   "renta_year": 2023,
+   "population": 4666,
+   "population_5y_change_pct": -0.7,
+   "population_year": 2025
+  },
+  "15038": {
+   "name": "Frades",
+   "province": "15",
+   "renta_media_persona": 14630,
+   "renta_year": 2023,
+   "population": 2117,
+   "population_5y_change_pct": -8.0,
+   "population_year": 2025
+  },
+  "15039": {
+   "name": "Irixoa",
+   "province": "15",
+   "renta_media_persona": 14052,
+   "renta_year": 2023,
+   "population": 1343,
+   "population_5y_change_pct": 0.2,
+   "population_year": 2025
+  },
+  "15040": {
+   "name": "Laxe",
+   "province": "15",
+   "renta_media_persona": 12940,
+   "renta_year": 2023,
+   "population": 2883,
+   "population_5y_change_pct": -3.6,
+   "population_year": 2025
+  },
+  "15041": {
+   "name": "Laracha, A",
+   "province": "15",
+   "renta_media_persona": 13965,
+   "renta_year": 2023,
+   "population": 11781,
+   "population_5y_change_pct": 3.3,
+   "population_year": 2025
+  },
+  "15042": {
+   "name": "Lousame",
+   "province": "15",
+   "renta_media_persona": 12785,
+   "renta_year": 2023,
+   "population": 3056,
+   "population_5y_change_pct": -6.5,
+   "population_year": 2025
+  },
+  "15043": {
+   "name": "Malpica de Bergantiños",
+   "province": "15",
+   "renta_media_persona": 13070,
+   "renta_year": 2023,
+   "population": 5232,
+   "population_5y_change_pct": -2.2,
+   "population_year": 2025
+  },
+  "15044": {
+   "name": "Mañón",
+   "province": "15",
+   "renta_media_persona": 13963,
+   "renta_year": 2023,
+   "population": 1218,
+   "population_5y_change_pct": -7.7,
+   "population_year": 2025
+  },
+  "15045": {
+   "name": "Mazaricos",
+   "province": "15",
+   "renta_media_persona": 14379,
+   "renta_year": 2023,
+   "population": 3721,
+   "population_5y_change_pct": -3.1,
+   "population_year": 2025
+  },
+  "15046": {
+   "name": "Melide",
+   "province": "15",
+   "renta_media_persona": 12655,
+   "renta_year": 2023,
+   "population": 7817,
+   "population_5y_change_pct": 5.4,
+   "population_year": 2025
+  },
+  "15047": {
+   "name": "Mesía",
+   "province": "15",
+   "renta_media_persona": 13950,
+   "renta_year": 2023,
+   "population": 2367,
+   "population_5y_change_pct": -5.2,
+   "population_year": 2025
+  },
+  "15048": {
+   "name": "Miño",
+   "province": "15",
+   "renta_media_persona": 15491,
+   "renta_year": 2023,
+   "population": 7108,
+   "population_5y_change_pct": 13.2,
+   "population_year": 2025
+  },
+  "15049": {
+   "name": "Moeche",
+   "province": "15",
+   "renta_media_persona": 13319,
+   "renta_year": 2023,
+   "population": 1194,
+   "population_5y_change_pct": 0.7,
+   "population_year": 2025
+  },
+  "15050": {
+   "name": "Monfero",
+   "province": "15",
+   "renta_media_persona": 13156,
+   "renta_year": 2023,
+   "population": 1816,
+   "population_5y_change_pct": -4.8,
+   "population_year": 2025
+  },
+  "15051": {
+   "name": "Mugardos",
+   "province": "15",
+   "renta_media_persona": 14603,
+   "renta_year": 2023,
+   "population": 5203,
+   "population_5y_change_pct": -0.2,
+   "population_year": 2025
+  },
+  "15052": {
+   "name": "Muxía",
+   "province": "15",
+   "renta_media_persona": 12292,
+   "renta_year": 2023,
+   "population": 4326,
+   "population_5y_change_pct": -5.9,
+   "population_year": 2025
+  },
+  "15053": {
+   "name": "Muros",
+   "province": "15",
+   "renta_media_persona": 12609,
+   "renta_year": 2023,
+   "population": 8173,
+   "population_5y_change_pct": -3.0,
+   "population_year": 2025
+  },
+  "15054": {
+   "name": "Narón",
+   "province": "15",
+   "renta_media_persona": 14101,
+   "renta_year": 2023,
+   "population": 39953,
+   "population_5y_change_pct": 2.3,
+   "population_year": 2025
+  },
+  "15055": {
+   "name": "Neda",
+   "province": "15",
+   "renta_media_persona": 14562,
+   "renta_year": 2023,
+   "population": 4925,
+   "population_5y_change_pct": -2.0,
+   "population_year": 2025
+  },
+  "15056": {
+   "name": "Negreira",
+   "province": "15",
+   "renta_media_persona": 12640,
+   "renta_year": 2023,
+   "population": 6969,
+   "population_5y_change_pct": 2.7,
+   "population_year": 2025
+  },
+  "15057": {
+   "name": "Noia",
+   "province": "15",
+   "renta_media_persona": 13409,
+   "renta_year": 2023,
+   "population": 14123,
+   "population_5y_change_pct": -1.1,
+   "population_year": 2025
+  },
+  "15058": {
+   "name": "Oleiros",
+   "province": "15",
+   "renta_media_persona": 19798,
+   "renta_year": 2023,
+   "population": 38793,
+   "population_5y_change_pct": 6.2,
+   "population_year": 2025
+  },
+  "15059": {
+   "name": "Ordes",
+   "province": "15",
+   "renta_media_persona": 13244,
+   "renta_year": 2023,
+   "population": 12990,
+   "population_5y_change_pct": 2.9,
+   "population_year": 2025
+  },
+  "15060": {
+   "name": "Oroso",
+   "province": "15",
+   "renta_media_persona": 13987,
+   "renta_year": 2023,
+   "population": 7776,
+   "population_5y_change_pct": 3.2,
+   "population_year": 2025
+  },
+  "15061": {
+   "name": "Ortigueira",
+   "province": "15",
+   "renta_media_persona": 13660,
+   "renta_year": 2023,
+   "population": 5384,
+   "population_5y_change_pct": -4.4,
+   "population_year": 2025
+  },
+  "15062": {
+   "name": "Outes",
+   "province": "15",
+   "renta_media_persona": 13199,
+   "renta_year": 2023,
+   "population": 5998,
+   "population_5y_change_pct": -2.6,
+   "population_year": 2025
+  },
+  "15064": {
+   "name": "Paderne",
+   "province": "15",
+   "renta_media_persona": 14948,
+   "renta_year": 2023,
+   "population": 2450,
+   "population_5y_change_pct": 2.8,
+   "population_year": 2025
+  },
+  "15065": {
+   "name": "Padrón",
+   "province": "15",
+   "renta_media_persona": 13758,
+   "renta_year": 2023,
+   "population": 8334,
+   "population_5y_change_pct": -0.4,
+   "population_year": 2025
+  },
+  "15066": {
+   "name": "Pino, O",
+   "province": "15",
+   "renta_media_persona": 13709,
+   "renta_year": 2023,
+   "population": 4589,
+   "population_5y_change_pct": -1.4,
+   "population_year": 2025
+  },
+  "15067": {
+   "name": "Pobra do Caramiñal, A",
+   "province": "15",
+   "renta_media_persona": 13771,
+   "renta_year": 2023,
+   "population": 9126,
+   "population_5y_change_pct": -2.1,
+   "population_year": 2025
+  },
+  "15068": {
+   "name": "Ponteceso",
+   "province": "15",
+   "renta_media_persona": 13328,
+   "renta_year": 2023,
+   "population": 5268,
+   "population_5y_change_pct": -4.2,
+   "population_year": 2025
+  },
+  "15069": {
+   "name": "Pontedeume",
+   "province": "15",
+   "renta_media_persona": 14488,
+   "renta_year": 2023,
+   "population": 7431,
+   "population_5y_change_pct": -4.2,
+   "population_year": 2025
+  },
+  "15070": {
+   "name": "Pontes de García Rodríguez, As",
+   "province": "15",
+   "renta_media_persona": 17107,
+   "renta_year": 2023,
+   "population": 9796,
+   "population_5y_change_pct": -2.7,
+   "population_year": 2025
+  },
+  "15071": {
+   "name": "Porto do Son",
+   "province": "15",
+   "renta_media_persona": 12922,
+   "renta_year": 2023,
+   "population": 9060,
+   "population_5y_change_pct": -0.9,
+   "population_year": 2025
+  },
+  "15072": {
+   "name": "Rianxo",
+   "province": "15",
+   "renta_media_persona": 12641,
+   "renta_year": 2023,
+   "population": 10758,
+   "population_5y_change_pct": -2.3,
+   "population_year": 2025
+  },
+  "15073": {
+   "name": "Ribeira",
+   "province": "15",
+   "renta_media_persona": 13082,
+   "renta_year": 2023,
+   "population": 27102,
+   "population_5y_change_pct": 0.9,
+   "population_year": 2025
+  },
+  "15074": {
+   "name": "Rois",
+   "province": "15",
+   "renta_media_persona": 12971,
+   "renta_year": 2023,
+   "population": 4358,
+   "population_5y_change_pct": -3.3,
+   "population_year": 2025
+  },
+  "15075": {
+   "name": "Sada",
+   "province": "15",
+   "renta_media_persona": 15021,
+   "renta_year": 2023,
+   "population": 17421,
+   "population_5y_change_pct": 7.6,
+   "population_year": 2025
+  },
+  "15076": {
+   "name": "San Sadurniño",
+   "province": "15",
+   "renta_media_persona": 13854,
+   "renta_year": 2023,
+   "population": 2738,
+   "population_5y_change_pct": -1.7,
+   "population_year": 2025
+  },
+  "15077": {
+   "name": "Santa Comba",
+   "province": "15",
+   "renta_media_persona": 13687,
+   "renta_year": 2023,
+   "population": 9442,
+   "population_5y_change_pct": 0.9,
+   "population_year": 2025
+  },
+  "15078": {
+   "name": "Santiago de Compostela",
+   "province": "15",
+   "renta_media_persona": 17514,
+   "renta_year": 2023,
+   "population": 100965,
+   "population_5y_change_pct": 3.2,
+   "population_year": 2025
+  },
+  "15079": {
+   "name": "Santiso",
+   "province": "15",
+   "renta_media_persona": 12826,
+   "renta_year": 2023,
+   "population": 1430,
+   "population_5y_change_pct": -7.4,
+   "population_year": 2025
+  },
+  "15080": {
+   "name": "Sobrado",
+   "province": "15",
+   "renta_media_persona": 13388,
+   "renta_year": 2023,
+   "population": 1830,
+   "population_5y_change_pct": 5.8,
+   "population_year": 2025
+  },
+  "15081": {
+   "name": "Somozas, As",
+   "province": "15",
+   "renta_media_persona": 13409,
+   "renta_year": 2023,
+   "population": 1042,
+   "population_5y_change_pct": -3.8,
+   "population_year": 2025
+  },
+  "15082": {
+   "name": "Teo",
+   "province": "15",
+   "renta_media_persona": 16080,
+   "renta_year": 2023,
+   "population": 18968,
+   "population_5y_change_pct": 1.8,
+   "population_year": 2025
+  },
+  "15083": {
+   "name": "Toques",
+   "province": "15",
+   "renta_media_persona": 13557,
+   "renta_year": 2023,
+   "population": 1056,
+   "population_5y_change_pct": -4.6,
+   "population_year": 2025
+  },
+  "15084": {
+   "name": "Tordoia",
+   "province": "15",
+   "renta_media_persona": 14308,
+   "renta_year": 2023,
+   "population": 3152,
+   "population_5y_change_pct": -3.3,
+   "population_year": 2025
+  },
+  "15085": {
+   "name": "Touro",
+   "province": "15",
+   "renta_media_persona": 13580,
+   "renta_year": 2023,
+   "population": 3342,
+   "population_5y_change_pct": -4.9,
+   "population_year": 2025
+  },
+  "15086": {
+   "name": "Trazo",
+   "province": "15",
+   "renta_media_persona": 14223,
+   "renta_year": 2023,
+   "population": 2986,
+   "population_5y_change_pct": -0.9,
+   "population_year": 2025
+  },
+  "15087": {
+   "name": "Valdoviño",
+   "province": "15",
+   "renta_media_persona": 15016,
+   "renta_year": 2023,
+   "population": 6818,
+   "population_5y_change_pct": 4.2,
+   "population_year": 2025
+  },
+  "15088": {
+   "name": "Val do Dubra",
+   "province": "15",
+   "renta_media_persona": 13612,
+   "renta_year": 2023,
+   "population": 3680,
+   "population_5y_change_pct": -4.4,
+   "population_year": 2025
+  },
+  "15089": {
+   "name": "Vedra",
+   "province": "15",
+   "renta_media_persona": 14464,
+   "renta_year": 2023,
+   "population": 4903,
+   "population_5y_change_pct": -2.1,
+   "population_year": 2025
+  },
+  "15090": {
+   "name": "Vilasantar",
+   "province": "15",
+   "renta_media_persona": 14028,
+   "renta_year": 2023,
+   "population": 1233,
+   "population_5y_change_pct": 1.8,
+   "population_year": 2025
+  },
+  "15091": {
+   "name": "Vilarmaior",
+   "province": "15",
+   "renta_media_persona": 15485,
+   "renta_year": 2023,
+   "population": 1242,
+   "population_5y_change_pct": 2.7,
+   "population_year": 2025
+  },
+  "15092": {
+   "name": "Vimianzo",
+   "province": "15",
+   "renta_media_persona": 12998,
+   "renta_year": 2023,
+   "population": 6768,
+   "population_5y_change_pct": -2.8,
+   "population_year": 2025
+  },
+  "15093": {
+   "name": "Zas",
+   "province": "15",
+   "renta_media_persona": 13305,
+   "renta_year": 2023,
+   "population": 4199,
+   "population_5y_change_pct": -4.4,
+   "population_year": 2025
+  },
+  "15901": {
+   "name": "Cariño",
+   "province": "15",
+   "renta_media_persona": 12248,
+   "renta_year": 2023,
+   "population": 3661,
+   "population_5y_change_pct": -3.0,
+   "population_year": 2025
+  },
+  "15902": {
+   "name": "Oza-Cesuras",
+   "province": "15",
+   "renta_media_persona": 14523,
+   "renta_year": 2023,
+   "population": 5159,
+   "population_5y_change_pct": 1.2,
+   "population_year": 2025
+  },
+  "27001": {
+   "name": "Abadín",
+   "province": "27",
+   "renta_media_persona": 12857,
+   "renta_year": 2023,
+   "population": 2239,
+   "population_5y_change_pct": -3.6,
+   "population_year": 2025
+  },
+  "27002": {
+   "name": "Alfoz",
+   "province": "27",
+   "renta_media_persona": 14178,
+   "renta_year": 2023,
+   "population": 1493,
+   "population_5y_change_pct": -10.0,
+   "population_year": 2025
+  },
+  "27003": {
+   "name": "Antas de Ulla",
+   "province": "27",
+   "renta_media_persona": 12907,
+   "renta_year": 2023,
+   "population": 1822,
+   "population_5y_change_pct": -6.1,
+   "population_year": 2025
+  },
+  "27004": {
+   "name": "Baleira",
+   "province": "27",
+   "renta_media_persona": 13947,
+   "renta_year": 2023,
+   "population": 1093,
+   "population_5y_change_pct": -10.8,
+   "population_year": 2025
+  },
+  "27005": {
+   "name": "Barreiros",
+   "province": "27",
+   "renta_media_persona": 14827,
+   "renta_year": 2023,
+   "population": 3036,
+   "population_5y_change_pct": 3.8,
+   "population_year": 2025
+  },
+  "27006": {
+   "name": "Becerreá",
+   "province": "27",
+   "renta_media_persona": 13198,
+   "renta_year": 2023,
+   "population": 2836,
+   "population_5y_change_pct": 1.0,
+   "population_year": 2025
+  },
+  "27007": {
+   "name": "Begonte",
+   "province": "27",
+   "renta_media_persona": 14154,
+   "renta_year": 2023,
+   "population": 2886,
+   "population_5y_change_pct": -3.1,
+   "population_year": 2025
+  },
+  "27008": {
+   "name": "Bóveda",
+   "province": "27",
+   "renta_media_persona": 13861,
+   "renta_year": 2023,
+   "population": 1369,
+   "population_5y_change_pct": -5.6,
+   "population_year": 2025
+  },
+  "27009": {
+   "name": "Carballedo",
+   "province": "27",
+   "renta_media_persona": 13858,
+   "renta_year": 2023,
+   "population": 1987,
+   "population_5y_change_pct": -7.1,
+   "population_year": 2025
+  },
+  "27010": {
+   "name": "Castro de Rei",
+   "province": "27",
+   "renta_media_persona": 14084,
+   "renta_year": 2023,
+   "population": 5001,
+   "population_5y_change_pct": -1.4,
+   "population_year": 2025
+  },
+  "27011": {
+   "name": "Castroverde",
+   "province": "27",
+   "renta_media_persona": 14277,
+   "renta_year": 2023,
+   "population": 2478,
+   "population_5y_change_pct": -4.5,
+   "population_year": 2025
+  },
+  "27012": {
+   "name": "Cervantes",
+   "province": "27",
+   "renta_media_persona": 13696,
+   "renta_year": 2023,
+   "population": 1142,
+   "population_5y_change_pct": -11.7,
+   "population_year": 2025
+  },
+  "27013": {
+   "name": "Cervo",
+   "province": "27",
+   "renta_media_persona": 16822,
+   "renta_year": 2023,
+   "population": 4137,
+   "population_5y_change_pct": -1.9,
+   "population_year": 2025
+  },
+  "27014": {
+   "name": "Corgo, O",
+   "province": "27",
+   "renta_media_persona": 14868,
+   "renta_year": 2023,
+   "population": 3366,
+   "population_5y_change_pct": -1.6,
+   "population_year": 2025
+  },
+  "27015": {
+   "name": "Cospeito",
+   "province": "27",
+   "renta_media_persona": 13458,
+   "renta_year": 2023,
+   "population": 4172,
+   "population_5y_change_pct": -5.1,
+   "population_year": 2025
+  },
+  "27016": {
+   "name": "Chantada",
+   "province": "27",
+   "renta_media_persona": 13016,
+   "renta_year": 2023,
+   "population": 8171,
+   "population_5y_change_pct": 0.2,
+   "population_year": 2025
+  },
+  "27017": {
+   "name": "Folgoso do Courel",
+   "province": "27",
+   "renta_media_persona": 13920,
+   "renta_year": 2023,
+   "population": 921,
+   "population_5y_change_pct": -8.5,
+   "population_year": 2025
+  },
+  "27018": {
+   "name": "Fonsagrada, A",
+   "province": "27",
+   "renta_media_persona": 13811,
+   "renta_year": 2023,
+   "population": 3073,
+   "population_5y_change_pct": -9.3,
+   "population_year": 2025
+  },
+  "27019": {
+   "name": "Foz",
+   "province": "27",
+   "renta_media_persona": 14946,
+   "renta_year": 2023,
+   "population": 10329,
+   "population_5y_change_pct": 3.1,
+   "population_year": 2025
+  },
+  "27020": {
+   "name": "Friol",
+   "province": "27",
+   "renta_media_persona": 13757,
+   "renta_year": 2023,
+   "population": 3608,
+   "population_5y_change_pct": -1.5,
+   "population_year": 2025
+  },
+  "27021": {
+   "name": "Xermade",
+   "province": "27",
+   "renta_media_persona": 14626,
+   "renta_year": 2023,
+   "population": 1665,
+   "population_5y_change_pct": -6.6,
+   "population_year": 2025
+  },
+  "27022": {
+   "name": "Guitiriz",
+   "province": "27",
+   "renta_media_persona": 13109,
+   "renta_year": 2023,
+   "population": 5180,
+   "population_5y_change_pct": -5.6,
+   "population_year": 2025
+  },
+  "27023": {
+   "name": "Guntín",
+   "province": "27",
+   "renta_media_persona": 13883,
+   "renta_year": 2023,
+   "population": 2501,
+   "population_5y_change_pct": -4.8,
+   "population_year": 2025
+  },
+  "27024": {
+   "name": "Incio, O",
+   "province": "27",
+   "renta_media_persona": 14035,
+   "renta_year": 2023,
+   "population": 1513,
+   "population_5y_change_pct": -1.3,
+   "population_year": 2025
+  },
+  "27025": {
+   "name": "Xove",
+   "province": "27",
+   "renta_media_persona": 15205,
+   "renta_year": 2023,
+   "population": 3269,
+   "population_5y_change_pct": -0.2,
+   "population_year": 2025
+  },
+  "27026": {
+   "name": "Láncara",
+   "province": "27",
+   "renta_media_persona": 12260,
+   "renta_year": 2023,
+   "population": 2489,
+   "population_5y_change_pct": -3.7,
+   "population_year": 2025
+  },
+  "27027": {
+   "name": "Lourenzá",
+   "province": "27",
+   "renta_media_persona": 12860,
+   "renta_year": 2023,
+   "population": 2083,
+   "population_5y_change_pct": -2.6,
+   "population_year": 2025
+  },
+  "27028": {
+   "name": "Lugo",
+   "province": "27",
+   "renta_media_persona": 15082,
+   "renta_year": 2023,
+   "population": 100143,
+   "population_5y_change_pct": 1.6,
+   "population_year": 2025
+  },
+  "27029": {
+   "name": "Meira",
+   "province": "27",
+   "renta_media_persona": 14123,
+   "renta_year": 2023,
+   "population": 1773,
+   "population_5y_change_pct": 1.4,
+   "population_year": 2025
+  },
+  "27030": {
+   "name": "Mondoñedo",
+   "province": "27",
+   "renta_media_persona": 13320,
+   "renta_year": 2023,
+   "population": 3303,
+   "population_5y_change_pct": -6.7,
+   "population_year": 2025
+  },
+  "27031": {
+   "name": "Monforte de Lemos",
+   "province": "27",
+   "renta_media_persona": 13384,
+   "renta_year": 2023,
+   "population": 18933,
+   "population_5y_change_pct": 3.2,
+   "population_year": 2025
+  },
+  "27032": {
+   "name": "Monterroso",
+   "province": "27",
+   "renta_media_persona": 13365,
+   "renta_year": 2023,
+   "population": 3744,
+   "population_5y_change_pct": 3.6,
+   "population_year": 2025
+  },
+  "27033": {
+   "name": "Muras",
+   "province": "27",
+   "renta_media_persona": 13662,
+   "renta_year": 2023,
+   "population": 577,
+   "population_5y_change_pct": -6.8,
+   "population_year": 2025
+  },
+  "27034": {
+   "name": "Navia de Suarna",
+   "province": "27",
+   "renta_media_persona": 13997,
+   "renta_year": 2023,
+   "population": 971,
+   "population_5y_change_pct": -8.7,
+   "population_year": 2025
+  },
+  "27035": {
+   "name": "Negueira de Muñiz",
+   "province": "27",
+   "renta_media_persona": 14532,
+   "renta_year": 2023,
+   "population": 236,
+   "population_5y_change_pct": 9.8,
+   "population_year": 2025
+  },
+  "27037": {
+   "name": "Nogais, As",
+   "province": "27",
+   "renta_media_persona": 13373,
+   "renta_year": 2023,
+   "population": 914,
+   "population_5y_change_pct": -12.7,
+   "population_year": 2025
+  },
+  "27038": {
+   "name": "Ourol",
+   "province": "27",
+   "renta_media_persona": 13402,
+   "renta_year": 2023,
+   "population": 965,
+   "population_5y_change_pct": -3.0,
+   "population_year": 2025
+  },
+  "27039": {
+   "name": "Outeiro de Rei",
+   "province": "27",
+   "renta_media_persona": 15459,
+   "renta_year": 2023,
+   "population": 5420,
+   "population_5y_change_pct": 4.0,
+   "population_year": 2025
+  },
+  "27040": {
+   "name": "Palas de Rei",
+   "province": "27",
+   "renta_media_persona": 13881,
+   "renta_year": 2023,
+   "population": 3227,
+   "population_5y_change_pct": -3.0,
+   "population_year": 2025
+  },
+  "27041": {
+   "name": "Pantón",
+   "province": "27",
+   "renta_media_persona": 13426,
+   "renta_year": 2023,
+   "population": 2350,
+   "population_5y_change_pct": -4.4,
+   "population_year": 2025
+  },
+  "27042": {
+   "name": "Paradela",
+   "province": "27",
+   "renta_media_persona": 14027,
+   "renta_year": 2023,
+   "population": 1557,
+   "population_5y_change_pct": -10.5,
+   "population_year": 2025
+  },
+  "27043": {
+   "name": "Páramo, O",
+   "province": "27",
+   "renta_media_persona": 13328,
+   "renta_year": 2023,
+   "population": 1265,
+   "population_5y_change_pct": -5.9,
+   "population_year": 2025
+  },
+  "27044": {
+   "name": "Pastoriza, A",
+   "province": "27",
+   "renta_media_persona": 13545,
+   "renta_year": 2023,
+   "population": 2794,
+   "population_5y_change_pct": -5.7,
+   "population_year": 2025
+  },
+  "27045": {
+   "name": "Pedrafita do Cebreiro",
+   "province": "27",
+   "renta_media_persona": 15443,
+   "renta_year": 2023,
+   "population": 868,
+   "population_5y_change_pct": -10.4,
+   "population_year": 2025
+  },
+  "27046": {
+   "name": "Pol",
+   "province": "27",
+   "renta_media_persona": 15017,
+   "renta_year": 2023,
+   "population": 1550,
+   "population_5y_change_pct": -4.5,
+   "population_year": 2025
+  },
+  "27047": {
+   "name": "Pobra do Brollón, A",
+   "province": "27",
+   "renta_media_persona": 14186,
+   "renta_year": 2023,
+   "population": 1610,
+   "population_5y_change_pct": -1.3,
+   "population_year": 2025
+  },
+  "27048": {
+   "name": "Pontenova, A",
+   "province": "27",
+   "renta_media_persona": 14303,
+   "renta_year": 2023,
+   "population": 2106,
+   "population_5y_change_pct": -4.3,
+   "population_year": 2025
+  },
+  "27049": {
+   "name": "Portomarín",
+   "province": "27",
+   "renta_media_persona": 15786,
+   "renta_year": 2023,
+   "population": 1277,
+   "population_5y_change_pct": -9.6,
+   "population_year": 2025
+  },
+  "27050": {
+   "name": "Quiroga",
+   "province": "27",
+   "renta_media_persona": 13491,
+   "renta_year": 2023,
+   "population": 3040,
+   "population_5y_change_pct": -4.1,
+   "population_year": 2025
+  },
+  "27051": {
+   "name": "Ribadeo",
+   "province": "27",
+   "renta_media_persona": 14772,
+   "renta_year": 2023,
+   "population": 10022,
+   "population_5y_change_pct": 1.6,
+   "population_year": 2025
+  },
+  "27052": {
+   "name": "Ribas de Sil",
+   "province": "27",
+   "renta_media_persona": 13659,
+   "renta_year": 2023,
+   "population": 894,
+   "population_5y_change_pct": -4.0,
+   "population_year": 2025
+  },
+  "27053": {
+   "name": "Ribeira de Piquín",
+   "province": "27",
+   "renta_media_persona": 13826,
+   "renta_year": 2023,
+   "population": 549,
+   "population_5y_change_pct": 7.0,
+   "population_year": 2025
+  },
+  "27054": {
+   "name": "Riotorto",
+   "province": "27",
+   "renta_media_persona": 13762,
+   "renta_year": 2023,
+   "population": 1182,
+   "population_5y_change_pct": -4.3,
+   "population_year": 2025
+  },
+  "27055": {
+   "name": "Samos",
+   "province": "27",
+   "renta_media_persona": 12989,
+   "renta_year": 2023,
+   "population": 1158,
+   "population_5y_change_pct": -7.1,
+   "population_year": 2025
+  },
+  "27056": {
+   "name": "Rábade",
+   "province": "27",
+   "renta_media_persona": 13787,
+   "renta_year": 2023,
+   "population": 1514,
+   "population_5y_change_pct": 0.6,
+   "population_year": 2025
+  },
+  "27057": {
+   "name": "Sarria",
+   "province": "27",
+   "renta_media_persona": 13348,
+   "renta_year": 2023,
+   "population": 13726,
+   "population_5y_change_pct": 2.9,
+   "population_year": 2025
+  },
+  "27058": {
+   "name": "Saviñao, O",
+   "province": "27",
+   "renta_media_persona": 12963,
+   "renta_year": 2023,
+   "population": 3470,
+   "population_5y_change_pct": -4.5,
+   "population_year": 2025
+  },
+  "27059": {
+   "name": "Sober",
+   "province": "27",
+   "renta_media_persona": 13732,
+   "renta_year": 2023,
+   "population": 2090,
+   "population_5y_change_pct": -7.5,
+   "population_year": 2025
+  },
+  "27060": {
+   "name": "Taboada",
+   "province": "27",
+   "renta_media_persona": 13762,
+   "renta_year": 2023,
+   "population": 2617,
+   "population_5y_change_pct": -3.6,
+   "population_year": 2025
+  },
+  "27061": {
+   "name": "Trabada",
+   "province": "27",
+   "renta_media_persona": 14593,
+   "renta_year": 2023,
+   "population": 1070,
+   "population_5y_change_pct": -5.1,
+   "population_year": 2025
+  },
+  "27062": {
+   "name": "Triacastela",
+   "province": "27",
+   "renta_media_persona": 11900,
+   "renta_year": 2023,
+   "population": 589,
+   "population_5y_change_pct": -7.5,
+   "population_year": 2025
+  },
+  "27063": {
+   "name": "Valadouro, O",
+   "province": "27",
+   "renta_media_persona": 13569,
+   "renta_year": 2023,
+   "population": 1845,
+   "population_5y_change_pct": -6.7,
+   "population_year": 2025
+  },
+  "27064": {
+   "name": "Vicedo, O",
+   "province": "27",
+   "renta_media_persona": 14488,
+   "renta_year": 2023,
+   "population": 1553,
+   "population_5y_change_pct": -6.2,
+   "population_year": 2025
+  },
+  "27065": {
+   "name": "Vilalba",
+   "province": "27",
+   "renta_media_persona": 13745,
+   "renta_year": 2023,
+   "population": 13852,
+   "population_5y_change_pct": -1.6,
+   "population_year": 2025
+  },
+  "27066": {
+   "name": "Viveiro",
+   "province": "27",
+   "renta_media_persona": 14698,
+   "renta_year": 2023,
+   "population": 15120,
+   "population_5y_change_pct": -1.8,
+   "population_year": 2025
+  },
+  "27901": {
+   "name": "Baralla",
+   "province": "27",
+   "renta_media_persona": 13275,
+   "renta_year": 2023,
+   "population": 2396,
+   "population_5y_change_pct": -3.5,
+   "population_year": 2025
+  },
+  "27902": {
+   "name": "Burela",
+   "province": "27",
+   "renta_media_persona": 14357,
+   "renta_year": 2023,
+   "population": 9630,
+   "population_5y_change_pct": 1.4,
+   "population_year": 2025
+  },
+  "32001": {
+   "name": "Allariz",
+   "province": "32",
+   "renta_media_persona": 14765,
+   "renta_year": 2023,
+   "population": 6497,
+   "population_5y_change_pct": 4.0,
+   "population_year": 2025
+  },
+  "32002": {
+   "name": "Amoeiro",
+   "province": "32",
+   "renta_media_persona": 14281,
+   "renta_year": 2023,
+   "population": 2443,
+   "population_5y_change_pct": 6.4,
+   "population_year": 2025
+  },
+  "32003": {
+   "name": "Arnoia, A",
+   "province": "32",
+   "renta_media_persona": 14171,
+   "renta_year": 2023,
+   "population": 949,
+   "population_5y_change_pct": -2.9,
+   "population_year": 2025
+  },
+  "32004": {
+   "name": "Avión",
+   "province": "32",
+   "renta_media_persona": 9365,
+   "renta_year": 2023,
+   "population": 1719,
+   "population_5y_change_pct": -1.0,
+   "population_year": 2025
+  },
+  "32005": {
+   "name": "Baltar",
+   "province": "32",
+   "renta_media_persona": 13525,
+   "renta_year": 2023,
+   "population": 849,
+   "population_5y_change_pct": -9.9,
+   "population_year": 2025
+  },
+  "32006": {
+   "name": "Bande",
+   "province": "32",
+   "renta_media_persona": 13550,
+   "renta_year": 2023,
+   "population": 1460,
+   "population_5y_change_pct": -2.5,
+   "population_year": 2025
+  },
+  "32007": {
+   "name": "Baños de Molgas",
+   "province": "32",
+   "renta_media_persona": 13865,
+   "renta_year": 2023,
+   "population": 1471,
+   "population_5y_change_pct": -1.5,
+   "population_year": 2025
+  },
+  "32008": {
+   "name": "Barbadás",
+   "province": "32",
+   "renta_media_persona": 13509,
+   "renta_year": 2023,
+   "population": 11201,
+   "population_5y_change_pct": 0.4,
+   "population_year": 2025
+  },
+  "32009": {
+   "name": "Barco de Valdeorras, O",
+   "province": "32",
+   "renta_media_persona": 14040,
+   "renta_year": 2023,
+   "population": 13368,
+   "population_5y_change_pct": -0.5,
+   "population_year": 2025
+  },
+  "32010": {
+   "name": "Beade",
+   "province": "32",
+   "renta_media_persona": 13163,
+   "renta_year": 2023,
+   "population": 363,
+   "population_5y_change_pct": -5.5,
+   "population_year": 2025
+  },
+  "32011": {
+   "name": "Beariz",
+   "province": "32",
+   "renta_media_persona": 11483,
+   "renta_year": 2023,
+   "population": 901,
+   "population_5y_change_pct": -7.1,
+   "population_year": 2025
+  },
+  "32012": {
+   "name": "Blancos, Os",
+   "province": "32",
+   "renta_media_persona": 13452,
+   "renta_year": 2023,
+   "population": 696,
+   "population_5y_change_pct": -7.8,
+   "population_year": 2025
+  },
+  "32013": {
+   "name": "Boborás",
+   "province": "32",
+   "renta_media_persona": 10913,
+   "renta_year": 2023,
+   "population": 2167,
+   "population_5y_change_pct": -2.5,
+   "population_year": 2025
+  },
+  "32014": {
+   "name": "Bola, A",
+   "province": "32",
+   "renta_media_persona": 12833,
+   "renta_year": 2023,
+   "population": 1139,
+   "population_5y_change_pct": 2.3,
+   "population_year": 2025
+  },
+  "32015": {
+   "name": "Bolo, O",
+   "province": "32",
+   "renta_media_persona": 12492,
+   "renta_year": 2023,
+   "population": 789,
+   "population_5y_change_pct": -7.2,
+   "population_year": 2025
+  },
+  "32016": {
+   "name": "Calvos de Randín",
+   "province": "32",
+   "renta_media_persona": 13562,
+   "renta_year": 2023,
+   "population": 650,
+   "population_5y_change_pct": -11.6,
+   "population_year": 2025
+  },
+  "32017": {
+   "name": "Carballeda de Valdeorras",
+   "province": "32",
+   "renta_media_persona": 15583,
+   "renta_year": 2023,
+   "population": 1311,
+   "population_5y_change_pct": -12.5,
+   "population_year": 2025
+  },
+  "32018": {
+   "name": "Carballeda de Avia",
+   "province": "32",
+   "renta_media_persona": 12719,
+   "renta_year": 2023,
+   "population": 1172,
+   "population_5y_change_pct": -7.8,
+   "population_year": 2025
+  },
+  "32019": {
+   "name": "Carballiño, O",
+   "province": "32",
+   "renta_media_persona": 12419,
+   "renta_year": 2023,
+   "population": 14249,
+   "population_5y_change_pct": 1.1,
+   "population_year": 2025
+  },
+  "32020": {
+   "name": "Cartelle",
+   "province": "32",
+   "renta_media_persona": 13827,
+   "renta_year": 2023,
+   "population": 2466,
+   "population_5y_change_pct": -4.8,
+   "population_year": 2025
+  },
+  "32021": {
+   "name": "Castrelo do Val",
+   "province": "32",
+   "renta_media_persona": 12452,
+   "renta_year": 2023,
+   "population": 947,
+   "population_5y_change_pct": -1.1,
+   "population_year": 2025
+  },
+  "32022": {
+   "name": "Castrelo de Miño",
+   "province": "32",
+   "renta_media_persona": 13485,
+   "renta_year": 2023,
+   "population": 1289,
+   "population_5y_change_pct": -3.8,
+   "population_year": 2025
+  },
+  "32023": {
+   "name": "Castro Caldelas",
+   "province": "32",
+   "renta_media_persona": 14482,
+   "renta_year": 2023,
+   "population": 1244,
+   "population_5y_change_pct": 3.3,
+   "population_year": 2025
+  },
+  "32024": {
+   "name": "Celanova",
+   "province": "32",
+   "renta_media_persona": 12647,
+   "renta_year": 2023,
+   "population": 5723,
+   "population_5y_change_pct": 1.4,
+   "population_year": 2025
+  },
+  "32025": {
+   "name": "Cenlle",
+   "province": "32",
+   "renta_media_persona": 14113,
+   "renta_year": 2023,
+   "population": 1066,
+   "population_5y_change_pct": -3.1,
+   "population_year": 2025
+  },
+  "32026": {
+   "name": "Coles",
+   "province": "32",
+   "renta_media_persona": 13901,
+   "renta_year": 2023,
+   "population": 3228,
+   "population_5y_change_pct": 5.0,
+   "population_year": 2025
+  },
+  "32027": {
+   "name": "Cortegada",
+   "province": "32",
+   "renta_media_persona": 12990,
+   "renta_year": 2023,
+   "population": 1027,
+   "population_5y_change_pct": -4.0,
+   "population_year": 2025
+  },
+  "32028": {
+   "name": "Cualedro",
+   "province": "32",
+   "renta_media_persona": 12496,
+   "renta_year": 2023,
+   "population": 1538,
+   "population_5y_change_pct": -7.8,
+   "population_year": 2025
+  },
+  "32029": {
+   "name": "Chandrexa de Queixa",
+   "province": "32",
+   "renta_media_persona": 13600,
+   "renta_year": 2023,
+   "population": 467,
+   "population_5y_change_pct": -1.1,
+   "population_year": 2025
+  },
+  "32030": {
+   "name": "Entrimo",
+   "province": "32",
+   "renta_media_persona": 12600,
+   "renta_year": 2023,
+   "population": 1093,
+   "population_5y_change_pct": -1.4,
+   "population_year": 2025
+  },
+  "32031": {
+   "name": "Esgos",
+   "province": "32",
+   "renta_media_persona": 14459,
+   "renta_year": 2023,
+   "population": 1103,
+   "population_5y_change_pct": 0.0,
+   "population_year": 2025
+  },
+  "32032": {
+   "name": "Xinzo de Limia",
+   "province": "32",
+   "renta_media_persona": 12763,
+   "renta_year": 2023,
+   "population": 9699,
+   "population_5y_change_pct": 0.6,
+   "population_year": 2025
+  },
+  "32033": {
+   "name": "Gomesende",
+   "province": "32",
+   "renta_media_persona": 12436,
+   "renta_year": 2023,
+   "population": 646,
+   "population_5y_change_pct": -9.5,
+   "population_year": 2025
+  },
+  "32034": {
+   "name": "Gudiña, A",
+   "province": "32",
+   "renta_media_persona": 13502,
+   "renta_year": 2023,
+   "population": 1197,
+   "population_5y_change_pct": -3.2,
+   "population_year": 2025
+  },
+  "32035": {
+   "name": "Irixo, O",
+   "province": "32",
+   "renta_media_persona": 13529,
+   "renta_year": 2023,
+   "population": 1340,
+   "population_5y_change_pct": -5.6,
+   "population_year": 2025
+  },
+  "32036": {
+   "name": "Xunqueira de Ambía",
+   "province": "32",
+   "renta_media_persona": 13693,
+   "renta_year": 2023,
+   "population": 1346,
+   "population_5y_change_pct": -2.0,
+   "population_year": 2025
+  },
+  "32037": {
+   "name": "Xunqueira de Espadanedo",
+   "province": "32",
+   "renta_media_persona": 14712,
+   "renta_year": 2023,
+   "population": 696,
+   "population_5y_change_pct": -7.3,
+   "population_year": 2025
+  },
+  "32038": {
+   "name": "Larouco",
+   "province": "32",
+   "renta_media_persona": 13945,
+   "renta_year": 2023,
+   "population": 484,
+   "population_5y_change_pct": 16.1,
+   "population_year": 2025
+  },
+  "32039": {
+   "name": "Laza",
+   "province": "32",
+   "renta_media_persona": 13838,
+   "renta_year": 2023,
+   "population": 1156,
+   "population_5y_change_pct": -5.5,
+   "population_year": 2025
+  },
+  "32040": {
+   "name": "Leiro",
+   "province": "32",
+   "renta_media_persona": 13143,
+   "renta_year": 2023,
+   "population": 1517,
+   "population_5y_change_pct": -0.5,
+   "population_year": 2025
+  },
+  "32041": {
+   "name": "Lobeira",
+   "province": "32",
+   "renta_media_persona": 15369,
+   "renta_year": 2023,
+   "population": 703,
+   "population_5y_change_pct": -8.5,
+   "population_year": 2025
+  },
+  "32042": {
+   "name": "Lobios",
+   "province": "32",
+   "renta_media_persona": 13393,
+   "renta_year": 2023,
+   "population": 1776,
+   "population_5y_change_pct": 5.8,
+   "population_year": 2025
+  },
+  "32043": {
+   "name": "Maceda",
+   "province": "32",
+   "renta_media_persona": 13761,
+   "renta_year": 2023,
+   "population": 2874,
+   "population_5y_change_pct": 1.2,
+   "population_year": 2025
+  },
+  "32044": {
+   "name": "Manzaneda",
+   "province": "32",
+   "renta_media_persona": 13898,
+   "renta_year": 2023,
+   "population": 767,
+   "population_5y_change_pct": -9.0,
+   "population_year": 2025
+  },
+  "32045": {
+   "name": "Maside",
+   "province": "32",
+   "renta_media_persona": 12147,
+   "renta_year": 2023,
+   "population": 2768,
+   "population_5y_change_pct": 2.2,
+   "population_year": 2025
+  },
+  "32046": {
+   "name": "Melón",
+   "province": "32",
+   "renta_media_persona": 12959,
+   "renta_year": 2023,
+   "population": 1079,
+   "population_5y_change_pct": -6.7,
+   "population_year": 2025
+  },
+  "32047": {
+   "name": "Merca, A",
+   "province": "32",
+   "renta_media_persona": 14322,
+   "renta_year": 2023,
+   "population": 1962,
+   "population_5y_change_pct": 2.6,
+   "population_year": 2025
+  },
+  "32048": {
+   "name": "Mezquita, A",
+   "province": "32",
+   "renta_media_persona": 12571,
+   "renta_year": 2023,
+   "population": 996,
+   "population_5y_change_pct": -1.7,
+   "population_year": 2025
+  },
+  "32049": {
+   "name": "Montederramo",
+   "province": "32",
+   "renta_media_persona": 14080,
+   "renta_year": 2023,
+   "population": 660,
+   "population_5y_change_pct": -5.6,
+   "population_year": 2025
+  },
+  "32050": {
+   "name": "Monterrei",
+   "province": "32",
+   "renta_media_persona": 12516,
+   "renta_year": 2023,
+   "population": 2403,
+   "population_5y_change_pct": -4.6,
+   "population_year": 2025
+  },
+  "32051": {
+   "name": "Muíños",
+   "province": "32",
+   "renta_media_persona": 15099,
+   "renta_year": 2023,
+   "population": 1385,
+   "population_5y_change_pct": -5.5,
+   "population_year": 2025
+  },
+  "32052": {
+   "name": "Nogueira de Ramuín",
+   "province": "32",
+   "renta_media_persona": 14113,
+   "renta_year": 2023,
+   "population": 2074,
+   "population_5y_change_pct": 4.3,
+   "population_year": 2025
+  },
+  "32053": {
+   "name": "Oímbra",
+   "province": "32",
+   "renta_media_persona": 11432,
+   "renta_year": 2023,
+   "population": 1689,
+   "population_5y_change_pct": -1.8,
+   "population_year": 2025
+  },
+  "32054": {
+   "name": "Ourense",
+   "province": "32",
+   "renta_media_persona": 15203,
+   "renta_year": 2023,
+   "population": 105769,
+   "population_5y_change_pct": 0.1,
+   "population_year": 2025
+  },
+  "32055": {
+   "name": "Paderne de Allariz",
+   "province": "32",
+   "renta_media_persona": 14781,
+   "renta_year": 2023,
+   "population": 1346,
+   "population_5y_change_pct": -1.9,
+   "population_year": 2025
+  },
+  "32056": {
+   "name": "Padrenda",
+   "province": "32",
+   "renta_media_persona": 12006,
+   "renta_year": 2023,
+   "population": 1555,
+   "population_5y_change_pct": -6.9,
+   "population_year": 2025
+  },
+  "32057": {
+   "name": "Parada de Sil",
+   "province": "32",
+   "renta_media_persona": 15568,
+   "renta_year": 2023,
+   "population": 500,
+   "population_5y_change_pct": -8.4,
+   "population_year": 2025
+  },
+  "32058": {
+   "name": "Pereiro de Aguiar, O",
+   "province": "32",
+   "renta_media_persona": 15510,
+   "renta_year": 2023,
+   "population": 6794,
+   "population_5y_change_pct": 7.0,
+   "population_year": 2025
+  },
+  "32059": {
+   "name": "Peroxa, A",
+   "province": "32",
+   "renta_media_persona": 14457,
+   "renta_year": 2023,
+   "population": 1793,
+   "population_5y_change_pct": -0.9,
+   "population_year": 2025
+  },
+  "32060": {
+   "name": "Petín",
+   "province": "32",
+   "renta_media_persona": 13500,
+   "renta_year": 2023,
+   "population": 856,
+   "population_5y_change_pct": 0.8,
+   "population_year": 2025
+  },
+  "32061": {
+   "name": "Piñor",
+   "province": "32",
+   "renta_media_persona": 13391,
+   "renta_year": 2023,
+   "population": 1103,
+   "population_5y_change_pct": -6.8,
+   "population_year": 2025
+  },
+  "32062": {
+   "name": "Porqueira",
+   "province": "32",
+   "renta_media_persona": 13324,
+   "renta_year": 2023,
+   "population": 806,
+   "population_5y_change_pct": -2.1,
+   "population_year": 2025
+  },
+  "32063": {
+   "name": "Pobra de Trives, A",
+   "province": "32",
+   "renta_media_persona": 14651,
+   "renta_year": 2023,
+   "population": 1929,
+   "population_5y_change_pct": -4.2,
+   "population_year": 2025
+  },
+  "32064": {
+   "name": "Pontedeva",
+   "province": "32",
+   "renta_media_persona": 14250,
+   "renta_year": 2023,
+   "population": 458,
+   "population_5y_change_pct": -7.3,
+   "population_year": 2025
+  },
+  "32065": {
+   "name": "Punxín",
+   "province": "32",
+   "renta_media_persona": 13582,
+   "renta_year": 2023,
+   "population": 748,
+   "population_5y_change_pct": 5.6,
+   "population_year": 2025
+  },
+  "32066": {
+   "name": "Quintela de Leirado",
+   "province": "32",
+   "renta_media_persona": 12084,
+   "renta_year": 2023,
+   "population": 587,
+   "population_5y_change_pct": -6.8,
+   "population_year": 2025
+  },
+  "32067": {
+   "name": "Rairiz de Veiga",
+   "province": "32",
+   "renta_media_persona": 14067,
+   "renta_year": 2023,
+   "population": 1154,
+   "population_5y_change_pct": -6.0,
+   "population_year": 2025
+  },
+  "32068": {
+   "name": "Ramirás",
+   "province": "32",
+   "renta_media_persona": 11930,
+   "renta_year": 2023,
+   "population": 1485,
+   "population_5y_change_pct": -4.3,
+   "population_year": 2025
+  },
+  "32069": {
+   "name": "Ribadavia",
+   "province": "32",
+   "renta_media_persona": 13014,
+   "renta_year": 2023,
+   "population": 4895,
+   "population_5y_change_pct": -2.3,
+   "population_year": 2025
+  },
+  "32070": {
+   "name": "San Xoán de Río",
+   "province": "32",
+   "renta_media_persona": 13584,
+   "renta_year": 2023,
+   "population": 510,
+   "population_5y_change_pct": 0.8,
+   "population_year": 2025
+  },
+  "32071": {
+   "name": "Riós",
+   "province": "32",
+   "renta_media_persona": 12045,
+   "renta_year": 2023,
+   "population": 1379,
+   "population_5y_change_pct": -5.6,
+   "population_year": 2025
+  },
+  "32072": {
+   "name": "Rúa, A",
+   "province": "32",
+   "renta_media_persona": 13361,
+   "renta_year": 2023,
+   "population": 4214,
+   "population_5y_change_pct": -1.6,
+   "population_year": 2025
+  },
+  "32073": {
+   "name": "Rubiá",
+   "province": "32",
+   "renta_media_persona": 14623,
+   "renta_year": 2023,
+   "population": 1391,
+   "population_5y_change_pct": 0.6,
+   "population_year": 2025
+  },
+  "32074": {
+   "name": "San Amaro",
+   "province": "32",
+   "renta_media_persona": 13065,
+   "renta_year": 2023,
+   "population": 1030,
+   "population_5y_change_pct": -2.1,
+   "population_year": 2025
+  },
+  "32075": {
+   "name": "San Cibrao das Viñas",
+   "province": "32",
+   "renta_media_persona": 14626,
+   "renta_year": 2023,
+   "population": 5751,
+   "population_5y_change_pct": 6.6,
+   "population_year": 2025
+  },
+  "32076": {
+   "name": "San Cristovo de Cea",
+   "province": "32",
+   "renta_media_persona": 13705,
+   "renta_year": 2023,
+   "population": 1963,
+   "population_5y_change_pct": -6.0,
+   "population_year": 2025
+  },
+  "32077": {
+   "name": "Sandiás",
+   "province": "32",
+   "renta_media_persona": 14795,
+   "renta_year": 2023,
+   "population": 1086,
+   "population_5y_change_pct": -9.3,
+   "population_year": 2025
+  },
+  "32078": {
+   "name": "Sarreaus",
+   "province": "32",
+   "renta_media_persona": 14886,
+   "renta_year": 2023,
+   "population": 1068,
+   "population_5y_change_pct": -6.7,
+   "population_year": 2025
+  },
+  "32079": {
+   "name": "Taboadela",
+   "province": "32",
+   "renta_media_persona": 14254,
+   "renta_year": 2023,
+   "population": 1480,
+   "population_5y_change_pct": 4.4,
+   "population_year": 2025
+  },
+  "32080": {
+   "name": "Teixeira, A",
+   "province": "32",
+   "renta_media_persona": 13635,
+   "renta_year": 2023,
+   "population": 328,
+   "population_5y_change_pct": 4.1,
+   "population_year": 2025
+  },
+  "32081": {
+   "name": "Toén",
+   "province": "32",
+   "renta_media_persona": 14955,
+   "renta_year": 2023,
+   "population": 2327,
+   "population_5y_change_pct": -1.1,
+   "population_year": 2025
+  },
+  "32082": {
+   "name": "Trasmiras",
+   "province": "32",
+   "renta_media_persona": 12031,
+   "renta_year": 2023,
+   "population": 1216,
+   "population_5y_change_pct": -3.7,
+   "population_year": 2025
+  },
+  "32083": {
+   "name": "Veiga, A",
+   "province": "32",
+   "renta_media_persona": 13976,
+   "renta_year": 2023,
+   "population": 873,
+   "population_5y_change_pct": 1.9,
+   "population_year": 2025
+  },
+  "32084": {
+   "name": "Verea",
+   "province": "32",
+   "renta_media_persona": 12697,
+   "renta_year": 2023,
+   "population": 974,
+   "population_5y_change_pct": 6.8,
+   "population_year": 2025
+  },
+  "32085": {
+   "name": "Verín",
+   "province": "32",
+   "renta_media_persona": 12202,
+   "renta_year": 2023,
+   "population": 13956,
+   "population_5y_change_pct": 2.3,
+   "population_year": 2025
+  },
+  "32086": {
+   "name": "Viana do Bolo",
+   "province": "32",
+   "renta_media_persona": 13508,
+   "renta_year": 2023,
+   "population": 2715,
+   "population_5y_change_pct": -3.7,
+   "population_year": 2025
+  },
+  "32087": {
+   "name": "Vilamarín",
+   "province": "32",
+   "renta_media_persona": 15154,
+   "renta_year": 2023,
+   "population": 1836,
+   "population_5y_change_pct": -0.9,
+   "population_year": 2025
+  },
+  "32088": {
+   "name": "Vilamartín de Valdeorras",
+   "province": "32",
+   "renta_media_persona": 13943,
+   "renta_year": 2023,
+   "population": 1817,
+   "population_5y_change_pct": 0.3,
+   "population_year": 2025
+  },
+  "32089": {
+   "name": "Vilar de Barrio",
+   "province": "32",
+   "renta_media_persona": 14459,
+   "renta_year": 2023,
+   "population": 1178,
+   "population_5y_change_pct": -8.2,
+   "population_year": 2025
+  },
+  "32090": {
+   "name": "Vilar de Santos",
+   "province": "32",
+   "renta_media_persona": 14297,
+   "renta_year": 2023,
+   "population": 784,
+   "population_5y_change_pct": -1.3,
+   "population_year": 2025
+  },
+  "32091": {
+   "name": "Vilardevós",
+   "province": "32",
+   "renta_media_persona": 12545,
+   "renta_year": 2023,
+   "population": 1616,
+   "population_5y_change_pct": -10.3,
+   "population_year": 2025
+  },
+  "32092": {
+   "name": "Vilariño de Conso",
+   "province": "32",
+   "renta_media_persona": 13975,
+   "renta_year": 2023,
+   "population": 501,
+   "population_5y_change_pct": -4.4,
+   "population_year": 2025
+  },
+  "33001": {
+   "name": "Allande",
+   "province": "33",
+   "renta_media_persona": 13151,
+   "renta_year": 2023,
+   "population": 1506,
+   "population_5y_change_pct": -6.7,
+   "population_year": 2025
+  },
+  "33002": {
+   "name": "Aller",
+   "province": "33",
+   "renta_media_persona": 15858,
+   "renta_year": 2023,
+   "population": 10011,
+   "population_5y_change_pct": -3.9,
+   "population_year": 2025
+  },
+  "33003": {
+   "name": "Amieva",
+   "province": "33",
+   "renta_media_persona": 13858,
+   "renta_year": 2023,
+   "population": 591,
+   "population_5y_change_pct": -5.9,
+   "population_year": 2025
+  },
+  "33004": {
+   "name": "Avilés",
+   "province": "33",
+   "renta_media_persona": 15545,
+   "renta_year": 2023,
+   "population": 75517,
+   "population_5y_change_pct": -2.9,
+   "population_year": 2025
+  },
+  "33005": {
+   "name": "Belmonte de Miranda",
+   "province": "33",
+   "renta_media_persona": 14966,
+   "renta_year": 2023,
+   "population": 1366,
+   "population_5y_change_pct": -4.9,
+   "population_year": 2025
+  },
+  "33006": {
+   "name": "Bimenes",
+   "province": "33",
+   "renta_media_persona": 14625,
+   "renta_year": 2023,
+   "population": 1639,
+   "population_5y_change_pct": -2.4,
+   "population_year": 2025
+  },
+  "33007": {
+   "name": "Boal",
+   "province": "33",
+   "renta_media_persona": 14635,
+   "renta_year": 2023,
+   "population": 1372,
+   "population_5y_change_pct": -7.4,
+   "population_year": 2025
+  },
+  "33008": {
+   "name": "Cabrales",
+   "province": "33",
+   "renta_media_persona": 12723,
+   "renta_year": 2023,
+   "population": 1884,
+   "population_5y_change_pct": -2.9,
+   "population_year": 2025
+  },
+  "33009": {
+   "name": "Cabranes",
+   "province": "33",
+   "renta_media_persona": 12945,
+   "renta_year": 2023,
+   "population": 1094,
+   "population_5y_change_pct": 3.5,
+   "population_year": 2025
+  },
+  "33010": {
+   "name": "Candamo",
+   "province": "33",
+   "renta_media_persona": 15184,
+   "renta_year": 2023,
+   "population": 1902,
+   "population_5y_change_pct": -3.4,
+   "population_year": 2025
+  },
+  "33011": {
+   "name": "Cangas del Narcea",
+   "province": "33",
+   "renta_media_persona": 14883,
+   "renta_year": 2023,
+   "population": 11282,
+   "population_5y_change_pct": -6.9,
+   "population_year": 2025
+  },
+  "33012": {
+   "name": "Cangas de Onís",
+   "province": "33",
+   "renta_media_persona": 13217,
+   "renta_year": 2023,
+   "population": 6344,
+   "population_5y_change_pct": 2.2,
+   "population_year": 2025
+  },
+  "33013": {
+   "name": "Caravia",
+   "province": "33",
+   "renta_media_persona": 16875,
+   "renta_year": 2023,
+   "population": 486,
+   "population_5y_change_pct": 3.6,
+   "population_year": 2025
+  },
+  "33014": {
+   "name": "Carreño",
+   "province": "33",
+   "renta_media_persona": 15838,
+   "renta_year": 2023,
+   "population": 10292,
+   "population_5y_change_pct": -0.1,
+   "population_year": 2025
+  },
+  "33015": {
+   "name": "Caso",
+   "province": "33",
+   "renta_media_persona": 17202,
+   "renta_year": 2023,
+   "population": 1437,
+   "population_5y_change_pct": -1.4,
+   "population_year": 2025
+  },
+  "33016": {
+   "name": "Castrillón",
+   "province": "33",
+   "renta_media_persona": 17045,
+   "renta_year": 2023,
+   "population": 21998,
+   "population_5y_change_pct": -1.2,
+   "population_year": 2025
+  },
+  "33017": {
+   "name": "Castropol",
+   "province": "33",
+   "renta_media_persona": 14488,
+   "renta_year": 2023,
+   "population": 3202,
+   "population_5y_change_pct": -4.2,
+   "population_year": 2025
+  },
+  "33018": {
+   "name": "Coaña",
+   "province": "33",
+   "renta_media_persona": 15276,
+   "renta_year": 2023,
+   "population": 3321,
+   "population_5y_change_pct": 0.8,
+   "population_year": 2025
+  },
+  "33019": {
+   "name": "Colunga",
+   "province": "33",
+   "renta_media_persona": 13929,
+   "renta_year": 2023,
+   "population": 3143,
+   "population_5y_change_pct": -1.9,
+   "population_year": 2025
+  },
+  "33020": {
+   "name": "Corvera de Asturias",
+   "province": "33",
+   "renta_media_persona": 14364,
+   "renta_year": 2023,
+   "population": 15785,
+   "population_5y_change_pct": 1.7,
+   "population_year": 2025
+  },
+  "33021": {
+   "name": "Cudillero",
+   "province": "33",
+   "renta_media_persona": 14740,
+   "renta_year": 2023,
+   "population": 4867,
+   "population_5y_change_pct": -1.1,
+   "population_year": 2025
+  },
+  "33022": {
+   "name": "Degaña",
+   "province": "33",
+   "renta_media_persona": 16983,
+   "renta_year": 2023,
+   "population": 768,
+   "population_5y_change_pct": -12.8,
+   "population_year": 2025
+  },
+  "33023": {
+   "name": "Franco, El",
+   "province": "33",
+   "renta_media_persona": 14713,
+   "renta_year": 2023,
+   "population": 3728,
+   "population_5y_change_pct": -0.9,
+   "population_year": 2025
+  },
+  "33024": {
+   "name": "Gijón",
+   "province": "33",
+   "renta_media_persona": 16141,
+   "renta_year": 2023,
+   "population": 269894,
+   "population_5y_change_pct": -0.7,
+   "population_year": 2025
+  },
+  "33025": {
+   "name": "Gozón",
+   "province": "33",
+   "renta_media_persona": 15996,
+   "renta_year": 2023,
+   "population": 10407,
+   "population_5y_change_pct": 1.2,
+   "population_year": 2025
+  },
+  "33026": {
+   "name": "Grado",
+   "province": "33",
+   "renta_media_persona": 14283,
+   "renta_year": 2023,
+   "population": 9681,
+   "population_5y_change_pct": -0.2,
+   "population_year": 2025
+  },
+  "33027": {
+   "name": "Grandas de Salime",
+   "province": "33",
+   "renta_media_persona": 16139,
+   "renta_year": 2023,
+   "population": 767,
+   "population_5y_change_pct": -5.9,
+   "population_year": 2025
+  },
+  "33028": {
+   "name": "Ibias",
+   "province": "33",
+   "renta_media_persona": 17716,
+   "renta_year": 2023,
+   "population": 1084,
+   "population_5y_change_pct": -10.2,
+   "population_year": 2025
+  },
+  "33029": {
+   "name": "Illano",
+   "province": "33",
+   "renta_media_persona": 13134,
+   "renta_year": 2023,
+   "population": 277,
+   "population_5y_change_pct": -16.8,
+   "population_year": 2025
+  },
+  "33030": {
+   "name": "Illas",
+   "province": "33",
+   "renta_media_persona": 16550,
+   "renta_year": 2023,
+   "population": 1048,
+   "population_5y_change_pct": 2.4,
+   "population_year": 2025
+  },
+  "33031": {
+   "name": "Langreo",
+   "province": "33",
+   "renta_media_persona": 14474,
+   "renta_year": 2023,
+   "population": 38612,
+   "population_5y_change_pct": -1.5,
+   "population_year": 2025
+  },
+  "33032": {
+   "name": "Laviana",
+   "province": "33",
+   "renta_media_persona": 15202,
+   "renta_year": 2023,
+   "population": 12352,
+   "population_5y_change_pct": -4.1,
+   "population_year": 2025
+  },
+  "33033": {
+   "name": "Lena",
+   "province": "33",
+   "renta_media_persona": 15489,
+   "renta_year": 2023,
+   "population": 10382,
+   "population_5y_change_pct": -3.0,
+   "population_year": 2025
+  },
+  "33034": {
+   "name": "Valdés",
+   "province": "33",
+   "renta_media_persona": 13957,
+   "renta_year": 2023,
+   "population": 10776,
+   "population_5y_change_pct": -5.4,
+   "population_year": 2025
+  },
+  "33035": {
+   "name": "Llanera",
+   "province": "33",
+   "renta_media_persona": 15975,
+   "renta_year": 2023,
+   "population": 14020,
+   "population_5y_change_pct": 2.4,
+   "population_year": 2025
+  },
+  "33036": {
+   "name": "Llanes",
+   "province": "33",
+   "renta_media_persona": 13896,
+   "renta_year": 2023,
+   "population": 13486,
+   "population_5y_change_pct": 0.1,
+   "population_year": 2025
+  },
+  "33037": {
+   "name": "Mieres",
+   "province": "33",
+   "renta_media_persona": 15070,
+   "renta_year": 2023,
+   "population": 36373,
+   "population_5y_change_pct": -3.1,
+   "population_year": 2025
+  },
+  "33038": {
+   "name": "Morcín",
+   "province": "33",
+   "renta_media_persona": 16407,
+   "renta_year": 2023,
+   "population": 2460,
+   "population_5y_change_pct": -3.7,
+   "population_year": 2025
+  },
+  "33039": {
+   "name": "Muros de Nalón",
+   "province": "33",
+   "renta_media_persona": 15948,
+   "renta_year": 2023,
+   "population": 1955,
+   "population_5y_change_pct": 3.6,
+   "population_year": 2025
+  },
+  "33040": {
+   "name": "Nava",
+   "province": "33",
+   "renta_media_persona": 14617,
+   "renta_year": 2023,
+   "population": 5244,
+   "population_5y_change_pct": -0.6,
+   "population_year": 2025
+  },
+  "33041": {
+   "name": "Navia",
+   "province": "33",
+   "renta_media_persona": 15629,
+   "renta_year": 2023,
+   "population": 8031,
+   "population_5y_change_pct": -3.5,
+   "population_year": 2025
+  },
+  "33042": {
+   "name": "Noreña",
+   "province": "33",
+   "renta_media_persona": 15660,
+   "renta_year": 2023,
+   "population": 5131,
+   "population_5y_change_pct": -0.3,
+   "population_year": 2025
+  },
+  "33043": {
+   "name": "Onís",
+   "province": "33",
+   "renta_media_persona": 11862,
+   "renta_year": 2023,
+   "population": 739,
+   "population_5y_change_pct": 0.7,
+   "population_year": 2025
+  },
+  "33044": {
+   "name": "Oviedo",
+   "province": "33",
+   "renta_media_persona": 16926,
+   "renta_year": 2023,
+   "population": 223968,
+   "population_5y_change_pct": 1.8,
+   "population_year": 2025
+  },
+  "33045": {
+   "name": "Parres",
+   "province": "33",
+   "renta_media_persona": 13793,
+   "renta_year": 2023,
+   "population": 5150,
+   "population_5y_change_pct": -3.1,
+   "population_year": 2025
+  },
+  "33046": {
+   "name": "Peñamellera Alta",
+   "province": "33",
+   "renta_media_persona": 12332,
+   "renta_year": 2023,
+   "population": 500,
+   "population_5y_change_pct": 0.4,
+   "population_year": 2025
+  },
+  "33047": {
+   "name": "Peñamellera Baja",
+   "province": "33",
+   "renta_media_persona": 12189,
+   "renta_year": 2023,
+   "population": 1194,
+   "population_5y_change_pct": -2.7,
+   "population_year": 2025
+  },
+  "33048": {
+   "name": "Pesoz",
+   "province": "33",
+   "renta_media_persona": 13353,
+   "renta_year": 2023,
+   "population": 134,
+   "population_5y_change_pct": -9.5,
+   "population_year": 2025
+  },
+  "33049": {
+   "name": "Piloña",
+   "province": "33",
+   "renta_media_persona": 13424,
+   "renta_year": 2023,
+   "population": 6716,
+   "population_5y_change_pct": -2.3,
+   "population_year": 2025
+  },
+  "33050": {
+   "name": "Ponga",
+   "province": "33",
+   "renta_media_persona": 14089,
+   "renta_year": 2023,
+   "population": 576,
+   "population_5y_change_pct": 0.7,
+   "population_year": 2025
+  },
+  "33051": {
+   "name": "Pravia",
+   "province": "33",
+   "renta_media_persona": 13620,
+   "renta_year": 2023,
+   "population": 7792,
+   "population_5y_change_pct": -2.4,
+   "population_year": 2025
+  },
+  "33052": {
+   "name": "Proaza",
+   "province": "33",
+   "renta_media_persona": 17533,
+   "renta_year": 2023,
+   "population": 686,
+   "population_5y_change_pct": -3.0,
+   "population_year": 2025
+  },
+  "33053": {
+   "name": "Quirós",
+   "province": "33",
+   "renta_media_persona": 17208,
+   "renta_year": 2023,
+   "population": 1142,
+   "population_5y_change_pct": -3.8,
+   "population_year": 2025
+  },
+  "33054": {
+   "name": "Regueras, Las",
+   "province": "33",
+   "renta_media_persona": 16861,
+   "renta_year": 2023,
+   "population": 1892,
+   "population_5y_change_pct": 2.9,
+   "population_year": 2025
+  },
+  "33055": {
+   "name": "Ribadedeva",
+   "province": "33",
+   "renta_media_persona": 13061,
+   "renta_year": 2023,
+   "population": 1693,
+   "population_5y_change_pct": -2.8,
+   "population_year": 2025
+  },
+  "33056": {
+   "name": "Ribadesella",
+   "province": "33",
+   "renta_media_persona": 14235,
+   "renta_year": 2023,
+   "population": 5591,
+   "population_5y_change_pct": -1.7,
+   "population_year": 2025
+  },
+  "33057": {
+   "name": "Ribera de Arriba",
+   "province": "33",
+   "renta_media_persona": 14045,
+   "renta_year": 2023,
+   "population": 1852,
+   "population_5y_change_pct": 0.8,
+   "population_year": 2025
+  },
+  "33058": {
+   "name": "Riosa",
+   "province": "33",
+   "renta_media_persona": 16110,
+   "renta_year": 2023,
+   "population": 1686,
+   "population_5y_change_pct": -8.8,
+   "population_year": 2025
+  },
+  "33059": {
+   "name": "Salas",
+   "province": "33",
+   "renta_media_persona": 14133,
+   "renta_year": 2023,
+   "population": 4771,
+   "population_5y_change_pct": -2.6,
+   "population_year": 2025
+  },
+  "33060": {
+   "name": "San Martín del Rey Aurelio",
+   "province": "33",
+   "renta_media_persona": 14699,
+   "renta_year": 2023,
+   "population": 15531,
+   "population_5y_change_pct": -1.8,
+   "population_year": 2025
+  },
+  "33061": {
+   "name": "San Martín de Oscos",
+   "province": "33",
+   "renta_media_persona": 13598,
+   "renta_year": 2023,
+   "population": 337,
+   "population_5y_change_pct": -10.4,
+   "population_year": 2025
+  },
+  "33062": {
+   "name": "Santa Eulalia de Oscos",
+   "province": "33",
+   "renta_media_persona": 12605,
+   "renta_year": 2023,
+   "population": 420,
+   "population_5y_change_pct": -6.5,
+   "population_year": 2025
+  },
+  "33063": {
+   "name": "San Tirso de Abres",
+   "province": "33",
+   "renta_media_persona": 13455,
+   "renta_year": 2023,
+   "population": 396,
+   "population_5y_change_pct": -5.9,
+   "population_year": 2025
+  },
+  "33064": {
+   "name": "Santo Adriano",
+   "province": "33",
+   "renta_media_persona": 15621,
+   "renta_year": 2023,
+   "population": 281,
+   "population_5y_change_pct": 2.9,
+   "population_year": 2025
+  },
+  "33065": {
+   "name": "Sariego",
+   "province": "33",
+   "renta_media_persona": 15683,
+   "renta_year": 2023,
+   "population": 1252,
+   "population_5y_change_pct": -0.2,
+   "population_year": 2025
+  },
+  "33066": {
+   "name": "Siero",
+   "province": "33",
+   "renta_media_persona": 15873,
+   "renta_year": 2023,
+   "population": 53049,
+   "population_5y_change_pct": 3.0,
+   "population_year": 2025
+  },
+  "33067": {
+   "name": "Sobrescobio",
+   "province": "33",
+   "renta_media_persona": 17068,
+   "renta_year": 2023,
+   "population": 838,
+   "population_5y_change_pct": 2.9,
+   "population_year": 2025
+  },
+  "33068": {
+   "name": "Somiedo",
+   "province": "33",
+   "renta_media_persona": 15743,
+   "renta_year": 2023,
+   "population": 1031,
+   "population_5y_change_pct": -5.7,
+   "population_year": 2025
+  },
+  "33069": {
+   "name": "Soto del Barco",
+   "province": "33",
+   "renta_media_persona": 15362,
+   "renta_year": 2023,
+   "population": 3801,
+   "population_5y_change_pct": 0.0,
+   "population_year": 2025
+  },
+  "33070": {
+   "name": "Tapia de Casariego",
+   "province": "33",
+   "renta_media_persona": 15464,
+   "renta_year": 2023,
+   "population": 3538,
+   "population_5y_change_pct": -5.0,
+   "population_year": 2025
+  },
+  "33071": {
+   "name": "Taramundi",
+   "province": "33",
+   "renta_media_persona": 14117,
+   "renta_year": 2023,
+   "population": 545,
+   "population_5y_change_pct": -9.5,
+   "population_year": 2025
+  },
+  "33072": {
+   "name": "Teverga",
+   "province": "33",
+   "renta_media_persona": 17196,
+   "renta_year": 2023,
+   "population": 1495,
+   "population_5y_change_pct": -3.8,
+   "population_year": 2025
+  },
+  "33073": {
+   "name": "Tineo",
+   "province": "33",
+   "renta_media_persona": 13886,
+   "renta_year": 2023,
+   "population": 8679,
+   "population_5y_change_pct": -5.7,
+   "population_year": 2025
+  },
+  "33074": {
+   "name": "Vegadeo",
+   "province": "33",
+   "renta_media_persona": 13628,
+   "renta_year": 2023,
+   "population": 3928,
+   "population_5y_change_pct": 0.1,
+   "population_year": 2025
+  },
+  "33075": {
+   "name": "Villanueva de Oscos",
+   "province": "33",
+   "renta_media_persona": 12598,
+   "renta_year": 2023,
+   "population": 244,
+   "population_5y_change_pct": -10.3,
+   "population_year": 2025
+  },
+  "33076": {
+   "name": "Villaviciosa",
+   "province": "33",
+   "renta_media_persona": 14987,
+   "renta_year": 2023,
+   "population": 15379,
+   "population_5y_change_pct": 6.3,
+   "population_year": 2025
+  },
+  "33077": {
+   "name": "Villayón",
+   "province": "33",
+   "renta_media_persona": 13356,
+   "renta_year": 2023,
+   "population": 1054,
+   "population_5y_change_pct": -10.7,
+   "population_year": 2025
+  },
+  "33078": {
+   "name": "Yernes y Tameza",
+   "province": "33",
+   "renta_media_persona": 15777,
+   "renta_year": 2023,
+   "population": 134,
+   "population_5y_change_pct": 0.8,
+   "population_year": 2025
+  },
+  "36001": {
+   "name": "Arbo",
+   "province": "36",
+   "renta_media_persona": 12425,
+   "renta_year": 2023,
+   "population": 2603,
+   "population_5y_change_pct": 1.0,
+   "population_year": 2025
+  },
+  "36002": {
+   "name": "Barro",
+   "province": "36",
+   "renta_media_persona": 13380,
+   "renta_year": 2023,
+   "population": 3674,
+   "population_5y_change_pct": 1.4,
+   "population_year": 2025
+  },
+  "36003": {
+   "name": "Baiona",
+   "province": "36",
+   "renta_media_persona": 15254,
+   "renta_year": 2023,
+   "population": 12361,
+   "population_5y_change_pct": 1.9,
+   "population_year": 2025
+  },
+  "36004": {
+   "name": "Bueu",
+   "province": "36",
+   "renta_media_persona": 14320,
+   "renta_year": 2023,
+   "population": 11836,
+   "population_5y_change_pct": -1.0,
+   "population_year": 2025
+  },
+  "36005": {
+   "name": "Caldas de Reis",
+   "province": "36",
+   "renta_media_persona": 12651,
+   "renta_year": 2023,
+   "population": 9615,
+   "population_5y_change_pct": -1.6,
+   "population_year": 2025
+  },
+  "36006": {
+   "name": "Cambados",
+   "province": "36",
+   "renta_media_persona": 12476,
+   "renta_year": 2023,
+   "population": 13787,
+   "population_5y_change_pct": 0.5,
+   "population_year": 2025
+  },
+  "36007": {
+   "name": "Campo Lameiro",
+   "province": "36",
+   "renta_media_persona": 13218,
+   "renta_year": 2023,
+   "population": 1667,
+   "population_5y_change_pct": -6.2,
+   "population_year": 2025
+  },
+  "36008": {
+   "name": "Cangas",
+   "province": "36",
+   "renta_media_persona": 14034,
+   "renta_year": 2023,
+   "population": 26711,
+   "population_5y_change_pct": 0.5,
+   "population_year": 2025
+  },
+  "36009": {
+   "name": "Cañiza, A",
+   "province": "36",
+   "renta_media_persona": 11669,
+   "renta_year": 2023,
+   "population": 4990,
+   "population_5y_change_pct": -2.6,
+   "population_year": 2025
+  },
+  "36010": {
+   "name": "Catoira",
+   "province": "36",
+   "renta_media_persona": 13137,
+   "renta_year": 2023,
+   "population": 3274,
+   "population_5y_change_pct": -1.7,
+   "population_year": 2025
+  },
+  "36013": {
+   "name": "Covelo",
+   "province": "36",
+   "renta_media_persona": 12673,
+   "renta_year": 2023,
+   "population": 2472,
+   "population_5y_change_pct": 4.4,
+   "population_year": 2025
+  },
+  "36014": {
+   "name": "Crecente",
+   "province": "36",
+   "renta_media_persona": 13367,
+   "renta_year": 2023,
+   "population": 1921,
+   "population_5y_change_pct": -3.7,
+   "population_year": 2025
+  },
+  "36015": {
+   "name": "Cuntis",
+   "province": "36",
+   "renta_media_persona": 13435,
+   "renta_year": 2023,
+   "population": 4469,
+   "population_5y_change_pct": -4.2,
+   "population_year": 2025
+  },
+  "36016": {
+   "name": "Dozón",
+   "province": "36",
+   "renta_media_persona": 13844,
+   "renta_year": 2023,
+   "population": 961,
+   "population_5y_change_pct": -10.4,
+   "population_year": 2025
+  },
+  "36017": {
+   "name": "Estrada, A",
+   "province": "36",
+   "renta_media_persona": 13417,
+   "renta_year": 2023,
+   "population": 20112,
+   "population_5y_change_pct": -1.2,
+   "population_year": 2025
+  },
+  "36018": {
+   "name": "Forcarei",
+   "province": "36",
+   "renta_media_persona": 13821,
+   "renta_year": 2023,
+   "population": 3067,
+   "population_5y_change_pct": -7.3,
+   "population_year": 2025
+  },
+  "36019": {
+   "name": "Fornelos de Montes",
+   "province": "36",
+   "renta_media_persona": 12290,
+   "renta_year": 2023,
+   "population": 1614,
+   "population_5y_change_pct": 1.0,
+   "population_year": 2025
+  },
+  "36020": {
+   "name": "Agolada",
+   "province": "36",
+   "renta_media_persona": 12837,
+   "renta_year": 2023,
+   "population": 2225,
+   "population_5y_change_pct": -3.4,
+   "population_year": 2025
+  },
+  "36021": {
+   "name": "Gondomar",
+   "province": "36",
+   "renta_media_persona": 14198,
+   "renta_year": 2023,
+   "population": 15066,
+   "population_5y_change_pct": 2.5,
+   "population_year": 2025
+  },
+  "36022": {
+   "name": "Grove, O",
+   "province": "36",
+   "renta_media_persona": 12766,
+   "renta_year": 2023,
+   "population": 10833,
+   "population_5y_change_pct": 3.0,
+   "population_year": 2025
+  },
+  "36023": {
+   "name": "Guarda, A",
+   "province": "36",
+   "renta_media_persona": 12638,
+   "renta_year": 2023,
+   "population": 9970,
+   "population_5y_change_pct": -0.5,
+   "population_year": 2025
+  },
+  "36024": {
+   "name": "Lalín",
+   "province": "36",
+   "renta_media_persona": 12896,
+   "renta_year": 2023,
+   "population": 20292,
+   "population_5y_change_pct": 0.4,
+   "population_year": 2025
+  },
+  "36025": {
+   "name": "Lama, A",
+   "province": "36",
+   "renta_media_persona": 10775,
+   "renta_year": 2023,
+   "population": 2437,
+   "population_5y_change_pct": 1.7,
+   "population_year": 2025
+  },
+  "36026": {
+   "name": "Marín",
+   "province": "36",
+   "renta_media_persona": 12981,
+   "renta_year": 2023,
+   "population": 23991,
+   "population_5y_change_pct": -1.0,
+   "population_year": 2025
+  },
+  "36027": {
+   "name": "Meaño",
+   "province": "36",
+   "renta_media_persona": 12134,
+   "renta_year": 2023,
+   "population": 5237,
+   "population_5y_change_pct": -1.6,
+   "population_year": 2025
+  },
+  "36028": {
+   "name": "Meis",
+   "province": "36",
+   "renta_media_persona": 12337,
+   "renta_year": 2023,
+   "population": 4668,
+   "population_5y_change_pct": -1.8,
+   "population_year": 2025
+  },
+  "36029": {
+   "name": "Moaña",
+   "province": "36",
+   "renta_media_persona": 13813,
+   "renta_year": 2023,
+   "population": 19320,
+   "population_5y_change_pct": -0.7,
+   "population_year": 2025
+  },
+  "36030": {
+   "name": "Mondariz",
+   "province": "36",
+   "renta_media_persona": 12260,
+   "renta_year": 2023,
+   "population": 4456,
+   "population_5y_change_pct": 1.0,
+   "population_year": 2025
+  },
+  "36031": {
+   "name": "Mondariz-Balneario",
+   "province": "36",
+   "renta_media_persona": 15418,
+   "renta_year": 2023,
+   "population": 742,
+   "population_5y_change_pct": 16.5,
+   "population_year": 2025
+  },
+  "36032": {
+   "name": "Moraña",
+   "province": "36",
+   "renta_media_persona": 12517,
+   "renta_year": 2023,
+   "population": 4131,
+   "population_5y_change_pct": -0.4,
+   "population_year": 2025
+  },
+  "36033": {
+   "name": "Mos",
+   "province": "36",
+   "renta_media_persona": 13517,
+   "renta_year": 2023,
+   "population": 15233,
+   "population_5y_change_pct": 1.1,
+   "population_year": 2025
+  },
+  "36034": {
+   "name": "Neves, As",
+   "province": "36",
+   "renta_media_persona": 11872,
+   "renta_year": 2023,
+   "population": 3657,
+   "population_5y_change_pct": -3.8,
+   "population_year": 2025
+  },
+  "36035": {
+   "name": "Nigrán",
+   "province": "36",
+   "renta_media_persona": 16404,
+   "renta_year": 2023,
+   "population": 18174,
+   "population_5y_change_pct": 2.4,
+   "population_year": 2025
+  },
+  "36036": {
+   "name": "Oia",
+   "province": "36",
+   "renta_media_persona": 13410,
+   "renta_year": 2023,
+   "population": 3062,
+   "population_5y_change_pct": 0.4,
+   "population_year": 2025
+  },
+  "36037": {
+   "name": "Pazos de Borbén",
+   "province": "36",
+   "renta_media_persona": 12546,
+   "renta_year": 2023,
+   "population": 3046,
+   "population_5y_change_pct": 2.7,
+   "population_year": 2025
+  },
+  "36038": {
+   "name": "Pontevedra",
+   "province": "36",
+   "renta_media_persona": 15483,
+   "renta_year": 2023,
+   "population": 83316,
+   "population_5y_change_pct": 0.1,
+   "population_year": 2025
+  },
+  "36039": {
+   "name": "Porriño, O",
+   "province": "36",
+   "renta_media_persona": 13289,
+   "renta_year": 2023,
+   "population": 20965,
+   "population_5y_change_pct": 4.3,
+   "population_year": 2025
+  },
+  "36040": {
+   "name": "Portas",
+   "province": "36",
+   "renta_media_persona": 12790,
+   "renta_year": 2023,
+   "population": 2748,
+   "population_5y_change_pct": -5.4,
+   "population_year": 2025
+  },
+  "36041": {
+   "name": "Poio",
+   "province": "36",
+   "renta_media_persona": 14627,
+   "renta_year": 2023,
+   "population": 17434,
+   "population_5y_change_pct": 2.1,
+   "population_year": 2025
+  },
+  "36042": {
+   "name": "Ponteareas",
+   "province": "36",
+   "renta_media_persona": 12538,
+   "renta_year": 2023,
+   "population": 23211,
+   "population_5y_change_pct": 1.2,
+   "population_year": 2025
+  },
+  "36043": {
+   "name": "Ponte Caldelas",
+   "province": "36",
+   "renta_media_persona": 12440,
+   "renta_year": 2023,
+   "population": 5609,
+   "population_5y_change_pct": 1.4,
+   "population_year": 2025
+  },
+  "36044": {
+   "name": "Pontecesures",
+   "province": "36",
+   "renta_media_persona": 13987,
+   "renta_year": 2023,
+   "population": 3076,
+   "population_5y_change_pct": 0.8,
+   "population_year": 2025
+  },
+  "36045": {
+   "name": "Redondela",
+   "province": "36",
+   "renta_media_persona": 13948,
+   "renta_year": 2023,
+   "population": 28874,
+   "population_5y_change_pct": -1.3,
+   "population_year": 2025
+  },
+  "36046": {
+   "name": "Ribadumia",
+   "province": "36",
+   "renta_media_persona": 12655,
+   "renta_year": 2023,
+   "population": 5166,
+   "population_5y_change_pct": 1.2,
+   "population_year": 2025
+  },
+  "36047": {
+   "name": "Rodeiro",
+   "province": "36",
+   "renta_media_persona": 13197,
+   "renta_year": 2023,
+   "population": 2232,
+   "population_5y_change_pct": -6.7,
+   "population_year": 2025
+  },
+  "36048": {
+   "name": "Rosal, O",
+   "province": "36",
+   "renta_media_persona": 12656,
+   "renta_year": 2023,
+   "population": 6548,
+   "population_5y_change_pct": 4.1,
+   "population_year": 2025
+  },
+  "36049": {
+   "name": "Salceda de Caselas",
+   "province": "36",
+   "renta_media_persona": 13017,
+   "renta_year": 2023,
+   "population": 9409,
+   "population_5y_change_pct": 2.6,
+   "population_year": 2025
+  },
+  "36050": {
+   "name": "Salvaterra de Miño",
+   "province": "36",
+   "renta_media_persona": 12213,
+   "renta_year": 2023,
+   "population": 10617,
+   "population_5y_change_pct": 6.3,
+   "population_year": 2025
+  },
+  "36051": {
+   "name": "Sanxenxo",
+   "province": "36",
+   "renta_media_persona": 13605,
+   "renta_year": 2023,
+   "population": 18016,
+   "population_5y_change_pct": 3.5,
+   "population_year": 2025
+  },
+  "36052": {
+   "name": "Silleda",
+   "province": "36",
+   "renta_media_persona": 12863,
+   "renta_year": 2023,
+   "population": 8917,
+   "population_5y_change_pct": 0.6,
+   "population_year": 2025
+  },
+  "36053": {
+   "name": "Soutomaior",
+   "province": "36",
+   "renta_media_persona": 12961,
+   "renta_year": 2023,
+   "population": 7589,
+   "population_5y_change_pct": 2.2,
+   "population_year": 2025
+  },
+  "36054": {
+   "name": "Tomiño",
+   "province": "36",
+   "renta_media_persona": 13024,
+   "renta_year": 2023,
+   "population": 13738,
+   "population_5y_change_pct": 1.3,
+   "population_year": 2025
+  },
+  "36055": {
+   "name": "Tui",
+   "province": "36",
+   "renta_media_persona": 12688,
+   "renta_year": 2023,
+   "population": 17468,
+   "population_5y_change_pct": 0.8,
+   "population_year": 2025
+  },
+  "36056": {
+   "name": "Valga",
+   "province": "36",
+   "renta_media_persona": 12773,
+   "renta_year": 2023,
+   "population": 5779,
+   "population_5y_change_pct": -0.8,
+   "population_year": 2025
+  },
+  "36057": {
+   "name": "Vigo",
+   "province": "36",
+   "renta_media_persona": 15359,
+   "renta_year": 2023,
+   "population": 294489,
+   "population_5y_change_pct": -0.7,
+   "population_year": 2025
+  },
+  "36058": {
+   "name": "Vilaboa",
+   "province": "36",
+   "renta_media_persona": 13646,
+   "renta_year": 2023,
+   "population": 5856,
+   "population_5y_change_pct": -1.1,
+   "population_year": 2025
+  },
+  "36059": {
+   "name": "Vila de Cruces",
+   "province": "36",
+   "renta_media_persona": 12753,
+   "renta_year": 2023,
+   "population": 4967,
+   "population_5y_change_pct": -4.6,
+   "population_year": 2025
+  },
+  "36060": {
+   "name": "Vilagarcía de Arousa",
+   "province": "36",
+   "renta_media_persona": 13097,
+   "renta_year": 2023,
+   "population": 37888,
+   "population_5y_change_pct": 0.9,
+   "population_year": 2025
+  },
+  "36061": {
+   "name": "Vilanova de Arousa",
+   "province": "36",
+   "renta_media_persona": 11902,
+   "renta_year": 2023,
+   "population": 10159,
+   "population_5y_change_pct": -0.8,
+   "population_year": 2025
+  },
+  "36901": {
+   "name": "Illa de Arousa, A",
+   "province": "36",
+   "renta_media_persona": 11380,
+   "renta_year": 2023,
+   "population": 4809,
+   "population_5y_change_pct": -2.5,
+   "population_year": 2025
+  },
+  "36902": {
+   "name": "Cerdedo-Cotobade",
+   "province": "36",
+   "renta_media_persona": 13376,
+   "renta_year": 2023,
+   "population": 5671,
+   "population_5y_change_pct": -0.5,
+   "population_year": 2025
+  }
+ },
+ "province_medians": {
+  "15": {
+   "renta_media_persona": 13775
+  },
+  "27": {
+   "renta_media_persona": 13826
+  },
+  "32": {
+   "renta_media_persona": 13583.0
+  },
+  "33": {
+   "renta_media_persona": 14811.5
+  },
+  "36": {
+   "renta_media_persona": 12981
+  }
+ }
+}

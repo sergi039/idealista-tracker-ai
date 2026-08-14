@@ -10,6 +10,7 @@ from services.enrichment_service import EnrichmentService
 from services.property_location_service import PropertyLocationService
 from services.property_scoring_service import PropertyScoringService
 from services.property_travel_service import PropertyTravelService, travel_api_state
+from services.quality_of_life_service import QualityOfLifeService
 from services.sea_distance_service import SeaDistanceService
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ class PropertyEnrichmentService:
         scoring_service: Optional[PropertyScoringService] = None,
         sea_distance_service: Optional[SeaDistanceService] = None,
         enrichment_service: Optional[EnrichmentService] = None,
+        quality_of_life_service: Optional["QualityOfLifeService"] = None,
     ):
         self.location_service = location_service or PropertyLocationService()
         self.travel_service = travel_service or PropertyTravelService()
@@ -41,6 +43,11 @@ class PropertyEnrichmentService:
         # Only its OSM amenity half is used here; the Google half of this class
         # is the property services above.
         self.enrichment_service = enrichment_service or EnrichmentService()
+        # Shares the amenity client's Overpass transport through the same
+        # EnrichmentService instance, so one gate paces both lookups.
+        self.quality_of_life_service = quality_of_life_service or QualityOfLifeService(
+            enrichment_service=self.enrichment_service
+        )
 
     def enrich_property(
         self,
@@ -101,6 +108,20 @@ class PropertyEnrichmentService:
         except Exception as e:
             logger.warning(
                 "OSM amenity lookup failed for %s: %s",
+                getattr(prop, "id", None),
+                e,
+            )
+
+        # Quality-of-life block (Phase 2, agreed proposal D15/D16/D18/D20):
+        # INE context, supermarket reach, CNH hospitals. Free — local
+        # reference files plus the shared Overpass client — advisory, and
+        # score-neutral; each part records its own status and a failure here
+        # never fails the run.
+        try:
+            self.quality_of_life_service.enrich(prop, commit=False)
+        except Exception as e:
+            logger.warning(
+                "Quality-of-life enrichment failed for %s: %s",
                 getattr(prop, "id", None),
                 e,
             )
