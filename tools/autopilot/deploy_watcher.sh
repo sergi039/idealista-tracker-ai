@@ -39,19 +39,18 @@ HEALTH_POLL_SECONDS=5
 # TemplateSyntaxError turned every /properties/<id> into a redirect for 15
 # minutes while healthz stayed green. A page that renders is the other half of
 # "is this build serving", so one real page must answer 200 - not a redirect,
-# which is exactly what that defect produced. Derived from the health URL so a
-# test harness pointing healthz at a stub points this at the same stub; set
-# AUTOPILOT_PAGE_URL="" to skip it and be told the page is unverified.
-url_origin() {
-    local url="$1" rest
-    rest="${url#*://}"
-    printf '%s://%s' "${url%%://*}" "${rest%%/*}"
-}
-if [ -n "${AUTOPILOT_PAGE_URL+set}" ]; then
-    PAGE_URL="$AUTOPILOT_PAGE_URL"
-else
-    PAGE_URL="$(url_origin "$HEALTH_URL")/properties"
-fi
+# which is exactly what that defect produced.
+#
+# Which page, and what counts as rendered, live in lib/render_check.sh: one
+# contract, read here and by .githooks/post-merge, because this rule used to be
+# written down twice under two names that had to move together (#292). Set
+# DEPLOY_RENDER_PATH="" to skip the check and be told the page is unverified.
+# The origin is this watcher's own: the health URL's, so a test harness
+# pointing healthz at a stub points the page check at the same stub. The
+# contract is loaded further down, once log() and die() exist to report a
+# failure to load into the deploy log rather than into launchd's stderr file.
+AUTOPILOT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
+RENDER_LIB="${AUTOPILOT_LIB_DIR}/render_check.sh"
 
 # --- long-running work inside the container (#283) --------------------------
 # `docker compose up -d --build` recreates the app container, which kills
@@ -80,10 +79,27 @@ die() {
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
+# --- the page-check contract -----------------------------------------------
+# Present is not loaded, and loaded is not complete: a half-written file parses
+# into nothing, and a page check that cannot run must never read as one that
+# passed. `set -e` would already abort on a source that fails, but silently,
+# into launchd's stderr file - so say it in the deploy log instead, and require
+# the functions themselves rather than the file.
+# shellcheck source=lib/render_check.sh
+if [ ! -r "$RENDER_LIB" ] || ! source "$RENDER_LIB"; then
+    die "${RENDER_LIB} is missing or did not load - the page check cannot run"
+fi
+for contract_fn in deploy_render_origin deploy_render_url deploy_render_ok \
+    deploy_render_legacy_vars; do
+    command -v "$contract_fn" >/dev/null 2>&1 \
+        || die "${RENDER_LIB} defined no ${contract_fn}() - the page check cannot run"
+done
+PAGE_URL="$(deploy_render_url "$(deploy_render_origin "$HEALTH_URL")")"
+
 # --- single instance -------------------------------------------------------
 # A build takes minutes; the timer fires more often than that.
 # shellcheck source=lib/lock.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/lock.sh"
+source "${AUTOPILOT_LIB_DIR}/lock.sh"
 if ! autopilot_acquire_lock "$LOCK_DIR"; then
     echo "$(date '+%Y-%m-%d %H:%M:%S')  another deploy is in progress, skipping" >>"$LOG_FILE"
     exit 0
@@ -141,6 +157,17 @@ elif [ -z "$deployed_sha" ]; then
 else
     log "checkout is current (${remote_sha:0:7}) but the deployed build is ${deployed_sha:0:7}"
 fi
+
+# The pre-#292 names are not read any more. Ignoring one can only make the page
+# check stricter, never weaker, but an operator who set one deliberately has to
+# be told rather than quietly overruled. Said here rather than at the top, so a
+# tick with nothing to deploy stays silent.
+while read -r legacy_var; do
+    [ -n "$legacy_var" ] || continue
+    log "NOTE: ${legacy_var} is set but no longer read - the page check is DEPLOY_RENDER_PATH now (#292)"
+done <<EOF
+$(deploy_render_legacy_vars)
+EOF
 
 # --- checkpoint for rollback ----------------------------------------------
 if docker image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -258,7 +285,7 @@ rollback() {
 
 check_health() {
     local deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
-    local body code
+    local body
     while [ $SECONDS -lt $deadline ]; do
         body="$(curl -fsS --max-time 10 "$HEALTH_URL" 2>/dev/null || true)"
         if [ -n "$body" ]; then
@@ -268,18 +295,15 @@ check_health() {
             if printf '%s' "$body" | grep -q '"ok":true'; then
                 if [ -z "$PAGE_URL" ]; then
                     log "health OK: $body"
-                    log "  (AUTOPILOT_PAGE_URL is empty - no page was rendered, so a broken template would pass)"
+                    log "  (DEPLOY_RENDER_PATH is empty - no page was rendered, so a broken template would pass)"
                     return 0
                 fi
-                # No -L and no -f: a redirect is the failure being looked for,
-                # so the status code has to be read rather than followed.
-                code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$PAGE_URL" 2>/dev/null || true)"
-                if [ "$code" = "200" ]; then
+                if deploy_render_ok "$PAGE_URL"; then
                     log "health OK: $body"
                     log "  ${PAGE_URL} rendered (200)"
                     return 0
                 fi
-                log "healthz is green but ${PAGE_URL} answered ${code:-no response}"
+                log "healthz is green but ${PAGE_URL} answered ${DEPLOY_RENDER_STATUS:-no response}"
             else
                 log "health not ready: $body"
             fi

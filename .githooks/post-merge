@@ -40,7 +40,12 @@
 # The image the running container came from is tagged before the build, and a
 # rebuild is rolled back to it unless the app both answers healthz AND renders
 # a real page - healthz alone is what made the 2026-08-14 container look fine
-# for 15 minutes. The tree is never rolled back the way deploy_watcher.sh does
+# for 15 minutes. Which page that is, and what counts as rendered, is not
+# decided here: it is one contract in tools/autopilot/lib/render_check.sh, read
+# by this hook and by deploy_watcher.sh, because the rule used to be written
+# down twice under two names that had to move together (#292). This hook
+# supplies only the origin, which it resolves from compose.
+# The tree is never rolled back the way deploy_watcher.sh does
 # it: this checkout is shared, and a `git reset --hard` here would delete
 # another session's uncommitted work.
 #
@@ -101,6 +106,38 @@ cd "$repo_root" || exit 0
 compose_file="${AUTO_REBUILD_COMPOSE_FILE:-docker-compose.yml}"
 health_timeout="${AUTO_REBUILD_HEALTH_TIMEOUT:-120}"
 
+# The page check is one contract, read here and by tools/autopilot/
+# deploy_watcher.sh (#292) - it used to be written down twice, under two names
+# that had to move together. Not optional: a missing contract means the page
+# cannot be checked, and a check that did not run must never read as one that
+# passed, so refuse rather than build something nothing will look at.
+render_lib="${repo_root}/tools/autopilot/lib/render_check.sh"
+# shellcheck source=tools/autopilot/lib/render_check.sh
+if [ ! -r "$render_lib" ] || ! . "$render_lib"; then
+    log "REFUSING TO BUILD - ${render_lib} is missing or did not load, so a rebuilt"
+    log "  page cannot be checked; the container still serves the previous image"
+    exit 0
+fi
+# Present is not loaded, and loaded is not complete. This hook sources a file
+# out of the working tree of a shared checkout - the same tree whose
+# half-written neighbours it exists to keep out of an image - and the jinja/ast
+# gate below never looks at a .sh at all. A truncated contract parses fine and
+# defines nothing, which would leave render_url empty and the page check
+# quietly off, reported as an operator opt-out that never happened. So require
+# what is about to be called, not merely a file where it should be.
+for contract_fn in deploy_render_url deploy_render_ok deploy_render_legacy_vars; do
+    command -v "$contract_fn" >/dev/null 2>&1 && continue
+    log "REFUSING TO BUILD - ${render_lib} defined no ${contract_fn}(), so a rebuilt"
+    log "  page cannot be checked; restore the file and pull again"
+    exit 0
+done
+while read -r legacy_var; do
+    [ -n "$legacy_var" ] || continue
+    log "NOTE: ${legacy_var} is set but no longer read - the page check is DEPLOY_RENDER_PATH now (#292)"
+done <<EOF
+$(deploy_render_legacy_vars)
+EOF
+
 if ! command -v docker >/dev/null 2>&1; then
     log "docker is not on PATH - cannot rebuild anything"
     exit 0
@@ -142,12 +179,10 @@ else
     base_url="http://127.0.0.1:${port}"
 fi
 health_url="${base_url}/api/healthz"
-# healthz renders no template, and routes/main_routes.py turns a template
-# failure into a redirect with a flash - which is exactly why the 2026-08-14
-# container looked healthy for 15 minutes while every property page was
-# broken. So a rebuild is not accepted until a page that actually renders a
-# template answers 200; a 302 here is the failure, not a detail.
-render_url="${base_url}${AUTO_REBUILD_RENDER_PATH:-/properties}"
+# The page that has to render, and what counts as rendered, come from
+# render_check.sh; this hook only supplies the origin it just resolved from
+# compose. Empty means the check is turned off, and the final line says so.
+render_url="$(deploy_render_url "$base_url")"
 
 # The image the running container was made from is what a rollback restores.
 image="$(docker_probe inspect --format '{{.Config.Image}}' "$container" 2>/dev/null | head -1)"
@@ -294,11 +329,21 @@ healthy() {
     return 1
 }
 
-# Anything but 200 is a failure, redirects included: that is the whole point.
+# Anything but 200 is a failure, redirects included: that is the whole point,
+# and deploy_render_ok is where it is decided. With the check turned off there
+# is nothing to fail - every caller of this says so in its own line.
 renders() {
-    render_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$render_url" 2>/dev/null || true)"
-    [ "$render_code" = "200" ]
+    [ -n "$render_url" ] || return 0
+    deploy_render_ok "$render_url"
 }
+
+# What the success line says about the page: the URL that answered 200, or
+# that nobody looked.
+if [ -n "$render_url" ]; then
+    render_note=", ${render_url} 200"
+else
+    render_note=" (DEPLOY_RENDER_PATH is empty - no page was rendered, so a broken template would pass)"
+fi
 
 # The image is rolled back, never the tree: this checkout is shared, and a
 # `git reset --hard` here would delete another session's uncommitted work.
@@ -314,7 +359,10 @@ roll_back() {
         return
     fi
     if healthy "$health_timeout" && renders; then
-        log "  rollback verified - the previous build is serving again: ${health_body}"
+        # ${render_note} and not a bare "verified": with the check turned off
+        # nothing rendered here either, and a rollback is exactly where that
+        # matters - the image being restored can be broken too.
+        log "  rollback verified - the previous build is serving again: ${health_body}${render_note}"
     else
         log "  ROLLBACK IS ALSO UNHEALTHY - THE APP IS DOWN, manual attention needed"
     fi
@@ -328,13 +376,12 @@ if ! docker compose -f "$compose_file" up -d --build; then
 fi
 
 health_body=""
-render_code=""
 if healthy "$health_timeout"; then
     if renders; then
-        log "rebuilt ${sha:0:7}${checked_note}: health ${health_body}, ${render_url} 200"
+        log "rebuilt ${sha:0:7}${checked_note}: health ${health_body}${render_note}"
         exit 0
     fi
-    log "REBUILT ${sha:0:7}, healthz is green, BUT ${render_url} answered ${render_code:-nothing}"
+    log "REBUILT ${sha:0:7}, healthz is green, BUT ${render_url} answered ${DEPLOY_RENDER_STATUS:-nothing}"
     log "  (a 302 is the app catching a template failure and redirecting - the 2026-08-14 shape)"
 else
     log "REBUILT ${sha:0:7} BUT ${health_url} DID NOT REPORT ok:true WITHIN ${health_timeout}s"
