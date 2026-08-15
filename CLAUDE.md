@@ -336,6 +336,104 @@ lookup actually covers scores `None` rather than 0, because nobody looked there.
 `utils/recalc_sea_distance.py` backfills; it writes a rollback snapshot of the
 score columns first, since rolling the app back does not undo a data rewrite.
 
+**The pool criterion ships weightless and is live in production anyway**
+(proposal D17, #278; turned on on the mini 2026-08-14). Every category in
+`services/property_scoring_service.py` carries `pool_score: 0.0` in both
+`DEFAULT_INVESTMENT_WEIGHTS` and `DEFAULT_LIFESTYLE_WEIGHTS`, so reading the code
+tells you the criterion is off — and on the Mac mini it is not. The weight lives
+in data: `scoring_config.categories.<cat>.lifestyle.pool_score = 0.1`, all six
+categories, on the three subscriptions that carry a `scoring_config` at all —
+`Default` (1), `Land at Norte` (6), `houses at your custom search area norte`
+(8). The fourth live subscription, `Asturias` (11), has none and therefore still
+scores at the shipped 0.0. A weight set on the *lifestyle* branch alone still
+moves `score_total`, because the combined score is the saved investment/lifestyle
+mix (#257) — the number the list sorts by. So a score that changed under you is
+not necessarily a code change, and `git log` will not explain it.
+
+**Rolling that back is a data restore, not a deploy.**
+`data/pool_weight_enable_snapshot.json` on the mini (2026-08-14T17:48:43Z) holds
+the three profiles' previous `scoring_config` — `null` for each — plus the score
+columns and `scoring` payload of all 393 rows as they stood before. Nothing in
+`utils/` reads that shape: the per-tool snapshots (`--restore` in
+`utils/backfill_pool.py`, `utils/recalc_sea_distance.py`) are flat row lists and
+carry no profile config, so this one is restored by hand — profiles first, then
+the rows. Deleting it is not tidying up; it is discarding the only way back.
+
+**Turning the weight on is deliberately not an ordinary save**
+(`routes/main_routes.py`, action `confirm_pool_scoring`). A save that raises
+`pool_score` above 0 re-scores every listing in the subscription, so it first
+runs a dry preview — stage the config, rescore in the session, count the rows
+that move and the mean shift of the combined total, then `rollback()` — and
+stores the pending config together with **the baseline it diffed against**. The
+confirm applies it only while the stored config still equals that baseline; an
+ordinary save in between drops the pending preview rather than silently
+reverting the newer weights. Every score column is diffed, not just lifestyle:
+the weight can go on the investment branch and move investment and the total
+while lifestyle sits still, and a preview reporting "0 would change" ahead of a
+mass rescore is worse than no preview. Do not collapse this into a direct save.
+
+**The pool datum is honest-absence, like sea view** (`services/pool_service.py`).
+Only a *measured* drive time scores. OSM finding nothing triggers one budgeted
+Places Text Search cross-check and the verdict becomes `unverified_absence` —
+component `None`, never 0, because one text search proves nothing about
+completeness; the only path to a true 0 is the owner's hand-set `owner_no_pool`
+flag, which outranks every computed state and survives recomputes. Indoor is
+evidence with a source — `verified` (`covered=yes`), `likely` (a building, or
+"climatizada" in the name), `unknown` for silence — and the require-indoor
+toggle is applied by the *scorer*, so narrowing or widening it never rewrites
+the evidence. A refusal never overwrites measured candidates.
+`utils/backfill_pool.py` covers the Phase-2 auto-scope (last 30 days plus
+favorites, `utils/enrich_scope.py`), costs at most three Distance Matrix
+elements per property, and is resumable per row; everything older stays manual
+via the Enrich button.
+
+**`/municipalities` keeps municipality facts and listing medians apart, and says
+which is which on the page** (proposal D22, #281). Facts are the municipality's
+own values — INE renta and población, SEPE registered unemployment — with no
+listing involved. Medians are taken over *that municipality's own listings*
+(sea, beach, pool, hospital, supermarket, airport, train, price, score): the
+owner's decision of 2026-08-14, over a capital-centroid basis, because what he
+is choosing between is the listings and not the town halls. The median, never
+the minimum — a minimum crowns a municipality because one listing happens to sit
+next to a pool. Every metric carries its own coverage count, since a median over
+2 of 30 listings is a different claim from one over 30 of 30; sorts put
+unmeasured rows last in **both** directions, like the listing table; and a name
+the INE join cannot resolve says "not matched" rather than showing a guessed
+code (#98's shape, applied to a join). SEPE publishes a *count*, so the page
+renders it as a labeled proxy against población and never as the official
+unemployment rate. Listings whose municipality is empty or email-truncated
+(#298) are counted aside, not compared.
+
+**Three reference files are committed on purpose, and `.gitignore` re-includes
+them one at a time.** `data/*` excludes the runtime artifacts — backfill
+snapshots, ledgers, logs — and `!data/ine_municipal.json`,
+`!data/hospitals_cnh.json`, `!data/sepe_unemployment.json` bring back the small,
+reviewed, importer-generated files that the QoL card and `/municipalities` read.
+It is `data/*` and not `data/` because git cannot re-include a file whose parent
+*directory* is excluded: the bare-directory form makes all three negations
+silently dead. Regenerate with `utils/import_ine_data.py`,
+`utils/import_cnh_hospitals.py` and `utils/import_sepe_unemployment.py`; a
+missing or unreadable file reads as `no_reference_data`, never as an empty
+landscape. Filling the card itself is free and scoped —
+`utils/backfill_quality_of_life.py`, INE and CNH from those local files and the
+supermarket reach through the shared Overpass gate — so it belongs with
+`backfill_sea_view` and `backfill_osm_amenities` under the exception in the hard
+rules below, not with the paid backfills.
+
+**SEPE's `<5` is suppression, not zero** — #98's rule inside a national dataset.
+A withheld count is recorded as `unemployed_total: null` with `suppressed: true`
+(June 2026: one municipality in the five watched provinces, 33048 Pesoz);
+reading it as 0, or as 5, fabricates a figure, and dropping the row claims the
+municipality is absent from the dataset. Two more properties of that source are
+measured rather than assumed, and each cost an afternoon: the CSV declares
+`charset=UTF-8` in the HTTP header and is actually **ISO-8859-1**, and its
+header row sits under a banner with stray spaces inside the column names, so the
+header is *found* and stripped rather than indexed at a fixed offset. The newest
+month on sepe.es exists only as legacy OLE2 `.xls`, which openpyxl refuses and
+xlrd is not a dependency of this project — so the annual open-data CSV is the
+newest *machine-readable* month, and the period actually parsed is recorded in
+the output instead of being assumed by whatever renders it.
+
 The dual-build isolation contract
 from the transition — legacy on 5001 vs universal on 5050, unique Docker
 names, separate IMAP labels and cookie names — lives in docs/DEV_RULES.md
@@ -639,6 +737,47 @@ and TODO.md; respect it if you ever run both side by side.
 - Run `uv run pytest tests/ -q` locally and paste the real output before
   claiming done. That is a standing owner requirement in its own right,
   not a stand-in for CI.
+- **A pass count says the suite ran. It does not say the fix works.** On
+  2026-08-14 four defects in one day survived a green suite because the test
+  meant to catch them could not fail: a stub that counted calls instead of
+  recording what they saw (#297, found by the mutation in #300); a fixture
+  whose text avoided the one input the guard under test keys on, so the test
+  "stepped around the defect instead of at it" (#306); a call site pinned by
+  three context-free substrings, so inlining the call back to the broken
+  position passed all five of its tests (#309); and a `skipif` on the module
+  that tests a mechanism, so removing that mechanism's installation gave
+  `29 skipped`, exit 0 (#308, fixed in #310). The same
+  currency bought the earlier ones: three clean re-runs of the merge-bot test
+  that never touched the crashing path (#284), a green `/api/healthz` through 15
+  minutes of every `/properties/<id>` redirecting (#283).
+- **A change that adds or modifies a test reports the mutation result, not the
+  pass count.** Undo the fix — or invert the assertion — and paste which tests
+  go red. A fix whose tests stay green when it is removed is unproven, whatever
+  the tail says, and saying so costs one re-run. Where a mutation is expected to
+  stay green because another line already covers it, say that too rather than
+  presenting the green as evidence.
+- **UI and timing behaviour is proven by measurement on a built image**, never
+  by a unit test or a template's static text. The bar #302 arrived at and #309
+  was measured against: repeated *loads* (the race resolves once at init, so
+  repeated samples
+  inside one load agree with each other and prove nothing), at least two
+  widths, `elementFromPoint` per control rather than bounding-box overlap, and
+  a second sample seconds later because the popup keeps moving. Identical bytes
+  behaving differently on two machines is an environment finding, not a code
+  one.
+- **A skipped test reports success**, which is why `tests/skip_guard.py` pins
+  which module may skip and for what reason, and fails the session on anything
+  else (#314). A genuinely conditional new test costs one line in `ALLOWED` —
+  that friction is the point, because the alternative is a number nothing
+  reads: not `.github/workflows/ci.yml` (exit status only), not
+  `tools/ci/local_ci.sh`, and not a reviewer, who would have to diff a tail
+  against the previous run to notice it move. Both hooks are wired on purpose —
+  a module skipped at *import* (`allow_module_level`, `importorskip`) never
+  reaches `pytest_runtest_logreport` and would take a whole file out of the
+  session unseen. What the guard cannot do is tell a deliberate escape hatch
+  from a mechanism that failed to install, because the reason text is
+  identical; `tests/test_network_guard_is_installed.py` is what answers that,
+  and the two are meant to be read together.
 - **Writing a migration?** Everything in `migrations/` is PostgreSQL-only and
   multi-statement, so SQLite cannot execute it and `db.create_all()` proves
   nothing about it. `tests/test_postgres_migrations.py` runs the real files

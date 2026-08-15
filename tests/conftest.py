@@ -1,14 +1,16 @@
 """Guards against per-process state that escapes a test.
 
-Three independent guards live here. The `pytest_runtest_teardown` wrapper
+Four independent guards live here. The `pytest_runtest_teardown` wrapper
 (per-test) fails any test that leaves a Flask app or request context pushed,
 and scrubs the application reference flask-caching retains on the
 module-global `utils.cache.cache` -- see its docstring for why that retention
 makes a test behave differently alone and in the full run. The socket guard in
 tests/network_guard.py, installed and reported from the hooks below, refuses
 every connect that leaves this machine (issue #307); its own module docstring
-carries the reasoning. The rest of the module is the session-scoped
-Config-mutation guard below.
+carries the reasoning. The skip guard in tests/skip_guard.py fails the run on
+a skip nobody approved, because a skipped test reports success and that is how
+the network guard itself could be switched off silently (#310). The rest of
+the module is the session-scoped Config-mutation guard below.
 
 `Config` (config.py) keeps several mutable containers as *class* attributes -
 `DEFAULT_SCORING_WEIGHTS`, `SCORING_PROFILES`, `COMBINED_MIX` and friends. They
@@ -47,7 +49,7 @@ import pytest
 from flask import globals as flask_globals
 
 from config import Config
-from tests import network_guard
+from tests import network_guard, skip_guard
 from utils.cache import cache as flask_cache
 
 
@@ -138,6 +140,7 @@ _snapshot: dict[str, Any] | None = None
 _problems: list[str] = []
 _reported = False
 _network_reported = False
+_skip_reported = False
 
 
 def _mutable_config_attributes() -> dict[str, Any]:
@@ -278,6 +281,51 @@ def pytest_configure(config: pytest.Config) -> None:
             for name, value in _mutable_config_attributes().items()
         }
     network_guard.install()
+    skip_guard.reset()
+
+
+def _skip_reason(report: Any) -> str:
+    """The message a skip was raised with, as pytest recorded it.
+
+    `longrepr` for a skipped report is the (path, lineno, message) triple, for
+    a collected module and a run test alike. Anything else yields no reason
+    rather than a guessed one: an unapproved skip is refused either way, and
+    the guard says "(none given)" instead of inventing text to match against.
+    """
+    longrepr = getattr(report, "longrepr", None)
+    if isinstance(longrepr, tuple) and len(longrepr) == 3:
+        return str(longrepr[2])
+    return ""
+
+
+def pytest_runtest_logreport(report: Any) -> None:
+    """Hand every skip to the skip guard.
+
+    The module path comes from `report.fspath` -- `nodeid` up to the first
+    `::` -- so an entry in `ALLOWED` is keyed by the file a reader would open.
+    """
+    if not report.skipped or report.when not in ("setup", "call"):
+        return
+    skip_guard.note_skip(report.nodeid, report.fspath, _skip_reason(report))
+
+
+def pytest_collectreport(report: Any) -> None:
+    """A module skipped at import never reaches the hook above at all.
+
+    `pytest.skip(..., allow_module_level=True)` and `importorskip` are refused
+    during collection, so pytest emits a *collect* report and no test in that
+    file is ever run or reported. The file disappears from the session and the
+    only trace is the same skip count nothing reads -- the #310 shape, one
+    stage earlier and covering a whole module at once.
+
+    Nothing in this repository skips that way today (measured on 7c96493: no
+    `allow_module_level`, no `importorskip` anywhere under tests/). That is the
+    reason to wire it now rather than the reason to leave it: the first such
+    skip would otherwise be invisible to the guard written to catch exactly it.
+    """
+    if not report.skipped:
+        return
+    skip_guard.note_skip(report.nodeid, report.fspath, _skip_reason(report))
 
 
 def pytest_runtest_logstart(nodeid: str, location: Any) -> None:
@@ -286,10 +334,11 @@ def pytest_runtest_logstart(nodeid: str, location: Any) -> None:
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Fail the run when a mutation, or a live network call, escaped a test."""
+    """Fail the run when a mutation, a live network call, or an unapproved
+    skip escaped a test."""
     global _problems
     _problems = _detect_mutations()
-    if not _problems and not network_guard.attempts():
+    if not _problems and not network_guard.attempts() and not skip_guard.offenses():
         return
 
     # Raising here does not fail the run: wrap_session() has already computed
@@ -311,7 +360,13 @@ def pytest_terminal_summary(terminalreporter: Any) -> None:
     callers catch `Exception` and degrade, so a refused call can leave a green
     test and no trace anywhere else in the output.
     """
-    global _reported, _network_reported
+    global _reported, _network_reported, _skip_reported
+    skip_lines = skip_guard.summary_lines()
+    if skip_lines:
+        terminalreporter.write_sep("=", "skip guard: FAILED", red=True, bold=True)
+        for line in skip_lines:
+            terminalreporter.write_line(line, red=True)
+        _skip_reported = True
     network_lines = network_guard.summary_lines()
     if network_lines:
         terminalreporter.write_sep("=", "network guard: FAILED", red=True, bold=True)
@@ -340,4 +395,7 @@ def pytest_unconfigure(config: pytest.Config) -> None:
     network_lines = network_guard.summary_lines()
     if network_lines and not _network_reported:  # pragma: no cover - as above
         print("\n".join(["network guard: FAILED", *network_lines]))
+    skip_lines = skip_guard.summary_lines()
+    if skip_lines and not _skip_reported:  # pragma: no cover - as above
+        print("\n".join(["skip guard: FAILED", *skip_lines]))
     network_guard.uninstall()
