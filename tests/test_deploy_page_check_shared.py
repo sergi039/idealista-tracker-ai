@@ -48,6 +48,82 @@ def run_lib(script: str, env: dict[str, str] | None = None) -> str:
     ).stdout
 
 
+# Records how the contract called curl, and answers the way the real one would:
+# a 302 unless it was told to follow, in which case the 200 of the page the
+# redirect lands on. `-sSL` and `-Ls` are the same instruction as `-L`, so a
+# short-option cluster counts too. Shebang at byte 0 - a stub whose first line
+# is blank is not executable and bash re-executes it with itself (CLAUDE.md).
+CURL_FOLLOW_STUB = """#!/bin/sh
+printf '%s\\n' "$@" >>"$CURL_ARGV_LOG"
+for a in "$@"; do
+    case "$a" in
+        --location) printf '200'; exit 0 ;;
+        --*) ;;
+        -*L*) printf '200'; exit 0 ;;
+    esac
+done
+printf '302'
+exit 0
+"""
+
+
+def test_the_fetch_does_not_follow_the_redirect_it_is_looking_for(tmp_path):
+    """`-L` would turn the defect being hunted into a pass.
+
+    A `TemplateSyntaxError` makes `routes/main_routes.py` redirect to a flash
+    page that renders perfectly well, so a fetch that follows arrives at 200
+    and reports the broken build healthy - the exact 2026-08-14 shape.
+
+    Nothing else pins it *for that reason*. The hook's curl stub reads the URL
+    off the last argument and never sees a flag at all. The watcher harness
+    does use a real curl, but its stub server answers a redirect with
+    `Location: /`, and `/` is a path it 404s - so `-L` fails there by landing
+    on a missing page, not by landing on the 200 that production would serve.
+    A redirect target that renders is what makes `-L` dangerous, so that is
+    what this stub does. Since #292 the fetch happens in one place, so one test
+    covers both deployers.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "curl"
+    stub.write_text(CURL_FOLLOW_STUB)
+    stub.chmod(0o755)
+    argv_log = tmp_path / "curl-argv"
+
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'. "{RENDER_LIB}"\n'
+            'if deploy_render_ok "http://127.0.0.1:5001/properties"; then\n'
+            "  echo VERDICT=accepted\nelse\n  echo VERDICT=rejected\nfi\n"
+            'echo "STATUS=${DEPLOY_RENDER_STATUS}"',
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "CURL_ARGV_LOG": str(argv_log)},
+    )
+
+    assert "VERDICT=rejected" in proc.stdout, (
+        "a redirecting page was accepted - the fetch followed it:\n" + proc.stdout
+    )
+    assert "STATUS=302" in proc.stdout, proc.stdout
+
+    args = argv_log.read_text().split("\n")
+    followers = [a for a in args if a == "--location" or _is_short_cluster(a, "L")]
+    assert not followers, f"the fetch was told to follow redirects: {followers}"
+    # -f swallows the status the log is supposed to report, turning a 500 into
+    # "no response" - the code is the diagnosis, so it has to come back.
+    swallowers = [a for a in args if a == "--fail" or _is_short_cluster(a, "f")]
+    assert not swallowers, f"the fetch was told to hide the status: {swallowers}"
+
+
+def _is_short_cluster(arg: str, letter: str) -> bool:
+    """`-L`, `-sSL` and `-Ls` are one instruction; `--max-time` is not."""
+    return arg.startswith("-") and not arg.startswith("--") and letter in arg[1:]
+
+
 def test_the_contract_names_the_page_once():
     assert RENDER_LIB.is_file()
     assert run_lib('printf "%s" "$DEPLOY_RENDER_PATH"') == "/properties"
