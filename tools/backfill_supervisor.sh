@@ -91,11 +91,11 @@ Usage: backfill_supervisor.sh --module utils.backfill_pool --snapshot-prefix dat
                            shell INSIDE the container, so it is operator-trusted
                            input like any other argument to `docker exec`
   --container NAME         default idealista-app
-  --run-log PATH           where the module's own output goes, RELATIVE to /app
-                           (default data/<module-tail>_supervised.log). It is
-                           read back on the host through the ./data bind mount,
-                           so an absolute path would name two different files
-                           and is refused.
+  --run-log PATH           where the module's own output goes, under data/
+                           (default data/<module-tail>_supervised.log). Only
+                           ./data is bind mounted into the container, so any
+                           other path names one file on the host and a
+                           different one inside, and is refused.
   --log PATH               supervisor log (default data/backfill_supervisor.log)
   --max-restarts N         default 12
   --interval S             seconds between checks, default 90
@@ -158,13 +158,22 @@ RUN_LOG="${RUN_LOG:-data/${MODULE_TAIL}_supervised.log}"
 LOG_FILE="${LOG_FILE:-data/backfill_supervisor.log}"
 
 # The restart redirects to /app/$RUN_LOG inside the container while finished()
-# reads $RUN_LOG here; those are the same file only because ./data is bind
-# mounted at /app/data. An absolute path silently names two different files,
-# and the host one going stale reads as either "never finishes" or, if an old
-# Done sits in it, immediate false success.
+# reads $RUN_LOG here. Those are one file only under the ./data:/app/data bind
+# mount, so the run log has to live in data/ — refusing merely the absolute
+# paths was not enough: `--run-log run.log` writes /app/run.log inside the
+# container while the host reads ./run.log, so completion is never seen and a
+# finished job is restarted until the budget runs out.
 case "$RUN_LOG" in
-    /*) echo "--run-log must be relative to /app (it is read back on the host through the bind mount), got: $RUN_LOG" >&2; exit 2 ;;
+    data/?*) : ;;
+    *) echo "--run-log must be a path under data/ (only ./data is bind mounted into the container), got: $RUN_LOG" >&2; exit 2 ;;
 esac
+
+if [ -z "$DONE_PATTERN" ]; then
+    # grep matches an empty pattern against every line, so the first progress
+    # line the module wrote would report the paid job as finished.
+    echo "--done-pattern must not be empty" >&2
+    exit 2
+fi
 
 mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 
@@ -196,7 +205,10 @@ job_state() {
     if [ "$rc" -ne 0 ] || [ -z "$listing" ]; then
         return 2
     fi
-    if printf '%s\n' "$listing" | grep -qE -- "(^| )-m ${MODULE_RE}( |\$)"; then
+    # `-m mod`, `-mmod` and `-um mod` are all the same invocation to python, and
+    # anchoring on the literal "-m " missed the last two — declaring a live paid
+    # backfill idle and starting a second copy of it.
+    if printf '%s\n' "$listing" | grep -qE -- "(^| )-[A-Za-z]*m ?${MODULE_RE}( |\$)"; then
         return 0
     fi
     return 1
@@ -217,32 +229,62 @@ finished() {
         | grep -q -- "$DONE_PATTERN"
 }
 
-# One supervisor per module and container (rule 5). mkdir is the atomic part;
-# the pid inside lets a genuinely dead predecessor be taken over instead of
-# blocking the owner forever.
-LOCK_DIR="$(dirname "$LOG_FILE")/.supervisor.${CONTAINER}.${MODULE}.lock"
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    # mkdir fails for two different reasons and they must not be confused.
-    # Only "it already exists" is a lock held by somebody; a missing parent or
-    # a permission error means this run holds NO lock, and carrying on there
-    # is the same fail-open this tool was just audited for.
-    if [ ! -d "$LOCK_DIR" ]; then
-        echo "cannot create the supervisor lock at $LOCK_DIR" >&2
-        exit 2
-    fi
-    other="$(cat "$LOCK_DIR/pid" 2>/dev/null)"
-    # `kill -0` cannot tell "no such process" from "not yours", so a lock held
-    # by another user reads as stale. The supervisor runs as the owner of the
-    # container on a single-user host, where that distinction does not arise.
-    if [ -n "$other" ] && kill -0 "$other" 2>/dev/null; then
-        echo "another supervisor (pid $other) already watches $MODULE in $CONTAINER" >&2
-        log "supervisor: refusing to start - pid $other already watches $MODULE in $CONTAINER"
-        exit 2
-    fi
-    log "supervisor: taking over a stale lock left by pid ${other:-unknown}"
+# One supervisor per module and container (rule 5).
+#
+# The lock is anchored to the repository, NOT to `dirname $LOG_FILE`: keying it
+# to an option meant two supervisors with different --log paths took two
+# different locks and both restarted the same paid job.
+#
+# It is a FILE created under `noclobber`, not a directory, because create and
+# claim then happen in one atomic step. The directory version had two races:
+# two supervisors could both find one stale lock, both decide it was dead, and
+# both fall through before either wrote its pid; and a pid write that failed
+# was ignored, leaving a supervisor running with a lock it did not hold.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+LOCK_ROOT="${BACKFILL_LOCK_ROOT:-$(dirname "$SCRIPT_DIR")/data}"
+LOCK_FILE="$LOCK_ROOT/.supervisor.${CONTAINER}.${MODULE}.lock"
+
+if ! mkdir -p "$LOCK_ROOT" 2>/dev/null; then
+    echo "cannot create the supervisor lock directory $LOCK_ROOT" >&2
+    exit 2
 fi
-printf '%s\n' "$$" >"$LOCK_DIR/pid" 2>/dev/null || true
-trap 'rm -f "$LOCK_DIR/pid" 2>/dev/null; rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+
+# An empty or unreadable lock is NOT stale: a supervisor that has just created
+# its lock is momentarily in that state, and taking it over is how two paid
+# backfills start. Only a lock naming a pid that is genuinely gone is taken,
+# and that takeover is settled by the atomic create below, so exactly one of
+# several racing supervisors can win it.
+acquire_lock() {
+    local attempt=0 other
+    while [ "$attempt" -lt 3 ]; do
+        attempt=$((attempt + 1))
+        if (set -o noclobber; printf '%s\n' "$$" >"$LOCK_FILE") 2>/dev/null; then
+            return 0
+        fi
+        [ -e "$LOCK_FILE" ] || return 1
+        other="$(cat "$LOCK_FILE" 2>/dev/null)"
+        if [ -z "$other" ]; then
+            echo "the supervisor lock $LOCK_FILE names no pid; remove it by hand if no supervisor is running" >&2
+            return 1
+        fi
+        # `kill -0` cannot tell "no such process" from "not yours", so a lock
+        # held by another user reads as stale. The supervisor runs as the owner
+        # of the container on a single-user host, where that does not arise.
+        if kill -0 "$other" 2>/dev/null; then
+            echo "another supervisor (pid $other) already watches $MODULE in $CONTAINER" >&2
+            return 1
+        fi
+        log "supervisor: taking over a stale lock left by pid $other"
+        rm -f "$LOCK_FILE" 2>/dev/null
+    done
+    return 1
+}
+
+if ! acquire_lock; then
+    log "supervisor: refusing to start - could not take the lock for $MODULE in $CONTAINER"
+    exit 2
+fi
+trap '[ "$(cat "$LOCK_FILE" 2>/dev/null)" = "$$" ] && rm -f "$LOCK_FILE"' EXIT
 
 restarts=0
 log "supervisor: watching $MODULE in $CONTAINER (max $MAX_RESTARTS restarts)"
@@ -267,11 +309,12 @@ for _tick in $(seq 1 "$MAX_TICKS"); do
                 restarts=$((restarts + 1))
                 cmd="python -m $MODULE"
                 if [ -n "$SNAPSHOT_PREFIX" ]; then
-                    # The restart counter is what makes this unique within a
-                    # run (a clock does not: --interval 0 restarts twice in one
-                    # second), and the date is what stops a run tomorrow from
-                    # landing on a file left today (rule 3).
-                    cmd="$cmd --snapshot ${SNAPSHOT_PREFIX}_$(date +%Y%m%d_%H%M%S)_${restarts}.json"
+                    # The restart counter makes this unique within a run (a
+                    # clock does not: --interval 0 restarts twice in one
+                    # second), the pid makes it unique between runs that share
+                    # a second and a counter, and the date stops a run tomorrow
+                    # from landing on a file left today (rule 3).
+                    cmd="$cmd --snapshot ${SNAPSHOT_PREFIX}_$(date +%Y%m%d_%H%M%S)_$$_${restarts}.json"
                 fi
                 [ -n "$EXTRA_ARGS" ] && cmd="$cmd $EXTRA_ARGS"
                 log "supervisor: restart $restarts/$MAX_RESTARTS -> $cmd"

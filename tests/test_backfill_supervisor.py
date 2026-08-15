@@ -26,6 +26,15 @@ two of its findings were reproduced by probe before being fixed:
     supervision of that module exit 0 at its first tick, having called docker
     zero times, and log it as success. Only bytes this run appended count.
 
+A second audit of the fixes found the same shape twice more, both of them
+money: `python -um mod` and `python -mmod` are ordinary invocations that the
+first anchored match did not recognise, so a live paid backfill read as idle
+and got a second copy started against it; and the lock was keyed to the
+directory of `--log`, so two supervisors passing two different log paths took
+two different locks and both restarted the same job. The lock is a file
+created under `noclobber` now, anchored to the repository, because create-then-
+claim in one atomic step is what a takeover race needs.
+
 `tools/backfill_supervisor.sh` is that script, made honest. This wrapper runs
 its shell test and surfaces the output on failure, the way
 `test_deploy_watcher_inflight.py` does for the watcher.
@@ -46,7 +55,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SUPERVISOR_TEST = REPO_ROOT / "tools" / "backfill_supervisor_test.sh"
 
-# Sixteen scenarios, most polling a stub for a few one-second ticks.
+# Twenty-three scenarios, most polling a stub for a few one-second ticks.
 TIMEOUT_SECONDS = 300
 
 
