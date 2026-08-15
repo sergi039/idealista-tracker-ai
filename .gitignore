@@ -35,9 +35,10 @@ Thumbs.db
 # staged once already, and a `git add -A` from any of them would commit it.
 nr.json
 # data/ holds runtime artifacts (backfill snapshots, call ledgers) that must
-# never be committed — but the two importer-generated REFERENCE files below
-# are reviewed, small, and deploy with the code: the QoL card reads them.
-# Regenerate via utils/import_ine_data.py and utils/import_cnh_hospitals.py.
+# never be committed — but the three importer-generated REFERENCE files below
+# are reviewed, small, and deploy with the code: the QoL card and
+# /municipalities read them. Regenerate via utils/import_ine_data.py,
+# utils/import_cnh_hospitals.py and utils/import_sepe_unemployment.py.
 # `data/*` rather than `data/`: git cannot re-include a file whose parent
 # *directory* is excluded, so the bare-directory form made the negations
 # silently dead.
