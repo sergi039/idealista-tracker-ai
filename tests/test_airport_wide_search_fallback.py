@@ -236,11 +236,18 @@ class TestTheWideSearchFallback:
         assert lookup.failure is not None
         assert lookup.failure.reason == REASON_REQUEST_DENIED
 
-    @pytest.mark.parametrize("preset", ["train_station", "hospital", "supermarket"])
+    @pytest.mark.parametrize("preset", ["train_station", "supermarket", "school"])
     def test_other_presets_do_not_opt_into_the_fallback(self, app, preset):
-        """Only "airport" carries `wide_search_query` -- the dense presets
-        have never shown this failure across the owner's database and must
-        not start paying for a call they do not need."""
+        """The dense presets have never shown this failure across the owner's
+        database and must not start paying for a call they do not need.
+
+        "hospital" was in this list until 2026-08-15 and has been moved out:
+        #323 narrowed its rules to refuse primary care, and the recalc that
+        followed left 48 of 187 rows unresolved because a town fills Nearby
+        Search's single 20-result page with private practices before any
+        hospital appears. It now carries `wide_search_query` for the same
+        reason "airport" does, and `tests/test_hospital_wide_search_fallback.py`
+        holds that measurement."""
         service = _service()
         place_type = TRAVEL_PRESET_DEFS[preset]["place_types"][0]
         call_count = {"n": 0}
