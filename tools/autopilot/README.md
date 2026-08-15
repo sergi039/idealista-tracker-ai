@@ -187,6 +187,106 @@ watcher rightly refuses to deploy because it sits on a branch with uncommitted
 files. Both take this same deploy lock, so a hand-run of either never overlaps
 the other.
 
+## Deploying the watcher itself
+
+The watcher is in the tree it deploys, so a tick that advances main can be
+rolling out a change to `deploy_watcher.sh`. Until #293 that tick ran the *old*
+script all the way through — measured, not intermittent. `git merge` writes a
+file by renaming a new one over it, so the inode changes and the shell's open
+descriptor still points at the previous, now-unlinked one. It reads that to the
+end of the tick.
+
+That is what happened at 16:33:30 on 2026-08-14: the deploy that shipped #285's
+in-flight survey and page check ran with neither, and killed a pool backfill at
+32 ledger rows silently. It also means no ordering inside one process fixes it.
+
+So the tick hands over. When `origin/main` changes `deploy_watcher.sh` or
+`lib/`, the watcher fast-forwards and `exec`s the new script **before** it
+surveys, defers, builds or verifies anything:
+
+```
+a1b2c3d changes this watcher itself (tools/autopilot/deploy_watcher.sh tools/autopilot/lib)
+  fast-forwarded to a1b2c3d; handing this tick over to its tools/autopilot/deploy_watcher.sh
+still holding the deploy lock handed over with this tick
+```
+
+Three things ride across the `exec`:
+
+- **the deploy lock.** It is `flock(2)` on fd 9, and `exec` replaces the
+  program, not the process, so the descriptor and its lock are still held.
+  Re-taking it would also work — `exec 9>file` closes the old description
+  before locking the new one — and that is the problem: it drops the lock for
+  the length of a fork and an exec, during which another tick can start a
+  second concurrent build.
+- **the commit that is serving,** as `AUTOPILOT_ROLLBACK_SHA`. After the
+  fast-forward, `HEAD` is the commit under test, so the new process cannot work
+  out on its own where a rollback goes. That covers one tick, which is not
+  always enough: a tick that hands over and then *defers* to an in-flight job
+  ends without deploying, and the next tick is a fresh process with nothing
+  handed to it. There the rollback target comes from `data/.deployed_sha`
+  whenever the checkout is ahead of it — the marker is written only after a
+  build passed health, so it names what is serving, and unlike an environment
+  variable it outlives the process. Without that, a failed build of the
+  deferred commit rolls back to itself.
+- **a handover count,** so this terminates. One per tick; if main moves again
+  the log says so and the tick **stops without deploying**. Deploying at that
+  point is the defect this whole mechanism removes — the deploy would be run by
+  this watcher while the newer one goes on disk — and stopping costs only a
+  tick: the checkout already holds the watcher this process is running, so the
+  next tick starts from it and hands over normally, and that handover deploys
+  itself. Nothing is merged for the newer commit, and the previous build keeps
+  serving meanwhile.
+
+Before merging anything it syntax-checks the incoming `deploy_watcher.sh` and
+`lib/*.sh`. A watcher that does not parse cannot be handed over to, and
+deploying it would break the deploy chain at the *next* tick with the checkout
+already advanced — so it refuses while the checkout, the container and the
+marker are all still untouched, and the previous build keeps serving.
+
+Two details in that gate are load-bearing:
+
+- **It asks the bash that will run it,** `${BASH:-/bin/bash}`, never a bare
+  `bash`. The LaunchAgent execs `/bin/bash` (3.2.57) while handing the job a
+  PATH starting with `/opt/homebrew/bin` (5.x). Measured, `cmd &>> file` and
+  `;;&` are exit 0 under `bash -n` 5.3.15 and syntax errors under 3.2 — and
+  `>>"$LOG_FILE" 2>&1` appears a dozen times in this script, so `&>>` is one
+  keystroke away. It is still only a floor: `declare -A` parses under 3.2 and
+  fails at runtime.
+- **It merges the commit it vetted, not the ref that named it.**
+  `git merge --ff-only "$remote_sha"`. Several agent sessions and a human
+  `fetch` into this same clone, and the window between resolving `origin/main`
+  and merging holds a `docker image inspect`, a `docker tag` and the gate
+  itself — seconds. Merging the ref would fast-forward to, and then `exec`, a
+  watcher nothing had read. The newer commit is deployed by the next tick.
+
+| Variable | Default | Does |
+|---|---|---|
+| `AUTOPILOT_SELF_UPDATE` | `1` | `0` = the pre-#293 behaviour, which now says loudly that it deployed a watcher it did not run |
+| `AUTOPILOT_REEXEC_MAX` | `1` | handovers allowed in one tick |
+
+One property does change: after a handover the fast-forward has already
+happened, so an in-flight deferral holds with the checkout one commit ahead of
+the container. `data/.deployed_sha` still names what is serving, which is what
+everything downstream reads.
+
+`tools/autopilot/deploy_self_update_test.sh` (wrapped by
+`tests/test_deploy_watcher_self_update.py`) drives the real watcher from inside
+a throwaway repository that contains a copy of it — the arrangement the other
+two watcher tests deliberately do not have, which is why neither could reach
+this path.
+
+**That suite must not borrow a fact from the machine it runs on.** The
+scenario covering the gate above was first written with `&>>`, which is a
+syntax error under `/bin/bash` on this Mac and valid under `/bin/bash` on the
+Linux CI runner — so it proved the gate here and reported the gate broken
+there (CI run 31868366707). The divergence is now modelled instead: a `bash`
+stub leads `PATH` and pronounces everything valid, while the interpreter
+running the watcher rejects an ordinary syntax error, and the scenario also
+asserts the stub was never consulted. `WATCHER_BASH` picks the interpreter —
+`/bin/bash` by default, which is what the LaunchAgent execs; run the suite
+under a bash 5 as well before believing it, because that is the only bash CI
+has.
+
 ## Why it is shaped like this
 
 **One agent per issue.** PRs #57 and #58 both fixed issue #17, in different
