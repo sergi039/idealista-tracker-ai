@@ -204,7 +204,14 @@ Three things ride across the `exec`:
   second concurrent build.
 - **the commit that is serving,** as `AUTOPILOT_ROLLBACK_SHA`. After the
   fast-forward, `HEAD` is the commit under test, so the new process cannot work
-  out on its own where a rollback goes.
+  out on its own where a rollback goes. That covers one tick, which is not
+  always enough: a tick that hands over and then *defers* to an in-flight job
+  ends without deploying, and the next tick is a fresh process with nothing
+  handed to it. There the rollback target comes from `data/.deployed_sha`
+  whenever the checkout is ahead of it — the marker is written only after a
+  build passed health, so it names what is serving, and unlike an environment
+  variable it outlives the process. Without that, a failed build of the
+  deferred commit rolls back to itself.
 - **a handover count,** so this terminates. One per tick; if main moves again
   the log says so and the next tick picks up the rest.
 

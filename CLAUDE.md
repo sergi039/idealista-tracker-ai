@@ -534,7 +534,12 @@ and TODO.md; respect it if you ever run both side by side.
   a fork and an exec, which is room for a second concurrent build. The commit
   that is *serving* rides across too (`AUTOPILOT_ROLLBACK_SHA`), because after
   the merge `HEAD` is the commit under test and a rollback would otherwise stay
-  on it. An incoming watcher is syntax-checked **before** the merge, where
+  on it. That environment variable lasts one tick, and a tick that hands over
+  and then **defers** to an in-flight job ends without deploying — so from the
+  next tick the rollback target is read from `data/.deployed_sha` whenever the
+  checkout is ahead of it. The marker is the only record of what is serving
+  that outlives a process, and it is trustworthy because it is written only
+  after a build passed health. An incoming watcher is syntax-checked **before** the merge, where
   refusing costs nothing — with `${BASH:-/bin/bash}` and never a bare `bash`,
   because launchd puts Homebrew bash 5 on PATH while the plist execs
   `/bin/bash` 3.2.57, and `&>>` and `;;&` pass `-n` under one and are syntax

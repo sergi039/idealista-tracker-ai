@@ -210,6 +210,26 @@ if [ -n "$HANDOVER_ROLLBACK_SHA" ]; then
         log "WARNING: AUTOPILOT_ROLLBACK_SHA=${HANDOVER_ROLLBACK_SHA} is not a commit here"
         log "  a rollback would return to ${local_sha:0:7} instead"
     fi
+elif [ -n "$deployed_sha" ] && [ "$deployed_sha" != "$local_sha" ]; then
+    # The handover above carries the serving commit for the length of one tick,
+    # and one tick is not always enough: a tick that hands over and then
+    # *defers* to an in-flight job ends without deploying, leaving the checkout
+    # on the commit under test while the container still runs the previous one.
+    # The next tick is a fresh process with nothing handed to it, so `local_sha`
+    # is the commit that has not deployed yet - and rolling back to it would
+    # "return" to the very build being rolled back, then rebuild it from the
+    # tree if no saved image was available.
+    #
+    # The marker answers this, and it answers it across processes because it is
+    # on disk: it is written only after a build passed health, so it names what
+    # is serving. This also covers the plain case of a checkout someone moved
+    # ahead of the container by hand.
+    if git rev-parse --verify --quiet "${deployed_sha}^{commit}" >/dev/null; then
+        ROLLBACK_SHA="$deployed_sha"
+    else
+        log "WARNING: the deployment marker names ${deployed_sha:0:7}, which is not a commit here"
+        log "  a rollback would return to ${local_sha:0:7} instead"
+    fi
 fi
 
 # Two separate questions: is the checkout current, and is the container built

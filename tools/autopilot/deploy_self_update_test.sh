@@ -222,8 +222,10 @@ run_watcher() {
     PATH="${STUB_BIN}:${PATH}" \
     DOCKER_LOG="${WORK}/docker.log" \
     DOCKER_TOP_FILE="$TOP_FILE" \
-    DOCKER_PS_OUTPUT="" \
+    DOCKER_PS_OUTPUT="${PS_OUTPUT:-}" \
     DOCKER_FAIL_BUILD="${FAIL_BUILD:-0}" \
+    AUTOPILOT_DEFER_ON_INFLIGHT="${DEFER_ON_INFLIGHT:-0}" \
+    AUTOPILOT_DEFER_BUDGET="${DEFER_BUDGET:-2}" \
     AUTOPILOT_REPO_DIR="$REPO" \
     AUTOPILOT_DEPLOYED_MARKER="$MARKER" \
     AUTOPILOT_LOG_FILE="${WORK}/watcher.log" \
@@ -441,3 +443,43 @@ logged "does not parse" \
 [ ! -s "${WORK}/path-bash.log" ] \
     || fail "scenario 8 syntax-checked with the bash on PATH: $(cat "${WORK}/path-bash.log")"
 printf 'OK: the incoming watcher is vetted by the bash that will execute it\n'
+
+# --- scenario 9: a rollback after a deferred handover returns to what serves -
+# The handover carries the serving commit in the environment, which lasts one
+# tick - and a tick that hands over and then defers to an in-flight job ends
+# without deploying. The checkout is then on B while A is still serving, and
+# the *next* tick is a fresh process with nothing handed to it. Taking `HEAD`
+# as the rollback target there means a failed build of B "rolls back" to B.
+# Found by the independent review of this PR, not by these scenarios.
+fresh_repo
+mark_new_watcher
+publish "watcher change deferred by a job in flight"
+printf '%s\n' "$BASE_SHA" >"$MARKER"
+
+# A job that does not claim to be resumable, so deferring is the watcher's
+# choice to make. The container has to be named for the survey to run at all.
+{
+    printf 'UID PID PPID C STIME TTY TIME CMD\n'
+    printf 'appuser 4711 4700 0 12:00 ? 00:00:01 python -m utils.recalc_property_travel\n'
+} >"$TOP_FILE"
+printf '%s\n' '{"module":"recalc_property_travel","pid":4711,"resumable":false}' \
+    >"${INFLIGHT_DIR}/job.4711.json"
+
+PS_OUTPUT="idealista-app" DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+logged "deferring this tick" || fail "scenario 9 did not defer to the job in flight"
+[ "$(head_sha)" = "$NEW_SHA" ] \
+    || fail "scenario 9 expected the handover to have merged before deferring"
+[ "$(builds)" = "0" ] || fail "scenario 9 built although it deferred"
+[ "$(cat "$MARKER")" = "$BASE_SHA" ] || fail "scenario 9 moved the marker while deferring"
+
+# The job finishes; the next tick deploys the commit the checkout already sits
+# on, and that build fails.
+: >"$TOP_FILE"
+rm -f "${INFLIGHT_DIR}"/*.json
+FAIL_BUILD=1 PS_OUTPUT="idealista-app" run_watcher
+
+logged "ROLLBACK" || fail "scenario 9 did not roll back a failed build"
+[ "$(head_sha)" = "$BASE_SHA" ] \
+    || fail "scenario 9 rolled back to $(head_sha | cut -c1-7), the build that just failed, not to the serving ${BASE_SHA:0:7}"
+printf 'OK: a rollback after a deferred handover returns to the commit that serves\n'
