@@ -15,6 +15,17 @@ wrong before it worked:
   - a reused `--snapshot` path makes the restarted backfill exit instead of
     run, because the tools refuse to overwrite a rollback point.
 
+An independent Tier-2 audit then broke the first version of those fixes, and
+two of its findings were reproduced by probe before being fixed:
+
+  - `docker exec` failing while it still printed a partial listing slipped
+    past the empty-output check, and the supervisor started the paid backfill
+    twice while the real one was alive. Nonzero status is "could not tell",
+    whatever came out of it;
+  - a `Done` left in the append-only run log by an earlier run made the next
+    supervision of that module exit 0 at its first tick, having called docker
+    zero times, and log it as success. Only bytes this run appended count.
+
 `tools/backfill_supervisor.sh` is that script, made honest. This wrapper runs
 its shell test and surfaces the output on failure, the way
 `test_deploy_watcher_inflight.py` does for the watcher.
@@ -35,8 +46,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SUPERVISOR_TEST = REPO_ROOT / "tools" / "backfill_supervisor_test.sh"
 
-# Seven scenarios, each polling a stub for a few one-second ticks.
-TIMEOUT_SECONDS = 180
+# Sixteen scenarios, most polling a stub for a few one-second ticks.
+TIMEOUT_SECONDS = 300
 
 
 @pytest.mark.skipif(
