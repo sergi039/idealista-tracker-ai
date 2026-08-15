@@ -61,11 +61,12 @@ STUB
 # The run log lives under data/ because that is the only path bind mounted into
 # the container, so the host's data/run.log and the container's /app/data/run.log
 # are one file. BACKFILL_LOCK_ROOT is the lock's test seam: in production the
-# lock is anchored to the repository so that two supervisors cannot take two
+# lock and the run log are anchored to the repository, so that neither depends
+# on the caller's working directory and two supervisors cannot take two
 # different locks by passing two different --log paths.
 run_supervisor() {
     local dir="$1"; shift
-    ( cd "$dir" && PATH="$dir/bin:$PATH" BACKFILL_LOCK_ROOT="$dir/lock" timeout 20 "$SUPERVISOR" \
+    ( cd "$dir" && PATH="$dir/bin:$PATH" BACKFILL_ROOT="$dir" timeout 20 "$SUPERVISOR" \
         --module utils.backfill_pool \
         --snapshot-prefix data/pool_backfill \
         --interval 1 --max-ticks 3 \
@@ -255,7 +256,7 @@ rm -rf "$dir"
 # 7. A missing --module is a usage error, before any docker call.
 dir="$(mktemp -d)"
 make_stub "$dir" "sh -c sleep 1" "idealista-app"
-( cd "$dir" && PATH="$dir/bin:$PATH" BACKFILL_LOCK_ROOT="$dir/lock" timeout 20 "$SUPERVISOR" \
+( cd "$dir" && PATH="$dir/bin:$PATH" BACKFILL_ROOT="$dir" timeout 20 "$SUPERVISOR" \
     --snapshot-prefix data/p ) >/dev/null 2>&1
 rc=$?
 if [ "$rc" -ne 0 ] && [ ! -f "$dir/docker-calls.log" ]; then
@@ -271,7 +272,7 @@ rm -rf "$dir"
 # that exit at once.
 dir="$(mktemp -d)"
 make_stub "$dir" "sh -c sleep 1" "idealista-app"
-( cd "$dir" && PATH="$dir/bin:$PATH" BACKFILL_LOCK_ROOT="$dir/lock" timeout 20 "$SUPERVISOR" \
+( cd "$dir" && PATH="$dir/bin:$PATH" BACKFILL_ROOT="$dir" timeout 20 "$SUPERVISOR" \
     --module utils.backfill_pool --interval 1 --max-ticks 2 \
     --log "$dir/supervisor.log" --run-log data/run.log ) >/dev/null 2>&1
 rc=$?
@@ -287,7 +288,7 @@ rm -rf "$dir"
 # /app/<path> while the host reads <path>, two different files.
 dir="$(mktemp -d)"
 make_stub "$dir" "sh -c sleep 1" "idealista-app"
-( cd "$dir" && PATH="$dir/bin:$PATH" BACKFILL_LOCK_ROOT="$dir/lock" timeout 20 "$SUPERVISOR" \
+( cd "$dir" && PATH="$dir/bin:$PATH" BACKFILL_ROOT="$dir" timeout 20 "$SUPERVISOR" \
     --module utils.backfill_pool --snapshot-prefix data/p --interval 1 --max-ticks 2 \
     --log "$dir/supervisor.log" --run-log "$dir/run.log" ) >/dev/null 2>&1
 rc=$?
@@ -316,8 +317,8 @@ rm -rf "$dir"
 # restart the job independently and bill the same rows twice.
 dir="$(mktemp -d)"
 make_stub "$dir" "sh -c sleep 1" "idealista-app"
-mkdir -p "$dir/lock"
-printf '%s\n' "$$" > "$dir/lock/.supervisor.idealista-app.utils.backfill_pool.lock"
+mkdir -p "$dir/data"
+printf '%s\n' "$$" > "$dir/data/.supervisor.idealista-app.utils.backfill_pool.lock"
 run_supervisor "$dir" >/dev/null 2>&1
 rc=$?
 if [ "$rc" -eq 2 ] && [ "$(starts_in "$dir")" -eq 0 ]; then
@@ -335,7 +336,7 @@ rm -rf "$dir"
 # as reading a failed inspection as "idle".
 dir="$(mktemp -d)"
 make_stub "$dir" "sh -c sleep 1" "idealista-app"
-: > "$dir/lock"   # a FILE where the lock directory must go
+: > "$dir/data"   # a FILE where the lock directory must go
 run_supervisor "$dir" >/dev/null 2>&1
 rc=$?
 if [ "$rc" -eq 2 ] && [ "$(starts_in "$dir")" -eq 0 ]; then
@@ -369,7 +370,7 @@ done
 # the budget is gone.
 dir="$(mktemp -d)"
 make_stub "$dir" "sh -c sleep 1" "idealista-app"
-( cd "$dir" && PATH="$dir/bin:$PATH" BACKFILL_LOCK_ROOT="$dir/lock" timeout 20 "$SUPERVISOR" \
+( cd "$dir" && PATH="$dir/bin:$PATH" BACKFILL_ROOT="$dir" timeout 20 "$SUPERVISOR" \
     --module utils.backfill_pool --snapshot-prefix data/p --interval 1 --max-ticks 2 \
     --log "$dir/supervisor.log" --run-log run.log ) >/dev/null 2>&1
 rc=$?
@@ -393,13 +394,50 @@ else
 fi
 rm -rf "$dir"
 
+# 15b. A stale lock — one naming a pid that is genuinely gone — is REPORTED and
+# refused, never taken over. Taking one over cannot be made atomic: two
+# supervisors both read the dead pid, the first removes it and takes the lock,
+# and the second then performs the removal it had already decided on, deleting
+# the first's lock and taking one of its own. Both then restart the paid job.
+dir="$(mktemp -d)"
+make_stub "$dir" "sh -c sleep 1" "idealista-app"
+mkdir -p "$dir/data"
+dead=999999
+kill -0 "$dead" 2>/dev/null && dead=999998
+printf '%s\n' "$dead" > "$dir/data/.supervisor.idealista-app.utils.backfill_pool.lock"
+run_supervisor "$dir" >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 2 ] && [ "$(starts_in "$dir")" -eq 0 ]; then
+    pass "a stale lock is refused, not taken over"
+else
+    fail "a stale lock is refused, not taken over" "rc=$rc starts=$(starts_in "$dir")"
+fi
+rm -rf "$dir"
+
+# 15c. `data/../run.log` passes a prefix test and lands outside data/, which is
+# the only path bind mounted: the container would write /app/run.log while the
+# host reads a different file, so a finished job is restarted until the budget
+# is gone.
+dir="$(mktemp -d)"
+make_stub "$dir" "sh -c sleep 1" "idealista-app"
+( cd "$dir" && PATH="$dir/bin:$PATH" BACKFILL_ROOT="$dir" timeout 20 "$SUPERVISOR" \
+    --module utils.backfill_pool --snapshot-prefix data/p --interval 1 --max-ticks 2 \
+    --log "$dir/supervisor.log" --run-log data/../run.log ) >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 2 ] && [ ! -f "$dir/docker-calls.log" ]; then
+    pass "a run log escaping data/ with .. is refused"
+else
+    fail "a run log escaping data/ with .. is refused" "rc=$rc"
+fi
+rm -rf "$dir"
+
 # 16. A lock naming no pid is NOT stale. A supervisor that has just created its
 # lock is momentarily in that state, and taking it over is how two paid
 # backfills start.
 dir="$(mktemp -d)"
 make_stub "$dir" "sh -c sleep 1" "idealista-app"
-mkdir -p "$dir/lock"
-: > "$dir/lock/.supervisor.idealista-app.utils.backfill_pool.lock"
+mkdir -p "$dir/data"
+: > "$dir/data/.supervisor.idealista-app.utils.backfill_pool.lock"
 run_supervisor "$dir" >/dev/null 2>&1
 rc=$?
 if [ "$rc" -eq 2 ] && [ "$(starts_in "$dir")" -eq 0 ]; then

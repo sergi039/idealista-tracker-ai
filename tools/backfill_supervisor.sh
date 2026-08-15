@@ -157,16 +157,29 @@ MODULE_TAIL="${MODULE##*.}"
 RUN_LOG="${RUN_LOG:-data/${MODULE_TAIL}_supervised.log}"
 LOG_FILE="${LOG_FILE:-data/backfill_supervisor.log}"
 
+# Where this checkout lives, so that neither the run log nor the lock depends
+# on the caller's working directory. BACKFILL_ROOT is the test seam.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="${BACKFILL_ROOT:-$(dirname "$SCRIPT_DIR")}"
+
 # The restart redirects to /app/$RUN_LOG inside the container while finished()
-# reads $RUN_LOG here. Those are one file only under the ./data:/app/data bind
-# mount, so the run log has to live in data/ — refusing merely the absolute
-# paths was not enough: `--run-log run.log` writes /app/run.log inside the
-# container while the host reads ./run.log, so completion is never seen and a
-# finished job is restarted until the budget runs out.
+# reads the same file here. They are one file only under the ./data:/app/data
+# bind mount, so the run log has to resolve inside data/ — and three separate
+# ways of leaving it have now been found:
+#   * an absolute path names two unrelated files;
+#   * `--run-log run.log` writes /app/run.log in the container while the host
+#     reads ./run.log;
+#   * `data/../run.log` passes a prefix test and lands outside data/ anyway.
+# Reading it relative to REPO_ROOT rather than the cwd closes the fourth: the
+# same default diverges when the tool is invoked from anywhere else.
+case "$RUN_LOG" in
+    *..*) echo "--run-log must not contain '..', got: $RUN_LOG" >&2; exit 2 ;;
+esac
 case "$RUN_LOG" in
     data/?*) : ;;
     *) echo "--run-log must be a path under data/ (only ./data is bind mounted into the container), got: $RUN_LOG" >&2; exit 2 ;;
 esac
+RUN_LOG_HOST="$REPO_ROOT/$RUN_LOG"
 
 if [ -z "$DONE_PATTERN" ]; then
     # grep matches an empty pattern against every line, so the first progress
@@ -183,8 +196,8 @@ log() {
 
 # Only what THIS run appends counts as its completion; see rule 4 above.
 RUN_LOG_START=0
-if [ -f "$RUN_LOG" ]; then
-    RUN_LOG_START="$(wc -c <"$RUN_LOG" 2>/dev/null | tr -d ' ')"
+if [ -f "$RUN_LOG_HOST" ]; then
+    RUN_LOG_START="$(wc -c <"$RUN_LOG_HOST" 2>/dev/null | tr -d ' ')"
     case "$RUN_LOG_START" in ''|*[!0-9]*) RUN_LOG_START=0 ;; esac
 fi
 
@@ -224,8 +237,8 @@ finished() {
     # append-only and its default path is the same on every invocation, so
     # only the bytes appended after this supervisor started are its own
     # evidence of completion (rule 4).
-    [ -f "$RUN_LOG" ] || return 1
-    tail -c "+$((RUN_LOG_START + 1))" "$RUN_LOG" 2>/dev/null \
+    [ -f "$RUN_LOG_HOST" ] || return 1
+    tail -c "+$((RUN_LOG_START + 1))" "$RUN_LOG_HOST" 2>/dev/null \
         | grep -q -- "$DONE_PATTERN"
 }
 
@@ -240,8 +253,7 @@ finished() {
 # two supervisors could both find one stale lock, both decide it was dead, and
 # both fall through before either wrote its pid; and a pid write that failed
 # was ignored, leaving a supervisor running with a lock it did not hold.
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LOCK_ROOT="${BACKFILL_LOCK_ROOT:-$(dirname "$SCRIPT_DIR")/data}"
+LOCK_ROOT="$REPO_ROOT/data"
 LOCK_FILE="$LOCK_ROOT/.supervisor.${CONTAINER}.${MODULE}.lock"
 
 if ! mkdir -p "$LOCK_ROOT" 2>/dev/null; then
@@ -249,34 +261,31 @@ if ! mkdir -p "$LOCK_ROOT" 2>/dev/null; then
     exit 2
 fi
 
-# An empty or unreadable lock is NOT stale: a supervisor that has just created
-# its lock is momentarily in that state, and taking it over is how two paid
-# backfills start. Only a lock naming a pid that is genuinely gone is taken,
-# and that takeover is settled by the atomic create below, so exactly one of
-# several racing supervisors can win it.
+# The ONLY way to hold this lock is the atomic create below. A stale lock is
+# reported and refused, never taken over automatically.
+#
+# Taking one over cannot be made atomic, and an audit found the race: two
+# supervisors both read one dead pid, A removes it and creates its lock, B then
+# performs the removal it had already decided on — deleting A's fresh lock —
+# and creates its own. Both then believe they hold it and both restart the paid
+# job. Any read-then-remove has that shape, and macOS has no flock(1) to
+# replace it with. Refusing costs one manual `rm` when a supervisor is killed;
+# losing the race costs a duplicate paid backfill.
 acquire_lock() {
-    local attempt=0 other
-    while [ "$attempt" -lt 3 ]; do
-        attempt=$((attempt + 1))
-        if (set -o noclobber; printf '%s\n' "$$" >"$LOCK_FILE") 2>/dev/null; then
-            return 0
-        fi
-        [ -e "$LOCK_FILE" ] || return 1
-        other="$(cat "$LOCK_FILE" 2>/dev/null)"
-        if [ -z "$other" ]; then
-            echo "the supervisor lock $LOCK_FILE names no pid; remove it by hand if no supervisor is running" >&2
-            return 1
-        fi
-        # `kill -0` cannot tell "no such process" from "not yours", so a lock
-        # held by another user reads as stale. The supervisor runs as the owner
-        # of the container on a single-user host, where that does not arise.
-        if kill -0 "$other" 2>/dev/null; then
-            echo "another supervisor (pid $other) already watches $MODULE in $CONTAINER" >&2
-            return 1
-        fi
-        log "supervisor: taking over a stale lock left by pid $other"
-        rm -f "$LOCK_FILE" 2>/dev/null
-    done
+    local other
+    if (set -o noclobber; printf '%s\n' "$$" >"$LOCK_FILE") 2>/dev/null; then
+        return 0
+    fi
+    other="$(cat "$LOCK_FILE" 2>/dev/null)"
+    # `kill -0` cannot tell "no such process" from "not yours", so a lock held
+    # by another user reads as dead. The supervisor runs as the owner of the
+    # container on a single-user host, where that does not arise.
+    if [ -n "$other" ] && kill -0 "$other" 2>/dev/null; then
+        echo "another supervisor (pid $other) already watches $MODULE in $CONTAINER" >&2
+    else
+        echo "a supervisor lock is present at $LOCK_FILE (pid ${other:-unknown}, not running)." >&2
+        echo "It is not taken over automatically: that cannot be done atomically, and losing the race starts a second paid backfill. Remove the file by hand once you are sure no supervisor is running." >&2
+    fi
     return 1
 }
 
