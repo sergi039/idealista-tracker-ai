@@ -1,11 +1,14 @@
 """Guards against per-process state that escapes a test.
 
-Two independent guards live here. The `pytest_runtest_teardown` wrapper
+Three independent guards live here. The `pytest_runtest_teardown` wrapper
 (per-test) fails any test that leaves a Flask app or request context pushed,
 and scrubs the application reference flask-caching retains on the
 module-global `utils.cache.cache` -- see its docstring for why that retention
-makes a test behave differently alone and in the full run. The rest of the
-module is the session-scoped Config-mutation guard below.
+makes a test behave differently alone and in the full run. The socket guard in
+tests/network_guard.py, installed and reported from the hooks below, refuses
+every connect that leaves this machine (issue #307); its own module docstring
+carries the reasoning. The rest of the module is the session-scoped
+Config-mutation guard below.
 
 `Config` (config.py) keeps several mutable containers as *class* attributes -
 `DEFAULT_SCORING_WEIGHTS`, `SCORING_PROFILES`, `COMBINED_MIX` and friends. They
@@ -44,6 +47,7 @@ import pytest
 from flask import globals as flask_globals
 
 from config import Config
+from tests import network_guard
 from utils.cache import cache as flask_cache
 
 
@@ -133,6 +137,7 @@ MAX_VALUE_REPR = 120
 _snapshot: dict[str, Any] | None = None
 _problems: list[str] = []
 _reported = False
+_network_reported = False
 
 
 def _mutable_config_attributes() -> dict[str, Any]:
@@ -259,20 +264,32 @@ def _message() -> list[str]:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Snapshot the mutable Config containers before any test body runs."""
+    """Snapshot the mutable Config containers before any test body runs, and
+    close the network off before anything can reach it.
+
+    Both happen here rather than in a fixture because collection itself runs
+    code: a test module's import time is inside the session and outside every
+    fixture.
+    """
     global _snapshot
     if _snapshot is None:
         _snapshot = {
             name: copy.deepcopy(value)
             for name, value in _mutable_config_attributes().items()
         }
+    network_guard.install()
+
+
+def pytest_runtest_logstart(nodeid: str, location: Any) -> None:
+    """Attribute the connects made from here on to this test."""
+    network_guard.note_test(nodeid)
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Fail the run when a mutation escaped a test."""
+    """Fail the run when a mutation, or a live network call, escaped a test."""
     global _problems
     _problems = _detect_mutations()
-    if not _problems:
+    if not _problems and not network_guard.attempts():
         return
 
     # Raising here does not fail the run: wrap_session() has already computed
@@ -289,8 +306,18 @@ def pytest_terminal_summary(terminalreporter: Any) -> None:
     Runs from inside the terminal reporter's own pytest_sessionfinish wrapper,
     i.e. after the warnings summary, so the message is the last thing before
     the pass/fail counts rather than buried above them.
+
+    The network report is printed even though each refusal already raised: the
+    callers catch `Exception` and degrade, so a refused call can leave a green
+    test and no trace anywhere else in the output.
     """
-    global _reported
+    global _reported, _network_reported
+    network_lines = network_guard.summary_lines()
+    if network_lines:
+        terminalreporter.write_sep("=", "network guard: FAILED", red=True, bold=True)
+        for line in network_lines:
+            terminalreporter.write_line(line, red=True)
+        _network_reported = True
     if not _problems:
         return
     terminalreporter.write_sep(
@@ -302,6 +329,15 @@ def pytest_terminal_summary(terminalreporter: Any) -> None:
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
-    """Last resort when there is no terminal summary to write into."""
+    """Last resort when there is no terminal summary to write into.
+
+    A run failed by either guard has to say why: the exit status is set in
+    pytest_sessionfinish whether or not anything printed, and a non-zero exit
+    with no diagnosis is the worst of both.
+    """
     if _problems and not _reported:  # pragma: no cover - needs -p no:terminal
         print("\n".join(["config mutation guard: FAILED", *_message()]))
+    network_lines = network_guard.summary_lines()
+    if network_lines and not _network_reported:  # pragma: no cover - as above
+        print("\n".join(["network guard: FAILED", *network_lines]))
+    network_guard.uninstall()
