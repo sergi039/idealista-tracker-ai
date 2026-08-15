@@ -2,7 +2,7 @@
  "_source": "OpenStreetMap, api.openstreetmap.org/api/0.6/map?bbox=-5.4200,43.4900,-5.3600,43.5600",
  "_captured": "2026-08-15",
  "_licence": "ODbL 1.0, \u00a9 OpenStreetMap contributors",
- "_why": "Real natural=coastline geometry around the mouth of the Ria de Villaviciosa, captured for the Selorio report, 2026-08-15. It reproduces property 125's stored verdict exactly (4173.8 m, bearing 16.5), so the test measures the same thing production did. Overpass is the app's source; it was unreachable on the capture date, and a test must not reach either one anyway (tests/network_guard.py).",
+ "_why": "Real natural=coastline geometry around the mouth of the Ria de Villaviciosa, captured for #334 (the Selorio report, 2026-08-15). It reproduces property 125's stored verdict exactly (4173.8 m, bearing 16.5), so the test measures the same thing production did. Overpass is the app's source; it was unreachable on the capture date, and a test must not reach either one anyway (tests/network_guard.py).",
  "_geography": "The six ways close ACROSS the mouth rather than following the ria inland: their southernmost node is 43.5305789, while the Ria de Villaviciosa water multipolygon (OSM relation 2166590, natural=water/water=river/tidal=yes) reaches 43.4838 -- 7.13 km further in. Measured the same way for the rias of Aviles, Navia and the Nalon estuary: 4.60, 4.90 and 4.37/7.29 km. So the nearest coastline to an inland plot is the mouth, i.e. open sea, and none of the coastline ways in any of those four bboxes carries a name.",
  "ways": [
   {

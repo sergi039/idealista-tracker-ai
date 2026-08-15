@@ -3699,9 +3699,8 @@ def export_properties_csv():
             # What the verdict was measured to, not just how far away it was.
             # A buyer comparing "sea view" rows needs to be able to tell a
             # clifftop above open water from a plot looking up an estuary
-            # channel, and the state alone cannot say which (Selorio report,
-            # 2026-08-15). Empty on rows whose verdict predates the target
-            # being recorded.
+            # channel, and the state alone cannot say which (#334). Empty on
+            # rows whose verdict predates the target being recorded.
             "Sea View Distance (m)",
             "Sea View Target Lat",
             "Sea View Target Lon",

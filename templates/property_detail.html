@@ -1447,8 +1447,8 @@
                                 {# What that distance was measured *to*. On this coast the nearest
                                    coastline can be an estuary mouth with kilometres of ría between
                                    it and the plot, and a distance plus a bearing does not say so
-                                   (Selorio report, 2026-08-15). Absent on verdicts computed before
-                                   the target was recorded, so the line simply stops there. #}
+                                   (#334). Absent on verdicts computed before the target was
+                                   recorded, so the line simply stops there. #}
                                 {%- set _sea_target = sea_view_verdict.target %}
                                 {%- set _sea_target_url = maps_place_url(_sea_target.lat, _sea_target.lon) if _sea_target else none %}
                                 {%- if _sea_target_url %}

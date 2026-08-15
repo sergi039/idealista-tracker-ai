@@ -1,7 +1,7 @@
-"""A sea-view verdict has to say what water it looked at.
+"""A sea-view verdict has to say what water it looked at (#334).
 
-The "Selorio report" of 2026-08-15, referred to below, arrived as a direct
-owner request rather than a GitHub issue, so it carries no issue number.
+The "Selorio report" of 2026-08-15 arrived as a direct owner request rather
+than through the tracker, and was filed retroactively as #334.
 
 The ticket behind this file reported property 125 -- "Land in Selorio - Tornón,
 Villaviciosa", `likely`, `clear_line_of_sight`, 4173.8 m -- as scoring a sea

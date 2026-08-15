@@ -41,8 +41,7 @@ TRANSLATIONS = {
         # A `likely` that rests on bare-earth terrain alone. It says the ground
         # does not block the line, not that the listing has a sea view -- and
         # what the line reaches can be an estuary channel rather than open
-        # water (Selorio report, 2026-08-15). Named for what was actually
-        # computed; see state_label_key().
+        # water (#334). Named for what was computed; see state_label_key().
         "sea_view_state_likely_geometry": "Terrain allows a sea view",
         "sea_view_state_no": "No sea view",
         "sea_view_state_unknown": "Sea view unknown",

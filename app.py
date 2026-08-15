@@ -270,8 +270,8 @@ def create_app(testing: bool = False):
 
     app.jinja_env.globals["sea_view_verdict_for"] = sea_view_verdict_for
     # `likely` names two different claims and only one of them is the listing's
-    # (Selorio report, 2026-08-15), so the badge text comes from here rather
-    # than from `state` — in all three places that draw it.
+    # (#334), so the badge text comes from here rather than from `state` — in
+    # all three places that draw it.
     app.jinja_env.globals["sea_view_state_key"] = sea_view_state_key
 
     # One Maps URL builder for every surface: list travel cells, detail rows,

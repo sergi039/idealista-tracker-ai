@@ -630,8 +630,8 @@ def evaluate_geometry(
     # The point this verdict is *about*. A distance and a bearing describe it
     # only if you are willing to do spherical trigonometry, which is why
     # answering "what water did it actually look at?" for one property
-    # (Selorio report, 2026-08-15) took a day of OSM archaeology rather than
-    # one SQL query. Six decimals is
+    # (#334) took a day of OSM archaeology rather than one SQL query. Six
+    # decimals is
     # about 0.1 m -- far finer than the coastline itself is mapped, and the
     # point is a stored OSM node, so rounding it further would move the
     # verdict's subject off the node it was measured to.
@@ -1067,8 +1067,8 @@ def geometry_target(detail: Dict[str, Any]) -> Optional[Dict[str, float]]:
 
     None covers three different rows and deliberately does not distinguish
     them, because a caller can only do one thing with any of them: a verdict
-    from before `target_lat` was recorded (Selorio report, 2026-08-15), one
-    whose geometry found no coastline at all, and one whose coordinates did not survive the round trip
+    from before `target_lat` was recorded (#334), one whose geometry found no
+    coastline at all, and one whose coordinates did not survive the round trip
     through the JSON column.
     """
     geometry = detail.get("geometry")
@@ -1088,8 +1088,7 @@ def state_label_key(verdict: Dict[str, Any]) -> str:
     merely fails to rule it out -- and on this coast that is a weaker statement
     than the words suggest. Property 125 looks 4.2 km up the ría de
     Villaviciosa and reaches open sea through the mouth at Rodiles: measured,
-    correct, and not what a buyer reads into "sea view likely"
-    (Selorio report, 2026-08-15).
+    correct, and not what a buyer reads into "sea view likely" (#334).
 
     So a `likely` that rests on geometry alone is named for what was actually
     computed -- the terrain permits it -- and every other state keeps its own

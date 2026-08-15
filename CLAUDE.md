@@ -237,9 +237,9 @@ keep their old boolean at `enrichment.legacy_land.environment.sea_view`, which
 reads as `likely` (it came from the same weak keyword pass) and never as `yes`.
 
 **The coastline does not follow the rías inland, and the verdict now records
-the point it measured to** (the "Selorio report", 2026-08-15 — a direct owner
-request, so it carries no issue number; the phrase is the search anchor for the
-comments that cite it). The reported defect was that OSM's
+the point it measured to** (#334, the "Selorio report" of 2026-08-15 — it
+arrived as a direct owner request and was filed retroactively). The reported
+defect was that OSM's
 `natural=coastline` runs up an estuary to the tidal limit, so a plot 4 km from
 a ría scores a sea view against it. Measured against real OSM data for all four
 candidate rías, it does not: the coastline **closes across each mouth** and the
