@@ -694,6 +694,47 @@ and TODO.md; respect it if you ever run both side by side.
 - Run `uv run pytest tests/ -q` locally and paste the real output before
   claiming done. That is a standing owner requirement in its own right,
   not a stand-in for CI.
+- **A pass count says the suite ran. It does not say the fix works.** On
+  2026-08-14 four defects in one day survived a green suite because the test
+  meant to catch them could not fail: a stub that counted calls instead of
+  recording what they saw (#297, found by the mutation in #300); a fixture
+  whose text avoided the one input the guard under test keys on, so the test
+  "stepped around the defect instead of at it" (#306); a call site pinned by
+  three context-free substrings, so inlining the call back to the broken
+  position passed all five of its tests (#309); and a `skipif` on the module
+  that tests a mechanism, so removing that mechanism's installation gave
+  `29 skipped`, exit 0 (#308, fixed in #310). The same
+  currency bought the earlier ones: three clean re-runs of the merge-bot test
+  that never touched the crashing path (#284), a green `/api/healthz` through 15
+  minutes of every `/properties/<id>` redirecting (#283).
+- **A change that adds or modifies a test reports the mutation result, not the
+  pass count.** Undo the fix — or invert the assertion — and paste which tests
+  go red. A fix whose tests stay green when it is removed is unproven, whatever
+  the tail says, and saying so costs one re-run. Where a mutation is expected to
+  stay green because another line already covers it, say that too rather than
+  presenting the green as evidence.
+- **UI and timing behaviour is proven by measurement on a built image**, never
+  by a unit test or a template's static text. The bar #302 arrived at and #309
+  was measured against: repeated *loads* (the race resolves once at init, so
+  repeated samples
+  inside one load agree with each other and prove nothing), at least two
+  widths, `elementFromPoint` per control rather than bounding-box overlap, and
+  a second sample seconds later because the popup keeps moving. Identical bytes
+  behaving differently on two machines is an environment finding, not a code
+  one.
+- **A skipped test reports success**, which is why `tests/skip_guard.py` pins
+  which module may skip and for what reason, and fails the session on anything
+  else (#314). A genuinely conditional new test costs one line in `ALLOWED` —
+  that friction is the point, because the alternative is a number nothing
+  reads: not `.github/workflows/ci.yml` (exit status only), not
+  `tools/ci/local_ci.sh`, and not a reviewer, who would have to diff a tail
+  against the previous run to notice it move. Both hooks are wired on purpose —
+  a module skipped at *import* (`allow_module_level`, `importorskip`) never
+  reaches `pytest_runtest_logreport` and would take a whole file out of the
+  session unseen. What the guard cannot do is tell a deliberate escape hatch
+  from a mechanism that failed to install, because the reason text is
+  identical; `tests/test_network_guard_is_installed.py` is what answers that,
+  and the two are meant to be read together.
 - **Writing a migration?** Everything in `migrations/` is PostgreSQL-only and
   multi-statement, so SQLite cannot execute it and `db.create_all()` proves
   nothing about it. `tests/test_postgres_migrations.py` runs the real files
