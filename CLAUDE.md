@@ -532,6 +532,26 @@ and TODO.md; respect it if you ever run both side by side.
   `Land.distance_airport`. Do not copy the patterns into a third caller; import
   them. `utils/clear_legacy_land_airport.py` removes the values the unfiltered
   search left behind (free — no API call — with a rollback snapshot).
+- **The same rules say what may be recorded as a hospital, and a *centro de
+  salud* may not** (owner decision 2026-08-15, narrowing the 2026-08-10 one that
+  accepted "a hospital, a health centre or a public outpatient clinic"). Primary
+  care has no beds and no emergency department, so recording it overstates
+  medical access on a number the scorer reads: measured on the Salamir listing
+  (43.568817,-6.211955), the app said "hospital 11 min" — the Centro de Salud in
+  Muros de Nalón — against ~27 min to Hospital Universitario San Agustín, the
+  assigned hospital. 187 of 396 travel rows held such a place. The patterns went
+  on the preset, not into a second filter. Two of them are not obvious and were
+  measured: Google indexes a hospital campus **room by room, every room tagged
+  `hospital`**, so 13 departments of San Agustín sorted ahead of the hospital
+  itself at rank 18 of 20 — `hospital de día` (a day unit) and `unidad de
+  hospitalización` (one ward) carry the word and must be refused for the parent
+  to win. Nearby Search returns **one page of 20**, so a narrower rule can push
+  the real answer off the end; `wide_search_query` is the ready-made fallback if
+  measurement ever shows that (the airport preset uses it), and it was
+  deliberately *not* added here because at the measured coordinate the hospital
+  was still on the page. The old rows are not fixed by the deploy —
+  `utils/recalc_property_travel.py --ids …` rewrites them and **spends money**,
+  so it needs the owner to ask.
 - **Amenities are measured for `Property`, through the same one client**
   (#152). `_fetch_osm_amenities` is the whole Overpass amenity client — cache,
   gate, transport, refusals — and `_enrich_with_osm_data` (legacy `Land`) and
