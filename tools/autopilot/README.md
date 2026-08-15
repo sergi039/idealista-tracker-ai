@@ -140,10 +140,24 @@ them apart, and guessing "resumable" is how work goes missing quietly.
 **The marker is joined to a process by command line, not by PID.** The PID in
 the filename is the container's (`os.getpid()`); `docker top` reports the
 host/VM view — measured on the mini, 41 against 21974 for the same process.
-A marker vouches for a process when its `module` and every recorded `argv`
-token appear in that command line, which also keeps two concurrent runs of one
-module apart by their `--snapshot` paths. Markers that match but disagree
-about `resumable` resolve to *unknown*, never to the deploy's convenience.
+A marker vouches for a process when the module is the program that command
+runs — the token after `-m`, joined (`-mutils.backfill_pool`) or separated,
+or the first `.py` token — and the recorded `argv` renders to exactly that
+command's arguments, in order. Not "appears in": membership was the first
+attempt and was wrong three ways at once — `data/a` vouched for a live
+`data/aaa.json`, a reordered argv matched, and an *empty* argv was vacuously
+true, so a stale `bulk_ai_analysis` marker with no arguments vouched for a
+live `--force` run, the one run that is not resumable. Exactness also keeps
+two concurrent runs of one module apart by their `--snapshot` paths. Markers
+that match but disagree about `resumable` resolve to *unknown*, never to the
+deploy's convenience.
+
+The comparison is on the **rendered string**, not on token lists, because
+`docker top` returns one whitespace-joined line with the shell's quoting
+already gone: a job launched with `--snapshot 'data/My Pool.json'` arrives as
+four tokens against the marker's two. Asking "is this the same command line"
+is the only question a process list can answer, and it is the question that
+finds the live job's own marker.
 
 Three states, not two: a `docker top` that cannot be read is **unknown**, and
 blocks exactly like an unmarked job rather than reading as "nothing running".

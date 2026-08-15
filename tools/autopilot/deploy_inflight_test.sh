@@ -688,3 +688,67 @@ grep -q "0 job(s) above will be killed" "${WORK}/watcher.log" \
 grep -q "what this kills is UNKNOWN" "${WORK}/watcher.log" \
     || fail "scenario 25 deployed over an unreadable process list without saying so"
 printf 'OK: deploying over an unknown process list does not claim it killed nothing\n'
+
+# --- scenario 26: python's joined -m form is a running job ------------------
+# `python3 -mutils.backfill_pool` is what python accepts, not a typo, and the
+# survey's default pattern required a space after -m. A job the pattern does
+# not match is not reported as unknown - it is not reported at all, and the
+# deploy kills it in silence. That is the one outcome this survey exists to
+# remove, so it is the one worth a scenario of its own.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_inflight "python3 -mutils.backfill_pool --snapshot data/p.json" \
+    '{"module":"backfill_pool","argv":["--snapshot","data/p.json"],"resumable":true,"ledger":"data/p.json.ledger.jsonl"}'
+DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+grep -q "in flight (" "${WORK}/watcher.log" \
+    || fail "scenario 26 did not see a job launched with python's joined -m form"
+grep -q "in flight (resumable): python3 -mutils.backfill_pool" "${WORK}/watcher.log" \
+    || fail "scenario 26 saw the job but could not read its marker"
+printf 'OK: the joined -mMODULE form is seen, and its marker is found\n'
+
+# --- scenario 27: an argument containing a space still matches -------------
+# `docker top` returns one whitespace-joined line and the shell's quoting is
+# gone by then, so a marker recording ["--snapshot", "data/My Pool.json"]
+# faced four tokens against its two. Comparing token lists missed the live
+# job's OWN marker and called it unknown - a false unknown holds a deploy for
+# a job that had already said it was safe to kill.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_inflight "python -m utils.backfill_pool --snapshot data/My Pool.json" \
+    '{"module":"backfill_pool","argv":["--snapshot","data/My Pool.json"],"resumable":true,"ledger":"data/My Pool.json"}'
+DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+if grep -q "in flight (no marker" "${WORK}/watcher.log"; then
+    fail "scenario 27 missed the marker of a job whose argument contains a space"
+fi
+grep -q "in flight (resumable): python -m utils.backfill_pool --snapshot data/My Pool.json" \
+    "${WORK}/watcher.log" \
+    || fail "scenario 27 did not resolve the spaced argument to its own marker"
+built || fail "scenario 27 deferred for a job that reported itself resumable"
+printf 'OK: an argument containing a space resolves to its own marker\n'
+
+# --- scenario 28: an option with an operand does not hide the -c -----------
+# `bash -o pipefail -c ...` puts a bare word in the middle of the option run.
+# A scan that stops at the first non-option never reaches the -c, so the shell
+# is kept alongside its child and one job is reported twice - and the extra
+# row carries no marker, so it reports `unknown` and can hold a deploy on its
+# own.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_top_rows <<'ROWS'
+appuser 500 1 0 12:00 ? 00:00:01 /bin/bash -o pipefail -c python -m utils.backfill_pool --snapshot data/r.json
+appuser 501 500 0 12:00 ? 00:00:01 python -m utils.backfill_pool --snapshot data/r.json
+ROWS
+add_marker job '{"module":"backfill_pool","argv":["--snapshot","data/r.json"],"resumable":true}'
+DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+reported="$(grep -c "in flight (" "${WORK}/watcher.log" || true)"
+if [ "$reported" != "1" ]; then
+    fail "scenario 28 reported ${reported} jobs for one 'bash -o pipefail -c' tree"
+fi
+if grep -q "in flight (no marker" "${WORK}/watcher.log"; then
+    fail "scenario 28 kept the wrapper, which carries no marker"
+fi
+built || fail "scenario 28 deferred for a wrapper whose child is resumable"
+printf 'OK: an option taking an operand does not hide the -c that marks a wrapper\n'

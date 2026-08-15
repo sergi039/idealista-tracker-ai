@@ -70,7 +70,12 @@ RENDER_LIB="${AUTOPILOT_LIB_DIR}/render_check.sh"
 APP_CONTAINER="${AUTOPILOT_APP_CONTAINER:-${COMPOSE_CONTAINER_PREFIX:-idealista}-app}"
 INFLIGHT_DIR="${AUTOPILOT_INFLIGHT_DIR:-${REPO_DIR}/data/.inflight}"
 # Which container processes count as a job. Both spellings the repo uses.
-INFLIGHT_PATTERN="${AUTOPILOT_INFLIGHT_PATTERN:-python.*(-m +utils\.|utils/)}"
+# `-m *utils\.`, not `-m +utils\.`: python accepts the option and its argument
+# joined, so `python3 -mutils.backfill_pool` is a real, running backfill that a
+# space-requiring pattern does not see at all. A job the survey cannot see is
+# not reported as unknown - it is not reported, and the deploy kills it in
+# silence, which is the one failure mode this survey exists to remove.
+INFLIGHT_PATTERN="${AUTOPILOT_INFLIGHT_PATTERN:-python.*(-m *utils\.|utils/)}"
 DEFER_ON_INFLIGHT="${AUTOPILOT_DEFER_ON_INFLIGHT:-0}"
 DEFER_BUDGET="${AUTOPILOT_DEFER_BUDGET:-6}"
 DEFER_STATE="${AUTOPILOT_DEFER_STATE:-${REPO_DIR}/data/.deploy_deferrals}"
@@ -501,18 +506,29 @@ inflight_processes() {
         | grep -E "$INFLIGHT_PATTERN" \
         | awk -F'\t' '
             # A shell running `-c`, however it spells it: `sh -c`, `sh -cx`,
-            # `/bin/bash --login -c`. Options are skipped until the first
-            # non-option token, so `-c` need not sit next to the shell name.
+            # `/bin/bash --login -c`, `bash -o pipefail -c`.
+            #
+            # Every token is scanned, deliberately, rather than stopping at
+            # the first non-option: an option that takes an operand puts a
+            # bare word in the middle of the option run (`-o pipefail`,
+            # `--rcfile /x`), and a scan that halts there misses the `-c`
+            # behind it. Knowing where the options end means knowing an
+            # optstring per shell, and a parser covering `-o` but not
+            # `--rcfile` would read as complete while still being wrong.
+            #
+            # Scanning wide can only mistake a shell whose *operand* happens
+            # to be `-c` for a wrapper - and this is asked only of a shell
+            # that already has a matched `utils` child, where dropping it is
+            # right anyway: that shell launched the job, killing it kills the
+            # job, and the child is the row carrying the marker.
             function is_shell_wrapper(c,   parts, n, i, base) {
                 n = split(c, parts, /[ \t]+/)
                 if (n < 2) return 0
                 base = parts[1]
                 sub(/^.*\//, "", base)
                 if (base !~ /^(sh|bash|dash|ash|zsh)$/) return 0
-                for (i = 2; i <= n; i++) {
-                    if (parts[i] !~ /^-/) return 0
+                for (i = 2; i <= n; i++)
                     if (parts[i] ~ /^-[A-Za-z]*c[A-Za-z]*$/) return 1
-                }
                 return 0
             }
             { pid[NR] = $1; ppid[NR] = $2; cmd[NR] = $3; n = NR }
@@ -568,10 +584,18 @@ def _program(tokens):
     `--snapshot data/utils/backfill_pool.py`. The program is whichever comes
     first: the token after `-m`, or the first `.py` token (arguments follow
     the script, never precede it). Everything after it is the argv.
+
+    Both spellings of `-m` count. Python takes the module joined to the option
+    (`-mutils.backfill_pool`) as readily as separated, and reading only the
+    separated form leaves the joined one with no program at all - every marker
+    then misses it, which is the quiet half of the same defect the pattern
+    above fixes loudly.
     """
     for i, tok in enumerate(tokens):
         if tok == "-m" and i + 1 < len(tokens):
             return ("module", tokens[i + 1], tokens[i + 2 :])
+        if tok.startswith("-m") and len(tok) > 2:
+            return ("module", tok[2:], tokens[i + 1 :])
         if tok.endswith(".py"):
             return ("script", tok, tokens[i + 1 :])
     return None
@@ -606,9 +630,20 @@ for path in sorted(glob.glob(os.path.join(directory, "*.json"))):
     # an EMPTY argv vacuously true: a stale `bulk_ai_analysis` marker with no
     # args (resumable, because no --force) then vouched for a live
     # `--force` run, which is precisely the run that is not resumable.
+    #
+    # Compared as the rendered string, not as token lists, because `docker
+    # top` returns one whitespace-joined line and the shell's quoting is
+    # already gone by then. A job launched with `--snapshot 'data/My Pool.json'`
+    # arrives as four tokens against the marker's two, so a list comparison
+    # missed the live job's own marker and reported the run it was looking at
+    # as unknown. Joining both sides asks the only question the process list
+    # can actually answer - "is this the same command line" - and keeps order
+    # and exactness, which is what membership threw away.
     argv = data.get("argv")
     argv = argv if isinstance(argv, list) else []
-    if any(not isinstance(a, str) for a in argv) or argv != list(program[2]):
+    if any(not isinstance(a, str) for a in argv):
+        continue
+    if " ".join(argv) != " ".join(program[2]):
         continue
     matches.append(data)
 

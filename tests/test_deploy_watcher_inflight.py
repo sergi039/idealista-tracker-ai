@@ -29,8 +29,11 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INFLIGHT_TEST = REPO_ROOT / "tools" / "autopilot" / "deploy_inflight_test.sh"
 
-# Sixteen watcher runs against stubs, one of which waits out a short health
-# timeout.
+# Twenty-eight scenarios, 32 watcher runs against stubs, two of which wait out
+# a short health timeout. Measured 26.8 s wall clock on the development Mac on
+# 2026-08-15, so the bound below is roughly eleven times the observed cost and
+# exists to fail a hang, not to pace a slow machine. Re-measure before lowering
+# it; a timeout that fires on a busy CI runner reads as a broken deploy gate.
 TIMEOUT_SECONDS = 300
 
 

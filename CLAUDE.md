@@ -592,19 +592,32 @@ and TODO.md; respect it if you ever run both side by side.
   losing work, and a wrong `True` is #98's defect wearing an ops costume.
   The watcher's own liveness check is `docker top`, so a job that adopts
   nothing is still *seen*; what it cannot supply is whether killing it costs
-  anything. **A marker is matched to a process by its command line — module
-  plus every recorded `argv` token — and never by PID** (#290 follow-up). The
+  anything. **A marker is matched to a process by its rendered command line —
+  the module it actually runs, plus an `argv` that renders to exactly that
+  command's arguments — and never by PID** (#290 follow-up). The
   two sides do not share a PID namespace: `os.getpid()` inside the container
   returned 41 while `docker top` reported 21974 for that same process, so the
   original PID-keyed lookup matched nothing and every job read as `unknown`.
   The `resumable` half shipped dead and stayed dead for eleven deploy-log
   lines before anyone looked. Do not "simplify" the join back to a PID, and
   keep the fixture's marker PIDs absent from its `docker top` rows — a fixture
-  that numbers both sides the same cannot fail on this.
+  that numbers both sides the same cannot fail on this. *Rendered* is load
+  bearing on both halves: `docker top` returns one whitespace-joined line with
+  the shell's quoting gone, so `--snapshot 'data/My Pool.json'` arrives as
+  four tokens against the marker's two and a token-list comparison misses the
+  job's own marker; and the module must be read from `-m` **joined or
+  separated**, because `python3 -mutils.backfill_pool` is a running backfill
+  that a space-requiring pattern does not see at all — not reported as
+  unknown, not reported.
   Likewise **`docker top` failing is not `docker top` answering "nothing"**:
   an unreadable process list is a third state that blocks like an unmarked
   job, and only a *shell* `-c` parent is collapsed into its child — a real
-  `utils` process that spawned another is two jobs, not one.
+  `utils` process that spawned another is two jobs, not one. That `-c` is
+  looked for across every token, not only up to the first non-option one:
+  `bash -o pipefail -c` puts a bare word in the middle of the option run, and
+  knowing where the options end means knowing an optstring per shell, so a
+  scan that covers `-o` but not `--rcfile` would read as complete and still be
+  wrong.
   **A marker is not a liveness check and must never be read as
   one** — it outlives its process by design, because surviving the kill is
   what lets the next run report the interruption. A file in `data/.inflight/`
