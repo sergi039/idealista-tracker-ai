@@ -3696,6 +3696,14 @@ def export_properties_csv():
             "Favorite",
             "Sea View",
             "Sea View Source",
+            # What the verdict was measured to, not just how far away it was.
+            # A buyer comparing "sea view" rows needs to be able to tell a
+            # clifftop above open water from a plot looking up an estuary
+            # channel, and the state alone cannot say which (#334). Empty on
+            # rows whose verdict predates the target being recorded.
+            "Sea View Distance (m)",
+            "Sea View Target Lat",
+            "Sea View Target Lon",
             "Latitude",
             "Longitude",
             "Created At",
@@ -3725,6 +3733,7 @@ def export_properties_csv():
             bedrooms = attrs.get("bedrooms") if isinstance(attrs, dict) else None
             bathrooms = attrs.get("bathrooms") if isinstance(attrs, dict) else None
             sea_view_verdict = sea_view_service.read_verdict(prop)
+            sea_view_target = sea_view_verdict["target"]
 
             row = [
                 prop.id,
@@ -3744,6 +3753,9 @@ def export_properties_csv():
                 bool(prop.is_favorite),
                 sea_view_verdict["state"],
                 sea_view_verdict["source"],
+                sea_view_verdict["distance_m"],
+                sea_view_target["lat"] if sea_view_target else None,
+                sea_view_target["lon"] if sea_view_target else None,
                 float(prop.location_lat) if prop.location_lat else None,
                 float(prop.location_lon) if prop.location_lon else None,
                 prop.created_at.isoformat() if prop.created_at else "",

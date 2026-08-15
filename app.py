@@ -266,8 +266,13 @@ def create_app(testing: bool = False):
     # Every list row needs the sea-view verdict, and it is four states plus its
     # provenance rather than a column, so the templates read it through here.
     from services.sea_view_service import read_verdict as sea_view_verdict_for
+    from services.sea_view_service import state_label_key as sea_view_state_key
 
     app.jinja_env.globals["sea_view_verdict_for"] = sea_view_verdict_for
+    # `likely` names two different claims and only one of them is the listing's
+    # (#334), so the badge text comes from here rather than from `state` — in
+    # all three places that draw it.
+    app.jinja_env.globals["sea_view_state_key"] = sea_view_state_key
 
     # One Maps URL builder for every surface: list travel cells, detail rows,
     # beach lines. Templates used to concatenate free-text place names into
