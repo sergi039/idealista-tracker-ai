@@ -10,6 +10,10 @@ Two incidents on 2026-08-14, one contract each:
     15 minutes while `/api/healthz` stayed green - healthz renders no template,
     so it cannot see a broken one.
 
+Which page proves that, and what counts as rendered, is one contract shared
+with `.githooks/post-merge` (#292): the scenarios move `DEPLOY_RENDER_PATH` and
+require the watcher to follow it, so a copy of the rule kept here would fail.
+
 The watcher lives in bash; this wrapper runs its shell test and surfaces the
 output on failure, the same way `test_deploy_watcher_marker.py` does.
 """
@@ -25,8 +29,9 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INFLIGHT_TEST = REPO_ROOT / "tools" / "autopilot" / "deploy_inflight_test.sh"
 
-# Six watcher runs against stubs, two of which wait out a short health timeout.
-TIMEOUT_SECONDS = 240
+# Sixteen watcher runs against stubs, one of which waits out a short health
+# timeout.
+TIMEOUT_SECONDS = 300
 
 
 @pytest.mark.skipif(
