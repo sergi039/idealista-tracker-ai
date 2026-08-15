@@ -517,6 +517,32 @@ and TODO.md; respect it if you ever run both side by side.
   either side — the hook from `AUTO_REBUILD_BASE_URL`/the published port, the
   watcher from its health URL — so unifying them is a real change and wants
   its own ticket. Until then, change both or neither.
+- **A tick that deploys the watcher hands over to it first** (#293).
+  `deploy_watcher.sh` is in the tree it deploys, and a running tick cannot
+  pick up its own update: `git merge` renames a new file over the old one, so
+  the inode changes and the shell's open descriptor keeps reading the
+  *previous* script to the end of the tick. Measured, and reliable rather than
+  intermittent — which is why the 16:33:30 deploy on 2026-08-14 rolled out
+  #285's in-flight survey and page check while running neither, and killed a
+  pool backfill at 32 ledger rows silently. (An in-place rewrite is worse
+  still: the same script overwritten with `cat >` keeps its inode and bash
+  resumes mid-statement in the new bytes. Nothing here does that, and nothing
+  should start.) So when `origin/main` changes the script or `lib/`, the tick
+  fast-forwards and `exec`s the new one **before** it surveys, defers, builds
+  or verifies. The `flock` on fd 9 rides across the `exec` and is deliberately
+  not re-taken — re-taking works, and that is the defect: it drops the lock for
+  a fork and an exec, which is room for a second concurrent build. The commit
+  that is *serving* rides across too (`AUTOPILOT_ROLLBACK_SHA`), because after
+  the merge `HEAD` is the commit under test and a rollback would otherwise stay
+  on it. An incoming watcher is syntax-checked **before** the merge, where
+  refusing costs nothing — with `${BASH:-/bin/bash}` and never a bare `bash`,
+  because launchd puts Homebrew bash 5 on PATH while the plist execs
+  `/bin/bash` 3.2.57, and `&>>` and `;;&` pass `-n` under one and are syntax
+  errors under the other (measured). Both merges take `"$remote_sha"`, not
+  `origin/main`: sessions and humans fetch into this same clone, so the ref can
+  advance past the commit that was vetted, surveyed and counted against the
+  deferral budget. `AUTOPILOT_SELF_UPDATE=0` restores the old behaviour and
+  says so loudly; do not make that the default.
 - Preserve the scraping throttle in `services/listing_status_service.py`
   (randomized sleeps between listing fetches). No bulk re-scrape loops.
 - **There is no authentication** (owner decision, 2026-08-08): the admin
