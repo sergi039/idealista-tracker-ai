@@ -79,11 +79,27 @@ database, scheduler and schema; it renders no template, so it cannot see a
 broken one. On 2026-08-14 a `TemplateSyntaxError` turned every
 `/properties/<id>` into a redirect for 15 minutes while healthz stayed green —
 `routes/main_routes.py` catches the error and redirects. So the watcher also
-fetches `AUTOPILOT_PAGE_URL` (default: the health URL's origin plus
-`/properties`) and requires **200**, not a redirect, which is exactly what that
+fetches a page and requires **200**, not a redirect, which is exactly what that
 defect produced. Both must pass inside `AUTOPILOT_HEALTH_TIMEOUT`, on the
-deploy *and* on the rollback. Set `AUTOPILOT_PAGE_URL=""` to skip it; the log
-then says the build is unverified rather than saying nothing.
+deploy *and* on the rollback.
+
+Which page, and what counts as rendered, is **one contract** in
+[`lib/render_check.sh`](lib/render_check.sh): `DEPLOY_RENDER_PATH` (default
+`/properties`), joined to an origin, passing only on 200. `.githooks/post-merge`
+reads the same file, because this rule used to be written down twice — as
+`AUTOPILOT_PAGE_URL` here and `AUTO_REBUILD_RENDER_PATH` there — and two names
+for one idea eventually ship half-changed (#292). Both retired names are no
+longer read; a tick that still finds one set in its environment says so and
+carries on with the shared rule.
+
+What each deployer keeps is its own **origin**, which is a different question
+("which stack is this"): the watcher takes the origin of `AUTOPILOT_HEALTH_URL`,
+so a harness pointing healthz at a stub points the page check at the same stub,
+while the hook asks `docker compose port` because `APP_HOST_PORT` lives in the
+project `.env`.
+
+Set `DEPLOY_RENDER_PATH=""` to skip the check; the log then says the build is
+unverified rather than saying nothing.
 
 ## Long-running work inside the container
 
@@ -213,7 +229,13 @@ Three things ride across the `exec`:
   variable it outlives the process. Without that, a failed build of the
   deferred commit rolls back to itself.
 - **a handover count,** so this terminates. One per tick; if main moves again
-  the log says so and the next tick picks up the rest.
+  the log says so and the tick **stops without deploying**. Deploying at that
+  point is the defect this whole mechanism removes — the deploy would be run by
+  this watcher while the newer one goes on disk — and stopping costs only a
+  tick: the checkout already holds the watcher this process is running, so the
+  next tick starts from it and hands over normally, and that handover deploys
+  itself. Nothing is merged for the newer commit, and the previous build keeps
+  serving meanwhile.
 
 Before merging anything it syntax-checks the incoming `deploy_watcher.sh` and
 `lib/*.sh`. A watcher that does not parse cannot be handed over to, and

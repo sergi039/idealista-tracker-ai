@@ -18,6 +18,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 WATCHER_SOURCE="${SCRIPT_DIR}/deploy_watcher.sh"
 LOCK_SOURCE="${SCRIPT_DIR}/lib/lock.sh"
+# The watcher refuses to start without the page-check contract (#292), and the
+# handover vets and carries `lib/` as its own source, so the throwaway repo has
+# to hold the real file rather than a stand-in.
+RENDER_SOURCE="${SCRIPT_DIR}/lib/render_check.sh"
 
 # The interpreter that runs the watcher under test. The LaunchAgent execs
 # /bin/bash, so that is the default and the case that matters in production;
@@ -75,6 +79,13 @@ printf '%s\n' "$*" >>"$DOCKER_LOG"
 if [ -n "${ADVANCE_REF_TO:-}" ] && [ "$1" = "tag" ] && [ ! -e "$ADVANCE_ONCE" ]; then
     : >"$ADVANCE_ONCE"
     git -C "$ADVANCE_REPO" update-ref refs/remotes/origin/main "$ADVANCE_REF_TO"
+fi
+# The same window, but moving the *remote* rather than the local view of it:
+# what a session pushing to GitHub mid-tick produces, so the handed-over
+# process's own fetch really does see a newer main.
+if [ -n "${ADVANCE_REMOTE_TO:-}" ] && [ "$1" = "tag" ] && [ ! -e "$ADVANCE_ONCE" ]; then
+    : >"$ADVANCE_ONCE"
+    git -C "$ADVANCE_REMOTE" update-ref refs/heads/main "$ADVANCE_REMOTE_TO"
 fi
 if [ "${DOCKER_FAIL_BUILD:-0}" = "1" ]; then
     for arg in "$@"; do
@@ -179,17 +190,20 @@ curl -fsS --max-time 1 "http://127.0.0.1:${HEALTH_PORT}/healthz" >/dev/null 2>&1
 # a copy of it, which is precisely why they never exercise this path: with the
 # script outside the tree, there is nothing for a fast-forward to replace.
 REPO=""
+REMOTE=""
 BASE_SHA=""
 SCENARIO=0
 fresh_repo() {
     SCENARIO=$((SCENARIO + 1))
-    local remote="${WORK}/remote-${SCENARIO}.git"
+    REMOTE="${WORK}/remote-${SCENARIO}.git"
+    local remote="$REMOTE"
     REPO="${WORK}/repo-${SCENARIO}"
     git init --quiet --bare --initial-branch=main "$remote"
     git init --quiet --initial-branch=main "$REPO"
     mkdir -p "${REPO}/tools/autopilot/lib"
     cp "$WATCHER_SOURCE" "${REPO}/tools/autopilot/deploy_watcher.sh"
     cp "$LOCK_SOURCE" "${REPO}/tools/autopilot/lib/lock.sh"
+    cp "$RENDER_SOURCE" "${REPO}/tools/autopilot/lib/render_check.sh"
     chmod +x "${REPO}/tools/autopilot/deploy_watcher.sh"
     printf 'first\n' >"${REPO}/file.txt"
     git -C "$REPO" add -A
@@ -238,6 +252,8 @@ run_watcher() {
     AUTOPILOT_SELF_UPDATE="${SELF_UPDATE:-1}" \
     ADVANCE_REF_TO="${ADVANCE_REF_TO:-}" \
     ADVANCE_REPO="$REPO" \
+    ADVANCE_REMOTE="$REMOTE" \
+    ADVANCE_REMOTE_TO="${ADVANCE_REMOTE_TO:-}" \
     ADVANCE_ONCE="${WORK}/advanced" \
     PERMISSIVE_BASH_N="${PERMISSIVE_BASH_N:-0}" \
     PATH_BASH_LOG="${WORK}/path-bash.log" \
@@ -483,3 +499,50 @@ logged "ROLLBACK" || fail "scenario 9 did not roll back a failed build"
 [ "$(head_sha)" = "$BASE_SHA" ] \
     || fail "scenario 9 rolled back to $(head_sha | cut -c1-7), the build that just failed, not to the serving ${BASE_SHA:0:7}"
 printf 'OK: a rollback after a deferred handover returns to the commit that serves\n'
+
+# --- scenario 10: the handover budget stops the tick, it does not fall back --
+# Scenario 7 keeps its later commit out of the remote deliberately, so the
+# handed-over process never sees it. Here it is really pushed, mid-tick, which
+# is what a session merging a second watcher-changing PR produces. The budget
+# is then genuinely spent - and the tempting behaviour, deploying anyway, is
+# the #293 defect itself: the deploy would be governed by this watcher while
+# putting the newer one on disk. Stopping costs a tick and nothing else, which
+# the second half of this scenario is here to prove.
+# Named as a BLOCKER by the independent review of this PR.
+fresh_repo
+mark_new_watcher
+publish "watcher change"
+B_SHA="$NEW_SHA"
+
+git -C "$REPO" checkout -q --detach "$B_SHA"
+perl -0pi -e 's/NEW-WATCHER-SPEAKING/C-WATCHER-SPEAKING/' "${REPO}/tools/autopilot/deploy_watcher.sh"
+git -C "$REPO" add -A
+git -C "$REPO" commit --quiet -m "main moves again, changing the watcher again"
+C_SHA="$(git -C "$REPO" rev-parse HEAD)"
+# Push the objects now, move the branch mid-tick: the stub only has to retarget
+# a ref the remote already has the commits for.
+git -C "$REPO" push --quiet origin "${C_SHA}:refs/heads/parked"
+git -C "$REPO" checkout -q main
+rm -f "${WORK}/advanced"
+
+ADVANCE_REMOTE_TO="$C_SHA" run_watcher
+
+logged "moved again" || fail "scenario 10 never noticed that ${BRANCH:-main} moved again"
+logged "refusing to deploy" \
+    || fail "scenario 10 deployed the newer watcher under the outgoing one - the #293 defect"
+[ "$(builds)" = "0" ] || fail "scenario 10 ran $(builds) builds after spending its handover budget"
+[ "$(head_sha)" = "$B_SHA" ] \
+    || fail "scenario 10 merged ${C_SHA:0:7} without a watcher to hand over to"
+[ "$(cat "$MARKER")" = "0000000000000000000000000000000000000000" ] \
+    || fail "scenario 10 touched the deployment marker while refusing"
+
+# Nothing was lost by stopping: the checkout now holds B's watcher, so the next
+# tick starts from it and hands over to C, which deploys itself.
+run_watcher
+
+logged "building\.\.\. C-WATCHER-SPEAKING" \
+    || fail "scenario 10's next tick did not deploy ${C_SHA:0:7} under its own watcher"
+[ "$(head_sha)" = "$C_SHA" ] || fail "scenario 10's next tick did not reach ${C_SHA:0:7}"
+[ "$(cat "$MARKER")" = "$C_SHA" ] || fail "scenario 10 recorded '$(cat "$MARKER")', not ${C_SHA}"
+[ "$(builds)" = "1" ] || fail "scenario 10 ran $(builds) builds across both ticks"
+printf 'OK: a spent handover budget stops the tick, and the next one deploys it properly\n'

@@ -125,11 +125,14 @@ into the final line. Uncommitted files are always named before they ride in.
 **A green `/api/healthz` is not acceptance.** It renders no template, and
 `routes/main_routes.py` turns a `TemplateSyntaxError` into a redirect — which
 is precisely why the 2026-08-14 container looked healthy for 15 minutes. So
-the hook also requires a page that renders a template (`/properties`) to
-answer **200**; a 302 is a failure. Failing either check rolls the *image*
-back to the tag taken before the build. It never rolls the tree back the way
-the watcher does: this checkout is shared, and `git reset --hard` would delete
-another session's uncommitted work.
+the hook also requires a page that renders a template to answer **200**; a 302
+is a failure. Which page that is is not the hook's to decide — it reads
+`DEPLOY_RENDER_PATH` (default `/properties`) from
+`tools/autopilot/lib/render_check.sh`, the one home of that rule, shared with
+the deploy watcher (#292; see the hard rule below). Failing either check rolls
+the *image* back to the tag taken before the build. It never rolls the tree
+back the way the watcher does: this checkout is shared, and `git reset --hard`
+would delete another session's uncommitted work.
 
 A single pull skips it with `SKIP_AUTO_REBUILD=1 git pull`.
 `tests/test_post_merge_hook.py` pins all of it, with `docker` and `curl` stubs
@@ -504,19 +507,32 @@ and TODO.md; respect it if you ever run both side by side.
 - **A deploy is healthy when a page renders, not when healthz answers** (#283).
   `/api/healthz` reports database, scheduler and schema and renders no
   template, so it stayed green through the 15 minutes of 2026-08-14 in which a
-  `TemplateSyntaxError` turned every `/properties/<id>` into a redirect. The
-  watcher therefore also requires `AUTOPILOT_PAGE_URL` (default `/properties`
-  on the health URL's origin) to answer **200** — a redirect is the failure
-  being looked for, so do not add `-L` or accept 3xx. Do not "simplify" this
-  back to healthz alone, and do not solve it by making healthz render
-  something: it answers "can the app serve", and job liveness and template
-  health are different questions that must not be smuggled into it.
-  `.githooks/post-merge` reached the same rule the same day under its own name
-  (`AUTO_REBUILD_RENDER_PATH`, "Keeping the container current" above). Two
-  names for one idea is one too many, and the URLs are built differently
-  either side — the hook from `AUTO_REBUILD_BASE_URL`/the published port, the
-  watcher from its health URL — so unifying them is a real change and wants
-  its own ticket. Until then, change both or neither.
+  `TemplateSyntaxError` turned every `/properties/<id>` into a redirect. So a
+  build is not accepted until a page that renders a template answers **200** —
+  a redirect is the failure being looked for, so do not add `-L` or accept 3xx.
+  Do not "simplify" this back to healthz alone, and do not solve it by making
+  healthz render something: it answers "can the app serve", and job liveness
+  and template health are different questions that must not be smuggled into
+  it.
+  **That rule has exactly one home: `tools/autopilot/lib/render_check.sh`**
+  (#292). Both deployers — `tools/autopilot/deploy_watcher.sh` and
+  `.githooks/post-merge`, which reached the rule the same day — source it and
+  read `DEPLOY_RENDER_PATH` (default `/properties`), the join, and the
+  200-only verdict from there. It used to be written down twice, as
+  `AUTOPILOT_PAGE_URL` and `AUTO_REBUILD_RENDER_PATH`; both names are retired
+  and, if still set in an environment, are named in the log rather than
+  silently obeyed. Do not reintroduce a per-consumer copy: a rule in two places
+  is one that eventually ships half-changed, which is why "change both or
+  neither" stood here until this ticket. What is *not* shared, deliberately, is
+  where each finds its origin — the hook from `AUTO_REBUILD_BASE_URL` or the
+  published port, the watcher from its health URL. That answers "which stack is
+  this", not "what proves it renders". Both refuse to run when the contract is
+  missing **or merely half-loaded** — a truncated file in this shared checkout
+  parses fine and defines nothing, which would turn the page check off and
+  report it as an opt-out nobody chose — and both say plainly when
+  `DEPLOY_RENDER_PATH` is empty and no page was rendered, on the rollback path
+  as well as the forward one. `tests/test_deploy_page_check_shared.py` fails if
+  either consumer grows its own copy.
 - **A tick that deploys the watcher hands over to it first** (#293).
   `deploy_watcher.sh` is in the tree it deploys, and a running tick cannot
   pick up its own update: `git merge` renames a new file over the old one, so
@@ -546,7 +562,12 @@ and TODO.md; respect it if you ever run both side by side.
   errors under the other (measured). Both merges take `"$remote_sha"`, not
   `origin/main`: sessions and humans fetch into this same clone, so the ref can
   advance past the commit that was vetted, surveyed and counted against the
-  deferral budget. `AUTOPILOT_SELF_UPDATE=0` restores the old behaviour and
+  deferral budget. When the per-tick handover budget (`AUTOPILOT_REEXEC_MAX`)
+  is spent and `main` has moved again, the tick **stops without deploying**
+  rather than falling back to deploying the newer watcher under the running
+  one — that fallback is this ticket's defect, and stopping costs a single
+  tick because the checkout already holds the watcher in use, so the next tick
+  hands over normally. `AUTOPILOT_SELF_UPDATE=0` restores the old behaviour and
   says so loudly; do not make that the default. The suite that pins all of
   this (`tools/autopilot/deploy_self_update_test.sh`) must not build a
   scenario out of a fact that is only true on one machine: the version gap
