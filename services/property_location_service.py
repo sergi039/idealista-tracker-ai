@@ -2,6 +2,8 @@ import logging
 import re
 from typing import List, Optional
 
+from sqlalchemy.orm.attributes import flag_modified
+
 from models import Property
 from utils.geocoding import GeocodingService
 
@@ -57,7 +59,26 @@ class PropertyLocationService:
         self.geocoding_service = geocoding_service or GeocodingService()
 
     def ensure_coordinates(self, prop: Property, refresh: bool = False) -> bool:
-        """Best-effort: populate property.location_lat/lon from title/municipality."""
+        """Best-effort: populate property.location_lat/lon from title/municipality.
+
+        `Property.enrichment` is a plain `db.Column(JSON)`, so SQLAlchemy tracks
+        *assignment*, not mutation -- and `prop.enrichment or {}` hands back the
+        very object already on the instance, so mutating it and assigning it
+        back is not a change at all. On a fresh row that is invisible, because
+        the column is NULL and the `or {}` builds a new dict; on an already
+        enriched row the write is silently dropped.
+
+        Measured 2026-08-15: a re-geocode of 168 production rows wrote every
+        scalar column -- coordinates and `location_accuracy` both correct -- and
+        not one `enrichment["geocoding"]` record. The tool that ran it reads
+        that record to decide which rows are still unmeasured, so it would have
+        re-geocoded, and re-paid for, all 168 on the next run while reporting
+        itself resumable.
+
+        `flag_modified` is the idiom already used for this column in
+        `services/sea_distance_service.py`, `services/quality_of_life_service.py`
+        and `services/pool_service.py`.
+        """
         if not prop:
             return False
 
@@ -69,6 +90,7 @@ class PropertyLocationService:
             if isinstance(enrichment, dict):
                 enrichment.pop("geocoding", None)
                 prop.enrichment = enrichment or None
+                flag_modified(prop, "enrichment")
 
         if prop.location_lat and prop.location_lon:
             return True
@@ -100,6 +122,7 @@ class PropertyLocationService:
                 "accuracy": accuracy,
             }
             prop.enrichment = enrichment
+            flag_modified(prop, "enrichment")
             return True
 
         return False
