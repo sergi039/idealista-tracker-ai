@@ -353,11 +353,23 @@ not necessarily a code change, and `git log` will not explain it.
 **Rolling that back is a data restore, not a deploy.**
 `data/pool_weight_enable_snapshot.json` on the mini (2026-08-14T17:48:43Z) holds
 the three profiles' previous `scoring_config` — `null` for each — plus the score
-columns and `scoring` payload of all 393 rows as they stood before. Nothing in
-`utils/` reads that shape: the per-tool snapshots (`--restore` in
-`utils/backfill_pool.py`, `utils/recalc_sea_distance.py`) are flat row lists and
-carry no profile config, so this one is restored by hand — profiles first, then
-the rows. Deleting it is not tidying up; it is discarding the only way back.
+columns and `scoring` payload of all 393 rows as they stood before. Deleting it
+is not tidying up; it is discarding the only way back.
+
+`utils/restore_score_snapshot.py` puts both halves back, in one transaction,
+because weights restored without their scores (or the other way round) is a
+state the app never had. It **reports and exits** unless `--apply` is given,
+writes a backup of what it is about to overwrite first (`--no-backup` is a
+thing you say out loud, never a default), parses every row before writing any,
+and restores exactly the columns a row carries — this snapshot has no
+`enrichment`, and nulling it would erase measurements the weight change never
+touched. Rows ingested *after* the snapshot are the honest hole: they were
+scored under the config being rolled back and nothing knows their earlier
+values, because they had none, so the tool names them and `--rescore-uncovered`
+recomputes them under the restored config. The snapshot primitives now live in
+`utils/score_snapshot.py` — `backfill_pool`, `recalc_sea_distance` and
+`recalc_property_travel` had three copies of them and this was nearly the
+fourth.
 
 **Turning the weight on is deliberately not an ordinary save**
 (`routes/main_routes.py`, action `confirm_pool_scoring`). A save that raises

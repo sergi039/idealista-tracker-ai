@@ -16,7 +16,6 @@ a data rewrite, and the snapshot is cheap insurance either way.
 import argparse
 import json
 import logging
-import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -26,6 +25,7 @@ from models import Property
 from services.pool_service import PoolService
 from services.property_scoring_service import PropertyScoringService
 from utils.enrich_scope import scoped_properties
+from utils import score_snapshot
 from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
@@ -42,60 +42,15 @@ def needs_pool(prop: Property) -> bool:
 
 
 def _snapshot_row(prop: Property) -> Dict[str, Any]:
-    return {
-        "id": prop.id,
-        "score_total": str(prop.score_total) if prop.score_total is not None else None,
-        "score_investment": str(prop.score_investment)
-        if prop.score_investment is not None
-        else None,
-        "score_lifestyle": str(prop.score_lifestyle)
-        if prop.score_lifestyle is not None
-        else None,
-        "scoring": prop.scoring,
-        "enrichment": prop.enrichment,
-    }
+    return score_snapshot.snapshot_row(prop, json_columns=("scoring", "enrichment"))
 
 
 def _write_snapshot(rows: List[Dict[str, Any]], path: str) -> None:
-    directory = os.path.dirname(os.path.abspath(path))
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    if os.path.exists(path):
-        raise SystemExit(
-            f"Snapshot {path} already exists; refusing to overwrite a rollback point."
-        )
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(rows, handle, ensure_ascii=False, indent=2)
-    logger.info("Wrote rollback snapshot for %s properties to %s", len(rows), path)
+    score_snapshot.write_rows(rows, path)
 
 
 def _restore(path: str) -> int:
-    from decimal import Decimal
-
-    with open(path, encoding="utf-8") as handle:
-        rows = json.load(handle)
-    restored = 0
-    for row in rows:
-        prop = db.session.get(Property, row["id"])
-        if not prop:
-            logger.warning("Property %s from snapshot no longer exists", row["id"])
-            continue
-        prop.score_total = (
-            Decimal(row["score_total"]) if row["score_total"] is not None else None
-        )
-        prop.score_investment = (
-            Decimal(row["score_investment"])
-            if row["score_investment"] is not None
-            else None
-        )
-        prop.score_lifestyle = (
-            Decimal(row["score_lifestyle"])
-            if row["score_lifestyle"] is not None
-            else None
-        )
-        prop.scoring = row["scoring"]
-        prop.enrichment = row["enrichment"]
-        restored += 1
+    restored, _missing = score_snapshot.restore_file(path)
     db.session.commit()
     return restored
 
