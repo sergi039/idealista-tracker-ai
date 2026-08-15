@@ -14,9 +14,9 @@ What is pinned here:
 * that the SQL predicate behind the page's coverage count agrees with the
   per-row verdict, row for row. A header reading "12 of 311 verified" over a
   table drawing 9 ticks would be a third wrong number rather than a disclosure;
-* that `/properties`, `/properties/<id>`, the properties CSV export and
-  `to_dict` all state
-  it. Every one of them presented the default as a status before.
+* that `/properties`, `/properties/<id>`, `/lands/<id>`, the properties CSV
+  export and both JSON payloads state it. Every one of them presented the
+  default as a status before.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -381,6 +381,19 @@ class TestTheExports:
         columns = row.split(",")
         assert "unchecked" in columns
         assert "active" not in columns
+
+    def test_the_json_property_list_carries_it_too(self, app, client):
+        """The compact payload has its own hand-written dict, so it does not
+        inherit `to_dict`'s disclosure and has to make it itself."""
+        with app.app_context():
+            profile = _profile()
+            _property("json", search_profile_id=profile.id)
+            profile_id = profile.id
+
+        payload = client.get(f"/api/properties?profile_id={profile_id}").get_json()
+        row = payload["properties"][0]
+        assert row["listing_status"] == "active"
+        assert row["listing_status_verdict"] == "unchecked"
 
     def test_to_dict_carries_the_verdict_beside_the_raw_column(self, app):
         with app.app_context():

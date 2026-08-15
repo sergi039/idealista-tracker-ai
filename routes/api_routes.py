@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 # unknown id stays a 404 (issue #136).
 from werkzeug.exceptions import HTTPException
 from models import Land, LandHistory, SyncHistory, AiAnalysisVariant
+from services.listing_verification import read_verdict as listing_verdict
 from utils.api_errors import json_http_error
 from app import db
 from app import limiter
@@ -1720,7 +1721,12 @@ def get_properties():
                         if p.score_lifestyle
                         else None,
                         "is_favorite": bool(p.is_favorite),
+                        # Both, for the reason `to_dict` carries both: the raw
+                        # column is 'active' by default and nobody verified that
+                        # default, so a consumer reading it alone cannot tell a
+                        # live listing from a never-checked one.
                         "listing_status": p.listing_status or "active",
+                        "listing_status_verdict": listing_verdict(p)["state"],
                         "created_at": p.created_at.isoformat()
                         if p.created_at
                         else None,
