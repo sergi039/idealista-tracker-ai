@@ -180,6 +180,19 @@ reason an argument that is empty or nothing but whitespace disqualifies the
 marker: `[""]` and `[]` render identically, and that ambiguity must not be
 resolved in the deploy's favour.
 
+**The known limit, stated rather than left to be discovered.** Rendering
+cannot recover argument *boundaries*: `["--force", "data/x"]` and
+`["--force data/x"]` are the same line in a process table, so a marker
+recording the second would vouch for a live job running the first. It is not
+fixable from this side — `docker top` lost the quoting before the watcher saw
+it — and the fix that would work, reading `/proc/<pid>/cmdline` through
+`docker exec`, means going back into the container's PID namespace, which is
+the join this machinery exists to remove. Two things bound it: nothing in
+`utils/` can write such a marker, because every entry point runs
+`parse_args()` before `inflight()` and an argument spelled `--force data/x`
+is rejected before any marker exists; and a live job that wrote its own
+marker makes the two disagree, which already resolves to *unknown*.
+
 Three states, not two: a `docker top` that cannot be read is **unknown**, and
 blocks exactly like an unmarked job rather than reading as "nothing running".
 That includes a table it cannot *parse*: the column layout is read off the

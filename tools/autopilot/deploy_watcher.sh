@@ -741,6 +741,21 @@ for path in sorted(glob.glob(os.path.join(directory, "*.json"))):
     # a marker matches nothing and the job reads as unknown.
     if any(not a.split() for a in argv):
         continue
+    # KNOWN LIMIT, stated rather than discovered. Rendering cannot recover
+    # argument boundaries: `["--force", "data/x"]` and `["--force data/x"]`
+    # are one identical line in a process table, so a marker recording the
+    # second could vouch for a live job running the first. It is not fixable
+    # from this side - `docker top` lost the quoting before we saw it - and
+    # the fix that would work, reading /proc/<pid>/cmdline through
+    # `docker exec`, means going back into the container's PID namespace,
+    # which is the join this whole file exists to remove.
+    #
+    # What bounds it: nothing in `utils/` can write such a marker (every
+    # entry point runs `parse_args()` before `inflight()`, so an argument
+    # spelled "--force data/x" is rejected and the process exits before any
+    # marker exists), and a live job that wrote its own marker makes the two
+    # disagree, which already resolves to unknown below. Reported by an
+    # independent review 2026-08-15 and left in place deliberately.
     if _render(argv) != _render(program[2]):
         continue
     matches.append(data)
