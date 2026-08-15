@@ -25,7 +25,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HOOK = REPO_ROOT / ".githooks" / "post-merge"
-LOCK_LIB = REPO_ROOT / "tools" / "autopilot" / "lib" / "lock.sh"
+LIB_DIR = REPO_ROOT / "tools" / "autopilot" / "lib"
+LOCK_LIB = LIB_DIR / "lock.sh"
+RENDER_LIB = LIB_DIR / "render_check.sh"
 
 # Answers only for the stack it was told to expect, and records every call.
 DOCKER_STUB = """#!/bin/sh
@@ -118,6 +120,9 @@ def repo(tmp_path: Path) -> Path:
     shutil.copy(HOOK, work / ".githooks" / "post-merge")
     (work / ".githooks" / "post-merge").chmod(0o755)
     shutil.copy(LOCK_LIB, work / "tools" / "autopilot" / "lib" / "lock.sh")
+    # The page check is not the hook's own: it reads the same contract the
+    # deploy watcher reads (#292), so a clone without it cannot check a page.
+    shutil.copy(RENDER_LIB, work / "tools" / "autopilot" / "lib" / "render_check.sh")
     (work / "templates" / "page.html").write_text(GOOD_TEMPLATE)
     (work / "app.py").write_text("x = 1\n")
     (work / "docker-compose.yml").write_text("services: {}\n")
@@ -178,6 +183,9 @@ def hook_env(stub_bin: Path, home: Path, tmp_path: Path, log_name: str) -> dict:
         "AUTO_REBUILD_BRANCH",
         "AUTO_REBUILD_BASE_URL",
         "AUTO_REBUILD_RENDER_PATH",
+        "AUTOPILOT_PAGE_URL",
+        "DEPLOY_RENDER_PATH",
+        "DEPLOY_RENDER_MAX_TIME",
         "COMPOSE_CONTAINER_PREFIX",
     ):
         env.pop(key, None)
@@ -279,6 +287,96 @@ def test_rolls_back_when_healthz_is_green_but_the_page_redirects(
     assert "answered 302" in proc.stdout
     assert "tag idealistarank-app:post-merge-rollback idealistarank-app" in log
     assert any(line.endswith("up -d --no-build") for line in log.splitlines())
+
+
+def test_the_page_it_checks_comes_from_the_shared_contract(
+    repo, stub_bin, home, tmp_path
+):
+    """One name moves both deployers (#292).
+
+    The path is not this hook's constant: it is DEPLOY_RENDER_PATH in
+    tools/autopilot/lib/render_check.sh, which deploy_watcher.sh reads too. A
+    hook that kept its own literal would fetch /properties here, the curl stub
+    would refuse the unexpected URL, and the rebuild would roll back.
+    """
+    proc, log = run_hook(
+        repo,
+        stub_bin,
+        home,
+        tmp_path,
+        DEPLOY_RENDER_PATH="/dashboard",
+        EXPECT_RENDER_URL="http://127.0.0.1:5001/dashboard",
+    )
+
+    assert built(log)
+    assert "http://127.0.0.1:5001/dashboard 200" in proc.stdout, (
+        proc.stdout + proc.stderr
+    )
+
+
+def _break_contract(repo: Path, shape: str) -> None:
+    """Leave the contract file in one of the states a shared checkout produces."""
+    lib = repo / "tools" / "autopilot" / "lib" / "render_check.sh"
+    if shape == "missing":
+        lib.unlink()
+    elif shape == "empty":
+        # The window an O_TRUNC write leaves behind. Sourcing succeeds and
+        # defines nothing.
+        lib.write_text("")
+    elif shape == "truncated":
+        # Parses cleanly, defines none of the functions: a neighbour session
+        # mid-write, which is the tree this hook is about to snapshot.
+        lib.write_text(RENDER_LIB.read_text().split("deploy_render_origin()")[0])
+    else:  # pragma: no cover - guards the parametrisation itself
+        raise AssertionError(shape)
+
+
+@pytest.mark.parametrize("shape", ["missing", "empty", "truncated"])
+def test_refuses_to_build_when_the_shared_contract_did_not_load(
+    repo, stub_bin, home, tmp_path, shape
+):
+    """A page check that cannot run must not read as one that passed.
+
+    `-r` on the file is not that test: an empty or half-written contract is
+    readable, sources without error and defines nothing, which would leave
+    render_url empty and the check quietly off - reported as an operator
+    opt-out that never happened.
+    """
+    _break_contract(repo, shape)
+
+    proc, log = run_hook(repo, stub_bin, home, tmp_path)
+
+    assert not built(log), f"a {shape} contract must not reach a build"
+    assert "REFUSING TO BUILD" in proc.stdout
+    assert "render_check.sh" in proc.stdout
+
+
+def test_says_the_page_was_never_rendered_when_the_check_is_turned_off(
+    repo, stub_bin, home, tmp_path
+):
+    """Turning it off is allowed; being quiet about it is not."""
+    proc, log = run_hook(repo, stub_bin, home, tmp_path, DEPLOY_RENDER_PATH="")
+
+    assert built(log)
+    assert "no page was rendered" in proc.stdout
+    # Nothing was fetched, so no page URL can appear in the report.
+    assert "/properties" not in proc.stdout
+
+
+def test_the_retired_render_path_name_is_reported_not_silently_dropped(
+    repo, stub_bin, home, tmp_path
+):
+    """AUTO_REBUILD_RENDER_PATH is gone; an operator still setting it is told."""
+    proc, log = run_hook(
+        repo, stub_bin, home, tmp_path, AUTO_REBUILD_RENDER_PATH="/dashboard"
+    )
+
+    assert built(log)
+    # Ignored, so the shared default is what was fetched...
+    assert "http://127.0.0.1:5001/properties 200" in proc.stdout
+    # ...and the log names both the retired knob and the one that replaced it.
+    assert "AUTO_REBUILD_RENDER_PATH" in proc.stdout
+    assert "DEPLOY_RENDER_PATH" in proc.stdout
 
 
 def test_leaves_a_branch_checkout_alone(repo, stub_bin, home, tmp_path):
@@ -429,6 +527,28 @@ def test_rolls_back_a_failed_build_too(repo, stub_bin, home, tmp_path):
     assert "REBUILD FAILED" in proc.stdout
     assert any(line.endswith("up -d --no-build") for line in log.splitlines())
     assert proc.returncode == 0, "a failed rebuild must not fail the git command"
+    # The restored image can be broken too, so the rollback is verified the
+    # same way a build is: healthz AND a page.
+    verified = proc.stdout.split("rollback verified", 1)
+    assert len(verified) == 2, proc.stdout
+    assert "http://127.0.0.1:5001/properties 200" in verified[1]
+
+
+def test_a_rollback_verified_without_a_page_says_no_page_was_rendered(
+    repo, stub_bin, home, tmp_path
+):
+    """A rollback claiming to be verified must say what it verified.
+
+    It matters most here: the image being restored is the one that was serving
+    before, and it can be broken too.
+    """
+    proc, _ = run_hook(
+        repo, stub_bin, home, tmp_path, DOCKER_BUILD_RC="1", DEPLOY_RENDER_PATH=""
+    )
+
+    verified = proc.stdout.split("rollback verified", 1)
+    assert len(verified) == 2, proc.stdout
+    assert "no page was rendered" in verified[1]
 
 
 def test_says_so_when_there_is_no_image_to_roll_back_to(repo, stub_bin, home, tmp_path):

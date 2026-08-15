@@ -11,7 +11,8 @@
 #
 # This drives the real deploy_watcher.sh against a throwaway repository, a
 # stub docker whose `top` reports whatever a scenario needs, and an HTTP stub
-# whose /properties status the scenario chooses.
+# serving one page - which page, and with which status, the scenario chooses.
+# Everything else it 404s, so a fetch of a path nobody configured cannot pass.
 
 set -euo pipefail
 
@@ -61,6 +62,10 @@ INFLIGHT_DIR="${WORK}/inflight"
 DEFER_STATE="${WORK}/deferrals"
 TOP_FILE="${WORK}/docker-top.txt"
 PAGE_STATUS_FILE="${WORK}/page_status"
+# Which path the stub app serves as "the page". Everything else is a 404, so a
+# watcher that fetched a path nobody configured fails loudly instead of
+# stumbling onto a 200.
+PAGE_PATH_FILE="${WORK}/page_path"
 mkdir -p "$INFLIGHT_DIR"
 
 # --- a docker that answers, and records what it was asked -------------------
@@ -92,21 +97,27 @@ done
 [ -n "$HEALTH_PORT" ] || fail "no free port for the health stub"
 
 printf '200\n' >"$PAGE_STATUS_FILE"
+printf '/properties\n' >"$PAGE_PATH_FILE"
 
-python3 - "$HEALTH_PORT" "$PAGE_STATUS_FILE" <<'PY' &
+python3 - "$HEALTH_PORT" "$PAGE_STATUS_FILE" "$PAGE_PATH_FILE" <<'PY' &
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 STATUS_FILE = sys.argv[2]
+PATH_FILE = sys.argv[3]
+
+
+def _read(path, fallback):
+    with open(path) as handle:
+        return handle.read().strip() or fallback
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path.startswith("/properties"):
+        if self.path.startswith(_read(PATH_FILE, "/properties")):
             # The 2026-08-14 defect exactly: healthz green, the page a 302.
-            with open(STATUS_FILE) as handle:
-                code = int(handle.read().strip() or "200")
-            body = b"<html>properties</html>"
+            code = int(_read(STATUS_FILE, "200"))
+            body = b"<html>the page</html>"
             self.send_response(code)
             if code in (301, 302, 303, 307, 308):
                 self.send_header("Location", "/")
@@ -114,12 +125,18 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        body = b'{"ok":true,"checks":{"database":"ok"},"scheduler":"running"}'
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
+        if self.path.startswith("/healthz"):
+            body = b'{"ok":true,"checks":{"database":"ok"},"scheduler":"running"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        # Anything else is a page nobody configured: never a silent 200.
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
         self.end_headers()
-        self.wfile.write(body)
 
     def log_message(self, *_args):
         pass
@@ -175,6 +192,11 @@ run_watcher() {
     printf '%s\n' "0000000000000000000000000000000000000000" >"$MARKER"
     : >"${WORK}/docker.log"
     set +e
+    (
+    # Only when a scenario asks for it: the point of most scenarios is that the
+    # watcher finds the page through the shared default, with nothing set.
+    [ -z "${RENDER_PATH_OVERRIDE+set}" ] || export DEPLOY_RENDER_PATH="$RENDER_PATH_OVERRIDE"
+    [ -z "${LEGACY_PAGE_URL_OVERRIDE+set}" ] || export AUTOPILOT_PAGE_URL="$LEGACY_PAGE_URL_OVERRIDE"
     PATH="${STUB_BIN}:${PATH}" \
     DOCKER_LOG="${WORK}/docker.log" \
     DOCKER_TOP_FILE="$TOP_FILE" \
@@ -190,8 +212,23 @@ run_watcher() {
     AUTOPILOT_DEFER_STATE="$DEFER_STATE" \
     AUTOPILOT_DEFER_ON_INFLIGHT="${DEFER_ON_INFLIGHT:-0}" \
     AUTOPILOT_DEFER_BUDGET="${DEFER_BUDGET:-6}" \
-        bash "$WATCHER" >/dev/null 2>&1
+        bash "${WATCHER_UNDER_TEST:-$WATCHER}" >/dev/null 2>&1
+    )
     set -e
+}
+
+# A copy of the watcher next to a copy of lib/, so a scenario can damage the
+# contract it loads without touching the repository. The watcher finds its lib
+# through BASH_SOURCE, so the copy has to keep the same shape.
+watcher_with_contract() {
+    # watcher_with_contract <contents of lib/render_check.sh>
+    local where="${WORK}/broken-tools"
+    rm -rf "$where"
+    mkdir -p "${where}/lib"
+    cp "$WATCHER" "${where}/deploy_watcher.sh"
+    cp "${SCRIPT_DIR}/lib/lock.sh" "${where}/lib/lock.sh"
+    printf '%s' "$1" >"${where}/lib/render_check.sh"
+    printf '%s' "${where}/deploy_watcher.sh"
 }
 
 built() {
@@ -334,3 +371,77 @@ if [ -e "$MARKER" ]; then
     fail "scenario 6 recorded a deployment whose page never rendered"
 fi
 printf 'OK: a green healthz over a redirecting page is not a healthy deploy\n'
+
+# --- scenario 9: the page comes from the shared contract --------------------
+# The rule lived under two names that had to move together (#292). It is one
+# now - DEPLOY_RENDER_PATH in lib/render_check.sh - and this watcher reads it
+# rather than carrying its own copy. The stub serves only the configured page
+# and 404s everything else, so a watcher still hard-coding /properties fetches
+# a 404 and rolls back instead of deploying.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_inflight ""
+printf '/dashboard\n' >"$PAGE_PATH_FILE"
+RENDER_PATH_OVERRIDE=/dashboard HEALTH_TIMEOUT_OVERRIDE=6 run_watcher
+printf '/properties\n' >"$PAGE_PATH_FILE"
+
+built || fail "scenario 9 did not deploy - the watcher ignored DEPLOY_RENDER_PATH"
+grep -q "/dashboard rendered (200)" "${WORK}/watcher.log" \
+    || fail "scenario 9 verified some other page than the one the contract names"
+printf 'OK: the page checked is the one the shared contract names\n'
+
+# --- scenario 10: turning the check off says so -----------------------------
+# Allowed, and never silent: a build nobody rendered a page for must not read
+# like one that was verified.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_inflight ""
+printf '302\n' >"$PAGE_STATUS_FILE"
+RENDER_PATH_OVERRIDE="" run_watcher
+printf '200\n' >"$PAGE_STATUS_FILE"
+
+built || fail "scenario 10 did not deploy although the page check is off"
+grep -q "no page was rendered" "${WORK}/watcher.log" \
+    || fail "scenario 10 skipped the page check without saying so"
+printf 'OK: a skipped page check is reported, not assumed to have passed\n'
+
+# --- scenario 11: the retired name is named, never obeyed -------------------
+# AUTOPILOT_PAGE_URL="" used to be how this watcher's page check was switched
+# off. It is not read any more - the page is checked - and an environment that
+# still carries it is told rather than quietly overruled.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_inflight ""
+LEGACY_PAGE_URL_OVERRIDE="" run_watcher
+
+built || fail "scenario 11 did not deploy"
+grep -q "AUTOPILOT_PAGE_URL is set but no longer read" "${WORK}/watcher.log" \
+    || fail "scenario 11 dropped the retired name without a word"
+grep -q "rendered (200)" "${WORK}/watcher.log" \
+    || fail "scenario 11 obeyed the retired name and skipped the page check"
+printf 'OK: a retired page-check name is reported, and does not switch the check off\n'
+
+# --- scenario 12: a contract that did not load stops the tick ---------------
+# Present is not loaded, and loaded is not complete. An empty or half-written
+# render_check.sh is readable and sources without error, defining nothing - and
+# a page check that cannot run must never read as one that passed, so the tick
+# has to stop and say why rather than deploy with the check silently off.
+for shape in empty truncated unparseable; do
+    case "$shape" in
+        empty) contract="" ;;
+        # Parses, defines none of the functions: a neighbour mid-write.
+        truncated) contract=': "${DEPLOY_RENDER_PATH=/properties}"'$'\n' ;;
+        unparseable) contract='deploy_render_url() {'$'\n' ;;
+    esac
+    : >"${WORK}/watcher.log"
+    rm -f "$DEFER_STATE"
+    set_inflight ""
+    WATCHER_UNDER_TEST="$(watcher_with_contract "$contract")" run_watcher
+
+    built && fail "scenario 12 (${shape}) deployed with a contract that never loaded"
+    grep -q "FATAL" "${WORK}/watcher.log" \
+        || fail "scenario 12 (${shape}) stopped without saying why"
+    grep -q "render_check.sh" "${WORK}/watcher.log" \
+        || fail "scenario 12 (${shape}) blamed something other than the contract"
+done
+printf 'OK: a contract that did not load stops the deploy and names itself\n'
