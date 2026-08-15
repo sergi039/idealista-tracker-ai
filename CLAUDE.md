@@ -605,10 +605,17 @@ and TODO.md; respect it if you ever run both side by side.
   bearing on both halves: `docker top` returns one whitespace-joined line with
   the shell's quoting gone, so `--snapshot 'data/My Pool.json'` arrives as
   four tokens against the marker's two and a token-list comparison misses the
-  job's own marker; and the module must be read from `-m` **joined or
-  separated**, because `python3 -mutils.backfill_pool` is a running backfill
-  that a space-requiring pattern does not see at all — not reported as
-  unknown, not reported.
+  job's own marker; and the module is read the way **python** reads short
+  options, walking the cluster, never by matching a literal `-m`. Three
+  spellings of one command defeated three attempts to anchor on a form —
+  `-m utils.x`, `-mutils.x`, `-um utils.x` — and each time the job the
+  anchor missed was not reported as unknown, it was **not reported at all**.
+  That asymmetry is why `AUTOPILOT_INFLIGHT_PATTERN` is a deliberately
+  generous pre-filter (any python mentioning `utils.` or `utils/`) with the
+  marker join as the precise layer: an extra process named costs a bounded
+  deferral, a missing one costs work nobody knows was lost. The same class
+  bit `tools/backfill_supervisor.sh` twice on the same day (#311, #319) —
+  when one of these turns up, close the class, not the example.
   Likewise **`docker top` failing is not `docker top` answering "nothing"**:
   an unreadable process list is a third state that blocks like an unmarked
   job, and only a *shell* `-c` parent is collapsed into its child — a real

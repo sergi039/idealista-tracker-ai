@@ -804,3 +804,24 @@ grep -q "UNKNOWN, not empty" "${WORK}/watcher.log" \
     || fail "scenario 30 read a table it could not parse as 'nothing running'"
 built && fail "scenario 30 deployed over a process list it could not read"
 printf 'OK: a row the header cannot describe makes the table unknown, not empty\n'
+
+# --- scenario 31: `-um` is one cluster, not an unknown option --------------
+# `python -um utils.backfill_pool` is how a background job that writes to a
+# log is ordinarily started, and it is the third spelling of this command to
+# defeat an attempt to anchor on a literal form - after `-m utils.x` and
+# `-mutils.x`. The failure was the worst kind each time: the pattern did not
+# match, so the job was not reported as unknown, it was not reported at all.
+# The session shipping #315/#319 hit the identical class in its own supervisor
+# the same day; this scenario exists so the next form is a test failure rather
+# than a silent kill.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_inflight "python -um utils.backfill_pool --snapshot data/u.json" \
+    '{"module":"backfill_pool","argv":["--snapshot","data/u.json"],"resumable":true,"ledger":"data/u.json"}'
+DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+grep -q "in flight (" "${WORK}/watcher.log" \
+    || fail "scenario 31 did not see a job started with the clustered -um form"
+grep -q "in flight (resumable): python -um utils.backfill_pool" "${WORK}/watcher.log" \
+    || fail "scenario 31 saw the job but read -um as something other than -u -m"
+printf 'OK: a clustered -um is read as python reads it, and its marker is found\n'

@@ -113,6 +113,18 @@ learn what had completed was to read the backfill's own per-row ledger.
 Before it builds, the watcher now enumerates the container's processes with
 `docker top` — authoritative about liveness, and needs nothing installed in
 the image, so it also covers a job someone started by hand with `docker exec`.
+
+`AUTOPILOT_INFLIGHT_PATTERN` is deliberately a **generous pre-filter**, not a
+precise one: any python whose command mentions `utils.` or `utils/`. Three
+spellings of one command have already defeated three attempts to be precise —
+`-m utils.x`, `-mutils.x` (python takes the argument joined) and `-um utils.x`
+(a cluster; `-u` is what a job writing to a log is usually started with) — and
+each time the job the pattern missed was not reported as *unknown*, it was not
+reported at all. An extra process named here costs a bounded deferral and a
+log line; a missing one costs work nobody knows was lost. The marker join
+below is the precise layer, and it reads short options the way python does
+rather than matching a literal `-m`.
+
 Each match is logged by name:
 
 ```

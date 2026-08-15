@@ -70,12 +70,17 @@ RENDER_LIB="${AUTOPILOT_LIB_DIR}/render_check.sh"
 APP_CONTAINER="${AUTOPILOT_APP_CONTAINER:-${COMPOSE_CONTAINER_PREFIX:-idealista}-app}"
 INFLIGHT_DIR="${AUTOPILOT_INFLIGHT_DIR:-${REPO_DIR}/data/.inflight}"
 # Which container processes count as a job. Both spellings the repo uses.
-# `-m *utils\.`, not `-m +utils\.`: python accepts the option and its argument
-# joined, so `python3 -mutils.backfill_pool` is a real, running backfill that a
-# space-requiring pattern does not see at all. A job the survey cannot see is
-# not reported as unknown - it is not reported, and the deploy kills it in
-# silence, which is the one failure mode this survey exists to remove.
-INFLIGHT_PATTERN="${AUTOPILOT_INFLIGHT_PATTERN:-python.*(-m *utils\.|utils/)}"
+# This pattern is a deliberately generous PRE-FILTER, and it must stay one.
+# Three spellings of the same command defeated three successive attempts to be
+# precise here: `-m utils.x`, `-mutils.x` (python takes the argument joined),
+# and `-um utils.x` (a cluster - `-u` is what a logged background job is
+# usually started with). Each time, a job the pattern did not match was not
+# reported as `unknown`; it was not reported at all, and the deploy killed it
+# in silence. That asymmetry decides the design: an extra process named here
+# costs a bounded deferral and a log line, while a missing one costs work
+# nobody knows was lost. So match any python whose command mentions `utils.`
+# or `utils/` at all, and let the marker join below be the precise layer.
+INFLIGHT_PATTERN="${AUTOPILOT_INFLIGHT_PATTERN:-python.*utils[./]}"
 DEFER_ON_INFLIGHT="${AUTOPILOT_DEFER_ON_INFLIGHT:-0}"
 DEFER_BUDGET="${AUTOPILOT_DEFER_BUDGET:-6}"
 DEFER_STATE="${AUTOPILOT_DEFER_STATE:-${REPO_DIR}/data/.deploy_deferrals}"
@@ -614,17 +619,35 @@ def _program(tokens):
     first: the token after `-m`, or the first `.py` token (arguments follow
     the script, never precede it). Everything after it is the argv.
 
-    Both spellings of `-m` count. Python takes the module joined to the option
-    (`-mutils.backfill_pool`) as readily as separated, and reading only the
-    separated form leaves the joined one with no program at all - every marker
-    then misses it, which is the quiet half of the same defect the pattern
-    above fixes loudly.
+    Short options are read the way python reads them, not matched as a
+    literal `-m`. Three spellings of one command have already defeated three
+    attempts to anchor on a form: `-m utils.x`, `-mutils.x`, and `-um utils.x`
+    - the last is a cluster, and `-u` is what a background job writing to a
+    log is usually started with. Anchoring closes the example it was given and
+    leaves the class open, so this walks the cluster instead: on `m`, the
+    module is the rest of the token if there is one and the next token
+    otherwise; `c` means python is running a command string, so there is no
+    module to find; `W`, `X` and `Q` swallow their own operand and cannot be
+    read as options themselves.
     """
+    swallows_operand = "cmWXQ"
     for i, tok in enumerate(tokens):
-        if tok == "-m" and i + 1 < len(tokens):
-            return ("module", tokens[i + 1], tokens[i + 2 :])
-        if tok.startswith("-m") and len(tok) > 2:
-            return ("module", tok[2:], tokens[i + 1 :])
+        if tok.startswith("-") and not tok.startswith("--"):
+            for j, ch in enumerate(tok[1:]):
+                if ch not in swallows_operand:
+                    continue
+                if ch == "c":
+                    # `python -c '...'` runs a command, never a module.
+                    return None
+                operand = tok[j + 2 :]
+                if ch != "m":
+                    break
+                if operand:
+                    return ("module", operand, tokens[i + 1 :])
+                if i + 1 < len(tokens):
+                    return ("module", tokens[i + 1], tokens[i + 2 :])
+                return None
+            continue
         if tok.endswith(".py"):
             return ("script", tok, tokens[i + 1 :])
     return None
