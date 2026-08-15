@@ -169,7 +169,16 @@ The comparison is on the **rendered string**, not on token lists, because
 already gone: a job launched with `--snapshot 'data/My Pool.json'` arrives as
 four tokens against the marker's two. Asking "is this the same command line"
 is the only question a process list can answer, and it is the question that
-finds the live job's own marker.
+finds the live job's own marker. Both sides are whitespace-normalised before
+they are compared, since a tab the marker recorded cannot survive that line.
+
+A marker that cannot be read is **rejected, never normalised**. A missing or
+malformed `argv` coerced to `[]` would take on the identity of a job that
+runs with no arguments, so a damaged file claiming `resumable: true` could
+vouch for a live job — a claim invented out of the damage. For the same
+reason an argument that is empty or nothing but whitespace disqualifies the
+marker: `[""]` and `[]` render identically, and that ambiguity must not be
+resolved in the deploy's favour.
 
 Three states, not two: a `docker top` that cannot be read is **unknown**, and
 blocks exactly like an unmarked job rather than reading as "nothing running".

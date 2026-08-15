@@ -825,3 +825,69 @@ grep -q "in flight (" "${WORK}/watcher.log" \
 grep -q "in flight (resumable): python -um utils.backfill_pool" "${WORK}/watcher.log" \
     || fail "scenario 31 saw the job but read -um as something other than -u -m"
 printf 'OK: a clustered -um is read as python reads it, and its marker is found\n'
+
+# --- scenario 32: a damaged marker is rejected, never normalised -----------
+# `argv` coerced to [] when it was missing or malformed gave a corrupt marker
+# the identity of a job that takes no arguments - so a damaged file claiming
+# `resumable: true` vouched for a live job and the deploy ran over it. Every
+# other guard in this reader rejects what it cannot read; this one invented a
+# claim out of the damage.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_inflight "python -m utils.backfill_sea_view" \
+    '{"module":"backfill_sea_view","argv":"invalid","resumable":true}'
+DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+grep -q "in flight (no marker" "${WORK}/watcher.log" \
+    || fail "scenario 32 believed a marker whose argv was not a list"
+built && fail "scenario 32 deployed on a claim it read out of a damaged marker"
+printf 'OK: a marker whose argv is not a list is rejected, not read as empty\n'
+
+# --- scenario 33: an empty argument is not "no arguments" ------------------
+# [""] and [] both render to the empty string, so a stale marker recording one
+# empty argument could vouch for a live job that takes none. The ambiguity is
+# real and cannot be resolved from a whitespace-joined process table, so it
+# resolves to unknown rather than in the deploy's favour.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_inflight "python -m utils.backfill_sea_view" \
+    '{"module":"backfill_sea_view","argv":[""],"resumable":true}'
+DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+grep -q "in flight (no marker" "${WORK}/watcher.log" \
+    || fail "scenario 33 let a marker with an empty argument vouch for a job with none"
+built && fail "scenario 33 deployed over a job whose resumability was never established"
+printf 'OK: an empty recorded argument does not pass for no arguments at all\n'
+
+# --- scenario 34: a tab inside an argument still finds its marker ----------
+# The process table renders one whitespace-joined line, so a tab the marker
+# recorded arrives as a space. Comparing raw strings made the job miss its own
+# marker and spend the deferral budget as unknown - fail-closed, but wrong,
+# and wrong in the direction that holds deploys for jobs that are fine.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_inflight "python -m utils.backfill_pool --snapshot data/My Pool.json" \
+    '{"module":"backfill_pool","argv":["--snapshot","data/My\tPool.json"],"resumable":true,"ledger":"data/My Pool.json"}'
+DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+if grep -q "in flight (no marker" "${WORK}/watcher.log"; then
+    fail "scenario 34 missed the marker because it recorded a tab the table cannot show"
+fi
+built || fail "scenario 34 deferred for a job that reported itself resumable"
+printf 'OK: whitespace inside an argument is normalised on both sides, not just one\n'
+
+# --- scenario 35: the first non-option token is the program ----------------
+# Python stops parsing its own options at the first token that is not one, and
+# runs it - extension or not. Treating only `.py` as a script meant
+# `python worker -m utils.X` read as running utils.X, so a marker for utils.X
+# vouched for a process that was running something else entirely.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_inflight "python worker -m utils.backfill_sea_view" \
+    '{"module":"backfill_sea_view","argv":[],"resumable":true}'
+DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+grep -q "in flight (no marker" "${WORK}/watcher.log" \
+    || fail "scenario 35 read the -m argument as the program although a script preceded it"
+built && fail "scenario 35 deployed on a marker that belonged to a different program"
+printf 'OK: a script without a .py suffix still ends option parsing\n'

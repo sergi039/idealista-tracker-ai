@@ -630,27 +630,62 @@ def _program(tokens):
     module to find; `W`, `X` and `Q` swallow their own operand and cannot be
     read as options themselves.
     """
-    swallows_operand = "cmWXQ"
-    for i, tok in enumerate(tokens):
-        if tok.startswith("-") and not tok.startswith("--"):
-            for j, ch in enumerate(tok[1:]):
-                if ch not in swallows_operand:
-                    continue
-                if ch == "c":
-                    # `python -c '...'` runs a command, never a module.
-                    return None
-                operand = tok[j + 2 :]
-                if ch != "m":
-                    break
-                if operand:
-                    return ("module", operand, tokens[i + 1 :])
-                if i + 1 < len(tokens):
-                    return ("module", tokens[i + 1], tokens[i + 2 :])
-                return None
+    takes_operand = "cmWXQ"
+    i, n = 1, len(tokens)  # tokens[0] is the interpreter itself
+    while i < n:
+        tok = tokens[i]
+        if tok == "--":
+            i += 1
+            break
+        if tok == "-" or not tok.startswith("-"):
+            # `-` means the program is read from stdin, and the first token
+            # that is not an option ends option parsing and IS the program -
+            # with or without a `.py`. Treating only `.py` as a script let
+            # `python worker -m utils.x` read as running utils.x, so a marker
+            # for utils.x vouched for a process that is not it.
+            break
+        if tok.startswith("--"):
+            i += 1
             continue
-        if tok.endswith(".py"):
-            return ("script", tok, tokens[i + 1 :])
+        rest = tok[1:]
+        j = 0
+        while j < len(rest):
+            ch = rest[j]
+            if ch not in takes_operand:
+                j += 1
+                continue
+            operand = rest[j + 1 :]
+            if ch == "c":
+                return None  # `python -c '...'` runs a command, never a module
+            if ch == "m":
+                if operand:
+                    return ("module", operand, list(tokens[i + 1 :]))
+                if i + 1 < n:
+                    return ("module", tokens[i + 1], list(tokens[i + 2 :]))
+                return None
+            # -W/-X/-Q take an operand too, joined or as the next token. The
+            # separate form has to be stepped over or it reads as the script:
+            # `python -X pycache_prefix=/tmp/utils/x.py -m utils.y` ran y, not
+            # the path in the -X operand.
+            if not operand:
+                i += 1
+            break
+        i += 1
+    if i < n and tokens[i] != "-":
+        return ("script", tokens[i], list(tokens[i + 1 :]))
     return None
+
+
+def _render(argv):
+    """The arguments as a process table would show them.
+
+    `docker top` returns one whitespace-joined line, so a tab or a run of
+    spaces inside an argument survives in the marker and not in the table.
+    Comparing the raw strings therefore made a job miss its own marker and
+    spend the deferral budget as `unknown`. Both sides are normalised the
+    same way instead, which is the only comparison the process list supports.
+    """
+    return " ".join(" ".join(a.split()) for a in argv)
 
 
 def _runs_module(program, module):
@@ -691,11 +726,22 @@ for path in sorted(glob.glob(os.path.join(directory, "*.json"))):
     # as unknown. Joining both sides asks the only question the process list
     # can actually answer - "is this the same command line" - and keeps order
     # and exactness, which is what membership threw away.
+    # A marker that does not describe an argv describes nothing, and must be
+    # REJECTED rather than normalised. Coercing a missing or malformed `argv`
+    # to `[]` gave it the identity of a job with no arguments, so a corrupt
+    # marker claiming `resumable: true` vouched for a live no-argument job -
+    # inventing a claim out of damaged data, which is the opposite of what
+    # every other guard in this reader does.
     argv = data.get("argv")
-    argv = argv if isinstance(argv, list) else []
-    if any(not isinstance(a, str) for a in argv):
+    if not isinstance(argv, list) or any(not isinstance(a, str) for a in argv):
         continue
-    if " ".join(argv) != " ".join(program[2]):
+    # An argument that is empty, or nothing but whitespace, cannot be told
+    # apart from *no argument* once rendered - `[""]` and `[]` both render to
+    # "". Rather than let that ambiguity resolve in the deploy's favour, such
+    # a marker matches nothing and the job reads as unknown.
+    if any(not a.split() for a in argv):
+        continue
+    if _render(argv) != _render(program[2]):
         continue
     matches.append(data)
 
