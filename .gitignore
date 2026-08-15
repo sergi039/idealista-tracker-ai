@@ -29,6 +29,11 @@ Thumbs.db
 
 # Project specific
 .last_seen_uid
+# Scratch API responses left in the repo root by an agent session — nr.json is
+# an ArcGIS municipality query result from the #298 work. Nothing reads them.
+# Ignored because several sessions share this checkout: the file turned up
+# staged once already, and a `git add -A` from any of them would commit it.
+nr.json
 # data/ holds runtime artifacts (backfill snapshots, call ledgers) that must
 # never be committed — but the two importer-generated REFERENCE files below
 # are reviewed, small, and deploy with the code: the QoL card reads them.
