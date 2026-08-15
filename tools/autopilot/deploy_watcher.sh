@@ -664,17 +664,32 @@ self_update_and_reexec() {
     # the checkout already advanced. Checked before the fast-forward, where
     # refusing costs nothing: checkout, container and marker are all untouched
     # and the previous build keeps serving.
-    local listing file tmp
-    listing="$(git ls-tree -r --name-only "$remote_sha" -- "${SELF_PATHS[@]}" 2>>"$LOG_FILE")" \
+    local listing entry mode kind file tmp
+    # With modes, not just names: a syntax check reads the *blob*, and a
+    # symlink's blob is its target path - one word, which parses as a valid
+    # command and tells the gate nothing about what `exec` would actually run.
+    # A dangling one would pass, be merged, and kill every later tick with the
+    # checkout already advanced. Only a regular file can be the script this
+    # process execs, so anything else is refused here, where refusing is free.
+    listing="$(git ls-tree -r "$remote_sha" -- "${SELF_PATHS[@]}" 2>>"$LOG_FILE")" \
         || die "cannot list ${SELF_PATHS[*]} at ${remote_sha:0:7} - refusing to hand over blind"
     tmp="$(mktemp "${TMPDIR:-/tmp}/deploy-watcher-parse.XXXXXX")" \
         || die "cannot write a temporary file to syntax-check ${remote_sha:0:7}"
-    while IFS= read -r file; do
+    while IFS= read -r entry; do
+        [ -n "$entry" ] || continue
+        # "<mode> <type> <sha>\t<path>"
+        mode="${entry%% *}"
+        kind="${entry#* }"
+        kind="${kind%% *}"
+        file="${entry#*$'\t'}"
         case "$file" in
-            '' | *.sh) ;;
+            *.sh) ;;
             *) continue ;;
         esac
-        [ -n "$file" ] || continue
+        if [ "$kind" != "blob" ] || { [ "$mode" != "100644" ] && [ "$mode" != "100755" ]; }; then
+            rm -f "$tmp"
+            die "${file} at ${remote_sha:0:7} is a ${kind} with mode ${mode}, not a regular file - refusing to hand over to something that is not a script (nothing merged; ${deployed_sha:0:7} keeps serving)"
+        fi
         if ! git show "${remote_sha}:${file}" >"$tmp" 2>>"$LOG_FILE"; then
             rm -f "$tmp"
             die "cannot read ${file} at ${remote_sha:0:7} - refusing to hand over blind"

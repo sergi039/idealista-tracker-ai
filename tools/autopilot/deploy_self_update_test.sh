@@ -546,3 +546,24 @@ logged "building\.\.\. C-WATCHER-SPEAKING" \
 [ "$(cat "$MARKER")" = "$C_SHA" ] || fail "scenario 10 recorded '$(cat "$MARKER")', not ${C_SHA}"
 [ "$(builds)" = "1" ] || fail "scenario 10 ran $(builds) builds across both ticks"
 printf 'OK: a spent handover budget stops the tick, and the next one deploys it properly\n'
+
+# --- scenario 11: what is handed over to has to be a script -----------------
+# The syntax check reads the blob, and a symlink's blob is its target path:
+# one word, which parses cleanly and says nothing about what `exec` would run.
+# A dangling one would be waved through, merged, and would kill every later
+# tick with the checkout already advanced. Named by the independent review.
+fresh_repo
+rm -f "${REPO}/tools/autopilot/deploy_watcher.sh"
+ln -s "missing-watcher" "${REPO}/tools/autopilot/deploy_watcher.sh"
+publish "watcher replaced by a dangling symlink"
+
+run_watcher
+
+logged "not a regular file" \
+    || fail "scenario 11 accepted a symlink as the watcher to hand over to"
+[ "$(builds)" = "0" ] || fail "scenario 11 deployed it anyway"
+[ "$(head_sha)" = "$BASE_SHA" ] \
+    || fail "scenario 11 advanced the checkout to a watcher that cannot be executed"
+[ "$(cat "$MARKER")" = "0000000000000000000000000000000000000000" ] \
+    || fail "scenario 11 touched the deployment marker"
+printf 'OK: a watcher that is not a regular file is refused before the merge\n'
