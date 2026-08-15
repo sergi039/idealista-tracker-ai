@@ -113,6 +113,18 @@ learn what had completed was to read the backfill's own per-row ledger.
 Before it builds, the watcher now enumerates the container's processes with
 `docker top` — authoritative about liveness, and needs nothing installed in
 the image, so it also covers a job someone started by hand with `docker exec`.
+
+`AUTOPILOT_INFLIGHT_PATTERN` is deliberately a **generous pre-filter**, not a
+precise one: any python whose command mentions `utils.` or `utils/`. Three
+spellings of one command have already defeated three attempts to be precise —
+`-m utils.x`, `-mutils.x` (python takes the argument joined) and `-um utils.x`
+(a cluster; `-u` is what a job writing to a log is usually started with) — and
+each time the job the pattern missed was not reported as *unknown*, it was not
+reported at all. An extra process named here costs a bounded deferral and a
+log line; a missing one costs work nobody knows was lost. The marker join
+below is the precise layer, and it reads short options the way python does
+rather than matching a literal `-m`.
+
 Each match is logged by name:
 
 ```
@@ -136,6 +148,62 @@ resumes without losing or re-billing work — per-row commit, an idempotent
 scope that finished rows leave, and ideally a ledger. A missing marker means
 *unknown*, and unknown is treated exactly like `false`: a deploy cannot tell
 them apart, and guessing "resumable" is how work goes missing quietly.
+
+**The marker is joined to a process by command line, not by PID.** The PID in
+the filename is the container's (`os.getpid()`); `docker top` reports the
+host/VM view — measured on the mini, 41 against 21974 for the same process.
+A marker vouches for a process when the module is the program that command
+runs — the token after `-m`, joined (`-mutils.backfill_pool`) or separated,
+or the first `.py` token — and the recorded `argv` renders to exactly that
+command's arguments, in order. Not "appears in": membership was the first
+attempt and was wrong three ways at once — `data/a` vouched for a live
+`data/aaa.json`, a reordered argv matched, and an *empty* argv was vacuously
+true, so a stale `bulk_ai_analysis` marker with no arguments vouched for a
+live `--force` run, the one run that is not resumable. Exactness also keeps
+two concurrent runs of one module apart by their `--snapshot` paths. Markers
+that match but disagree about `resumable` resolve to *unknown*, never to the
+deploy's convenience.
+
+The comparison is on the **rendered string**, not on token lists, because
+`docker top` returns one whitespace-joined line with the shell's quoting
+already gone: a job launched with `--snapshot 'data/My Pool.json'` arrives as
+four tokens against the marker's two. Asking "is this the same command line"
+is the only question a process list can answer, and it is the question that
+finds the live job's own marker. Both sides are whitespace-normalised before
+they are compared, since a tab the marker recorded cannot survive that line.
+
+A marker that cannot be read is **rejected, never normalised**. A missing or
+malformed `argv` coerced to `[]` would take on the identity of a job that
+runs with no arguments, so a damaged file claiming `resumable: true` could
+vouch for a live job — a claim invented out of the damage. For the same
+reason an argument that is empty or nothing but whitespace disqualifies the
+marker: `[""]` and `[]` render identically, and that ambiguity must not be
+resolved in the deploy's favour.
+
+**The known limit, stated rather than left to be discovered.** Rendering
+cannot recover argument *boundaries*: `["--force", "data/x"]` and
+`["--force data/x"]` are the same line in a process table, so a marker
+recording the second would vouch for a live job running the first. It is not
+fixable from this side — `docker top` lost the quoting before the watcher saw
+it — and the fix that would work, reading `/proc/<pid>/cmdline` through
+`docker exec`, means going back into the container's PID namespace, which is
+the join this machinery exists to remove. Two things bound it: nothing in
+`utils/` can write such a marker, because every entry point runs
+`parse_args()` before `inflight()` and an argument spelled `--force data/x`
+is rejected before any marker exists; and a live job that wrote its own
+marker makes the two disagree, which already resolves to *unknown*.
+
+Three states, not two: a `docker top` that cannot be read is **unknown**, and
+blocks exactly like an unmarked job rather than reading as "nothing running".
+That includes a table it cannot *parse*: the column layout is read off the
+header (`docker top` renders whatever ps format it is handed, and only the
+default one puts the command at field 8), and one row the header cannot
+describe makes the whole table unknown. A mis-split command matches the
+pattern no more, so the job it named would not become unknown — it would
+disappear, which is the outcome this survey exists to remove.
+Only a shell `-c` parent is folded into its child; a genuine `utils` process
+that spawned another `utils` process stays two jobs, so a non-resumable parent
+cannot vanish from the count.
 
 | Variable | Default | Does |
 |---|---|---|

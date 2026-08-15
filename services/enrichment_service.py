@@ -511,24 +511,29 @@ class EnrichmentService:
         if municipality:
             municipality = municipality.replace(" - ", ", ")
 
-        # Try different address formats in order of precision (title-derived first).
+        # Try different address formats in order of precision (title-derived
+        # first). The label on each attempt is how *specific the query string*
+        # looks, guessed before anything is called -- it is not, and must never
+        # be recorded as, the accuracy of the result. It decides the order to
+        # try and the duplicate policy below; Google decides the accuracy
+        # (issue #321).
         address_attempts: List[Dict[str, str]] = []
         seen_addresses: set[str] = set()
 
-        def add_attempt(address: str, accuracy: str) -> None:
+        def add_attempt(address: str, specificity: str) -> None:
             candidate = (address or "").strip()
             if not candidate or candidate in seen_addresses:
                 return
             seen_addresses.add(candidate)
-            address_attempts.append({"address": candidate, "accuracy": accuracy})
+            address_attempts.append({"address": candidate, "specificity": specificity})
 
         title_parts = self._extract_location_parts_from_title(
             getattr(land, "title", None) or ""
         )
         if title_parts:
             full = ", ".join(title_parts)
-            base_accuracy = "precise" if len(title_parts) >= 2 else "approximate"
-            add_attempt(f"{full}, Spain", base_accuracy)
+            base_specificity = "precise" if len(title_parts) >= 2 else "approximate"
+            add_attempt(f"{full}, Spain", base_specificity)
             if len(title_parts) >= 2:
                 tail = ", ".join(title_parts[-2:])
                 add_attempt(f"{tail}, Spain", "approximate")
@@ -572,36 +577,53 @@ class EnrichmentService:
 
         for attempt in address_attempts:
             coordinates = self.geocoding_service.geocode_address(attempt["address"])
-            if coordinates:
-                # Only check for duplicates on precise geocoding results
-                # Allow approximate/regional results even if they're duplicates
-                if attempt["accuracy"] == "precise":
-                    if not self._is_duplicate_coordinates(
-                        coordinates["lat"], coordinates["lng"], land.id
-                    ):
-                        logger.info(
-                            f"Successfully geocoded '{attempt['address']}' with {attempt['accuracy']} accuracy"
-                        )
-                        return {
-                            "lat": coordinates["lat"],
-                            "lng": coordinates["lng"],
-                            "accuracy": attempt["accuracy"],
-                        }
-                    else:
-                        logger.warning(
-                            f"Skipping duplicate precise coordinates for '{attempt['address']}'"
-                        )
-                        continue
-                else:
-                    # Accept approximate/regional results even if duplicated
-                    logger.info(
-                        f"Successfully geocoded '{attempt['address']}' with {attempt['accuracy']} accuracy (allowing duplicates)"
-                    )
-                    return {
-                        "lat": coordinates["lat"],
-                        "lng": coordinates["lng"],
-                        "accuracy": attempt["accuracy"],
-                    }
+            if not coordinates:
+                continue
+
+            # What Google said about the point it returned. `utils/geocoding.py`
+            # derives it from `location_type` -- ROOFTOP and nothing else means
+            # "precise" -- and that is the only thing entitled to be stored as
+            # the accuracy of this coordinate (issue #321). The attempt's own
+            # `specificity` describes the query, was decided before the call,
+            # and knows nothing about what came back.
+            measured = (coordinates.get("accuracy") or "unknown").strip().lower()
+            if measured not in {"precise", "approximate", "unknown"}:
+                measured = "unknown"
+            result = {
+                "lat": coordinates["lat"],
+                "lng": coordinates["lng"],
+                "accuracy": measured,
+            }
+
+            # The duplicate check still keys on the *query*: a specific-looking
+            # address that lands on a point another land already owns is the
+            # signal that the specific part was ignored, whatever Google then
+            # called the result.
+            if attempt["specificity"] != "precise":
+                logger.info(
+                    "Geocoded '%s' (query looked %s), Google says %s (allowing duplicates)",
+                    attempt["address"],
+                    attempt["specificity"],
+                    measured,
+                )
+                return result
+
+            if self._is_duplicate_coordinates(
+                coordinates["lat"], coordinates["lng"], land.id
+            ):
+                logger.warning(
+                    "Skipping duplicate coordinates for specific query '%s'",
+                    attempt["address"],
+                )
+                continue
+
+            logger.info(
+                "Geocoded '%s' (query looked %s), Google says %s",
+                attempt["address"],
+                attempt["specificity"],
+                measured,
+            )
+            return result
 
         return None
 

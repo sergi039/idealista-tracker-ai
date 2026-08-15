@@ -532,6 +532,41 @@ and TODO.md; respect it if you ever run both side by side.
   `Land.distance_airport`. Do not copy the patterns into a third caller; import
   them. `utils/clear_legacy_land_airport.py` removes the values the unfiltered
   search left behind (free — no API call — with a rollback snapshot).
+- **The same rules say what may be recorded as a hospital, and a *centro de
+  salud* may not** (owner decision 2026-08-15, narrowing the 2026-08-10 one that
+  accepted "a hospital, a health centre or a public outpatient clinic"). Primary
+  care has no beds and no emergency department, so recording it overstates
+  medical access on a number the scorer reads: measured on the Salamir listing
+  (43.568817,-6.211955), the app said "hospital 11 min" — the Centro de Salud in
+  Muros de Nalón — against ~27 min to Hospital Universitario San Agustín, the
+  assigned hospital. 187 of 396 travel rows held such a place. The patterns went
+  on the preset, not into a second filter. Two of them are not obvious and were
+  measured: Google indexes a hospital campus **room by room, every room tagged
+  `hospital`**, so 13 departments of San Agustín sorted ahead of the hospital
+  itself at rank 18 of 20 — `hospital de día` (a day unit) and `unidad de
+  hospitalización` (one ward) carry the word and must be refused for the parent
+  to win. The old rows are not fixed by the deploy —
+  `utils/recalc_property_travel.py --ids …` rewrites them and **spends money**,
+  so it needs the owner to ask.
+- **A town crowds the real hospital off the page, so the preset carries
+  `wide_search_query` too** (#325). Nearby Search returns **one page of 20**,
+  and #323 shipped without the fallback on the strength of one *rural*
+  coordinate where the hospital was still on that page. It does not
+  generalise: the recalc it authorised left **48 of 187 rows** with no
+  hospital, and at 43.3622522,-5.8485461 (Oviedo) all 20 results sit inside
+  0.7 km and are private practices — a beauty centre, a driving-licence
+  renewal office, several named individuals. HUCA and Monte Naranco are close
+  and can never appear. So the refusals were right and the answer was never on
+  the page, which is the airport preset's situation exactly (#171/#254), and
+  it takes the same cure: Text Search accepts no `radius`, so Nearby's ~50 km
+  cap does not apply, and the same preset rules filter the result. Measured
+  against the deployed image: Oviedo → "Monte Naranco Hospital" 2.1 km,
+  Cudillero → "Hospital Universitario San Agustin" 26.2 km. It fires only
+  where Nearby already answered with nothing acceptable, so it bills nothing
+  for the rows that resolve. **`wide_search_query` is not part of
+  `PlaceRules`**, so adding it leaves the Places cache signature unchanged and
+  the already-correct rows keep their cached lookups — which is what let the
+  48 be re-run on their own.
 - **Amenities are measured for `Property`, through the same one client**
   (#152). `_fetch_osm_amenities` is the whole Overpass amenity client — cache,
   gate, transport, refusals — and `_enrich_with_osm_data` (legacy `Land`) and
@@ -592,7 +627,40 @@ and TODO.md; respect it if you ever run both side by side.
   losing work, and a wrong `True` is #98's defect wearing an ops costume.
   The watcher's own liveness check is `docker top`, so a job that adopts
   nothing is still *seen*; what it cannot supply is whether killing it costs
-  anything. **A marker is not a liveness check and must never be read as
+  anything. **A marker is matched to a process by its rendered command line —
+  the module it actually runs, plus an `argv` that renders to exactly that
+  command's arguments — and never by PID** (#290 follow-up). The
+  two sides do not share a PID namespace: `os.getpid()` inside the container
+  returned 41 while `docker top` reported 21974 for that same process, so the
+  original PID-keyed lookup matched nothing and every job read as `unknown`.
+  The `resumable` half shipped dead and stayed dead for eleven deploy-log
+  lines before anyone looked. Do not "simplify" the join back to a PID, and
+  keep the fixture's marker PIDs absent from its `docker top` rows — a fixture
+  that numbers both sides the same cannot fail on this. *Rendered* is load
+  bearing on both halves: `docker top` returns one whitespace-joined line with
+  the shell's quoting gone, so `--snapshot 'data/My Pool.json'` arrives as
+  four tokens against the marker's two and a token-list comparison misses the
+  job's own marker; and the module is read the way **python** reads short
+  options, walking the cluster, never by matching a literal `-m`. Three
+  spellings of one command defeated three attempts to anchor on a form —
+  `-m utils.x`, `-mutils.x`, `-um utils.x` — and each time the job the
+  anchor missed was not reported as unknown, it was **not reported at all**.
+  That asymmetry is why `AUTOPILOT_INFLIGHT_PATTERN` is a deliberately
+  generous pre-filter (any python mentioning `utils.` or `utils/`) with the
+  marker join as the precise layer: an extra process named costs a bounded
+  deferral, a missing one costs work nobody knows was lost. The same class
+  bit `tools/backfill_supervisor.sh` twice on the same day (#311, #319) —
+  when one of these turns up, close the class, not the example.
+  Likewise **`docker top` failing is not `docker top` answering "nothing"**:
+  an unreadable process list is a third state that blocks like an unmarked
+  job, and only a *shell* `-c` parent is collapsed into its child — a real
+  `utils` process that spawned another is two jobs, not one. That `-c` is
+  looked for across every token, not only up to the first non-option one:
+  `bash -o pipefail -c` puts a bare word in the middle of the option run, and
+  knowing where the options end means knowing an optstring per shell, so a
+  scan that covers `-o` but not `--rcfile` would read as complete and still be
+  wrong.
+  **A marker is not a liveness check and must never be read as
   one** — it outlives its process by design, because surviving the kill is
   what lets the next run report the interruption. A file in `data/.inflight/`
   therefore means "a run started and did not clean up", which is true of a

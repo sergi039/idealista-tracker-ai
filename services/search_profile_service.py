@@ -74,18 +74,47 @@ _AIRPORT_REJECT_TYPES = [
     "hospital",
 ]
 
-# A hospital, a health centre or a public outpatient clinic. A cosmetic-surgery
-# practice is none of those, and a trial run put one forward as the "nearest
-# hospital" for two listings.
+# A hospital, and not a primary-care centre (owner decision, 2026-08-15,
+# narrowing the 2026-08-10 one that also accepted a "health centre or public
+# outpatient clinic"). A *centro de salud* is an outpatient GP surgery with no
+# beds and no emergency department; recording one as the nearest hospital
+# overstates medical access by the distance between the two, and the scorer
+# reads that number.
+#
+# Measured on the Salamir listing (43.568817,-6.211955) the day of the
+# decision: the app read "hospital 11 min", the Centro de Salud in Muros de
+# Nalón, while the assigned hospital -- Hospital Universitario San Agustín in
+# Avilés, Área I Occidente -- is ~27 min by road. A 2.5x overstatement, and
+# not a one-off: 187 of the owner's 396 travel rows held a place refused by
+# the rules below.
+#
+# Same defect class as the airport preset above (#171), so it takes the same
+# cure rather than a second filter: the place has to *say* it is a hospital.
+# Nothing qualifying nearby is reported as not found, which the scorer drops
+# rather than scoring as zero (#98) -- "no hospital within reach" is the true
+# answer for a remote valley, and it beats a confident 11-minute drive to a
+# GP surgery.
 _HOSPITAL_REQUIRE_NAMES = [
+    # Covers "hospitalario"/"hospitalaria" (complejo/complexo hospitalario) and
+    # the English names Google returns for Spanish hospitals -- "Central
+    # University Hospital of Asturias" is how HUCA comes back.
     "hospital",
-    "centro de salud",
-    "centro de saúde",
-    "centro de saude",
-    "ambulatorio",
-    "policlínic",
-    "policlinic",
+    # HUCA and its siblings abbreviate themselves on the sign and in Places.
+    "h.u.",
 ]
+# Two jobs. The first is the pre-existing one: a practice that carries Google's
+# `hospital` tag and is a dentist, a vet or a cosmetic clinic.
+#
+# The second is new, and it is what the require-list alone cannot do. Google
+# indexes a hospital campus room by room, every room tagged `hospital` -- the
+# measured Salamir page returned 13 separate departments of San Agustín ("Área
+# de Partos", "Sala de autopsias", "Ala Norte", "Nutrición parenteral") ahead
+# of the hospital itself at rank 18 of 20. Most carry no "hospital" in the
+# name and the require-list drops them, but two do, and `rankby=distance` puts
+# both in front of their own parent: a *hospital de día* is a day-care unit
+# that sends every patient home, and a *unidad de hospitalización* is one ward.
+# Refusing them is what lets rank 18 win. The parent campus is always in the
+# same distance cluster, so refusing a ward does not lose the hospital.
 _HOSPITAL_REJECT_NAMES = [
     "veterinar",
     "dental",
@@ -102,6 +131,28 @@ _HOSPITAL_REJECT_NAMES = [
     "helipuerto",
     "heliport",
     "helipad",
+    # Primary care: no beds, no emergency department. All three spellings
+    # occur -- Asturias writes "salud", Galicia "saúde", and Places returns the
+    # unaccented form too.
+    "centro de salud",
+    "centro de saude",
+    "centro de saúde",
+    "centro médico",
+    "centro medico",
+    "consultorio",
+    "ambulatorio",
+    "policlínic",
+    "policlinic",
+    # A mental-health facility has no emergency department either, and this
+    # catches it under both names the owner's rows use: "Centro de Salud Mental
+    # I Área Sanitaria III" and "Unidad de Hospitalización de Salud Mental".
+    "salud mental",
+    "saúde mental",
+    # Departments that carry the word "hospital"; see above.
+    "hospital de día",
+    "hospital de dia",
+    "unidad de hospitalización",
+    "unidad de hospitalizacion",
 ]
 
 # The supermarket preset takes the opposite approach to airport and hospital,
@@ -164,6 +215,29 @@ TRAVEL_PRESET_DEFS: Dict[str, Dict[str, Any]] = {
         "place_types": ["hospital"],
         "require_name_patterns": _HOSPITAL_REQUIRE_NAMES,
         "reject_name_patterns": _HOSPITAL_REJECT_NAMES,
+        # #323 refused primary care and left 48 of the 187 recalculated rows
+        # with no hospital at all. That was read there as the honest #98
+        # answer, and for a remote valley it is -- but the measurement taken
+        # afterwards says otherwise for a town. Nearby Search returns **one
+        # page of 20**, and at 43.3622522,-5.8485461 (Oviedo, property 139)
+        # all 20 sit inside 0.7 km and are private practices: "MUNIA TOTAL
+        # BEAUTY CENTER", "Sonrisas de fe", "Renovación carnet de conducir",
+        # a physiotherapist, several named individuals. HUCA and Monte Naranco
+        # exist and are close, but they can never appear in that response, so
+        # the rules were refusing junk correctly and the real answer was never
+        # on the page to be found. Same shape as the airport preset above:
+        # not an over-eager rejection, but Google never being asked about the
+        # place that mattered.
+        #
+        # Text Search takes no `radius`, so none of Nearby Search's cap
+        # applies. Measured 2026-08-15 against the deployed image at the three
+        # coordinates that were failing: Oviedo resolved "Monte Naranco
+        # Hospital" 2.1 km away, and Cudillero (property 247) resolved
+        # "Hospital Universitario San Agustin" at 26.2 km. It is a second,
+        # paid call and fires only where Nearby Search already answered with
+        # nothing this preset accepts -- which is exactly those rows and no
+        # others.
+        "wide_search_query": "hospital",
     },
     "police": {"label": "Nearest police station", "place_types": ["police"]},
     "supermarket": {

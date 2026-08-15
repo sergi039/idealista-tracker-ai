@@ -41,3 +41,42 @@ LICENSE
 data/
 instance/
 .last_seen_uid
+
+# --- kept out of git, and therefore out of the image ------------------------
+# `COPY . .` reads this file and not .gitignore, so anything deliberately kept
+# out of the repository still rides into the image unless it is named here
+# too. The two lists had drifted far enough apart that the laptop image was
+# 2.68 GB, of which 1.6 GB was .claude/worktrees - six parallel agent sessions'
+# full repository checkouts, each holding unmerged work - against 596 KB of
+# templates and 264 KB of static files. Production was spared only because the
+# Mac mini happens to have no worktrees, not because the mechanism differs.
+
+# Agent session state: worktrees are whole checkouts, and .mcp.json can carry
+# server credentials.
+.claude/
+.worktrees/
+.kimi-code/
+.mcp.json
+
+# Source bundles (issue #29). These were served unauthenticated from static/,
+# which Flask serves directly regardless of any route decorator. .gitignore
+# stops them being committed; without these lines an untracked bundle sitting
+# in the working tree is still copied in and still served.
+*.zip
+*.tar.gz
+*.tgz
+static/all_code.txt
+
+# Local databases, logs and coverage output. Never build inputs, and a log can
+# carry data that has no business in a shipped image.
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Scratch API responses agent sessions leave in the root (#292 follow-up).
+nr.json
