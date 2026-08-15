@@ -596,7 +596,7 @@ if [ -e "$MARKER" ]; then
 fi
 printf 'OK: a green healthz over a redirecting page is not a healthy deploy\n'
 
-# --- scenario 9: the page comes from the shared contract --------------------
+# --- scenario 21: the page comes from the shared contract --------------------
 # The rule lived under two names that had to move together (#292). It is one
 # now - DEPLOY_RENDER_PATH in lib/render_check.sh - and this watcher reads it
 # rather than carrying its own copy. The stub serves only the configured page
@@ -609,12 +609,12 @@ printf '/dashboard\n' >"$PAGE_PATH_FILE"
 RENDER_PATH_OVERRIDE=/dashboard HEALTH_TIMEOUT_OVERRIDE=6 run_watcher
 printf '/properties\n' >"$PAGE_PATH_FILE"
 
-built || fail "scenario 9 did not deploy - the watcher ignored DEPLOY_RENDER_PATH"
+built || fail "scenario 21 did not deploy - the watcher ignored DEPLOY_RENDER_PATH"
 grep -q "/dashboard rendered (200)" "${WORK}/watcher.log" \
-    || fail "scenario 9 verified some other page than the one the contract names"
+    || fail "scenario 21 verified some other page than the one the contract names"
 printf 'OK: the page checked is the one the shared contract names\n'
 
-# --- scenario 10: turning the check off says so -----------------------------
+# --- scenario 22: turning the check off says so -----------------------------
 # Allowed, and never silent: a build nobody rendered a page for must not read
 # like one that was verified.
 : >"${WORK}/watcher.log"
@@ -624,12 +624,12 @@ printf '302\n' >"$PAGE_STATUS_FILE"
 RENDER_PATH_OVERRIDE="" run_watcher
 printf '200\n' >"$PAGE_STATUS_FILE"
 
-built || fail "scenario 10 did not deploy although the page check is off"
+built || fail "scenario 22 did not deploy although the page check is off"
 grep -q "no page was rendered" "${WORK}/watcher.log" \
-    || fail "scenario 10 skipped the page check without saying so"
+    || fail "scenario 22 skipped the page check without saying so"
 printf 'OK: a skipped page check is reported, not assumed to have passed\n'
 
-# --- scenario 11: the retired name is named, never obeyed -------------------
+# --- scenario 23: the retired name is named, never obeyed -------------------
 # AUTOPILOT_PAGE_URL="" used to be how this watcher's page check was switched
 # off. It is not read any more - the page is checked - and an environment that
 # still carries it is told rather than quietly overruled.
@@ -638,14 +638,14 @@ rm -f "$DEFER_STATE"
 set_inflight ""
 LEGACY_PAGE_URL_OVERRIDE="" run_watcher
 
-built || fail "scenario 11 did not deploy"
+built || fail "scenario 23 did not deploy"
 grep -q "AUTOPILOT_PAGE_URL is set but no longer read" "${WORK}/watcher.log" \
-    || fail "scenario 11 dropped the retired name without a word"
+    || fail "scenario 23 dropped the retired name without a word"
 grep -q "rendered (200)" "${WORK}/watcher.log" \
-    || fail "scenario 11 obeyed the retired name and skipped the page check"
+    || fail "scenario 23 obeyed the retired name and skipped the page check"
 printf 'OK: a retired page-check name is reported, and does not switch the check off\n'
 
-# --- scenario 12: a contract that did not load stops the tick ---------------
+# --- scenario 24: a contract that did not load stops the tick ---------------
 # Present is not loaded, and loaded is not complete. An empty or half-written
 # render_check.sh is readable and sources without error, defining nothing - and
 # a page check that cannot run must never read as one that passed, so the tick
@@ -662,10 +662,29 @@ for shape in empty truncated unparseable; do
     set_inflight ""
     WATCHER_UNDER_TEST="$(watcher_with_contract "$contract")" run_watcher
 
-    built && fail "scenario 12 (${shape}) deployed with a contract that never loaded"
+    built && fail "scenario 24 (${shape}) deployed with a contract that never loaded"
     grep -q "FATAL" "${WORK}/watcher.log" \
-        || fail "scenario 12 (${shape}) stopped without saying why"
+        || fail "scenario 24 (${shape}) stopped without saying why"
     grep -q "render_check.sh" "${WORK}/watcher.log" \
-        || fail "scenario 12 (${shape}) blamed something other than the contract"
+        || fail "scenario 24 (${shape}) blamed something other than the contract"
 done
 printf 'OK: a contract that did not load stops the deploy and names itself\n'
+# --- scenario 25: an unknown list deploying is not "0 jobs killed" ----------
+# Scenario 10 with deferring off. The tick correctly deploys - that is the
+# documented default - but the sentence it leaves behind decides what an
+# operator reading data/autopilot-deploy.log believes happened. Counting the
+# jobs here reports the failed probe's zero as an observation, which is the
+# survey's own fail-open defect surviving in the log after being fixed in the
+# logic.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_inflight "python -m utils.backfill_pool --snapshot data/p.json" \
+    '{"module":"backfill_pool","argv":["--snapshot","data/p.json"],"resumable":true}'
+DOCKER_TOP_RC=1 DEFER_ON_INFLIGHT=0 run_watcher
+
+built || fail "scenario 25 refused to deploy although deferring is off"
+grep -q "0 job(s) above will be killed" "${WORK}/watcher.log" \
+    && fail "scenario 25 reported zero jobs killed for a process list it could not read"
+grep -q "what this kills is UNKNOWN" "${WORK}/watcher.log" \
+    || fail "scenario 25 deployed over an unreadable process list without saying so"
+printf 'OK: deploying over an unknown process list does not claim it killed nothing\n'

@@ -874,7 +874,17 @@ survey_inflight
 blocking=$((inflight_unsafe + inflight_unknown))
 if [ "$inflight_count" != "0" ] || [ "$inflight_unknown" != "0" ]; then
     if [ "$DEFER_ON_INFLIGHT" != "1" ]; then
-        log "  deploying anyway (AUTOPILOT_DEFER_ON_INFLIGHT is off); the ${inflight_count} job(s) above will be killed"
+        # The two branches are genuinely exclusive: an unreadable list returns
+        # from the survey before a single job is counted. Reporting the count
+        # anyway would print "the 0 job(s) above will be killed" for the one
+        # case where the count is not an observation but the failed probe's
+        # residue - a deploy claiming it killed nothing precisely when it
+        # cannot know what it killed.
+        if [ "$inflight_unknown" != "0" ]; then
+            log "  deploying anyway (AUTOPILOT_DEFER_ON_INFLIGHT is off); what this kills is UNKNOWN - the process list could not be read"
+        else
+            log "  deploying anyway (AUTOPILOT_DEFER_ON_INFLIGHT is off); the ${inflight_count} job(s) above will be killed"
+        fi
     elif [ "$blocking" = "0" ]; then
         log "  every job above reports itself resumable; deploying and killing them"
     else
