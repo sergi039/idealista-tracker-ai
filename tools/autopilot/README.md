@@ -113,6 +113,18 @@ learn what had completed was to read the backfill's own per-row ledger.
 Before it builds, the watcher now enumerates the container's processes with
 `docker top` — authoritative about liveness, and needs nothing installed in
 the image, so it also covers a job someone started by hand with `docker exec`.
+
+`AUTOPILOT_INFLIGHT_PATTERN` is deliberately a **generous pre-filter**, not a
+precise one: any python whose command mentions `utils.` or `utils/`. Three
+spellings of one command have already defeated three attempts to be precise —
+`-m utils.x`, `-mutils.x` (python takes the argument joined) and `-um utils.x`
+(a cluster; `-u` is what a job writing to a log is usually started with) — and
+each time the job the pattern missed was not reported as *unknown*, it was not
+reported at all. An extra process named here costs a bounded deferral and a
+log line; a missing one costs work nobody knows was lost. The marker join
+below is the precise layer, and it reads short options the way python does
+rather than matching a literal `-m`.
+
 Each match is logged by name:
 
 ```
@@ -136,6 +148,62 @@ resumes without losing or re-billing work — per-row commit, an idempotent
 scope that finished rows leave, and ideally a ledger. A missing marker means
 *unknown*, and unknown is treated exactly like `false`: a deploy cannot tell
 them apart, and guessing "resumable" is how work goes missing quietly.
+
+**The marker is joined to a process by command line, not by PID.** The PID in
+the filename is the container's (`os.getpid()`); `docker top` reports the
+host/VM view — measured on the mini, 41 against 21974 for the same process.
+A marker vouches for a process when the module is the program that command
+runs — the token after `-m`, joined (`-mutils.backfill_pool`) or separated,
+or the first `.py` token — and the recorded `argv` renders to exactly that
+command's arguments, in order. Not "appears in": membership was the first
+attempt and was wrong three ways at once — `data/a` vouched for a live
+`data/aaa.json`, a reordered argv matched, and an *empty* argv was vacuously
+true, so a stale `bulk_ai_analysis` marker with no arguments vouched for a
+live `--force` run, the one run that is not resumable. Exactness also keeps
+two concurrent runs of one module apart by their `--snapshot` paths. Markers
+that match but disagree about `resumable` resolve to *unknown*, never to the
+deploy's convenience.
+
+The comparison is on the **rendered string**, not on token lists, because
+`docker top` returns one whitespace-joined line with the shell's quoting
+already gone: a job launched with `--snapshot 'data/My Pool.json'` arrives as
+four tokens against the marker's two. Asking "is this the same command line"
+is the only question a process list can answer, and it is the question that
+finds the live job's own marker. Both sides are whitespace-normalised before
+they are compared, since a tab the marker recorded cannot survive that line.
+
+A marker that cannot be read is **rejected, never normalised**. A missing or
+malformed `argv` coerced to `[]` would take on the identity of a job that
+runs with no arguments, so a damaged file claiming `resumable: true` could
+vouch for a live job — a claim invented out of the damage. For the same
+reason an argument that is empty or nothing but whitespace disqualifies the
+marker: `[""]` and `[]` render identically, and that ambiguity must not be
+resolved in the deploy's favour.
+
+**The known limit, stated rather than left to be discovered.** Rendering
+cannot recover argument *boundaries*: `["--force", "data/x"]` and
+`["--force data/x"]` are the same line in a process table, so a marker
+recording the second would vouch for a live job running the first. It is not
+fixable from this side — `docker top` lost the quoting before the watcher saw
+it — and the fix that would work, reading `/proc/<pid>/cmdline` through
+`docker exec`, means going back into the container's PID namespace, which is
+the join this machinery exists to remove. Two things bound it: nothing in
+`utils/` can write such a marker, because every entry point runs
+`parse_args()` before `inflight()` and an argument spelled `--force data/x`
+is rejected before any marker exists; and a live job that wrote its own
+marker makes the two disagree, which already resolves to *unknown*.
+
+Three states, not two: a `docker top` that cannot be read is **unknown**, and
+blocks exactly like an unmarked job rather than reading as "nothing running".
+That includes a table it cannot *parse*: the column layout is read off the
+header (`docker top` renders whatever ps format it is handed, and only the
+default one puts the command at field 8), and one row the header cannot
+describe makes the whole table unknown. A mis-split command matches the
+pattern no more, so the job it named would not become unknown — it would
+disappear, which is the outcome this survey exists to remove.
+Only a shell `-c` parent is folded into its child; a genuine `utils` process
+that spawned another `utils` process stays two jobs, so a non-resumable parent
+cannot vanish from the count.
 
 | Variable | Default | Does |
 |---|---|---|
@@ -186,6 +254,106 @@ machines with no deployer — the shared agent checkout on the laptop, which thi
 watcher rightly refuses to deploy because it sits on a branch with uncommitted
 files. Both take this same deploy lock, so a hand-run of either never overlaps
 the other.
+
+## Deploying the watcher itself
+
+The watcher is in the tree it deploys, so a tick that advances main can be
+rolling out a change to `deploy_watcher.sh`. Until #293 that tick ran the *old*
+script all the way through — measured, not intermittent. `git merge` writes a
+file by renaming a new one over it, so the inode changes and the shell's open
+descriptor still points at the previous, now-unlinked one. It reads that to the
+end of the tick.
+
+That is what happened at 16:33:30 on 2026-08-14: the deploy that shipped #285's
+in-flight survey and page check ran with neither, and killed a pool backfill at
+32 ledger rows silently. It also means no ordering inside one process fixes it.
+
+So the tick hands over. When `origin/main` changes `deploy_watcher.sh` or
+`lib/`, the watcher fast-forwards and `exec`s the new script **before** it
+surveys, defers, builds or verifies anything:
+
+```
+a1b2c3d changes this watcher itself (tools/autopilot/deploy_watcher.sh tools/autopilot/lib)
+  fast-forwarded to a1b2c3d; handing this tick over to its tools/autopilot/deploy_watcher.sh
+still holding the deploy lock handed over with this tick
+```
+
+Three things ride across the `exec`:
+
+- **the deploy lock.** It is `flock(2)` on fd 9, and `exec` replaces the
+  program, not the process, so the descriptor and its lock are still held.
+  Re-taking it would also work — `exec 9>file` closes the old description
+  before locking the new one — and that is the problem: it drops the lock for
+  the length of a fork and an exec, during which another tick can start a
+  second concurrent build.
+- **the commit that is serving,** as `AUTOPILOT_ROLLBACK_SHA`. After the
+  fast-forward, `HEAD` is the commit under test, so the new process cannot work
+  out on its own where a rollback goes. That covers one tick, which is not
+  always enough: a tick that hands over and then *defers* to an in-flight job
+  ends without deploying, and the next tick is a fresh process with nothing
+  handed to it. There the rollback target comes from `data/.deployed_sha`
+  whenever the checkout is ahead of it — the marker is written only after a
+  build passed health, so it names what is serving, and unlike an environment
+  variable it outlives the process. Without that, a failed build of the
+  deferred commit rolls back to itself.
+- **a handover count,** so this terminates. One per tick; if main moves again
+  the log says so and the tick **stops without deploying**. Deploying at that
+  point is the defect this whole mechanism removes — the deploy would be run by
+  this watcher while the newer one goes on disk — and stopping costs only a
+  tick: the checkout already holds the watcher this process is running, so the
+  next tick starts from it and hands over normally, and that handover deploys
+  itself. Nothing is merged for the newer commit, and the previous build keeps
+  serving meanwhile.
+
+Before merging anything it syntax-checks the incoming `deploy_watcher.sh` and
+`lib/*.sh`. A watcher that does not parse cannot be handed over to, and
+deploying it would break the deploy chain at the *next* tick with the checkout
+already advanced — so it refuses while the checkout, the container and the
+marker are all still untouched, and the previous build keeps serving.
+
+Two details in that gate are load-bearing:
+
+- **It asks the bash that will run it,** `${BASH:-/bin/bash}`, never a bare
+  `bash`. The LaunchAgent execs `/bin/bash` (3.2.57) while handing the job a
+  PATH starting with `/opt/homebrew/bin` (5.x). Measured, `cmd &>> file` and
+  `;;&` are exit 0 under `bash -n` 5.3.15 and syntax errors under 3.2 — and
+  `>>"$LOG_FILE" 2>&1` appears a dozen times in this script, so `&>>` is one
+  keystroke away. It is still only a floor: `declare -A` parses under 3.2 and
+  fails at runtime.
+- **It merges the commit it vetted, not the ref that named it.**
+  `git merge --ff-only "$remote_sha"`. Several agent sessions and a human
+  `fetch` into this same clone, and the window between resolving `origin/main`
+  and merging holds a `docker image inspect`, a `docker tag` and the gate
+  itself — seconds. Merging the ref would fast-forward to, and then `exec`, a
+  watcher nothing had read. The newer commit is deployed by the next tick.
+
+| Variable | Default | Does |
+|---|---|---|
+| `AUTOPILOT_SELF_UPDATE` | `1` | `0` = the pre-#293 behaviour, which now says loudly that it deployed a watcher it did not run |
+| `AUTOPILOT_REEXEC_MAX` | `1` | handovers allowed in one tick |
+
+One property does change: after a handover the fast-forward has already
+happened, so an in-flight deferral holds with the checkout one commit ahead of
+the container. `data/.deployed_sha` still names what is serving, which is what
+everything downstream reads.
+
+`tools/autopilot/deploy_self_update_test.sh` (wrapped by
+`tests/test_deploy_watcher_self_update.py`) drives the real watcher from inside
+a throwaway repository that contains a copy of it — the arrangement the other
+two watcher tests deliberately do not have, which is why neither could reach
+this path.
+
+**That suite must not borrow a fact from the machine it runs on.** The
+scenario covering the gate above was first written with `&>>`, which is a
+syntax error under `/bin/bash` on this Mac and valid under `/bin/bash` on the
+Linux CI runner — so it proved the gate here and reported the gate broken
+there (CI run 31868366707). The divergence is now modelled instead: a `bash`
+stub leads `PATH` and pronounces everything valid, while the interpreter
+running the watcher rejects an ordinary syntax error, and the scenario also
+asserts the stub was never consulted. `WATCHER_BASH` picks the interpreter —
+`/bin/bash` by default, which is what the LaunchAgent execs; run the suite
+under a bash 5 as well before believing it, because that is the only bash CI
+has.
 
 ## Why it is shaped like this
 

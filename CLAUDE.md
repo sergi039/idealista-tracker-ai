@@ -544,6 +544,41 @@ and TODO.md; respect it if you ever run both side by side.
   `Land.distance_airport`. Do not copy the patterns into a third caller; import
   them. `utils/clear_legacy_land_airport.py` removes the values the unfiltered
   search left behind (free — no API call — with a rollback snapshot).
+- **The same rules say what may be recorded as a hospital, and a *centro de
+  salud* may not** (owner decision 2026-08-15, narrowing the 2026-08-10 one that
+  accepted "a hospital, a health centre or a public outpatient clinic"). Primary
+  care has no beds and no emergency department, so recording it overstates
+  medical access on a number the scorer reads: measured on the Salamir listing
+  (43.568817,-6.211955), the app said "hospital 11 min" — the Centro de Salud in
+  Muros de Nalón — against ~27 min to Hospital Universitario San Agustín, the
+  assigned hospital. 187 of 396 travel rows held such a place. The patterns went
+  on the preset, not into a second filter. Two of them are not obvious and were
+  measured: Google indexes a hospital campus **room by room, every room tagged
+  `hospital`**, so 13 departments of San Agustín sorted ahead of the hospital
+  itself at rank 18 of 20 — `hospital de día` (a day unit) and `unidad de
+  hospitalización` (one ward) carry the word and must be refused for the parent
+  to win. The old rows are not fixed by the deploy —
+  `utils/recalc_property_travel.py --ids …` rewrites them and **spends money**,
+  so it needs the owner to ask.
+- **A town crowds the real hospital off the page, so the preset carries
+  `wide_search_query` too** (#325). Nearby Search returns **one page of 20**,
+  and #323 shipped without the fallback on the strength of one *rural*
+  coordinate where the hospital was still on that page. It does not
+  generalise: the recalc it authorised left **48 of 187 rows** with no
+  hospital, and at 43.3622522,-5.8485461 (Oviedo) all 20 results sit inside
+  0.7 km and are private practices — a beauty centre, a driving-licence
+  renewal office, several named individuals. HUCA and Monte Naranco are close
+  and can never appear. So the refusals were right and the answer was never on
+  the page, which is the airport preset's situation exactly (#171/#254), and
+  it takes the same cure: Text Search accepts no `radius`, so Nearby's ~50 km
+  cap does not apply, and the same preset rules filter the result. Measured
+  against the deployed image: Oviedo → "Monte Naranco Hospital" 2.1 km,
+  Cudillero → "Hospital Universitario San Agustin" 26.2 km. It fires only
+  where Nearby already answered with nothing acceptable, so it bills nothing
+  for the rows that resolve. **`wide_search_query` is not part of
+  `PlaceRules`**, so adding it leaves the Places cache signature unchanged and
+  the already-correct rows keep their cached lookups — which is what let the
+  48 be re-run on their own.
 - **Amenities are measured for `Property`, through the same one client**
   (#152). `_fetch_osm_amenities` is the whole Overpass amenity client — cache,
   gate, transport, refusals — and `_enrich_with_osm_data` (legacy `Land`) and
@@ -604,7 +639,40 @@ and TODO.md; respect it if you ever run both side by side.
   losing work, and a wrong `True` is #98's defect wearing an ops costume.
   The watcher's own liveness check is `docker top`, so a job that adopts
   nothing is still *seen*; what it cannot supply is whether killing it costs
-  anything. **A marker is not a liveness check and must never be read as
+  anything. **A marker is matched to a process by its rendered command line —
+  the module it actually runs, plus an `argv` that renders to exactly that
+  command's arguments — and never by PID** (#290 follow-up). The
+  two sides do not share a PID namespace: `os.getpid()` inside the container
+  returned 41 while `docker top` reported 21974 for that same process, so the
+  original PID-keyed lookup matched nothing and every job read as `unknown`.
+  The `resumable` half shipped dead and stayed dead for eleven deploy-log
+  lines before anyone looked. Do not "simplify" the join back to a PID, and
+  keep the fixture's marker PIDs absent from its `docker top` rows — a fixture
+  that numbers both sides the same cannot fail on this. *Rendered* is load
+  bearing on both halves: `docker top` returns one whitespace-joined line with
+  the shell's quoting gone, so `--snapshot 'data/My Pool.json'` arrives as
+  four tokens against the marker's two and a token-list comparison misses the
+  job's own marker; and the module is read the way **python** reads short
+  options, walking the cluster, never by matching a literal `-m`. Three
+  spellings of one command defeated three attempts to anchor on a form —
+  `-m utils.x`, `-mutils.x`, `-um utils.x` — and each time the job the
+  anchor missed was not reported as unknown, it was **not reported at all**.
+  That asymmetry is why `AUTOPILOT_INFLIGHT_PATTERN` is a deliberately
+  generous pre-filter (any python mentioning `utils.` or `utils/`) with the
+  marker join as the precise layer: an extra process named costs a bounded
+  deferral, a missing one costs work nobody knows was lost. The same class
+  bit `tools/backfill_supervisor.sh` twice on the same day (#311, #319) —
+  when one of these turns up, close the class, not the example.
+  Likewise **`docker top` failing is not `docker top` answering "nothing"**:
+  an unreadable process list is a third state that blocks like an unmarked
+  job, and only a *shell* `-c` parent is collapsed into its child — a real
+  `utils` process that spawned another is two jobs, not one. That `-c` is
+  looked for across every token, not only up to the first non-option one:
+  `bash -o pipefail -c` puts a bare word in the middle of the option run, and
+  knowing where the options end means knowing an optstring per shell, so a
+  scan that covers `-o` but not `--rcfile` would read as complete and still be
+  wrong.
+  **A marker is not a liveness check and must never be read as
   one** — it outlives its process by design, because surviving the kill is
   what lets the next run report the interruption. A file in `data/.inflight/`
   therefore means "a run started and did not clean up", which is true of a
@@ -643,6 +711,49 @@ and TODO.md; respect it if you ever run both side by side.
   `DEPLOY_RENDER_PATH` is empty and no page was rendered, on the rollback path
   as well as the forward one. `tests/test_deploy_page_check_shared.py` fails if
   either consumer grows its own copy.
+- **A tick that deploys the watcher hands over to it first** (#293).
+  `deploy_watcher.sh` is in the tree it deploys, and a running tick cannot
+  pick up its own update: `git merge` renames a new file over the old one, so
+  the inode changes and the shell's open descriptor keeps reading the
+  *previous* script to the end of the tick. Measured, and reliable rather than
+  intermittent — which is why the 16:33:30 deploy on 2026-08-14 rolled out
+  #285's in-flight survey and page check while running neither, and killed a
+  pool backfill at 32 ledger rows silently. (An in-place rewrite is worse
+  still: the same script overwritten with `cat >` keeps its inode and bash
+  resumes mid-statement in the new bytes. Nothing here does that, and nothing
+  should start.) So when `origin/main` changes the script or `lib/`, the tick
+  fast-forwards and `exec`s the new one **before** it surveys, defers, builds
+  or verifies. The `flock` on fd 9 rides across the `exec` and is deliberately
+  not re-taken — re-taking works, and that is the defect: it drops the lock for
+  a fork and an exec, which is room for a second concurrent build. The commit
+  that is *serving* rides across too (`AUTOPILOT_ROLLBACK_SHA`), because after
+  the merge `HEAD` is the commit under test and a rollback would otherwise stay
+  on it. That environment variable lasts one tick, and a tick that hands over
+  and then **defers** to an in-flight job ends without deploying — so from the
+  next tick the rollback target is read from `data/.deployed_sha` whenever the
+  checkout is ahead of it. The marker is the only record of what is serving
+  that outlives a process, and it is trustworthy because it is written only
+  after a build passed health. An incoming watcher is syntax-checked **before** the merge, where
+  refusing costs nothing — with `${BASH:-/bin/bash}` and never a bare `bash`,
+  because launchd puts Homebrew bash 5 on PATH while the plist execs
+  `/bin/bash` 3.2.57, and `&>>` and `;;&` pass `-n` under one and are syntax
+  errors under the other (measured). Both merges take `"$remote_sha"`, not
+  `origin/main`: sessions and humans fetch into this same clone, so the ref can
+  advance past the commit that was vetted, surveyed and counted against the
+  deferral budget. When the per-tick handover budget (`AUTOPILOT_REEXEC_MAX`)
+  is spent and `main` has moved again, the tick **stops without deploying**
+  rather than falling back to deploying the newer watcher under the running
+  one — that fallback is this ticket's defect, and stopping costs a single
+  tick because the checkout already holds the watcher in use, so the next tick
+  hands over normally. `AUTOPILOT_SELF_UPDATE=0` restores the old behaviour and
+  says so loudly; do not make that the default. The suite that pins all of
+  this (`tools/autopilot/deploy_self_update_test.sh`) must not build a
+  scenario out of a fact that is only true on one machine: the version gap
+  above exists on this Mac and not on the Linux CI runner, where `/bin/bash`
+  is bash 5 too, so the first version of that scenario proved the gate here
+  and reported it broken there. It now models the disagreement with a `bash`
+  stub on `PATH` that approves everything, and `WATCHER_BASH` runs every
+  scenario under a bash 5 as well.
 - Preserve the scraping throttle in `services/listing_status_service.py`
   (randomized sleeps between listing fetches). No bulk re-scrape loops.
 - **There is no authentication** (owner decision, 2026-08-08): the admin

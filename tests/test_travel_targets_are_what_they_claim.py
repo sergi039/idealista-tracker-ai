@@ -223,14 +223,29 @@ class TestThePlaceHasToSayWhatItIs:
         "name",
         [
             "Hospital Universitario Central de Asturias",
-            "Centro de Salud de Cudillero",
-            "Ambulatorio de Gijón",
+            "Hospital Universitario San Agustin",
         ],
     )
-    def test_a_hospital_or_health_centre_is_taken(self, name):
+    def test_a_hospital_is_taken(self, name):
         rules = _place_rules(TRAVEL_PRESET_DEFS["hospital"])
 
         assert not rules.rejects(_place(name, ["hospital", "establishment"]))
+
+    @pytest.mark.parametrize(
+        "name", ["Centro de Salud de Cudillero", "Ambulatorio de Gijón"]
+    )
+    def test_a_health_centre_is_no_longer_taken(self, name):
+        """Both were *accepted* here until 2026-08-15, by the decision above.
+
+        A centro de salud has no beds and no emergency department, so recording
+        one as the nearest hospital overstated medical access -- 2.5x on the
+        Salamir listing, on 187 of 396 rows overall. The narrowing and its
+        measurement live in `tests/test_hospital_is_a_hospital.py`; this case
+        stays here so the reversal is visible from the decision it reverses.
+        """
+        rules = _place_rules(TRAVEL_PRESET_DEFS["hospital"])
+
+        assert rules.rejects(_place(name, ["hospital", "establishment"]))
 
 
 class TestTheLookupWalksPastRefusedCandidates:

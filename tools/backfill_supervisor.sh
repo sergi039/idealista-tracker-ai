@@ -91,11 +91,11 @@ Usage: backfill_supervisor.sh --module utils.backfill_pool --snapshot-prefix dat
                            shell INSIDE the container, so it is operator-trusted
                            input like any other argument to `docker exec`
   --container NAME         default idealista-app
-  --run-log PATH           where the module's own output goes, RELATIVE to /app
-                           (default data/<module-tail>_supervised.log). It is
-                           read back on the host through the ./data bind mount,
-                           so an absolute path would name two different files
-                           and is refused.
+  --run-log PATH           where the module's own output goes, under data/
+                           (default data/<module-tail>_supervised.log). Only
+                           ./data is bind mounted into the container, so any
+                           other path names one file on the host and a
+                           different one inside, and is refused.
   --log PATH               supervisor log (default data/backfill_supervisor.log)
   --max-restarts N         default 12
   --interval S             seconds between checks, default 90
@@ -157,14 +157,71 @@ MODULE_TAIL="${MODULE##*.}"
 RUN_LOG="${RUN_LOG:-data/${MODULE_TAIL}_supervised.log}"
 LOG_FILE="${LOG_FILE:-data/backfill_supervisor.log}"
 
+# Where this checkout lives, so that neither the run log nor the lock depends
+# on the caller's working directory. BACKFILL_ROOT is the test seam.
+#
+# $0 is resolved through symlinks and every path is made PHYSICAL (`pwd -P`),
+# because the identity of the lock is what keeps two supervisors apart: reached
+# through a symlink at a different depth, `dirname $0` named a different
+# repository root, so the same tool took two different locks and both restarted
+# the paid job.
+SCRIPT_SOURCE="$0"
+while [ -L "$SCRIPT_SOURCE" ]; do
+    SCRIPT_LINK="$(readlink "$SCRIPT_SOURCE")" || break
+    case "$SCRIPT_LINK" in
+        /*) SCRIPT_SOURCE="$SCRIPT_LINK" ;;
+        *) SCRIPT_SOURCE="$(dirname "$SCRIPT_SOURCE")/$SCRIPT_LINK" ;;
+    esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd -P)"
+REPO_ROOT="${BACKFILL_ROOT:-$(dirname "$SCRIPT_DIR")}"
+REPO_ROOT="$(cd "$REPO_ROOT" 2>/dev/null && pwd -P)" || REPO_ROOT=""
+if [ -z "$REPO_ROOT" ]; then
+    echo "cannot resolve the repository root for this script" >&2
+    exit 2
+fi
+
 # The restart redirects to /app/$RUN_LOG inside the container while finished()
-# reads $RUN_LOG here; those are the same file only because ./data is bind
-# mounted at /app/data. An absolute path silently names two different files,
-# and the host one going stale reads as either "never finishes" or, if an old
-# Done sits in it, immediate false success.
+# reads the same file here. They are one file only under the ./data:/app/data
+# bind mount, so the run log has to resolve inside data/ — and three separate
+# ways of leaving it have now been found:
+#   * an absolute path names two unrelated files;
+#   * `--run-log run.log` writes /app/run.log in the container while the host
+#     reads ./run.log;
+#   * `data/../run.log` passes a prefix test and lands outside data/ anyway.
+# Reading it relative to REPO_ROOT rather than the cwd closes the fourth: the
+# same default diverges when the tool is invoked from anywhere else.
 case "$RUN_LOG" in
-    /*) echo "--run-log must be relative to /app (it is read back on the host through the bind mount), got: $RUN_LOG" >&2; exit 2 ;;
+    *..*) echo "--run-log must not contain '..', got: $RUN_LOG" >&2; exit 2 ;;
 esac
+case "$RUN_LOG" in
+    data/?*) : ;;
+    *) echo "--run-log must be a path under data/ (only ./data is bind mounted into the container), got: $RUN_LOG" >&2; exit 2 ;;
+esac
+RUN_LOG_HOST="$REPO_ROOT/$RUN_LOG"
+
+# A textual check is not containment: `data/up` where `up` is a symlink to `..`
+# passes every string test above and still lands outside the bind mount. Only
+# the resolved physical path answers "is this the file the container writes".
+RUN_LOG_DIR="$(dirname "$RUN_LOG_HOST")"
+mkdir -p "$RUN_LOG_DIR" 2>/dev/null || true
+DATA_PHYS="$(cd "$REPO_ROOT/data" 2>/dev/null && pwd -P)" || DATA_PHYS=""
+RUN_LOG_PHYS="$(cd "$RUN_LOG_DIR" 2>/dev/null && pwd -P)" || RUN_LOG_PHYS=""
+if [ -z "$DATA_PHYS" ] || [ -z "$RUN_LOG_PHYS" ]; then
+    echo "--run-log directory does not exist under data/: $RUN_LOG_DIR" >&2
+    exit 2
+fi
+case "$RUN_LOG_PHYS/" in
+    "$DATA_PHYS"/*) : ;;
+    *) echo "--run-log resolves outside data/ ($RUN_LOG_PHYS); only ./data is bind mounted into the container" >&2; exit 2 ;;
+esac
+
+if [ -z "$DONE_PATTERN" ]; then
+    # grep matches an empty pattern against every line, so the first progress
+    # line the module wrote would report the paid job as finished.
+    echo "--done-pattern must not be empty" >&2
+    exit 2
+fi
 
 mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 
@@ -174,8 +231,8 @@ log() {
 
 # Only what THIS run appends counts as its completion; see rule 4 above.
 RUN_LOG_START=0
-if [ -f "$RUN_LOG" ]; then
-    RUN_LOG_START="$(wc -c <"$RUN_LOG" 2>/dev/null | tr -d ' ')"
+if [ -f "$RUN_LOG_HOST" ]; then
+    RUN_LOG_START="$(wc -c <"$RUN_LOG_HOST" 2>/dev/null | tr -d ' ')"
     case "$RUN_LOG_START" in ''|*[!0-9]*) RUN_LOG_START=0 ;; esac
 fi
 
@@ -196,7 +253,10 @@ job_state() {
     if [ "$rc" -ne 0 ] || [ -z "$listing" ]; then
         return 2
     fi
-    if printf '%s\n' "$listing" | grep -qE -- "(^| )-m ${MODULE_RE}( |\$)"; then
+    # `-m mod`, `-mmod` and `-um mod` are all the same invocation to python, and
+    # anchoring on the literal "-m " missed the last two — declaring a live paid
+    # backfill idle and starting a second copy of it.
+    if printf '%s\n' "$listing" | grep -qE -- "(^| )-[A-Za-z]*m ?${MODULE_RE}( |\$)"; then
         return 0
     fi
     return 1
@@ -212,37 +272,63 @@ finished() {
     # append-only and its default path is the same on every invocation, so
     # only the bytes appended after this supervisor started are its own
     # evidence of completion (rule 4).
-    [ -f "$RUN_LOG" ] || return 1
-    tail -c "+$((RUN_LOG_START + 1))" "$RUN_LOG" 2>/dev/null \
+    [ -f "$RUN_LOG_HOST" ] || return 1
+    tail -c "+$((RUN_LOG_START + 1))" "$RUN_LOG_HOST" 2>/dev/null \
         | grep -q -- "$DONE_PATTERN"
 }
 
-# One supervisor per module and container (rule 5). mkdir is the atomic part;
-# the pid inside lets a genuinely dead predecessor be taken over instead of
-# blocking the owner forever.
-LOCK_DIR="$(dirname "$LOG_FILE")/.supervisor.${CONTAINER}.${MODULE}.lock"
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    # mkdir fails for two different reasons and they must not be confused.
-    # Only "it already exists" is a lock held by somebody; a missing parent or
-    # a permission error means this run holds NO lock, and carrying on there
-    # is the same fail-open this tool was just audited for.
-    if [ ! -d "$LOCK_DIR" ]; then
-        echo "cannot create the supervisor lock at $LOCK_DIR" >&2
-        exit 2
+# One supervisor per module and container (rule 5).
+#
+# The lock is anchored to the repository, NOT to `dirname $LOG_FILE`: keying it
+# to an option meant two supervisors with different --log paths took two
+# different locks and both restarted the same paid job.
+#
+# It is a FILE created under `noclobber`, not a directory, because create and
+# claim then happen in one atomic step. The directory version had two races:
+# two supervisors could both find one stale lock, both decide it was dead, and
+# both fall through before either wrote its pid; and a pid write that failed
+# was ignored, leaving a supervisor running with a lock it did not hold.
+LOCK_ROOT="$REPO_ROOT/data"
+LOCK_FILE="$LOCK_ROOT/.supervisor.${CONTAINER}.${MODULE}.lock"
+
+if ! mkdir -p "$LOCK_ROOT" 2>/dev/null; then
+    echo "cannot create the supervisor lock directory $LOCK_ROOT" >&2
+    exit 2
+fi
+
+# The ONLY way to hold this lock is the atomic create below. A stale lock is
+# reported and refused, never taken over automatically.
+#
+# Taking one over cannot be made atomic, and an audit found the race: two
+# supervisors both read one dead pid, A removes it and creates its lock, B then
+# performs the removal it had already decided on — deleting A's fresh lock —
+# and creates its own. Both then believe they hold it and both restart the paid
+# job. Any read-then-remove has that shape, and macOS has no flock(1) to
+# replace it with. Refusing costs one manual `rm` when a supervisor is killed;
+# losing the race costs a duplicate paid backfill.
+acquire_lock() {
+    local other
+    if (set -o noclobber; printf '%s\n' "$$" >"$LOCK_FILE") 2>/dev/null; then
+        return 0
     fi
-    other="$(cat "$LOCK_DIR/pid" 2>/dev/null)"
+    other="$(cat "$LOCK_FILE" 2>/dev/null)"
     # `kill -0` cannot tell "no such process" from "not yours", so a lock held
-    # by another user reads as stale. The supervisor runs as the owner of the
-    # container on a single-user host, where that distinction does not arise.
+    # by another user reads as dead. The supervisor runs as the owner of the
+    # container on a single-user host, where that does not arise.
     if [ -n "$other" ] && kill -0 "$other" 2>/dev/null; then
         echo "another supervisor (pid $other) already watches $MODULE in $CONTAINER" >&2
-        log "supervisor: refusing to start - pid $other already watches $MODULE in $CONTAINER"
-        exit 2
+    else
+        echo "a supervisor lock is present at $LOCK_FILE (pid ${other:-unknown}, not running)." >&2
+        echo "It is not taken over automatically: that cannot be done atomically, and losing the race starts a second paid backfill. Remove the file by hand once you are sure no supervisor is running." >&2
     fi
-    log "supervisor: taking over a stale lock left by pid ${other:-unknown}"
+    return 1
+}
+
+if ! acquire_lock; then
+    log "supervisor: refusing to start - could not take the lock for $MODULE in $CONTAINER"
+    exit 2
 fi
-printf '%s\n' "$$" >"$LOCK_DIR/pid" 2>/dev/null || true
-trap 'rm -f "$LOCK_DIR/pid" 2>/dev/null; rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+trap '[ "$(cat "$LOCK_FILE" 2>/dev/null)" = "$$" ] && rm -f "$LOCK_FILE"' EXIT
 
 restarts=0
 log "supervisor: watching $MODULE in $CONTAINER (max $MAX_RESTARTS restarts)"
@@ -267,11 +353,12 @@ for _tick in $(seq 1 "$MAX_TICKS"); do
                 restarts=$((restarts + 1))
                 cmd="python -m $MODULE"
                 if [ -n "$SNAPSHOT_PREFIX" ]; then
-                    # The restart counter is what makes this unique within a
-                    # run (a clock does not: --interval 0 restarts twice in one
-                    # second), and the date is what stops a run tomorrow from
-                    # landing on a file left today (rule 3).
-                    cmd="$cmd --snapshot ${SNAPSHOT_PREFIX}_$(date +%Y%m%d_%H%M%S)_${restarts}.json"
+                    # The restart counter makes this unique within a run (a
+                    # clock does not: --interval 0 restarts twice in one
+                    # second), the pid makes it unique between runs that share
+                    # a second and a counter, and the date stops a run tomorrow
+                    # from landing on a file left today (rule 3).
+                    cmd="$cmd --snapshot ${SNAPSHOT_PREFIX}_$(date +%Y%m%d_%H%M%S)_$$_${restarts}.json"
                 fi
                 [ -n "$EXTRA_ARGS" ] && cmd="$cmd $EXTRA_ARGS"
                 log "supervisor: restart $restarts/$MAX_RESTARTS -> $cmd"
