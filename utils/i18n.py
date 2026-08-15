@@ -43,6 +43,16 @@ TRANSLATIONS = {
         # Shown instead of the literal source code "none": nobody computed a
         # verdict here, which is not the same as computing "no sea view".
         "sea_view_not_computed": "Not computed yet",
+        # Listing status is a claim, and a claim needs a source: `active` is
+        # the default a row is ingested with, so the surfaces say when nobody
+        # ever verified it (services/listing_verification.py).
+        "listing_state_active": "Live",
+        "listing_state_unchecked": "Unverified",
+        "listing_verified_tooltip": "Confirmed against Idealista",
+        "listing_unchecked_tooltip": "Never verified against Idealista — the default a new listing carries",
+        "listing_checked_ago": "checked %s d ago",
+        "listing_status_coverage": "Listing status: %s of %s verified against Idealista",
+        "listing_status_coverage_tooltip": "The rest carry the status they were ingested with, which nobody confirmed. Idealista blocks the automatic checker from this machine.",
         # Quick scope switches on the properties toolbar
         "favorites": "Favorites",
         "hide_removed": "Hide removed",
@@ -270,6 +280,14 @@ TRANSLATIONS = {
         "sea_view_state_no": "Sin vista al mar",
         "sea_view_state_unknown": "Vista al mar sin determinar",
         "sea_view_not_computed": "Sin calcular todavía",
+        # Ver services/listing_verification.py.
+        "listing_state_active": "Activo",
+        "listing_state_unchecked": "Sin verificar",
+        "listing_verified_tooltip": "Confirmado en Idealista",
+        "listing_unchecked_tooltip": "Nunca verificado en Idealista — es el valor por defecto de un anuncio nuevo",
+        "listing_checked_ago": "comprobado hace %s d",
+        "listing_status_coverage": "Estado del anuncio: %s de %s verificados en Idealista",
+        "listing_status_coverage_tooltip": "El resto conserva el estado con el que se importó, que nadie confirmó. Idealista bloquea el comprobador automático desde esta máquina.",
         "favorites": "Favoritos",
         "hide_removed": "Ocultar retirados",
         "price": "Precio",

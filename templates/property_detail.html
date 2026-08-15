@@ -142,21 +142,42 @@
                     {# Where the status came from. A `removed` idealista mailed the
                        owner and a `removed` somebody typed read identically
                        before this, and with the scraper blocked the difference
-                       is most of what the reader has to go on. #}
-                    {% set _status_note = {
-                        'email': "Recorded from Idealista's own removal email.",
-                        'check': 'Recorded by a status check that read the listing page.',
-                        'manual': 'Set by hand.',
-                        'ingest': 'The default this listing was ingested with — never verified.',
-                    }.get(property.listing_status_source, 'Source not recorded.') %}
+                       is most of what the reader has to go on. The sentences
+                       live in services/listing_verification.py, with the rule
+                       that decides which of them applies -- this page and the
+                       list badges have to agree about what counts as verified,
+                       and two copies of a rule eventually ship half-changed. #}
+                    {% set _verdict = listing_verdict_for(property) %}
+                    {% set _status_note = _verdict.note %}
                     <div class="d-flex flex-wrap align-items-center gap-2 text-body-secondary small">
-                        {% if property.listing_status == 'removed' %}
+                        {% if _verdict.state == 'removed' %}
                             <span class="badge bg-danger" title="{{ _status_note }}">
                                 <i class="fas fa-times-circle me-1"></i>REMOVED
                             </span>
-                        {% elif property.listing_status == 'sold' %}
+                        {% elif _verdict.state == 'sold' %}
                             <span class="badge bg-secondary" title="{{ _status_note }}">
                                 <i class="fas fa-check-circle me-1"></i>SOLD
+                            </span>
+                        {% elif _verdict.state == 'active' %}
+                            {# Shown because somebody established it. The header
+                               deliberately said nothing for an active listing
+                               (2026-08-09) back when every listing was active by
+                               default; now that "live" is a claim with a source
+                               behind it, it is worth the badge -- and the reader
+                               can tell it apart from the unverified rows. #}
+                            <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle fw-normal"
+                                  title="{{ t('listing_verified_tooltip') }} — {{ _status_note }}">
+                                <i class="fas fa-circle-check me-1"></i>{{ t('listing_state_active') }}
+                            </span>
+                        {% else %}
+                            {# The default a row is ingested with, which this page
+                               used to render exactly like a confirmed one: no
+                               badge, no banner, nothing to distinguish "we read
+                               the page" from "nobody ever looked". #}
+                            <span class="badge bg-body-tertiary text-body-secondary border fw-normal"
+                                  id="listing-unverified-badge"
+                                  title="{{ _status_note }}">
+                                <i class="fas fa-circle-question me-1"></i>{{ t('listing_state_unchecked') }}
                             </span>
                         {% endif %}
                         {# The geocoded address, which the enrichment pass has been
@@ -242,14 +263,14 @@
     </div>
 </div>
 
-{% if property.listing_status in ('removed', 'sold') %}
+{% if _verdict.state in ('removed', 'sold') %}
 <div class="row mb-3">
     <div class="col-12">
-        <div class="alert alert-{{ 'danger' if property.listing_status == 'removed' else 'secondary' }} d-flex align-items-center" role="alert">
-            <i class="fas fa-{{ 'times-circle' if property.listing_status == 'removed' else 'check-circle' }} me-3 fa-2x"></i>
+        <div class="alert alert-{{ 'danger' if _verdict.state == 'removed' else 'secondary' }} d-flex align-items-center" role="alert">
+            <i class="fas fa-{{ 'times-circle' if _verdict.state == 'removed' else 'check-circle' }} me-3 fa-2x"></i>
             <div>
                 <h5 class="mb-1">
-                    {% if property.listing_status == 'removed' %}
+                    {% if _verdict.state == 'removed' %}
                         This listing is no longer available on Idealista
                     {% else %}
                         This property has been sold
@@ -1643,11 +1664,26 @@ async function checkPropertyListingStatus(propertyId) {
         }
         paintLastChecked(result.last_checked);
         if (result.observed === 'error') {
-            report(
-                'fas fa-ban',
-                'Could not verify: Idealista did not answer with the listing page (bot protection or a server error). Status left unchanged.',
-                'error'
-            );
+            // Name the wall. A refusal by idealista is a standing condition —
+            // it will answer the next press the same way, and the service has
+            // stopped dialling — while a timeout is a bad moment worth
+            // retrying. Reporting both as one sentence is how 76 consecutive
+            // captchas looked like 76 unrelated failures.
+            const breaker = result.breaker || {};
+            const until = breaker.blocked_until
+                ? new Date(breaker.blocked_until).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
+                : null;
+            let message;
+            if (result.refusal === 'backing_off') {
+                message = `Not checked: Idealista has refused the last ${breaker.consecutive_refusals} checks from this machine, so the checker is paused${until ? ` until ${until}` : ''}. Set the status by hand if you have looked at the listing yourself.`;
+            } else if (result.refusal === 'blocked' || result.refusal === 'not_the_listing_page') {
+                message = 'Could not verify: Idealista answered with bot protection instead of the listing page. Status left unchanged.';
+            } else if (result.refusal === 'timeout') {
+                message = 'Could not verify: Idealista did not answer in time. Status left unchanged — worth retrying.';
+            } else {
+                message = 'Could not verify: Idealista did not answer with the listing page. Status left unchanged.';
+            }
+            report('fas fa-ban', message, 'error');
         } else {
             report('fas fa-check', 'Checked on Idealista: no change.', 'success');
         }

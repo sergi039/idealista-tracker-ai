@@ -81,6 +81,34 @@
     {% endif %}
 {%- endmacro %}
 
+{# The listing status, and only when somebody established it. `active` is the
+   value a row is ingested with, so an unchecked row gets no badge at all --
+   badging every row "unverified" would put a grey pill on ~100% of the table,
+   which is why the coverage line above the list carries that half of the
+   disclosure instead. What a row may say for itself: a terminal status, or a
+   live one somebody confirmed. Rule and wording both come from
+   services/listing_verification.py. #}
+{% macro listing_status_badge(p) -%}
+    {% set verdict = listing_verdict_for(p) %}
+    {% if verdict.state in ('removed', 'sold') %}
+        <span class="badge bg-secondary" title="{{ verdict.note }}">{{ verdict.state }}</span>
+    {% elif verdict.state == 'active' %}
+        {# The age carries as colour and tooltip, never as extra words: measured
+           on the rendered page at 800px, "Live checked 140 d ago" wraps to
+           three lines in the Type column and doubles the row height. A check
+           older than STALE_AFTER_DAYS still verified something -- the listing
+           was up when it was read -- so it keeps the badge and loses the green:
+           "confirmed in March" is not the same claim about today as "confirmed
+           yesterday", and the list has room to say that in weight but not in
+           words. The exact date is on the property page. #}
+        {% set age_note = (' — ' ~ t('listing_checked_ago')|format(verdict.age_days)) if verdict.age_days is not none else '' %}
+        <span class="badge fw-normal {{ 'bg-body-tertiary text-body-secondary border' if verdict.stale else 'bg-success-subtle text-success-emphasis border border-success-subtle' }}"
+              title="{{ t('listing_verified_tooltip') }}{{ age_note }} — {{ verdict.note }}">
+            <i class="fas {{ 'fa-clock-rotate-left' if verdict.stale else 'fa-circle-check' }} me-1"></i>{{ t('listing_state_active') }}
+        </span>
+    {% endif %}
+{%- endmacro %}
+
 {# Short label under a travel time, the way /lands captioned its OV | GJ
    column. The full destination stays in the tooltip. #}
 {% set TRAVEL_ABBR = {
@@ -578,6 +606,22 @@
                                     href="{{ url_for('main.properties', **dict(base_args, profile_id='unassigned', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">show them</a>)</span>
                         {% endif %}
                     {% endif %}
+                    {# How many of those rows carry a status anybody established.
+                       The other half of the disclosure the per-row badge cannot
+                       make: an unchecked row shows no badge, and without this
+                       line "no badge" reads as "nothing worth saying" rather
+                       than "never verified". Counted over the same filtered set
+                       as the total beside it, with the predicate the badges use
+                       (services/listing_verification.py). Rendered only when
+                       the page actually counted -- the error path renders this
+                       template with nothing, and a "0 of 0 verified" there would
+                       be a claim it cannot back up. #}
+                    {% if listing_verified_count is defined and pagination %}
+                        <span id="listing-verification-coverage" class="text-body-secondary small"
+                              title="{{ t('listing_status_coverage_tooltip') }}">
+                            <i class="fas fa-circle-info me-1"></i>{{ t('listing_status_coverage')|format(listing_verified_count, pagination.total) }}
+                        </span>
+                    {% endif %}
                     {% if not selected_profile_id and profile_selection.withholds_profile_travel %}
                         <span class="small text-body-secondary" id="profile-travel-notice">
                             <i class="fas fa-circle-info me-1"></i>{{ profile_selection.travel_notice }}
@@ -681,7 +725,7 @@
                                 <tbody>
                                     {% for p in properties %}
                                         <tr class="property-row {% if p.listing_status in ('removed', 'sold') %}listing-inactive{% endif %}"
-                                            data-listing-status="{{ p.listing_status or 'active' }}">
+                                            data-listing-status="{{ listing_verdict_for(p).state }}">
                                             <td class="col-score" {% if active_mode == 'investment' %}style="background-color: rgba(25, 135, 84, 0.2);"{% elif active_mode == 'lifestyle' %}style="background-color: rgba(255, 193, 7, 0.2);"{% endif %}>
                                                 {% if active_mode == 'investment' %}
                                                     {{ score_badge(p.score_investment|float if p.score_investment is not none else none, 'font-weight: bold; font-size: 0.9em;') }}
@@ -794,9 +838,7 @@
                                                     {% if p.property_subtype and p.property_subtype != p.property_category and not (p.property_category == 'land' and p.property_subtype == 'plot') %}
                                                         <span class="badge badge-neutral">{{ p.property_subtype }}</span>
                                                     {% endif %}
-                                                    {% if p.listing_status and p.listing_status != 'active' %}
-                                                        <span class="badge bg-secondary">{{ p.listing_status }}</span>
-                                                    {% endif %}
+                                                    {{ listing_status_badge(p) }}
                                                 </div>
                                             </td>
                                             <td class="col-added">
@@ -845,7 +887,7 @@
                     {# Two per row from the tablet breakpoint up: the container
                        is no longer capped at 720px there, and one card spanning
                        the whole width just stretches the same content. #}
-                    <div class="col-md-6 col-xl-4 mb-4" data-listing-status="{{ p.listing_status or 'active' }}">
+                    <div class="col-md-6 col-xl-4 mb-4" data-listing-status="{{ listing_verdict_for(p).state }}">
                         <div class="card h-100 property-card {% if p.listing_status in ('removed', 'sold') %}listing-inactive-card{% endif %}"
                              data-property-id="{{ p.id }}" style="overflow: hidden;">
                             <!-- Card Header with Score and Type -->
@@ -974,9 +1016,7 @@
                                     {% endif %}
                                 </div>
                                 <div class="d-flex align-items-center gap-2">
-                                    {% if p.listing_status and p.listing_status != 'active' %}
-                                        <span class="badge bg-secondary">{{ p.listing_status }}</span>
-                                    {% endif %}
+                                    {{ listing_status_badge(p) }}
                                     <a class="btn btn-outline-secondary btn-sm"
                                        href="{{ url_for('main.property_detail', property_id=p.id) }}"
                                        title="{{ t('view_details') }}">

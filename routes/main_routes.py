@@ -25,6 +25,10 @@ from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
 from app import db
 from services import sea_view_service
+from services.listing_verification import (
+    read_verdict as listing_verdict,
+    verified_expression,
+)
 from services.profile_selection import (
     MAX_SELECTED_PROFILE_IDS,
     PROFILE_UNASSIGNED_SENTINEL,
@@ -985,6 +989,18 @@ def properties():
             query, Property.search_profile_id, profile_selection
         )
 
+        # How much of what the page is about to draw was ever verified against
+        # idealista. `listing_status` is 'active' by default and nothing
+        # verified that default, so a list of rows carrying it is not a list of
+        # live listings -- and the reader cannot tell by looking, because a
+        # never-checked row and a checked-yesterday row rendered identically.
+        # Counted over the whole filtered result rather than the current page:
+        # the total beside it is the filtered total too, and two numbers on one
+        # line have to be about the same set of rows. The predicate comes from
+        # the module the badges read, so the header and the ticks under it
+        # cannot disagree (services/listing_verification.py).
+        listing_verified_count = query.filter(verified_expression(Property)).count()
+
         # Sorting (safe allow-list). An unknown sort -- an old /lands bookmark
         # asking for travel_time_nearest_beach, say -- falls back to the
         # default *and says so*, so the page never claims an order it did not
@@ -1080,6 +1096,7 @@ def properties():
             selected_profile_id=selected_profile_id,
             profile_selection=profile_selection,
             travel_display_targets=travel_display_targets,
+            listing_verified_count=listing_verified_count,
             **filter_options,
             current_filters={
                 # A list, so `url_for` repeats the parameter instead of
@@ -3692,7 +3709,14 @@ def export_properties_csv():
             "Municipality",
             "Category",
             "Subtype",
+            # The verdict, not the raw column: an ingested row exports
+            # `unchecked`, because exporting its default as `active` is what
+            # let a report recommend a listing that had been withdrawn months
+            # earlier. The two columns after it carry the provenance, the way
+            # Sea View carries its own below.
             "Status",
+            "Status Source",
+            "Status Checked At",
             "Favorite",
             "Sea View",
             "Sea View Source",
@@ -3725,6 +3749,7 @@ def export_properties_csv():
             bedrooms = attrs.get("bedrooms") if isinstance(attrs, dict) else None
             bathrooms = attrs.get("bathrooms") if isinstance(attrs, dict) else None
             sea_view_verdict = sea_view_service.read_verdict(prop)
+            listing_verdict_row = listing_verdict(prop)
 
             row = [
                 prop.id,
@@ -3740,7 +3765,11 @@ def export_properties_csv():
                 prop.municipality,
                 prop.property_category,
                 prop.property_subtype,
-                prop.listing_status,
+                listing_verdict_row["state"],
+                listing_verdict_row["source"] or "",
+                listing_verdict_row["checked_at"].isoformat()
+                if listing_verdict_row["checked_at"]
+                else "",
                 bool(prop.is_favorite),
                 sea_view_verdict["state"],
                 sea_view_verdict["source"],
