@@ -447,6 +447,45 @@ else
 fi
 rm -rf "$dir"
 
+# 17. Reached through a symlink at a different depth, the tool must resolve to
+# the SAME lock. `dirname $0` alone named a different repository root, so the
+# same supervisor took two different locks and both restarted the paid job.
+dir="$(mktemp -d)"
+make_stub "$dir" "sh -c sleep 1" "idealista-app"
+mkdir -p "$dir/tools" "$dir/launch/nested" "$dir/data"
+cp "$SUPERVISOR" "$dir/tools/backfill_supervisor.sh"
+ln -s "$dir/tools/backfill_supervisor.sh" "$dir/launch/nested/sup"
+# A lock held by a live pid, at the root the DIRECT path resolves to.
+printf '%s\n' "$$" > "$dir/data/.supervisor.idealista-app.utils.backfill_pool.lock"
+# No BACKFILL_ROOT here: the point is what the script derives from its own $0.
+( cd "$dir" && PATH="$dir/bin:$PATH" timeout 20 "$dir/launch/nested/sup" \
+    --module utils.backfill_pool --snapshot-prefix data/p --interval 1 --max-ticks 2 \
+    --log "$dir/supervisor.log" --run-log data/run.log ) >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 2 ] && [ "$(starts_in "$dir")" -eq 0 ]; then
+    pass "a symlinked invocation resolves to the same lock"
+else
+    fail "a symlinked invocation resolves to the same lock" "rc=$rc starts=$(starts_in "$dir")"
+fi
+rm -rf "$dir"
+
+# 18. A symlink INSIDE data/ escapes it while passing every textual test, so
+# containment is decided on the resolved physical path.
+dir="$(mktemp -d)"
+make_stub "$dir" "sh -c sleep 1" "idealista-app"
+mkdir -p "$dir/data"
+ln -s .. "$dir/data/up"
+( cd "$dir" && PATH="$dir/bin:$PATH" BACKFILL_ROOT="$dir" timeout 20 "$SUPERVISOR" \
+    --module utils.backfill_pool --snapshot-prefix data/p --interval 1 --max-ticks 2 \
+    --log "$dir/supervisor.log" --run-log data/up/run.log ) >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 2 ] && [ ! -f "$dir/docker-calls.log" ]; then
+    pass "a run log escaping data/ through a symlink is refused"
+else
+    fail "a run log escaping data/ through a symlink is refused" "rc=$rc"
+fi
+rm -rf "$dir"
+
 if [ "$failures" -gt 0 ]; then
     printf '\n%d check(s) failed\n' "$failures"
     exit 1

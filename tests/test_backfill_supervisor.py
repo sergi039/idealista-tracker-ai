@@ -55,7 +55,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SUPERVISOR_TEST = REPO_ROOT / "tools" / "backfill_supervisor_test.sh"
 
-# Twenty-three scenarios, most polling a stub for a few one-second ticks.
+# Twenty-seven scenarios, most polling a stub for a few one-second ticks.
 TIMEOUT_SECONDS = 300
 
 

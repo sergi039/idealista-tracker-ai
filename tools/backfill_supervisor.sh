@@ -159,8 +159,27 @@ LOG_FILE="${LOG_FILE:-data/backfill_supervisor.log}"
 
 # Where this checkout lives, so that neither the run log nor the lock depends
 # on the caller's working directory. BACKFILL_ROOT is the test seam.
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+#
+# $0 is resolved through symlinks and every path is made PHYSICAL (`pwd -P`),
+# because the identity of the lock is what keeps two supervisors apart: reached
+# through a symlink at a different depth, `dirname $0` named a different
+# repository root, so the same tool took two different locks and both restarted
+# the paid job.
+SCRIPT_SOURCE="$0"
+while [ -L "$SCRIPT_SOURCE" ]; do
+    SCRIPT_LINK="$(readlink "$SCRIPT_SOURCE")" || break
+    case "$SCRIPT_LINK" in
+        /*) SCRIPT_SOURCE="$SCRIPT_LINK" ;;
+        *) SCRIPT_SOURCE="$(dirname "$SCRIPT_SOURCE")/$SCRIPT_LINK" ;;
+    esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd -P)"
 REPO_ROOT="${BACKFILL_ROOT:-$(dirname "$SCRIPT_DIR")}"
+REPO_ROOT="$(cd "$REPO_ROOT" 2>/dev/null && pwd -P)" || REPO_ROOT=""
+if [ -z "$REPO_ROOT" ]; then
+    echo "cannot resolve the repository root for this script" >&2
+    exit 2
+fi
 
 # The restart redirects to /app/$RUN_LOG inside the container while finished()
 # reads the same file here. They are one file only under the ./data:/app/data
@@ -180,6 +199,22 @@ case "$RUN_LOG" in
     *) echo "--run-log must be a path under data/ (only ./data is bind mounted into the container), got: $RUN_LOG" >&2; exit 2 ;;
 esac
 RUN_LOG_HOST="$REPO_ROOT/$RUN_LOG"
+
+# A textual check is not containment: `data/up` where `up` is a symlink to `..`
+# passes every string test above and still lands outside the bind mount. Only
+# the resolved physical path answers "is this the file the container writes".
+RUN_LOG_DIR="$(dirname "$RUN_LOG_HOST")"
+mkdir -p "$RUN_LOG_DIR" 2>/dev/null || true
+DATA_PHYS="$(cd "$REPO_ROOT/data" 2>/dev/null && pwd -P)" || DATA_PHYS=""
+RUN_LOG_PHYS="$(cd "$RUN_LOG_DIR" 2>/dev/null && pwd -P)" || RUN_LOG_PHYS=""
+if [ -z "$DATA_PHYS" ] || [ -z "$RUN_LOG_PHYS" ]; then
+    echo "--run-log directory does not exist under data/: $RUN_LOG_DIR" >&2
+    exit 2
+fi
+case "$RUN_LOG_PHYS/" in
+    "$DATA_PHYS"/*) : ;;
+    *) echo "--run-log resolves outside data/ ($RUN_LOG_PHYS); only ./data is bind mounted into the container" >&2; exit 2 ;;
+esac
 
 if [ -z "$DONE_PATTERN" ]; then
     # grep matches an empty pattern against every line, so the first progress
