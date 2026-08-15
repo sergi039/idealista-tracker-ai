@@ -336,6 +336,104 @@ lookup actually covers scores `None` rather than 0, because nobody looked there.
 `utils/recalc_sea_distance.py` backfills; it writes a rollback snapshot of the
 score columns first, since rolling the app back does not undo a data rewrite.
 
+**The pool criterion ships weightless and is live in production anyway**
+(proposal D17, #278; turned on on the mini 2026-08-14). Every category in
+`services/property_scoring_service.py` carries `pool_score: 0.0` in both
+`DEFAULT_INVESTMENT_WEIGHTS` and `DEFAULT_LIFESTYLE_WEIGHTS`, so reading the code
+tells you the criterion is off — and on the Mac mini it is not. The weight lives
+in data: `scoring_config.categories.<cat>.lifestyle.pool_score = 0.1`, all six
+categories, on the three subscriptions that carry a `scoring_config` at all —
+`Default` (1), `Land at Norte` (6), `houses at your custom search area norte`
+(8). The fourth live subscription, `Asturias` (11), has none and therefore still
+scores at the shipped 0.0. A weight set on the *lifestyle* branch alone still
+moves `score_total`, because the combined score is the saved investment/lifestyle
+mix (#257) — the number the list sorts by. So a score that changed under you is
+not necessarily a code change, and `git log` will not explain it.
+
+**Rolling that back is a data restore, not a deploy.**
+`data/pool_weight_enable_snapshot.json` on the mini (2026-08-14T17:48:43Z) holds
+the three profiles' previous `scoring_config` — `null` for each — plus the score
+columns and `scoring` payload of all 393 rows as they stood before. Nothing in
+`utils/` reads that shape: the per-tool snapshots (`--restore` in
+`utils/backfill_pool.py`, `utils/recalc_sea_distance.py`) are flat row lists and
+carry no profile config, so this one is restored by hand — profiles first, then
+the rows. Deleting it is not tidying up; it is discarding the only way back.
+
+**Turning the weight on is deliberately not an ordinary save**
+(`routes/main_routes.py`, action `confirm_pool_scoring`). A save that raises
+`pool_score` above 0 re-scores every listing in the subscription, so it first
+runs a dry preview — stage the config, rescore in the session, count the rows
+that move and the mean shift of the combined total, then `rollback()` — and
+stores the pending config together with **the baseline it diffed against**. The
+confirm applies it only while the stored config still equals that baseline; an
+ordinary save in between drops the pending preview rather than silently
+reverting the newer weights. Every score column is diffed, not just lifestyle:
+the weight can go on the investment branch and move investment and the total
+while lifestyle sits still, and a preview reporting "0 would change" ahead of a
+mass rescore is worse than no preview. Do not collapse this into a direct save.
+
+**The pool datum is honest-absence, like sea view** (`services/pool_service.py`).
+Only a *measured* drive time scores. OSM finding nothing triggers one budgeted
+Places Text Search cross-check and the verdict becomes `unverified_absence` —
+component `None`, never 0, because one text search proves nothing about
+completeness; the only path to a true 0 is the owner's hand-set `owner_no_pool`
+flag, which outranks every computed state and survives recomputes. Indoor is
+evidence with a source — `verified` (`covered=yes`), `likely` (a building, or
+"climatizada" in the name), `unknown` for silence — and the require-indoor
+toggle is applied by the *scorer*, so narrowing or widening it never rewrites
+the evidence. A refusal never overwrites measured candidates.
+`utils/backfill_pool.py` covers the Phase-2 auto-scope (last 30 days plus
+favorites, `utils/enrich_scope.py`), costs at most three Distance Matrix
+elements per property, and is resumable per row; everything older stays manual
+via the Enrich button.
+
+**`/municipalities` keeps municipality facts and listing medians apart, and says
+which is which on the page** (proposal D22, #281). Facts are the municipality's
+own values — INE renta and población, SEPE registered unemployment — with no
+listing involved. Medians are taken over *that municipality's own listings*
+(sea, beach, pool, hospital, supermarket, airport, train, price, score): the
+owner's decision of 2026-08-14, over a capital-centroid basis, because what he
+is choosing between is the listings and not the town halls. The median, never
+the minimum — a minimum crowns a municipality because one listing happens to sit
+next to a pool. Every metric carries its own coverage count, since a median over
+2 of 30 listings is a different claim from one over 30 of 30; sorts put
+unmeasured rows last in **both** directions, like the listing table; and a name
+the INE join cannot resolve says "not matched" rather than showing a guessed
+code (#98's shape, applied to a join). SEPE publishes a *count*, so the page
+renders it as a labeled proxy against población and never as the official
+unemployment rate. Listings whose municipality is empty or email-truncated
+(#298) are counted aside, not compared.
+
+**Three reference files are committed on purpose, and `.gitignore` re-includes
+them one at a time.** `data/*` excludes the runtime artifacts — backfill
+snapshots, ledgers, logs — and `!data/ine_municipal.json`,
+`!data/hospitals_cnh.json`, `!data/sepe_unemployment.json` bring back the small,
+reviewed, importer-generated files that the QoL card and `/municipalities` read.
+It is `data/*` and not `data/` because git cannot re-include a file whose parent
+*directory* is excluded: the bare-directory form makes all three negations
+silently dead. Regenerate with `utils/import_ine_data.py`,
+`utils/import_cnh_hospitals.py` and `utils/import_sepe_unemployment.py`; a
+missing or unreadable file reads as `no_reference_data`, never as an empty
+landscape. Filling the card itself is free and scoped —
+`utils/backfill_quality_of_life.py`, INE and CNH from those local files and the
+supermarket reach through the shared Overpass gate — so it belongs with
+`backfill_sea_view` and `backfill_osm_amenities` under the exception in the hard
+rules below, not with the paid backfills.
+
+**SEPE's `<5` is suppression, not zero** — #98's rule inside a national dataset.
+A withheld count is recorded as `unemployed_total: null` with `suppressed: true`
+(June 2026: one municipality in the five watched provinces, 33048 Pesoz);
+reading it as 0, or as 5, fabricates a figure, and dropping the row claims the
+municipality is absent from the dataset. Two more properties of that source are
+measured rather than assumed, and each cost an afternoon: the CSV declares
+`charset=UTF-8` in the HTTP header and is actually **ISO-8859-1**, and its
+header row sits under a banner with stray spaces inside the column names, so the
+header is *found* and stripped rather than indexed at a fixed offset. The newest
+month on sepe.es exists only as legacy OLE2 `.xls`, which openpyxl refuses and
+xlrd is not a dependency of this project — so the annual open-data CSV is the
+newest *machine-readable* month, and the period actually parsed is recorded in
+the output instead of being assumed by whatever renders it.
+
 The dual-build isolation contract
 from the transition — legacy on 5001 vs universal on 5050, unique Docker
 names, separate IMAP labels and cookie names — lives in docs/DEV_RULES.md
