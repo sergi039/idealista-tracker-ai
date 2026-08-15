@@ -74,6 +74,12 @@ INFLIGHT_PATTERN="${AUTOPILOT_INFLIGHT_PATTERN:-python.*(-m +utils\.|utils/)}"
 DEFER_ON_INFLIGHT="${AUTOPILOT_DEFER_ON_INFLIGHT:-0}"
 DEFER_BUDGET="${AUTOPILOT_DEFER_BUDGET:-6}"
 DEFER_STATE="${AUTOPILOT_DEFER_STATE:-${REPO_DIR}/data/.deploy_deferrals}"
+# What a truthful process list for THIS container must contain. The Dockerfile
+# CMD runs gunicorn, so a table without it is not an idle container - it is a
+# probe that answered without looking. Shape alone is too weak: eight columns
+# and a numeric PID can be satisfied by junk. Set empty to fall back to the
+# shape check alone.
+CONTAINER_SENTINEL="${AUTOPILOT_CONTAINER_SENTINEL-gunicorn}"
 
 # --- this watcher deploys its own source (#293) -----------------------------
 # The tick that rolled out #285 on 2026-08-14 16:33:30 ran the *pre*-#285
@@ -193,6 +199,13 @@ fi
 # what was serving. Prove both tools work here rather than discovering it
 # halfway through a build.
 command -v docker >/dev/null 2>&1 || die "docker not on PATH (${PATH})"
+
+# A malformed AUTOPILOT_INFLIGHT_PATTERN makes `grep -E` exit 2 on every call,
+# which the survey's pipeline would turn into "no jobs are running" - a gate
+# that always passes because it is broken. Prove the pattern compiles once,
+# here, where the failure is loud.
+printf '' | grep -E "$INFLIGHT_PATTERN" >/dev/null 2>&1 || [ $? -eq 1 ] \
+    || die "AUTOPILOT_INFLIGHT_PATTERN is not a valid extended regex: ${INFLIGHT_PATTERN}"
 git rev-parse --git-dir >/dev/null 2>&1 \
     || die "$(command -v git) ($(git --version 2>&1 | head -1)) cannot read ${REPO_DIR} - PATH is ${PATH}"
 
@@ -451,24 +464,65 @@ check_health() {
 # `resumable`. One job, two contradictory verdicts, and with deferring on the
 # wrapper alone is enough to hold a deploy for a job that was safe to kill.
 #
-# So keep the leaves: drop any match that is the parent of another match. A
-# job with no wrapper has no matched child and survives untouched. (A job that
-# deliberately spawned a second `utils` module would lose its parent line;
-# nothing in this repository does that, and the leaf is the process doing the
-# work either way.)
+# So drop the wrapper - but ONLY a wrapper. The rule is not "any match that is
+# the parent of another match": `utils.coordinator` legitimately spawning
+# `utils.worker` would lose the coordinator, and if the coordinator were the
+# non-resumable half its disappearance would take `inflight_unsafe` to zero
+# and let the deploy run straight over it. So a parent is dropped only when
+# its own command is a shell `-c` invocation, which is what an `sh -c 'python
+# -m utils.X ... >> log'` launch actually looks like. Two genuine `utils`
+# processes in a parent/child relationship stay two jobs.
 #
-# Output: one "<pid>\t<command>" line per matching job.
+# Output: one "<pid>\t<command>" line per matching job. Returns non-zero when
+# the process list could not be read at all - see the fail-open note below.
 inflight_processes() {
-    docker top "$APP_CONTAINER" 2>/dev/null \
+    local raw
+    # Failure and emptiness are different answers and must not collapse. A
+    # `docker top` that exits non-zero with no stdout used to become an empty
+    # pipeline through `|| true`, which reads as "no jobs are running" and
+    # deploys in silence - the exact defect this survey exists to prevent,
+    # reproduced inside the survey itself.
+    raw="$(docker top "$APP_CONTAINER" 2>/dev/null)" || return 1
+    # A header with no data rows is not "no processes": the container always
+    # runs gunicorn, so an empty table means the probe did not work. Reading
+    # it as an empty process list is the same fail-open in a quieter costume.
+    # "Row" means a row that looks like ps output - eight columns with a
+    # numeric PID - so a single line of garbage after the header cannot pass
+    # for a process table either.
+    [ "$(printf '%s\n' "$raw" | awk 'NR > 1 && NF >= 8 && $2 ~ /^[0-9]+$/' | wc -l)" -gt 0 ] || return 1
+    # ...and it must contain the process this container cannot be without.
+    # Shape is satisfiable by junk; the app's own server is not.
+    if [ -n "$CONTAINER_SENTINEL" ]; then
+        printf '%s\n' "$raw" | awk 'NR > 1' | grep -qF -- "$CONTAINER_SENTINEL" || return 1
+    fi
+
+    printf '%s\n' "$raw" \
         | awk 'NR > 1 { pid = $2; ppid = $3; $1=$2=$3=$4=$5=$6=$7=""; sub(/^ +/, ""); print pid "\t" ppid "\t" $0 }' \
         | grep -E "$INFLIGHT_PATTERN" \
         | awk -F'\t' '
+            # A shell running `-c`, however it spells it: `sh -c`, `sh -cx`,
+            # `/bin/bash --login -c`. Options are skipped until the first
+            # non-option token, so `-c` need not sit next to the shell name.
+            function is_shell_wrapper(c,   parts, n, i, base) {
+                n = split(c, parts, /[ \t]+/)
+                if (n < 2) return 0
+                base = parts[1]
+                sub(/^.*\//, "", base)
+                if (base !~ /^(sh|bash|dash|ash|zsh)$/) return 0
+                for (i = 2; i <= n; i++) {
+                    if (parts[i] !~ /^-/) return 0
+                    if (parts[i] ~ /^-[A-Za-z]*c[A-Za-z]*$/) return 1
+                }
+                return 0
+            }
             { pid[NR] = $1; ppid[NR] = $2; cmd[NR] = $3; n = NR }
             END {
-                for (i = 1; i <= n; i++) is_parent[ppid[i]] = 1
+                for (i = 1; i <= n; i++) has_matched_child[ppid[i]] = 1
                 for (i = 1; i <= n; i++)
-                    if (!(pid[i] in is_parent)) print pid[i] "\t" cmd[i]
+                    if (!((pid[i] in has_matched_child) && is_shell_wrapper(cmd[i])))
+                        print pid[i] "\t" cmd[i]
             }' || true
+    return 0
 }
 
 # The marker a job wrote for itself, if it wrote one. Prints
@@ -477,21 +531,63 @@ inflight_processes() {
 # deploy cannot tell them apart, and guessing "resumable" is how work gets
 # lost silently.
 #
-# The marker is keyed by PID, and a PID left behind by a killed run can be
-# reused by an unrelated job in the container that replaced it. So the
-# marker's own module has to appear in the command line before its claim is
-# believed - otherwise a stale `resumable: true` could vouch for a job that
-# is nothing of the sort.
+# **The join is the command line, never the PID.** The two sides do not share
+# a PID namespace: `utils/inflight.py` records `os.getpid()` from inside the
+# container, `docker top` reports the host/VM view. Measured on the mini
+# 2026-08-14: the marker said `"pid": 41` while `docker top` reported 21974
+# for the same process, so a PID-keyed lookup matched nothing, every job read
+# as `unknown`, and the whole `resumable` half of #283 was dead in production
+# - eleven "no marker" lines in the deploy log before anyone noticed.
+#
+# So a marker vouches for a process when its `module` and *every* one of its
+# recorded `argv` tokens appear in that process's command line. That also
+# separates two concurrent runs of the same module, because their `--snapshot`
+# paths differ, and it keeps a stale marker from a killed run from vouching
+# for anything still alive under a different argv.
+#
+# If several markers match and disagree about `resumable`, the answer is
+# `unknown`: an ambiguous claim must not be resolved in the deploy's favour.
 inflight_marker() {
-    local pid="$1" command="$2"
-    python3 - "$INFLIGHT_DIR" "$pid" "$command" <<'PY' 2>/dev/null || printf 'unknown\t\n'
+    local command="$1"
+    python3 - "$INFLIGHT_DIR" "$command" <<'PY' 2>/dev/null || printf 'unknown\t\n'
 import glob
 import json
 import os
 import sys
 
-directory, pid, command = sys.argv[1], sys.argv[2], sys.argv[3]
-for path in sorted(glob.glob(os.path.join(directory, f"*.{pid}.json"))):
+directory, command = sys.argv[1], sys.argv[2]
+tokens = command.split()
+
+
+def _program(tokens):
+    """What these tokens actually run: ("module"|"script", name, args).
+
+    Position matters. Scanning for the module *anywhere* let a snapshot path
+    impersonate the program - `--snapshot data/utils.backfill_pool.json`
+    satisfied a `backfill_pool` marker, and so did
+    `--snapshot data/utils/backfill_pool.py`. The program is whichever comes
+    first: the token after `-m`, or the first `.py` token (arguments follow
+    the script, never precede it). Everything after it is the argv.
+    """
+    for i, tok in enumerate(tokens):
+        if tok == "-m" and i + 1 < len(tokens):
+            return ("module", tokens[i + 1], tokens[i + 2 :])
+        if tok.endswith(".py"):
+            return ("script", tok, tokens[i + 1 :])
+    return None
+
+
+def _runs_module(program, module):
+    kind, name, _args = program
+    if kind == "module":
+        return name == f"utils.{module}"
+    parts = name.split("/")
+    return len(parts) >= 2 and parts[-1] == f"{module}.py" and parts[-2] == "utils"
+
+
+program = _program(tokens)
+matches = []
+for path in sorted(glob.glob(os.path.join(directory, "*.json"))):
     try:
         with open(path, encoding="utf-8") as handle:
             data = json.load(handle)
@@ -500,13 +596,32 @@ for path in sorted(glob.glob(os.path.join(directory, f"*.{pid}.json"))):
     if not isinstance(data, dict):
         continue
     module = data.get("module")
-    if not isinstance(module, str) or module not in command:
+    if not isinstance(module, str) or not module:
         continue
-    resumable = "true" if data.get("resumable") is True else "false"
-    print(f"{resumable}\t{data.get('ledger') or ''}")
-    break
-else:
+    if program is None or not _runs_module(program, module):
+        continue
+    # The argv must be the SAME argv, in order - not a set of tokens that
+    # happen to occur. Membership let a marker recording `data/a` vouch for a
+    # live `data/aaa.json`, let a reordered argv match, and worst of all made
+    # an EMPTY argv vacuously true: a stale `bulk_ai_analysis` marker with no
+    # args (resumable, because no --force) then vouched for a live
+    # `--force` run, which is precisely the run that is not resumable.
+    argv = data.get("argv")
+    argv = argv if isinstance(argv, list) else []
+    if any(not isinstance(a, str) for a in argv) or argv != list(program[2]):
+        continue
+    matches.append(data)
+
+if not matches:
     print("unknown\t")
+else:
+    verdicts = {m.get("resumable") is True for m in matches}
+    if len(verdicts) > 1:
+        print("unknown\t")
+    else:
+        resumable = "true" if verdicts.pop() else "false"
+        ledger = next((m.get("ledger") for m in matches if m.get("ledger")), "")
+        print(f"{resumable}\t{ledger}")
 PY
 }
 
@@ -515,26 +630,45 @@ PY
 # are the jobs a deferral exists for.
 inflight_count=0
 inflight_unsafe=0
+# Set when the process list could not be read. "I do not know" is a third
+# answer, distinct from "nothing is running", and it has to block exactly like
+# a job that did not claim to be resumable - otherwise a broken probe is a
+# free pass.
+inflight_unknown=0
 survey_inflight() {
     inflight_count=0
     inflight_unsafe=0
+    inflight_unknown=0
 
-    if [ -z "$(docker ps --filter "name=^/${APP_CONTAINER}$" --format '{{.Names}}' 2>/dev/null)" ]; then
+    local running
+    if ! running="$(docker ps --filter "name=^/${APP_CONTAINER}$" --format '{{.Names}}' 2>/dev/null)"; then
+        inflight_unknown=1
+        log "WARNING: could not ask docker whether ${APP_CONTAINER} is running."
+        log "  work may be in flight; this tick cannot tell."
+        return 0
+    fi
+    if [ -z "$running" ]; then
         # Nothing is running, so nothing can be killed. Not an error: the very
         # first deploy on a machine starts the container.
         return 0
     fi
 
-    local procs line pid command marker resumable ledger
-    procs="$(inflight_processes)"
+    local procs line command marker resumable ledger
+    if ! procs="$(inflight_processes)"; then
+        inflight_unknown=1
+        log "WARNING: 'docker top ${APP_CONTAINER}' gave no readable process list."
+        log "  that is UNKNOWN, not empty - a long job may be running right now."
+        return 0
+    fi
     [ -n "$procs" ] || return 0
     log "long-running work is in flight inside ${APP_CONTAINER}:"
 
     while IFS= read -r line; do
         [ -n "$line" ] || continue
-        pid="${line%%$'\t'*}"
+        # The PID column is still emitted so the process list stays readable
+        # in a debug run, but nothing joins on it any more - see above.
         command="${line#*$'\t'}"
-        marker="$(inflight_marker "$pid" "$command")"
+        marker="$(inflight_marker "$command")"
         resumable="${marker%%$'\t'*}"
         ledger="${marker#*$'\t'}"
 
@@ -735,16 +869,19 @@ self_update_and_reexec
 # ahead of the container while a deferral waits. The marker still names what is
 # serving, which is the part anything downstream reads.)
 survey_inflight
-if [ "$inflight_count" != "0" ]; then
+# An unreadable process list blocks exactly like a job with no marker: both
+# mean "this tick cannot say that killing costs nothing".
+blocking=$((inflight_unsafe + inflight_unknown))
+if [ "$inflight_count" != "0" ] || [ "$inflight_unknown" != "0" ]; then
     if [ "$DEFER_ON_INFLIGHT" != "1" ]; then
         log "  deploying anyway (AUTOPILOT_DEFER_ON_INFLIGHT is off); the ${inflight_count} job(s) above will be killed"
-    elif [ "$inflight_unsafe" = "0" ]; then
+    elif [ "$blocking" = "0" ]; then
         log "  every job above reports itself resumable; deploying and killing them"
     else
         deferrals="$(read_deferrals "$remote_sha")"
         if [ "$deferrals" -ge "$DEFER_BUDGET" ]; then
             log "  deferral budget exhausted (${deferrals}/${DEFER_BUDGET} ticks waited for ${remote_sha:0:7})"
-            log "  deploying and killing the ${inflight_unsafe} job(s) that did not claim to be resumable"
+            log "  deploying and killing the ${blocking} job(s)/unknown(s) that did not claim to be resumable"
         else
             deferrals=$((deferrals + 1))
             if ! write_deferrals "$remote_sha" "$deferrals"; then
@@ -754,7 +891,7 @@ if [ "$inflight_count" != "0" ]; then
                 log "  ALERT: could not record the deferral in ${DEFER_STATE}"
                 log "  an unbounded wait is worse than a killed job - deploying now"
             else
-                log "  deferring this tick (${deferrals}/${DEFER_BUDGET}) - ${inflight_unsafe} job(s) would lose work"
+                log "  deferring this tick (${deferrals}/${DEFER_BUDGET}) - ${blocking} job(s)/unknown(s) may lose work"
                 log "  set AUTOPILOT_DEFER_ON_INFLIGHT=0 to deploy immediately instead"
                 exit 0
             fi

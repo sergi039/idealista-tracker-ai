@@ -137,6 +137,20 @@ scope that finished rows leave, and ideally a ledger. A missing marker means
 *unknown*, and unknown is treated exactly like `false`: a deploy cannot tell
 them apart, and guessing "resumable" is how work goes missing quietly.
 
+**The marker is joined to a process by command line, not by PID.** The PID in
+the filename is the container's (`os.getpid()`); `docker top` reports the
+host/VM view — measured on the mini, 41 against 21974 for the same process.
+A marker vouches for a process when its `module` and every recorded `argv`
+token appear in that command line, which also keeps two concurrent runs of one
+module apart by their `--snapshot` paths. Markers that match but disagree
+about `resumable` resolve to *unknown*, never to the deploy's convenience.
+
+Three states, not two: a `docker top` that cannot be read is **unknown**, and
+blocks exactly like an unmarked job rather than reading as "nothing running".
+Only a shell `-c` parent is folded into its child; a genuine `utils` process
+that spawned another `utils` process stays two jobs, so a non-resumable parent
+cannot vanish from the count.
+
 | Variable | Default | Does |
 |---|---|---|
 | `AUTOPILOT_DEFER_ON_INFLIGHT` | `0` | `1` = skip a tick when a job would lose work |
