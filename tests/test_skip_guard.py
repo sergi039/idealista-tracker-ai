@@ -53,6 +53,13 @@ class _Report:
         return self.nodeid.split("::")[0]
 
 
+class _Session:
+    """The one attribute `pytest_sessionfinish` writes to decide the exit code."""
+
+    def __init__(self):
+        self.exitstatus = pytest.ExitCode.OK
+
+
 class TestWhatIsAccountedFor:
     def test_a_pinned_module_may_skip_for_its_pinned_reason(self):
         skip_guard.note_skip(
@@ -217,3 +224,43 @@ class TestTheWiringInConftest:
         )
         assert len(skip_guard.offenses()) == 1
         assert "(none given)" in "\n".join(skip_guard.summary_lines())
+
+
+class TestTheRunActuallyFails:
+    """Recording an offence is not the same as refusing the run.
+
+    This class exists because the guard could be switched off in silence, which
+    is the defect it was written against. Measured on this tree before these
+    two assertions existed: deleting `and not skip_guard.offenses()` from
+    `pytest_sessionfinish` left all twelve other tests here green, still
+    printed the "skip guard: FAILED" banner, and exited **0** -- an unapproved
+    skip reported loudly and passed anyway. Everything above pins what the
+    guard *notices*; only this pins what it *does about it*.
+
+    `pytest_sessionfinish` also recomputes the config-mutation problems into a
+    module global, so each test restores it: this file must not decide what a
+    different guard reports about the real session.
+    """
+
+    def _finish(self, session):
+        problems_before = conftest._problems
+        try:
+            conftest.pytest_sessionfinish(session, pytest.ExitCode.OK)
+        finally:
+            conftest._problems = problems_before
+
+    def test_an_unapproved_skip_makes_the_process_exit_non_zero(self):
+        skip_guard.note_skip(
+            "tests/test_scoring_service.py::test_weights",
+            "tests/test_scoring_service.py",
+            "Skipped: needs the thing",
+        )
+        session = _Session()
+        self._finish(session)
+        assert session.exitstatus == pytest.ExitCode.TESTS_FAILED
+
+    def test_a_session_with_nothing_to_report_is_left_alone(self):
+        """A guard that fails every run is not a guard, it is a broken suite."""
+        session = _Session()
+        self._finish(session)
+        assert session.exitstatus == pytest.ExitCode.OK
