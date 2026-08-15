@@ -631,6 +631,49 @@ and TODO.md; respect it if you ever run both side by side.
   `DEPLOY_RENDER_PATH` is empty and no page was rendered, on the rollback path
   as well as the forward one. `tests/test_deploy_page_check_shared.py` fails if
   either consumer grows its own copy.
+- **A tick that deploys the watcher hands over to it first** (#293).
+  `deploy_watcher.sh` is in the tree it deploys, and a running tick cannot
+  pick up its own update: `git merge` renames a new file over the old one, so
+  the inode changes and the shell's open descriptor keeps reading the
+  *previous* script to the end of the tick. Measured, and reliable rather than
+  intermittent — which is why the 16:33:30 deploy on 2026-08-14 rolled out
+  #285's in-flight survey and page check while running neither, and killed a
+  pool backfill at 32 ledger rows silently. (An in-place rewrite is worse
+  still: the same script overwritten with `cat >` keeps its inode and bash
+  resumes mid-statement in the new bytes. Nothing here does that, and nothing
+  should start.) So when `origin/main` changes the script or `lib/`, the tick
+  fast-forwards and `exec`s the new one **before** it surveys, defers, builds
+  or verifies. The `flock` on fd 9 rides across the `exec` and is deliberately
+  not re-taken — re-taking works, and that is the defect: it drops the lock for
+  a fork and an exec, which is room for a second concurrent build. The commit
+  that is *serving* rides across too (`AUTOPILOT_ROLLBACK_SHA`), because after
+  the merge `HEAD` is the commit under test and a rollback would otherwise stay
+  on it. That environment variable lasts one tick, and a tick that hands over
+  and then **defers** to an in-flight job ends without deploying — so from the
+  next tick the rollback target is read from `data/.deployed_sha` whenever the
+  checkout is ahead of it. The marker is the only record of what is serving
+  that outlives a process, and it is trustworthy because it is written only
+  after a build passed health. An incoming watcher is syntax-checked **before** the merge, where
+  refusing costs nothing — with `${BASH:-/bin/bash}` and never a bare `bash`,
+  because launchd puts Homebrew bash 5 on PATH while the plist execs
+  `/bin/bash` 3.2.57, and `&>>` and `;;&` pass `-n` under one and are syntax
+  errors under the other (measured). Both merges take `"$remote_sha"`, not
+  `origin/main`: sessions and humans fetch into this same clone, so the ref can
+  advance past the commit that was vetted, surveyed and counted against the
+  deferral budget. When the per-tick handover budget (`AUTOPILOT_REEXEC_MAX`)
+  is spent and `main` has moved again, the tick **stops without deploying**
+  rather than falling back to deploying the newer watcher under the running
+  one — that fallback is this ticket's defect, and stopping costs a single
+  tick because the checkout already holds the watcher in use, so the next tick
+  hands over normally. `AUTOPILOT_SELF_UPDATE=0` restores the old behaviour and
+  says so loudly; do not make that the default. The suite that pins all of
+  this (`tools/autopilot/deploy_self_update_test.sh`) must not build a
+  scenario out of a fact that is only true on one machine: the version gap
+  above exists on this Mac and not on the Linux CI runner, where `/bin/bash`
+  is bash 5 too, so the first version of that scenario proved the gate here
+  and reported it broken there. It now models the disagreement with a `bash`
+  stub on `PATH` that approves everything, and `WATCHER_BASH` runs every
+  scenario under a bash 5 as well.
 - Preserve the scraping throttle in `services/listing_status_service.py`
   (randomized sleeps between listing fetches). No bulk re-scrape loops.
 - **There is no authentication** (owner decision, 2026-08-08): the admin

@@ -16,6 +16,13 @@
 
 set -euo pipefail
 
+# Where this script really is, and what it was called with. Both are needed to
+# hand over to the version of itself that a fast-forward brings in (#293), and
+# the path has to be resolved before anything can rewrite the file.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
+SCRIPT_ARGS=("$@")
+
 REPO_DIR="${AUTOPILOT_REPO_DIR:-/Users/ss/IdealistaRank}"
 BRANCH="${AUTOPILOT_BRANCH:-main}"
 COMPOSE_FILE="${AUTOPILOT_COMPOSE_FILE:-docker-compose.yml}"
@@ -68,6 +75,42 @@ DEFER_ON_INFLIGHT="${AUTOPILOT_DEFER_ON_INFLIGHT:-0}"
 DEFER_BUDGET="${AUTOPILOT_DEFER_BUDGET:-6}"
 DEFER_STATE="${AUTOPILOT_DEFER_STATE:-${REPO_DIR}/data/.deploy_deferrals}"
 
+# --- this watcher deploys its own source (#293) -----------------------------
+# The tick that rolled out #285 on 2026-08-14 16:33:30 ran the *pre*-#285
+# script: bash had read this file before the tick's own `git merge --ff-only`
+# replaced it, so that deploy had neither the in-flight survey nor the page
+# check it was shipping, and it killed a pool backfill at 32 ledger rows
+# silently. A watcher that deploys its own source has to hand over to the
+# version it is deploying, before it deploys it.
+#
+# Set AUTOPILOT_SELF_UPDATE=0 to keep the old behaviour; the tick then says
+# loudly that it deployed a watcher it did not run.
+SELF_UPDATE="${AUTOPILOT_SELF_UPDATE:-1}"
+# The interpreter that will run the new watcher, and therefore the only one
+# entitled to vet it. A bare `bash` is not it: the LaunchAgent execs /bin/bash
+# (3.2.57 on this Mac) while handing the job a PATH that starts with
+# /opt/homebrew/bin, where bash is 5.x. Measured, `cmd &>>file`, `;;&`, `|&`
+# and `coproc` all pass `bash -n` under 5.x and are syntax errors under 3.2 -
+# and `>>"$LOG_FILE" 2>&1` is written a dozen times in this file, so `&>>` is
+# one keystroke away. Lines 153-163 harden git and docker against exactly this
+# first-match-on-PATH trap; bash deserves the same. It is a floor, not a
+# guarantee: `declare -A` parses under 3.2 and fails at runtime.
+SELF_INTERPRETER="${BASH:-/bin/bash}"
+# One handover per tick. main moving again mid-tick is legitimate but has to
+# terminate, and the next tick is five minutes away.
+REEXEC_MAX="${AUTOPILOT_REEXEC_MAX:-1}"
+
+# State carried across the handover. Read once, then unset: these must not leak
+# into docker, git, curl or python3, and an operator's stale export must not
+# look like a handover that never happened.
+REEXEC_DEPTH="${AUTOPILOT_REEXEC_DEPTH:-0}"
+case "$REEXEC_DEPTH" in
+    '' | *[!0-9]*) REEXEC_DEPTH=0 ;;
+esac
+HANDOVER_ROLLBACK_SHA="${AUTOPILOT_ROLLBACK_SHA:-}"
+HANDOVER_LOCK="${AUTOPILOT_LOCK_INHERITED:-}"
+unset AUTOPILOT_REEXEC_DEPTH AUTOPILOT_ROLLBACK_SHA AUTOPILOT_LOCK_INHERITED
+
 log() {
     printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG_FILE"
 }
@@ -100,11 +143,46 @@ PAGE_URL="$(deploy_render_url "$(deploy_render_origin "$HEALTH_URL")")"
 # A build takes minutes; the timer fires more often than that.
 # shellcheck source=lib/lock.sh
 source "${AUTOPILOT_LIB_DIR}/lock.sh"
-if ! autopilot_acquire_lock "$LOCK_DIR"; then
+# A handover (#293) replaces the program, not the process, and bash sets no
+# close-on-exec on fd 9 - so the descriptor, and the flock(2) on it, are still
+# ours. Measured on this Mac: after `exec`, /dev/fd/9 is still open and an
+# unrelated process is still denied the lock.
+#
+# Taking it again would *work* - `exec 9>file` closes the old description
+# before it locks the new one, which was measured too - and that is exactly the
+# problem: it drops the lock for the length of a fork and exec, during which
+# another tick can take it and start a second concurrent build. A watcher whose
+# whole point is that two ticks never build at once should not open that window
+# once per self-update.
+#
+# The lock path has to match as well as the descriptor be open, so a stray
+# export in somebody's shell cannot talk this script out of locking; if either
+# check fails it acquires normally, which is the fail-safe direction.
+if [ -n "$HANDOVER_LOCK" ] && [ "$HANDOVER_LOCK" = "$LOCK_DIR" ] \
+    && [ -e "/dev/fd/${AUTOPILOT_LOCK_FD}" ]; then
+    log "still holding the deploy lock handed over with this tick"
+elif ! autopilot_acquire_lock "$LOCK_DIR"; then
     echo "$(date '+%Y-%m-%d %H:%M:%S')  another deploy is in progress, skipping" >>"$LOG_FILE"
     exit 0
 fi
 cd "$REPO_DIR" || die "repo not found: $REPO_DIR"
+
+# Is this script part of the repository it deploys? On the mini it is; in the
+# shell tests the real script runs against a throwaway repo that does not
+# contain it, and then there is nothing to hand over to. `pwd -P` on both sides
+# so a symlinked path does not read as a different tree.
+REPO_PHYS="$(pwd -P)"
+SELF_REL_DIR=""
+case "$SCRIPT_DIR" in
+    "$REPO_PHYS"/*) SELF_REL_DIR="${SCRIPT_DIR#"$REPO_PHYS"/}" ;;
+esac
+# The files this process actually executes: itself, and the library it sources.
+SELF_PATHS=()
+SELF_REL_SCRIPT=""
+if [ -n "$SELF_REL_DIR" ]; then
+    SELF_REL_SCRIPT="${SELF_REL_DIR}/$(basename "$SCRIPT_PATH")"
+    SELF_PATHS=("$SELF_REL_SCRIPT" "${SELF_REL_DIR}/lib")
+fi
 
 # --- the tools have to be the right ones, not merely present ---------------
 # launchd resolves the first match on PATH, and this Mac carries a Homebrew
@@ -136,12 +214,50 @@ local_sha="$(git rev-parse HEAD)"
 remote_sha="$(git rev-parse "origin/${BRANCH}")"
 deployed_sha="$(cat "$DEPLOYED_MARKER" 2>/dev/null || true)"
 
+# Where a rollback goes: the commit that is *serving*. Normally that is the
+# checkout before the fast-forward, but a handover (#293) merged before this
+# process started, so its HEAD is already the commit under test and the serving
+# commit has to be carried in.
+ROLLBACK_SHA="$local_sha"
+if [ -n "$HANDOVER_ROLLBACK_SHA" ]; then
+    if git rev-parse --verify --quiet "${HANDOVER_ROLLBACK_SHA}^{commit}" >/dev/null; then
+        ROLLBACK_SHA="$HANDOVER_ROLLBACK_SHA"
+    else
+        log "WARNING: AUTOPILOT_ROLLBACK_SHA=${HANDOVER_ROLLBACK_SHA} is not a commit here"
+        log "  a rollback would return to ${local_sha:0:7} instead"
+    fi
+elif [ -n "$deployed_sha" ] && [ "$deployed_sha" != "$local_sha" ]; then
+    # The handover above carries the serving commit for the length of one tick,
+    # and one tick is not always enough: a tick that hands over and then
+    # *defers* to an in-flight job ends without deploying, leaving the checkout
+    # on the commit under test while the container still runs the previous one.
+    # The next tick is a fresh process with nothing handed to it, so `local_sha`
+    # is the commit that has not deployed yet - and rolling back to it would
+    # "return" to the very build being rolled back, then rebuild it from the
+    # tree if no saved image was available.
+    #
+    # The marker answers this, and it answers it across processes because it is
+    # on disk: it is written only after a build passed health, so it names what
+    # is serving. This also covers the plain case of a checkout someone moved
+    # ahead of the container by hand.
+    if git rev-parse --verify --quiet "${deployed_sha}^{commit}" >/dev/null; then
+        ROLLBACK_SHA="$deployed_sha"
+    else
+        log "WARNING: the deployment marker names ${deployed_sha:0:7}, which is not a commit here"
+        log "  a rollback would return to ${local_sha:0:7} instead"
+    fi
+fi
+
 # Two separate questions: is the checkout current, and is the container built
 # from it. Answering only the first is what let a hand-run `git pull` convince
 # the watcher that a stale container was up to date.
 if [ "$local_sha" = "$remote_sha" ] && [ "$remote_sha" = "$deployed_sha" ]; then
     # Nothing new. Stay quiet: this runs every few minutes and the log is read
-    # by a human.
+    # by a human - except after a handover, where silence would read as the
+    # tick having disappeared.
+    if [ "$REEXEC_DEPTH" != "0" ]; then
+        log "handed-over watcher found ${remote_sha:0:7} already deployed - nothing to build"
+    fi
     exit 0
 fi
 
@@ -210,12 +326,12 @@ clear_marker() {
 
 rollback() {
     local reason="$1"
-    log "ROLLBACK (${reason}): returning to ${local_sha:0:7}"
+    log "ROLLBACK (${reason}): returning to ${ROLLBACK_SHA:0:7}"
 
     # Every step here runs on the failure path, where `set -e` aborting
     # mid-rollback would leave the app down with no further attempt. Each
     # command is therefore guarded and reported rather than allowed to exit.
-    git reset --hard "$local_sha" >/dev/null 2>&1 \
+    git reset --hard "$ROLLBACK_SHA" >/dev/null 2>&1 \
         || log "  git reset failed - the tree may not match the image"
 
     local restored=0
@@ -254,7 +370,7 @@ rollback() {
     log "rollback healthy - previous version is serving again"
 
     # The marker must name the commit that is *serving*, and only the rebuild
-    # path knows that: it built from local_sha and then passed health.
+    # path knows that: it built from ROLLBACK_SHA and then passed health.
     #
     # The saved image carries no such guarantee. With no marker to start from,
     # that image can predate the checkout entirely - built from B while the tree
@@ -269,7 +385,7 @@ rollback() {
 
     # A rebuild that failed leaves the previous container running, and a
     # container that was never stopped answers healthz perfectly well - so
-    # "healthy" here does not mean local_sha is serving. Recording it anyway
+    # "healthy" here does not mean ROLLBACK_SHA is serving. Recording it anyway
     # is how the marker came to claim e926de6 while the container still ran
     # the build before it, and the watcher then skipped every later tick
     # because marker == HEAD. Observed on 2026-08-08.
@@ -278,8 +394,8 @@ rollback() {
         return
     fi
 
-    if ! record_deployed "$local_sha"; then
-        clear_marker "the rollback rebuilt ${local_sha:0:7} but the marker could not be written"
+    if ! record_deployed "$ROLLBACK_SHA"; then
+        clear_marker "the rollback rebuilt ${ROLLBACK_SHA:0:7} but the marker could not be written"
     fi
 }
 
@@ -472,11 +588,152 @@ write_deferrals() {
     mv -f "$tmp" "$DEFER_STATE" || { rm -f "$tmp"; return 1; }
 }
 
+# --- hand over to the watcher this deploy brings (#293) --------------------
+# The tick that rolled out #285 executed the pre-#285 script and therefore
+# deployed the in-flight survey and the page check without running either -
+# killing a pool backfill at 32 ledger rows silently.
+#
+# Why the fast-forward alone cannot fix it, measured on this Mac: `git merge`
+# writes a file by creating a new one and renaming over it, so the inode
+# changes (654567352 -> 654567361 in the experiment). The shell's open
+# descriptor still points at the old, now-unlinked inode, and it keeps reading
+# the *previous* script to the end of the tick - reliably, not intermittently.
+# That is a mercy, because a rewrite that kept the inode does corrupt the run:
+# the same script overwritten in place with `cat >` resumed at the old byte
+# offset inside the new bytes and executed a comment fragment. But it also
+# means no amount of care after the merge can make this tick run new code.
+#
+# The only handover is a new process. So: when origin/main changes this script
+# or the library it sources, fast-forward and `exec` *before* deciding
+# anything, and let the new version survey, defer, build and verify.
+#
+# Deliberately placed before the in-flight survey rather than after: the survey
+# is exactly the kind of thing a new watcher changes (#290 rewrote it), so
+# running the old one first and then repeating it under the new one would log
+# two contradictory answers to the same question.
+self_update_and_reexec() {
+    [ "$local_sha" != "$remote_sha" ] || return 0
+    [ -n "$SELF_REL_DIR" ] || return 0
+
+    local rc=0
+    git diff --quiet "$local_sha" "$remote_sha" -- "${SELF_PATHS[@]}" || rc=$?
+    case "$rc" in
+        0) return 0 ;;
+        1) ;;
+        *)
+            log "could not compare ${SELF_PATHS[*]} across ${local_sha:0:7}..${remote_sha:0:7}"
+            log "  assuming this watcher changes, which is the safe way to be wrong"
+            ;;
+    esac
+
+    log "${remote_sha:0:7} changes this watcher itself (${SELF_PATHS[*]})"
+
+    if ! git cat-file -e "${remote_sha}:${SELF_REL_SCRIPT}" 2>/dev/null; then
+        log "  ALERT: ${remote_sha:0:7} removes ${SELF_REL_SCRIPT} - there is nothing to hand over to"
+        log "  this tick deploys that removal while running the script it removes"
+        return 0
+    fi
+
+    if [ "$SELF_UPDATE" != "1" ]; then
+        log "  ALERT: AUTOPILOT_SELF_UPDATE is off - this tick deploys the new watcher while running the old one"
+        log "  whatever ${remote_sha:0:7} changes about deploying does not apply until the next tick"
+        return 0
+    fi
+
+    if [ "$REEXEC_DEPTH" -ge "$REEXEC_MAX" ]; then
+        # Deploying anyway is the whole defect this ticket exists to remove:
+        # the deploy would be governed by the watcher from local_sha while
+        # putting remote_sha's watcher on disk. The budget bounds handovers per
+        # tick, and the honest way to respect it is to stop, not to fall back to
+        # the behaviour being fixed.
+        #
+        # Stopping costs one tick and nothing else. The checkout already holds
+        # the watcher this process is running, so the next tick starts from it
+        # and hands over to remote_sha normally - and that handover deploys
+        # itself, which is the point. Nothing has been merged for remote_sha,
+        # the container and the marker are untouched, and the previous build
+        # keeps serving.
+        log "  ALERT: already handed over ${REEXEC_DEPTH}x this tick and ${BRANCH} moved again"
+        log "  refusing to deploy ${remote_sha:0:7} under the watcher from ${local_sha:0:7}"
+        log "  the next tick runs ${local_sha:0:7}'s watcher and hands over to ${remote_sha:0:7} then"
+        exit 0
+    fi
+
+    # A watcher that does not parse cannot be handed over to, and deploying it
+    # would kill the deploy chain at the *next* tick instead of this one, with
+    # the checkout already advanced. Checked before the fast-forward, where
+    # refusing costs nothing: checkout, container and marker are all untouched
+    # and the previous build keeps serving.
+    local listing entry mode kind file tmp
+    # With modes, not just names: a syntax check reads the *blob*, and a
+    # symlink's blob is its target path - one word, which parses as a valid
+    # command and tells the gate nothing about what `exec` would actually run.
+    # A dangling one would pass, be merged, and kill every later tick with the
+    # checkout already advanced. Only a regular file can be the script this
+    # process execs, so anything else is refused here, where refusing is free.
+    listing="$(git ls-tree -r "$remote_sha" -- "${SELF_PATHS[@]}" 2>>"$LOG_FILE")" \
+        || die "cannot list ${SELF_PATHS[*]} at ${remote_sha:0:7} - refusing to hand over blind"
+    tmp="$(mktemp "${TMPDIR:-/tmp}/deploy-watcher-parse.XXXXXX")" \
+        || die "cannot write a temporary file to syntax-check ${remote_sha:0:7}"
+    while IFS= read -r entry; do
+        [ -n "$entry" ] || continue
+        # "<mode> <type> <sha>\t<path>"
+        mode="${entry%% *}"
+        kind="${entry#* }"
+        kind="${kind%% *}"
+        file="${entry#*$'\t'}"
+        case "$file" in
+            *.sh) ;;
+            *) continue ;;
+        esac
+        if [ "$kind" != "blob" ] || { [ "$mode" != "100644" ] && [ "$mode" != "100755" ]; }; then
+            rm -f "$tmp"
+            die "${file} at ${remote_sha:0:7} is a ${kind} with mode ${mode}, not a regular file - refusing to hand over to something that is not a script (nothing merged; ${deployed_sha:0:7} keeps serving)"
+        fi
+        if ! git show "${remote_sha}:${file}" >"$tmp" 2>>"$LOG_FILE"; then
+            rm -f "$tmp"
+            die "cannot read ${file} at ${remote_sha:0:7} - refusing to hand over blind"
+        fi
+        if ! "$SELF_INTERPRETER" -n "$tmp" 2>>"$LOG_FILE"; then
+            rm -f "$tmp"
+            die "${file} does not parse at ${remote_sha:0:7} - refusing to deploy a watcher that cannot run (nothing merged; ${deployed_sha:0:7} keeps serving)"
+        fi
+    done <<EOF
+${listing}
+EOF
+    rm -f "$tmp"
+
+    # The commit that was vetted, not the ref that named it. Several sessions
+    # and a human fetch into this same clone, so origin/main can advance
+    # between `git rev-parse` above and here - and the seconds in between hold
+    # a `docker image inspect`, a `docker tag` and this whole syntax gate. A
+    # ref here would fast-forward to, and then `exec`, a watcher nothing
+    # checked. The next tick deploys the newer commit five minutes later.
+    if ! git merge --ff-only "$remote_sha" >>"$LOG_FILE" 2>&1; then
+        die "fast-forward to ${remote_sha:0:7} (origin/${BRANCH}) failed - local ${BRANCH} has diverged"
+    fi
+    log "  fast-forwarded to ${remote_sha:0:7}; handing this tick over to its ${SELF_REL_SCRIPT}"
+
+    # The lock rides across on fd 9 (see the acquire above). ROLLBACK_SHA is the
+    # commit that is *serving*: after the merge HEAD is the commit under test,
+    # so the new process cannot work it out for itself.
+    export AUTOPILOT_LOCK_INHERITED="$LOCK_DIR"
+    export AUTOPILOT_REEXEC_DEPTH="$((REEXEC_DEPTH + 1))"
+    export AUTOPILOT_ROLLBACK_SHA="$ROLLBACK_SHA"
+    exec "$SELF_INTERPRETER" "$SCRIPT_PATH" ${SCRIPT_ARGS[@]+"${SCRIPT_ARGS[@]}"}
+    die "could not re-execute ${SCRIPT_PATH}"
+}
+
+self_update_and_reexec
+
 # --- who is about to be killed ---------------------------------------------
 # Runs before the fast-forward, so a deferred tick leaves the checkout and the
 # deployment marker exactly as they were and the next tick decides afresh. The
 # rollback image was already re-tagged above; that is idempotent and costs a
-# deferred tick nothing.
+# deferred tick nothing. (After a handover the fast-forward has already
+# happened, in the tick that handed over - so there the checkout is one commit
+# ahead of the container while a deferral waits. The marker still names what is
+# serving, which is the part anything downstream reads.)
 survey_inflight
 if [ "$inflight_count" != "0" ]; then
     if [ "$DEFER_ON_INFLIGHT" != "1" ]; then
@@ -510,8 +767,11 @@ fi
 rm -f "$DEFER_STATE" 2>/dev/null || true
 
 # --- deploy ----------------------------------------------------------------
-if ! git merge --ff-only "origin/${BRANCH}" >>"$LOG_FILE" 2>&1; then
-    die "fast-forward to origin/${BRANCH} failed - local ${BRANCH} has diverged"
+# The vetted commit, not the ref - same reason as the handover merge above, and
+# the same commit the survey and the deferral budget were decided against. A
+# no-op after a handover: that tick fast-forwarded before re-executing.
+if ! git merge --ff-only "$remote_sha" >>"$LOG_FILE" 2>&1; then
+    die "fast-forward to ${remote_sha:0:7} (origin/${BRANCH}) failed - local ${BRANCH} has diverged"
 fi
 
 log "building..."
