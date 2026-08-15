@@ -542,7 +542,14 @@ and TODO.md; respect it if you ever run both side by side.
   `origin/main`: sessions and humans fetch into this same clone, so the ref can
   advance past the commit that was vetted, surveyed and counted against the
   deferral budget. `AUTOPILOT_SELF_UPDATE=0` restores the old behaviour and
-  says so loudly; do not make that the default.
+  says so loudly; do not make that the default. The suite that pins all of
+  this (`tools/autopilot/deploy_self_update_test.sh`) must not build a
+  scenario out of a fact that is only true on one machine: the version gap
+  above exists on this Mac and not on the Linux CI runner, where `/bin/bash`
+  is bash 5 too, so the first version of that scenario proved the gate here
+  and reported it broken there. It now models the disagreement with a `bash`
+  stub on `PATH` that approves everything, and `WATCHER_BASH` runs every
+  scenario under a bash 5 as well.
 - Preserve the scraping throttle in `services/listing_status_service.py`
   (randomized sleeps between listing fetches). No bulk re-scrape loops.
 - **There is no authentication** (owner decision, 2026-08-08): the admin

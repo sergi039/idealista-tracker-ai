@@ -246,6 +246,18 @@ a throwaway repository that contains a copy of it — the arrangement the other
 two watcher tests deliberately do not have, which is why neither could reach
 this path.
 
+**That suite must not borrow a fact from the machine it runs on.** The
+scenario covering the gate above was first written with `&>>`, which is a
+syntax error under `/bin/bash` on this Mac and valid under `/bin/bash` on the
+Linux CI runner — so it proved the gate here and reported the gate broken
+there (CI run 31868366707). The divergence is now modelled instead: a `bash`
+stub leads `PATH` and pronounces everything valid, while the interpreter
+running the watcher rejects an ordinary syntax error, and the scenario also
+asserts the stub was never consulted. `WATCHER_BASH` picks the interpreter —
+`/bin/bash` by default, which is what the LaunchAgent execs; run the suite
+under a bash 5 as well before believing it, because that is the only bash CI
+has.
+
 ## Why it is shaped like this
 
 **One agent per issue.** PRs #57 and #58 both fixed issue #17, in different

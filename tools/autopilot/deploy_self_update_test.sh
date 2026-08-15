@@ -19,6 +19,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 WATCHER_SOURCE="${SCRIPT_DIR}/deploy_watcher.sh"
 LOCK_SOURCE="${SCRIPT_DIR}/lib/lock.sh"
 
+# The interpreter that runs the watcher under test. The LaunchAgent execs
+# /bin/bash, so that is the default and the case that matters in production;
+# it is a parameter because /bin/bash is bash 3.2.57 on this Mac and bash 5 on
+# the CI runner, and a suite that behaves differently on the two machines is a
+# suite that only one of them is really running. Every scenario here must pass
+# under both, and both are run before this suite is claimed green.
+WATCHER_BASH="${WATCHER_BASH:-/bin/bash}"
+[ -x "$WATCHER_BASH" ] || { printf 'no interpreter at %s\n' "$WATCHER_BASH" >&2; exit 1; }
+
 WORK="$(mktemp -d)"
 HEALTH_PID=""
 cleanup() {
@@ -86,6 +95,38 @@ esac
 exit 0
 STUB
 chmod +x "${STUB_BIN}/docker"
+
+# --- a bash on PATH that disagrees with the one running the watcher ---------
+# The production hazard, measured on this Mac: the LaunchAgent execs /bin/bash
+# (3.2.57) while handing the job a PATH that starts with /opt/homebrew/bin,
+# where bash is 5.3.15 - and `cmd &>>file`, `;;&`, `|&` and `coproc` all pass
+# `-n` under 5.x and are syntax errors under 3.2. A gate that asks a bare
+# `bash` therefore approves a watcher the process that will exec it cannot
+# parse, the merge lands it, and every tick after that dies at its first byte.
+#
+# That divergence cannot be borrowed from whatever machine is running the
+# suite. It exists here and not on the CI runner, where /bin/bash is 5.x as
+# well, so a scenario built out of `&>>` proves the gate on this Mac and
+# reports the gate broken on Linux - which is exactly what it did (CI run
+# 31868366707, 2026-08-15, the only red job on this PR). So the disagreement
+# is modelled rather than borrowed: this stub leads PATH and pronounces every
+# file it is asked to parse valid, while the interpreter actually running the
+# watcher rejects a real syntax error. Both halves hold on any machine and any
+# bash, and the gate is only green if it asked the second one.
+#
+# It lies solely about `-n`, and solely when asked to; everything else execs
+# the real bash, so no other scenario is touched by its presence on PATH.
+cat >"${STUB_BIN}/bash" <<'STUB'
+#!/bin/bash
+if [ "$1" = "-n" ]; then
+    printf '%s\n' "$*" >>"${PATH_BASH_LOG:-/dev/null}"
+    if [ "${PERMISSIVE_BASH_N:-0}" = "1" ]; then
+        exit 0
+    fi
+fi
+exec /bin/bash "$@"
+STUB
+chmod +x "${STUB_BIN}/bash"
 
 # --- an app that answers healthz and renders a page -------------------------
 HEALTH_PORT=""
@@ -196,7 +237,9 @@ run_watcher() {
     ADVANCE_REF_TO="${ADVANCE_REF_TO:-}" \
     ADVANCE_REPO="$REPO" \
     ADVANCE_ONCE="${WORK}/advanced" \
-        /bin/bash "${REPO}/tools/autopilot/deploy_watcher.sh" >/dev/null 2>&1
+    PERMISSIVE_BASH_N="${PERMISSIVE_BASH_N:-0}" \
+    PATH_BASH_LOG="${WORK}/path-bash.log" \
+        "$WATCHER_BASH" "${REPO}/tools/autopilot/deploy_watcher.sh" >/dev/null 2>&1
     WATCHER_RC=$?
     set -e
 }
@@ -375,27 +418,26 @@ fi
 printf 'OK: the tick merges the commit it vetted, not whatever the ref points at now\n'
 
 # --- scenario 8: the gate must use the interpreter that will run it ---------
-# The LaunchAgent execs /bin/bash - 3.2.57 here - while handing the job a PATH
-# that starts with /opt/homebrew/bin, where bash is 5.x. Measured on this Mac,
-# `cmd &>> file` is exit 0 under `bash -n` 5.3.15 and a syntax error under
-# /bin/bash 3.2.57. A gate that asks the wrong bash waves such a watcher
-# through, the merge lands it, and then the tick that execs it dies at its
-# first byte, every tick, with the checkout already advanced.
+# Scenario 2 already proves a broken watcher is refused; what it cannot see is
+# *who was asked*, because there both bashes agree. Here they do not: the
+# `bash` first on PATH calls the file valid (the stub above, and the reason it
+# has to be a stub is written there), and only the interpreter that will exec
+# the watcher reports the truth. A gate reading `bash -n` therefore passes this
+# watcher and fails this scenario.
 fresh_repo
-cat >>"${REPO}/tools/autopilot/deploy_watcher.sh" <<'B4'
-
-if false; then
-    # Parses under bash 5, syntax error under bash 3.2. Never executed - the
-    # point is what the *parser* does with it.
-    printf 'unreachable' &>> /dev/null
-fi
-B4
-publish "watcher using syntax the running bash cannot parse"
-run_watcher
+printf '\nif [ ; then\n' >>"${REPO}/tools/autopilot/deploy_watcher.sh"
+publish "watcher the interpreter that runs it cannot parse"
+: >"${WORK}/path-bash.log"
+PERMISSIVE_BASH_N=1 run_watcher
 
 logged "does not parse" \
     || fail "scenario 8 let through a watcher the interpreter that runs it cannot parse"
 [ "$(builds)" = "0" ] || fail "scenario 8 deployed it anyway"
 [ "$(head_sha)" = "$BASE_SHA" ] \
     || fail "scenario 8 advanced the checkout to a watcher that cannot start"
+# Refusing is necessary but not sufficient: it must have refused on the word of
+# the interpreter that will run the thing. The PATH bash was never entitled to
+# a say, so it must not have been consulted at all.
+[ ! -s "${WORK}/path-bash.log" ] \
+    || fail "scenario 8 syntax-checked with the bash on PATH: $(cat "${WORK}/path-bash.log")"
 printf 'OK: the incoming watcher is vetted by the bash that will execute it\n'
