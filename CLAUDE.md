@@ -236,6 +236,40 @@ billing is not involved. Fill it with `python -m utils.backfill_sea_view`;
 keep their old boolean at `enrichment.legacy_land.environment.sea_view`, which
 reads as `likely` (it came from the same weak keyword pass) and never as `yes`.
 
+**The coastline does not follow the rías inland, and the verdict now records
+the point it measured to** (the "Selorio report", 2026-08-15 — a direct owner
+request, so it carries no issue number; the phrase is the search anchor for the
+comments that cite it). The reported defect was that OSM's
+`natural=coastline` runs up an estuary to the tidal limit, so a plot 4 km from
+a ría scores a sea view against it. Measured against real OSM data for all four
+candidate rías, it does not: the coastline **closes across each mouth** and the
+estuary is mapped separately as a `natural=water` / `water=river` multipolygon
+reaching much further in — Villaviciosa 7.13 km past the nearest coastline
+node, Avilés 4.60, Navia 4.90, the Nalón 4.37 and 7.29. Not one coastline way
+in any of those four boxes carries a name either (the only named ones are rocks
+and islets near the Nalón, *Islote La Ñera*, *El Peñón*), so a rule keyed on a
+named ría way has nothing to read. The nearest coastline to an inland plot is
+therefore the mouth, which *is* open sea, and property 125's `likely` is
+correct: re-run against live EU-DEM it gives `clear_line_of_sight` to the mouth
+at 4173.8 m, and so does a ray on the same bearing to open water 5839 m out,
+with 9 null (over-water) samples confirming the far end really is sea.
+
+What was wrong is what the verdict *said*. Its sight line runs 2.8 km up the
+ría channel before it reaches the sea, and the page announced "Sea view likely"
+either way. So `geometry.target_lat` / `target_lon` now record the coastline
+node — additively, with no cache bump, because the field changes no verdict and
+re-querying 67 cells through a 5 s gate to gain it is not worth it — and the
+property page, the list and `properties/export.csv` carry it. A distance and a
+bearing are not a substitute: both are stored rounded to one decimal, so
+casting the ray back out lands metres off the node, which is enough to put the
+reconstruction on the far bank of a 300 m channel. And a `likely` resting on
+terrain alone is now named *"Terrain allows a sea view"* rather than asserting
+one — `state_label_key()` in `services/sea_view_service.py` is the single home
+of that distinction, for the three templates that draw the badge. What it must
+not do is soften a `likely` the listing itself claims, or a hand-set one.
+`tests/test_sea_view_target_recorded.py` pins all of it against the real
+coastline in `tests/data/`.
+
 **The "to beach" sort is live** (issue #271, PR #272): the Phase-2 backfill
 put measured beach times into `travel["beaches"]`, so the old #98 placeholder
 ("not one row holds a travel time") is retired. The list sort and the CSV

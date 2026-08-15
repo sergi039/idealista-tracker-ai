@@ -406,9 +406,10 @@
                         </span>
                     {% endif %}
                     {% if sea_view_verdict and sea_view_verdict.state in ('yes', 'likely') %}
+                        {% set _sea_label = t('sea_view_state_' ~ sea_view_state_key(sea_view_verdict)) %}
                         <span class="badge {{ 'bg-success' if sea_view_verdict.state == 'yes' else 'bg-info' }}"
-                              title="{{ t('sea_view_state_' ~ sea_view_verdict.state) }}">
-                            <i class="fas fa-binoculars me-1"></i>{{ t('sea_view_state_' ~ sea_view_verdict.state) }}
+                              title="{{ _sea_label }}">
+                            <i class="fas fa-binoculars me-1"></i>{{ _sea_label }}
                         </span>
                     {% endif %}
                     {% for tt in (travel_display_targets if travel_display_targets is iterable else []) %}
@@ -1423,7 +1424,7 @@
                         <div class="d-flex justify-content-between align-items-center mb-1">
                             <span class="small"><i class="fas fa-water me-1"></i>{{ t('sea_view') }}</span>
                             <span class="badge {{ sea_badge.get(sea_view_verdict.state, 'bg-warning text-dark') }}">
-                                {{ t('sea_view_state_' ~ sea_view_verdict.state) }}
+                                {{ t('sea_view_state_' ~ sea_view_state_key(sea_view_verdict)) }}
                             </span>
                         </div>
                         {# Provenance, not decoration: a `likely` from bare-earth terrain
@@ -1443,6 +1444,16 @@
                             {% if geometry.get('distance_m') %}
                                 <br><i class="fas fa-ruler-horizontal me-1"></i>{{ (geometry.distance_m / 1000)|round(1) }} km to the coastline
                                 {%- if geometry.get('observer_elevation_m') is not none %}, {{ geometry.observer_elevation_m|round(0)|int }} m above sea level{% endif %}
+                                {# What that distance was measured *to*. On this coast the nearest
+                                   coastline can be an estuary mouth with kilometres of ría between
+                                   it and the plot, and a distance plus a bearing does not say so
+                                   (Selorio report, 2026-08-15). Absent on verdicts computed before
+                                   the target was recorded, so the line simply stops there. #}
+                                {%- set _sea_target = sea_view_verdict.target %}
+                                {%- set _sea_target_url = maps_place_url(_sea_target.lat, _sea_target.lon) if _sea_target else none %}
+                                {%- if _sea_target_url %}
+                                    &middot; <a href="{{ _sea_target_url }}" target="_blank" rel="noopener noreferrer">{{ t('sea_view_target_link') }}</a>
+                                {%- endif %}
                             {% endif %}
                         </div>
                         {% for key, value in environment_items %}
