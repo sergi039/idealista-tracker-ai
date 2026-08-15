@@ -161,6 +161,12 @@ finds the live job's own marker.
 
 Three states, not two: a `docker top` that cannot be read is **unknown**, and
 blocks exactly like an unmarked job rather than reading as "nothing running".
+That includes a table it cannot *parse*: the column layout is read off the
+header (`docker top` renders whatever ps format it is handed, and only the
+default one puts the command at field 8), and one row the header cannot
+describe makes the whole table unknown. A mis-split command matches the
+pattern no more, so the job it named would not become unknown — it would
+disappear, which is the outcome this survey exists to remove.
 Only a shell `-c` parent is folded into its child; a genuine `utils` process
 that spawned another `utils` process stays two jobs, so a non-resumable parent
 cannot vanish from the count.

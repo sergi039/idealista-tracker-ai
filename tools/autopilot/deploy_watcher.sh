@@ -488,21 +488,50 @@ inflight_processes() {
     # deploys in silence - the exact defect this survey exists to prevent,
     # reproduced inside the survey itself.
     raw="$(docker top "$APP_CONTAINER" 2>/dev/null)" || return 1
-    # A header with no data rows is not "no processes": the container always
-    # runs gunicorn, so an empty table means the probe did not work. Reading
-    # it as an empty process list is the same fail-open in a quieter costume.
-    # "Row" means a row that looks like ps output - eight columns with a
-    # numeric PID - so a single line of garbage after the header cannot pass
-    # for a process table either.
-    [ "$(printf '%s\n' "$raw" | awk 'NR > 1 && NF >= 8 && $2 ~ /^[0-9]+$/' | wc -l)" -gt 0 ] || return 1
-    # ...and it must contain the process this container cannot be without.
-    # Shape is satisfiable by junk; the app's own server is not.
+    # It must contain the process this container cannot be without. Shape is
+    # satisfiable by junk; the app's own server is not.
     if [ -n "$CONTAINER_SENTINEL" ]; then
         printf '%s\n' "$raw" | awk 'NR > 1' | grep -qF -- "$CONTAINER_SENTINEL" || return 1
     fi
 
-    printf '%s\n' "$raw" \
-        | awk 'NR > 1 { pid = $2; ppid = $3; $1=$2=$3=$4=$5=$6=$7=""; sub(/^ +/, ""); print pid "\t" ppid "\t" $0 }' \
+    # The layout is read off the header, never assumed. `docker top` renders
+    # whatever ps format it is handed, and the previous parse *checked* one
+    # shape (eight fields, numeric PID) while *assuming* a stricter one (the
+    # command starting at field 8, fields 1-7 blanked positionally). A table
+    # can satisfy the check and still be split wrongly by the parse - and a
+    # mis-split command matches the pattern no more, so the job it described
+    # disappears from the survey instead of being reported. Check and parse
+    # now describe the same table because both come from the same header.
+    local rows
+    rows="$(printf '%s\n' "$raw" | awk '
+        NR == 1 {
+            for (i = 1; i <= NF; i++) {
+                if ($i == "PID") pid_col = i
+                else if ($i == "PPID") ppid_col = i
+                else if ($i == "CMD" || $i == "COMMAND") cmd_col = i
+            }
+            # No header, or one naming no command column, is not a process
+            # list this code can read. Guessing a layout is how a job goes
+            # missing quietly.
+            if (!pid_col || !cmd_col) exit 1
+            next
+        }
+        # A row the header cannot describe is unreadable, and unreadable is
+        # not empty: ONE such row makes the whole table unknown rather than
+        # silently dropping the process it was describing.
+        NF < cmd_col || $pid_col !~ /^[0-9]+$/ { exit 1 }
+        {
+            cmd = $cmd_col
+            for (i = cmd_col + 1; i <= NF; i++) cmd = cmd " " $i
+            print $pid_col "\t" (ppid_col ? $ppid_col : "") "\t" cmd
+            seen = 1
+        }
+        # A header with no data rows is not an idle container: this one always
+        # runs the app server, so an empty table means the probe did not work.
+        END { if (!seen) exit 1 }
+    ')" || return 1
+
+    printf '%s\n' "$rows" \
         | grep -E "$INFLIGHT_PATTERN" \
         | awk -F'\t' '
             # A shell running `-c`, however it spells it: `sh -c`, `sh -cx`,

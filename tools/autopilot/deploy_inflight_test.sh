@@ -194,6 +194,15 @@ set_top_rows() {
     } >"$TOP_FILE"
 }
 
+set_top_table() {
+    # set_top_table <<'EOF' ... header AND rows, the scenario's own layout ...
+    # For the cases where the column layout itself is the subject: `docker top`
+    # renders whatever ps format it is handed, so a scenario has to be able to
+    # hand it something other than the default eight columns.
+    rm -f "${INFLIGHT_DIR}"/*.json 2>/dev/null || true
+    cat >"$TOP_FILE"
+}
+
 add_marker() {
     # add_marker <name> <json>
     printf '%s\n' "$2" >"${INFLIGHT_DIR}/$1.${MARKER_PID}.json"
@@ -752,3 +761,46 @@ if grep -q "in flight (no marker" "${WORK}/watcher.log"; then
 fi
 built || fail "scenario 28 deferred for a wrapper whose child is resumable"
 printf 'OK: an option taking an operand does not hide the -c that marks a wrapper\n'
+
+# --- scenario 29: the column layout comes from the header ------------------
+# `docker top` renders whatever ps format it is handed; only the default one
+# puts the command at field 8. A parse that blanks fields 1-7 positionally
+# mangles any other layout, and a mangled command matches the pattern no more
+# - so the job does not become "unknown", it disappears, which is the one
+# outcome this survey exists to remove. The header names the columns; read it.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_top_table <<'TABLE'
+USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
+appuser 7 0.1 1.2 40000 20000 ? Ss 12:00 00:00:03 /app/.venv/bin/gunicorn --bind 0.0.0.0:5001 main:app
+appuser 4711 0.0 2.0 50000 30000 ? S 12:00 00:00:01 python -m utils.backfill_pool --snapshot data/s.json
+TABLE
+add_marker job '{"module":"backfill_pool","argv":["--snapshot","data/s.json"],"resumable":true,"ledger":"data/s.json"}'
+DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+grep -q "in flight (" "${WORK}/watcher.log" \
+    || fail "scenario 29 lost the job when the process table used another layout"
+grep -q "in flight (resumable): python -m utils.backfill_pool --snapshot data/s.json" \
+    "${WORK}/watcher.log" \
+    || fail "scenario 29 mis-split the command, so its marker did not match"
+printf 'OK: the command column is found from the header, not assumed to be the eighth\n'
+
+# --- scenario 30: a row the header cannot describe is unknown --------------
+# The check used to ask for eight fields and a numeric PID while the parse
+# assumed the command began at field 8 - two descriptions of one table, so a
+# row could satisfy the check and still be split wrongly. One row that the
+# header cannot describe now makes the whole table unknown, because a row that
+# cannot be read is not a row with nothing in it.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_top_table <<'TABLE'
+UID PID PPID C STIME TTY TIME CMD
+appuser 7 1 0 12:00 ? 00:00:03 /app/.venv/bin/gunicorn --bind 0.0.0.0:5001 main:app
+appuser 4711 7 0 12:00
+TABLE
+DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+grep -q "UNKNOWN, not empty" "${WORK}/watcher.log" \
+    || fail "scenario 30 read a table it could not parse as 'nothing running'"
+built && fail "scenario 30 deployed over a process list it could not read"
+printf 'OK: a row the header cannot describe makes the table unknown, not empty\n'
