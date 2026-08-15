@@ -545,13 +545,28 @@ and TODO.md; respect it if you ever run both side by side.
   `hospital`**, so 13 departments of San Agustín sorted ahead of the hospital
   itself at rank 18 of 20 — `hospital de día` (a day unit) and `unidad de
   hospitalización` (one ward) carry the word and must be refused for the parent
-  to win. Nearby Search returns **one page of 20**, so a narrower rule can push
-  the real answer off the end; `wide_search_query` is the ready-made fallback if
-  measurement ever shows that (the airport preset uses it), and it was
-  deliberately *not* added here because at the measured coordinate the hospital
-  was still on the page. The old rows are not fixed by the deploy —
+  to win. The old rows are not fixed by the deploy —
   `utils/recalc_property_travel.py --ids …` rewrites them and **spends money**,
   so it needs the owner to ask.
+- **A town crowds the real hospital off the page, so the preset carries
+  `wide_search_query` too** (#325). Nearby Search returns **one page of 20**,
+  and #323 shipped without the fallback on the strength of one *rural*
+  coordinate where the hospital was still on that page. It does not
+  generalise: the recalc it authorised left **48 of 187 rows** with no
+  hospital, and at 43.3622522,-5.8485461 (Oviedo) all 20 results sit inside
+  0.7 km and are private practices — a beauty centre, a driving-licence
+  renewal office, several named individuals. HUCA and Monte Naranco are close
+  and can never appear. So the refusals were right and the answer was never on
+  the page, which is the airport preset's situation exactly (#171/#254), and
+  it takes the same cure: Text Search accepts no `radius`, so Nearby's ~50 km
+  cap does not apply, and the same preset rules filter the result. Measured
+  against the deployed image: Oviedo → "Monte Naranco Hospital" 2.1 km,
+  Cudillero → "Hospital Universitario San Agustin" 26.2 km. It fires only
+  where Nearby already answered with nothing acceptable, so it bills nothing
+  for the rows that resolve. **`wide_search_query` is not part of
+  `PlaceRules`**, so adding it leaves the Places cache signature unchanged and
+  the already-correct rows keep their cached lookups — which is what let the
+  48 be re-run on their own.
 - **Amenities are measured for `Property`, through the same one client**
   (#152). `_fetch_osm_amenities` is the whole Overpass amenity client — cache,
   gate, transport, refusals — and `_enrich_with_osm_data` (legacy `Land`) and

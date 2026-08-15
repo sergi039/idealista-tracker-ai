@@ -215,6 +215,29 @@ TRAVEL_PRESET_DEFS: Dict[str, Dict[str, Any]] = {
         "place_types": ["hospital"],
         "require_name_patterns": _HOSPITAL_REQUIRE_NAMES,
         "reject_name_patterns": _HOSPITAL_REJECT_NAMES,
+        # #323 refused primary care and left 48 of the 187 recalculated rows
+        # with no hospital at all. That was read there as the honest #98
+        # answer, and for a remote valley it is -- but the measurement taken
+        # afterwards says otherwise for a town. Nearby Search returns **one
+        # page of 20**, and at 43.3622522,-5.8485461 (Oviedo, property 139)
+        # all 20 sit inside 0.7 km and are private practices: "MUNIA TOTAL
+        # BEAUTY CENTER", "Sonrisas de fe", "Renovación carnet de conducir",
+        # a physiotherapist, several named individuals. HUCA and Monte Naranco
+        # exist and are close, but they can never appear in that response, so
+        # the rules were refusing junk correctly and the real answer was never
+        # on the page to be found. Same shape as the airport preset above:
+        # not an over-eager rejection, but Google never being asked about the
+        # place that mattered.
+        #
+        # Text Search takes no `radius`, so none of Nearby Search's cap
+        # applies. Measured 2026-08-15 against the deployed image at the three
+        # coordinates that were failing: Oviedo resolved "Monte Naranco
+        # Hospital" 2.1 km away, and Cudillero (property 247) resolved
+        # "Hospital Universitario San Agustin" at 26.2 km. It is a second,
+        # paid call and fires only where Nearby Search already answered with
+        # nothing this preset accepts -- which is exactly those rows and no
+        # others.
+        "wide_search_query": "hospital",
     },
     "police": {"label": "Nearest police station", "place_types": ["police"]},
     "supermarket": {
