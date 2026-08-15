@@ -222,7 +222,18 @@ finished() {
 # blocking the owner forever.
 LOCK_DIR="$(dirname "$LOG_FILE")/.supervisor.${CONTAINER}.${MODULE}.lock"
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    # mkdir fails for two different reasons and they must not be confused.
+    # Only "it already exists" is a lock held by somebody; a missing parent or
+    # a permission error means this run holds NO lock, and carrying on there
+    # is the same fail-open this tool was just audited for.
+    if [ ! -d "$LOCK_DIR" ]; then
+        echo "cannot create the supervisor lock at $LOCK_DIR" >&2
+        exit 2
+    fi
     other="$(cat "$LOCK_DIR/pid" 2>/dev/null)"
+    # `kill -0` cannot tell "no such process" from "not yours", so a lock held
+    # by another user reads as stale. The supervisor runs as the owner of the
+    # container on a single-user host, where that distinction does not arise.
     if [ -n "$other" ] && kill -0 "$other" 2>/dev/null; then
         echo "another supervisor (pid $other) already watches $MODULE in $CONTAINER" >&2
         log "supervisor: refusing to start - pid $other already watches $MODULE in $CONTAINER"

@@ -297,6 +297,24 @@ else
 fi
 rm -rf "$dir"
 
+# 12. A lock that cannot be created at all is not a lock that is free. mkdir
+# fails for two reasons, and only "already exists" means somebody holds it —
+# here a plain file sits at the lock path. That used to fall through to the
+# stale-lock takeover, write no pid, and supervise unlocked: the same fail-open
+# as reading a failed inspection as "idle".
+dir="$(mktemp -d)"
+make_stub "$dir" "sh -c sleep 1" "idealista-app"
+: > "$dir/.supervisor.idealista-app.utils.backfill_pool.lock"
+run_supervisor "$dir" >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 2 ] && [ "$(starts_in "$dir")" -eq 0 ]; then
+    pass "a lock that cannot be created stops the supervisor"
+else
+    fail "a lock that cannot be created stops the supervisor" \
+         "rc=$rc starts=$(starts_in "$dir")"
+fi
+rm -rf "$dir"
+
 if [ "$failures" -gt 0 ]; then
     printf '\n%d check(s) failed\n' "$failures"
     exit 1
