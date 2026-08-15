@@ -535,7 +535,27 @@ and TODO.md; respect it if you ever run both side by side.
 - Never change existing primary key types. Schema changes go through
   migrations (see MIGRATION_RUNBOOK.md).
 - Mock external API calls in tests. Suites needing live services or
-  credentials are reported as skipped, never as passed.
+  credentials are reported as skipped, never as passed. **The suite now
+  enforces this itself** (issue #307): `tests/network_guard.py`, installed for
+  the whole session from `tests/conftest.py`, refuses every connect that leaves
+  this machine and names the destination and the line in this repository that
+  asked for it. It also *records* each refusal and fails the run on it, because
+  raising is not enough on its own — every caller here catches `Exception` and
+  degrades (`utils/geocoding.py` falls back to Nominatim and then swallows the
+  failure; an enrichment run reports `degraded`, #153), so an unmocked call used
+  to leave a green test and no trace anywhere in the output. That is how PR
+  #306's sea-view step came to reach live Overpass from three suites, and how,
+  in the pre-push gate's sandbox, those connects sat in `SYN_SENT` and stalled
+  the gate for tens of minutes.
+
+  Loopback and every non-IP address family stay open, so the CI PostgreSQL
+  service and the loopback HTTP servers in the AI-bridge suites are untouched.
+  The guard sees Python's socket module and nothing else: measured 2026-08-14,
+  `requests`, `urllib`, `http.client` and `imaplib` are all refused by name,
+  while psycopg2 dials through libpq in C and a subprocess is a separate
+  interpreter — neither is covered, and the guard claims neither.
+  `PYTEST_ALLOW_NETWORK=1` switches it off for a deliberate live-API
+  investigation; it is not a way to make a red run green.
 
 ## Workflow
 
