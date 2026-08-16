@@ -743,9 +743,9 @@ and TODO.md; respect it if you ever run both side by side.
 - **A liveness check is not a claim about the next minute** (#338). A marker is
   not a lock, and `docker top` is not a reservation. The second run above was
   started after its session ran `docker top idealista-app` and correctly saw
-  no `utils` process — because the deploy had killed the first run 58 seconds
-  earlier and `tools/backfill_supervisor.sh` refilled the container at
-  09:01:59, one tick later. A kill makes the process list read empty precisely
+  no `utils` process — because the deploy had killed the first run 57 seconds
+  earlier (09:01:02 in the deploy log) and `tools/backfill_supervisor.sh`
+  refilled the container at 09:01:59, on its next tick. A kill makes the process list read empty precisely
   when a respawn is imminent, and every deploy manufactures one such window.
   Until something can express "nothing is running here, and that is
   temporary", sessions sharing this machine announce a `utils.backfill_*` /
