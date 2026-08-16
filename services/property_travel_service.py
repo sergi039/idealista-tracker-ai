@@ -307,8 +307,8 @@ class _RunTally:
 def effective_travel_state(prop: Property) -> Optional[str]:
     """The verdict a reader should act on, not merely the one on record.
 
-    The row's coordinate quality outranks the stored run state, because 466 of
-    the 652 located rows carry `state: ok` from a run that predates this rule
+    The row's coordinate quality outranks the stored run state, because 532 of
+    the 725 located rows carry `state: ok` from a run that predates this rule
     and measured from a locality centroid. Those durations are not wrong about
     the point they were measured from; they are just not about the property,
     and no amount of re-reading the stored block reveals that. The column does.

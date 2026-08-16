@@ -321,7 +321,7 @@ def parcel_measurement(prop: Property) -> Dict[str, Any]:
     payload can disagree with the row it sits on and both must come out the
     same:
 
-    * 228 rows on the live database hold `status: ok` with a distance measured
+    * 264 rows on the live database hold `status: ok` with a distance measured
       before this rule existed, from a coordinate that is a locality centroid.
       Rewriting them is a free Overpass recalc, but a score must not wait for
       somebody to remember to run one, so the restatement happens on read.

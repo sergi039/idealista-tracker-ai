@@ -184,36 +184,35 @@ def _linear_minutes_score(
     return _clamp(ratio * 100.0)
 
 
-def _minutes_score_within_slack(
+def _minutes_score_bounds(
     minutes: Optional[float],
     *,
     slack_m: float,
     mode: str,
     best: float,
     worst: float,
-) -> Tuple[Optional[float], bool]:
-    """Score a duration only if the origin's error cannot change the answer.
+) -> Tuple[Optional[float], Optional[float]]:
+    """What this duration could score, at both ends of the origin's error.
 
-    Returns `(score, ambiguous)`. A duration measured from a locality centroid
-    describes a route that starts somewhere the property is merely near, and
-    the difference is worth minutes: the slack converted at the mode's assumed
-    speed. Inside the linear band that moves the score, so there is nothing
-    honest to report; past `worst` -- or under `best` -- both ends agree and
-    the imprecision is irrelevant, which is the same exemption
+    A duration measured from a locality centroid describes a route that starts
+    somewhere the property is merely near, and the difference is worth minutes:
+    the slack converted at the mode's assumed speed. The pair is `(nearest,
+    furthest)` -- the score if the parcel lies that much closer to the target,
+    and the score if it lies that much further. Where they agree, the
+    imprecision cannot change the answer, which is the exemption
     `sea_view_service` grants a negative it can prove from a centroid.
 
-    A precise coordinate has no slack, so both ends are the measurement and
-    this is the plain score it always was.
+    A precise coordinate has no slack, so both are the measurement itself.
     """
     if minutes is None:
-        return None, False
+        return None, None
 
     slack_min = _slack_minutes(slack_m, mode)
-    low = _linear_minutes_score(max(0.0, minutes - slack_min), best=best, worst=worst)
-    high = _linear_minutes_score(minutes + slack_min, best=best, worst=worst)
-    if low != high:
-        return None, True
-    return low, False
+    nearest = _linear_minutes_score(
+        max(0.0, minutes - slack_min), best=best, worst=worst
+    )
+    furthest = _linear_minutes_score(minutes + slack_min, best=best, worst=worst)
+    return nearest, furthest
 
 
 def _slack_minutes(slack_m: float, mode: str) -> float:
@@ -812,17 +811,25 @@ class HousingPropertyScorer(BasePropertyScorer):
 
         # The same question the sea score asks, in minutes: the parcel may sit
         # up to the slack away from the coordinate every one of these durations
-        # was measured from, so a duration only scores if both ends of that
-        # range score the same. `estimate_duration_seconds` converts the slack
-        # at the mode's own assumed speed -- the repository's one answer to
-        # "how long does this far take", rather than a second speed constant
-        # invented here.
+        # was measured from. `estimate_duration_seconds` converts it at the
+        # mode's own assumed speed -- the repository's one answer to "how long
+        # does this far take", rather than a second speed constant invented
+        # here.
+        #
+        # Asked of the *average*, not of each target, and that distinction is
+        # the whole rule. Per target it would keep only the durations that
+        # cannot move -- and measured on the live database those are 690 short
+        # ones against 9 long ones, so the surviving subset is systematically
+        # the near targets and the component would come out near 100 for rows
+        # whose real mix is nothing of the sort. Dropping the ambiguous ones
+        # and averaging what is left is not a smaller claim than the original,
+        # it is a differently wrong one.
         slack_m = coordinate_slack_m(getattr(prop, "location_accuracy", None))
         origin_accuracy = normalize_accuracy(getattr(prop, "location_accuracy", None))
 
         key_scores: Dict[str, Dict[str, Any]] = {}
-        scores: list[float] = []
-        unattributable = 0
+        near_scores: list[float] = []
+        far_scores: list[float] = []
         for key in enabled_keys:
             t = targets.get(key)
             minutes = None
@@ -830,32 +837,46 @@ class HousingPropertyScorer(BasePropertyScorer):
             if isinstance(t, dict):
                 minutes = _safe_float(t.get("duration_min"))
                 mode = str(t.get("mode") or "driving")
-            s, ambiguous = _minutes_score_within_slack(
+            nearest, furthest = _minutes_score_bounds(
                 minutes, slack_m=slack_m, mode=mode, best=best, worst=worst
             )
-            key_scores[key] = {"minutes": minutes, "score": s}
-            if ambiguous:
-                unattributable += 1
-                key_scores[key]["status"] = STATUS_APPROXIMATE_ORIGIN
-            if s is not None:
-                scores.append(s)
+            key_scores[key] = {
+                "minutes": minutes,
+                "score": nearest if nearest == furthest else None,
+            }
+            if nearest is None or furthest is None:
+                continue
+            near_scores.append(nearest)
+            far_scores.append(furthest)
 
-        if not scores:
+        if not near_scores:
             return None, {
-                "status": STATUS_APPROXIMATE_ORIGIN
-                if unattributable
-                else "missing_travel",
+                "status": "missing_travel",
                 "origin_accuracy": origin_accuracy,
                 "targets": key_scores,
                 "best": best,
                 "worst": worst,
             }
 
-        avg = sum(scores) / len(scores)
-        return _clamp(avg), {
+        # Every target counts in both averages, so this compares the same set
+        # to itself at the two ends of the error -- an equality that means the
+        # coordinate's imprecision cannot change the component, and for a
+        # precise row is one number compared with itself.
+        best_case = sum(near_scores) / len(near_scores)
+        worst_case = sum(far_scores) / len(far_scores)
+        if best_case != worst_case:
+            return None, {
+                "status": STATUS_APPROXIMATE_ORIGIN,
+                "origin_accuracy": origin_accuracy,
+                "range": [_clamp(worst_case), _clamp(best_case)],
+                "targets": key_scores,
+                "best": best,
+                "worst": worst,
+            }
+
+        return _clamp(best_case), {
             "status": "ok",
             "origin_accuracy": origin_accuracy,
-            "unattributable_targets": unattributable,
             "targets": key_scores,
             "best": best,
             "worst": worst,

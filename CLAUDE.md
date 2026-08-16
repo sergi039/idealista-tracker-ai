@@ -376,9 +376,11 @@ score columns first, since rolling the app back does not undo a data rewrite.
 **A coordinate that is not the parcel measures nothing about it, and every
 consumer asks before it measures** (#358). `location_accuracy` is Google's own
 word for what it matched: `precise` is an address, anything else is a locality
-centroid. On 2026-08-16 that was **466 of the 652 located rows**, 229 of them
-sharing a point with another listing across 67 points (16 listings on the worst
-one, 39 of the sharers labelled `precise`). `sea_view_service` has refused such
+centroid. At 11:08 UTC on 2026-08-16 that was **532 of the 725 located rows**,
+280 of them sharing a point with another listing across 78 points (21 listings
+on the worst one, 39 of the sharers labelled `precise`). Two hours earlier the
+same query said 466 of 652: the set grows with every ingest, so re-measure
+rather than quoting these. `sea_view_service` has refused such
 a point since #196; `sea_distance_service` and `property_travel_service` did
 not, so a listing scored the centroid's sea distance and the centroid's drive
 times, and nothing on the page said so. Properties 460, 461, 574 and 641 are
@@ -406,8 +408,13 @@ does *not* clear what the row already holds, unlike #350's `--clear-orphaned`,
 because that row has a real coordinate and a re-geocode makes those durations
 meaningful again. The scorer and the templates read the row's *current*
 accuracy through `parcel_measurement` and `effective_travel_state`, not the
-stored block, because 228 sea blocks and 466 travel blocks say `ok` from runs
-that predate the rule and no amount of re-reading them reveals it. And a shared
+stored block, because 264 sea blocks and 532 travel blocks say `ok` from runs
+that predate the rule and no amount of re-reading them reveals it. The
+exemption is asked of the travel *average*, never target by target: 690 of
+those durations sit under `best`, where the slack cannot move them, against 9
+past `worst`, so keeping the individually-safe ones would keep the near ones
+and report ~100 for a listing whose real mix is nothing of the sort. And a
+shared
 coordinate is surfaced as evidence, never as a gate: two flats in one building
 share a point legitimately, the coordinate alone cannot tell that from four
 plots on a centroid, so it is shown next to the coordinate and counted by

@@ -14,9 +14,10 @@ and labelled `approximate`. That point is **23.8 m** from the OSM coastline, so
 the sea-distance score of all four was the shoreline's own, including the last
 one, whose address is San Miguel de Quiloño: inland, by the airport.
 
-Measured 2026-08-16 on 652 located rows: 466 approximate against 186 precise,
-229 rows sharing a coordinate with another listing across 67 points, worst
-point 16 listings.
+Measured 2026-08-16 at 11:08 UTC on 725 located rows: 532 approximate against
+193 precise, 280 rows sharing a coordinate with another listing across 78
+points, worst point 21 listings, 39 of the sharers labelled `precise`. Two
+hours earlier it was 466 of 652 -- the set grows with every ingest.
 """
 
 from decimal import Decimal
@@ -191,7 +192,7 @@ class TestSeaDistanceRefusesTheCentroid:
         assert parcel_score is not None and parcel_score > 95
 
     def test_a_stored_ok_from_before_this_rule_is_restated_on_read(self, app):
-        """The 228 live rows whose block says `ok` about a centroid.
+        """The 264 live rows whose block says `ok` about a centroid.
 
         Rewriting them is a free Overpass recalc, but the score must not wait
         for one, so the restatement happens where the score is read.
@@ -376,6 +377,51 @@ class TestTravelMinutesFromACentroidDoNotScore:
         return HousingPropertyScorer()._travel_score(
             prop, profile, best=10.0, worst=60.0
         )
+
+    def test_one_unambiguous_target_does_not_speak_for_the_rest(self, app):
+        """The exemption is asked of the average, never target by target.
+
+        Measured on the live database: 690 durations sit under `best` where
+        the slack cannot move them, against 9 past `worst`. So keeping only
+        the targets that survive individually keeps the near ones, and the
+        component comes out at 100 for a listing whose real mix is a 2-minute
+        supermarket and a 27-minute hospital. That is not a smaller claim
+        than the original -- it is a differently wrong one.
+        """
+        profile = SearchProfile(
+            name="Castrillón, two targets",
+            is_active=True,
+            is_default=True,
+            travel_targets={
+                "presets": {
+                    "supermarket": {"enabled": True, "mode": "driving"},
+                    "hospital": {"enabled": True, "mode": "driving"},
+                },
+                "custom": [],
+            },
+        )
+        db.session.add(profile)
+        db.session.commit()
+        prop = _listing(title="centroid row", search_profile_id=profile.id)
+        prop.travel = {
+            "targets": {
+                # Under `best` at either end of the slack: unambiguous on its own.
+                "supermarket": {"duration_min": 2, "mode": "driving"},
+                # Squarely inside the band that moves.
+                "hospital": {"duration_min": 27, "mode": "driving"},
+            },
+            "api_status": {"state": "ok"},
+        }
+        db.session.commit()
+
+        score, meta = HousingPropertyScorer()._travel_score(
+            prop, profile, best=10.0, worst=60.0
+        )
+
+        assert score is None
+        assert meta["status"] == STATUS_APPROXIMATE_ORIGIN
+        # The range is reported rather than collapsed to one end of it.
+        assert meta["range"][0] < meta["range"][1]
 
     def test_a_duration_inside_the_band_scores_nothing(self, app):
         profile = self._profile()
