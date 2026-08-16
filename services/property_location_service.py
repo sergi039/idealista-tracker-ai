@@ -12,6 +12,36 @@ logger = logging.getLogger(__name__)
 
 _LOCATION_FROM_TITLE_RE = re.compile(r"\b(?:in|en)\s+(?P<loc>.+)$", re.IGNORECASE)
 
+# A result at these scales is not a place this listing is at -- it is what
+# Google falls back to when the query means nothing to it. Every query built
+# here ends in ", Spain", so a title fragment like "Finca offers for" resolves
+# to the country and returns Spain's own point, 40.463667,-3.749220 (issue
+# #331: eight properties sat there, and every travel target, the beaches block
+# and the travel component of their score were measured from it -- "Hospital La
+# Paz Peñagrande, 11 min" for a plot in Asturias).
+#
+# `location_type` cannot catch this: a street centroid and a country are both
+# APPROXIMATE. The result's `types` can, and it does not go stale the way a
+# blocklist of known centroids would.
+#
+# Measured on production 2026-08-16 over all 401 rows grouped by recorded
+# formatted address: the only value coarser than a town is "Spain" (8 rows, one
+# point). The administrative levels are refused too -- nothing hits them today,
+# so it costs nothing now and stops a province centroid being the next version
+# of this.
+COARSE_RESULT_TYPES = frozenset(
+    {
+        "country",
+        "administrative_area_level_1",
+        "administrative_area_level_2",
+    }
+)
+
+
+def _is_too_coarse(geo: dict) -> bool:
+    """Whether Google matched something far larger than a property."""
+    return bool(COARSE_RESULT_TYPES.intersection(geo.get("types") or ()))
+
 
 def _normalize_query(value: str) -> Optional[str]:
     text = " ".join(str(value or "").replace("\xa0", " ").split()).strip()
@@ -95,6 +125,7 @@ class PropertyLocationService:
         if prop.location_lat and prop.location_lon:
             return True
 
+        refused = None
         for query in _build_geocoding_queries(prop):
             try:
                 geo = self.geocoding_service.geocode_address(query)
@@ -102,6 +133,24 @@ class PropertyLocationService:
                 logger.warning("Geocoding failed for %r: %s", query, e)
                 continue
             if not geo:
+                continue
+
+            if _is_too_coarse(geo):
+                # Not a location for this listing. Keep the last one so the
+                # absence can be explained on the row, and try the next
+                # candidate -- a title that means nothing to Google is often
+                # followed by a municipality that does.
+                logger.warning(
+                    "Refusing %r: Google matched %r (%s), which is not a property",
+                    query,
+                    geo.get("formatted_address"),
+                    ", ".join(geo.get("types") or []),
+                )
+                refused = {
+                    "query": query,
+                    "formatted_address": geo.get("formatted_address"),
+                    "result_types": list(geo.get("types") or []),
+                }
                 continue
 
             try:
@@ -124,5 +173,20 @@ class PropertyLocationService:
             prop.enrichment = enrichment
             flag_modified(prop, "enrichment")
             return True
+
+        if refused is not None:
+            # No coordinates, and the row says why. An empty travel block is an
+            # honest "nobody could locate this listing"; a country centroid is
+            # six confident measurements taken 450 km from the property.
+            enrichment = dict(prop.enrichment or {})
+            enrichment["geocoding"] = {
+                "query": refused["query"],
+                "formatted_address": refused["formatted_address"],
+                "accuracy": "unknown",
+                "refused": "result_too_coarse",
+                "result_types": refused["result_types"],
+            }
+            prop.enrichment = enrichment
+            flag_modified(prop, "enrichment")
 
         return False

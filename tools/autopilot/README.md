@@ -379,6 +379,18 @@ guarantees the merged commit is the reviewed one.
 
 **UNAVAILABLE is not PASS.** A reviewer that cannot run leaves the PR open.
 
+**Every prompt ends by saying what a verdict looks like**, because `rx` reads
+the first line and only the first line: the bare keyword, optionally wrapped in
+Markdown emphasis, and anything else is `UNAVAILABLE`. On 2026-08-15 PR #312
+came back with two well-argued BLOCKER findings under an opening line of prose,
+and `rx` reported `verdict not recognised` — a real review discarded on
+presentation, with the attempt spent and the PR unmergeable. `merge_bot.sh` now
+appends `verdict_format_rule` to the strict prompt and, after the excerpts, to
+the documentation-only one; the paragraph lives in one function, and
+`tests/test_merge_bot_verdict_format.py` fails if either prompt loses it or
+grows its own copy. What no test can prove is compliance — that half was
+measured against codex, which obeyed first time, twice.
+
 **A diff over 60 000 bytes is refused before the attempt is spent, and no
 timeout will change that** (issue #182). `rx` does not degrade on a large diff,
 it dies: `bin/cx` pipes the whole codex transcript to stderr and the coordinator
