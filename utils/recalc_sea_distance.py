@@ -127,9 +127,13 @@ def main() -> None:
                             float(prop.location_lat), float(prop.location_lon)
                         )
                     else:
-                        result = sea_service.update_property(prop, commit=False)
-                        scoring_service.calculate_for_property(prop, commit=False)
-                        db.session.commit()
+                        # `commit=True` so the write happens under FOR UPDATE:
+                        # this tool and any other writer of `enrichment` were
+                        # overwriting each other's blocks (#339/#352). It owns
+                        # and ends its own transaction, so scoring follows in a
+                        # second one.
+                        result = sea_service.update_property(prop, commit=True)
+                        scoring_service.calculate_for_property(prop, commit=True)
                     status = (result or {}).get("status", "disabled")
                     counts[status] = counts.get(status, 0) + 1
                 except Exception as e:

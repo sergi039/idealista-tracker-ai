@@ -30,13 +30,12 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import inspect as sa_inspect
-from sqlalchemy.exc import NoInspectionAvailable
 from sqlalchemy.orm.attributes import flag_modified
 
 from models import Property
 from services import place_rules
 from services.enrichment_service import EnrichmentService
+from services.enrichment_write import check_writable, locked_write
 from services.sea_view_service import haversine_m
 
 logger = logging.getLogger(__name__)
@@ -283,46 +282,14 @@ class PoolService:
         worse than the race it would close. That mode makes no concurrency
         promise, and a caller that needs one asks for `commit=True`.
         """
-        from app import db
-
-        try:
-            state = sa_inspect(prop)
-        except NoInspectionAvailable:
-            state = None  # not a mapped instance; nothing to lock
-
-        # Validated *before* `_compute`, which spends real money: a caller
-        # error is worth a cheap raise, not a full round of Overpass, Places
-        # and Distance Matrix followed by one. The lock itself is taken after
-        # the measurement, because holding the row across those seconds is the
-        # cost #196 was avoiding.
-        locked = commit and state is not None
-        if locked:
-            # `db.session` is a scoped-session proxy, so comparing it against
-            # `state.session` is always unequal; ask the proxy whether it holds
-            # the object. This covers a detached one too.
-            if prop not in db.session:
-                raise RuntimeError(
-                    "PoolService.enrich was asked to commit a property this "
-                    "session does not hold; the write would not be persisted"
-                )
-            # The locked refresh autoflushes, which would write out anything
-            # else pending -- including a stale `enrichment` assigned before
-            # this call, erasing the very block the locked read is about to
-            # inspect. And since every exit ends the transaction, a caller's
-            # uncommitted work would be committed or discarded wholesale.
-            if db.session.new or db.session.dirty or db.session.deleted:
-                raise RuntimeError(
-                    "PoolService.enrich(commit=True) needs a session with "
-                    "nothing pending: it ends the transaction on every exit, "
-                    "which would commit or discard whatever else is in flight"
-                )
+        # Validated before `_compute`, which spends real money; the lock is
+        # taken after it. Both rules, and the transaction ownership below, live
+        # in `services/enrichment_write.py` -- one home for three writers.
+        locked = check_writable(prop, commit)
 
         part = self._compute(prop)
 
-        try:
-            if locked:
-                db.session.refresh(prop, with_for_update=True)
-
+        with locked_write(prop, locked=locked, commit=commit):
             enrichment = (
                 dict(prop.enrichment) if isinstance(prop.enrichment, dict) else {}
             )
@@ -348,15 +315,6 @@ class PoolService:
             enrichment["pool"] = part
             prop.enrichment = enrichment
             flag_modified(prop, "enrichment")
-            if commit:
-                db.session.commit()
-        except Exception:
-            if locked:
-                # The FOR UPDATE is still held and this method owns the
-                # transaction; end it rather than leave the row locked for the
-                # rest of a backfill.
-                db.session.rollback()
-            raise
         return part
 
     def _compute(self, prop: Property) -> Dict[str, Any]:
