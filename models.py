@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import json
 
 from app import db
+from services.listing_verification import read_verdict as listing_verdict
 from services.search_subscription_identity import SEARCH_KEY_LENGTH
 from sqlalchemy import CheckConstraint, func
 from sqlalchemy.types import JSON
@@ -321,6 +322,12 @@ class Property(db.Model):
             if self.listing_last_checked
             else None,
             "listing_status_source": self.listing_status_source,
+            # The raw column above is 'active' by default and nobody verified
+            # that default, so a consumer reading it alone cannot tell a live
+            # listing from a never-checked one. This is the same verdict the
+            # pages render: 'active' only when a check or the owner established
+            # it, 'unchecked' otherwise (services/listing_verification.py).
+            "listing_status_verdict": listing_verdict(self)["state"],
             "email_date": self.email_date.isoformat() if self.email_date else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
@@ -762,6 +769,12 @@ class Land(db.Model):
             if self.listing_last_checked
             else None,
             "listing_status_source": self.listing_status_source,
+            # The raw column above is 'active' by default and nobody verified
+            # that default, so a consumer reading it alone cannot tell a live
+            # listing from a never-checked one. This is the same verdict the
+            # pages render: 'active' only when a check or the owner established
+            # it, 'unchecked' otherwise (services/listing_verification.py).
+            "listing_status_verdict": listing_verdict(self)["state"],
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

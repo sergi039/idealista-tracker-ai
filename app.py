@@ -277,6 +277,13 @@ def create_app(testing: bool = False):
     # all three places that draw it.
     app.jinja_env.globals["sea_view_state_key"] = sea_view_state_key
 
+    # `listing_status` defaults to 'active' at ingestion and nothing verified
+    # that default, so no template may render the column directly: they read
+    # the verdict, which has a fourth state for "never checked".
+    from services.listing_verification import read_verdict as listing_verdict_for
+
+    app.jinja_env.globals["listing_verdict_for"] = listing_verdict_for
+
     # One Maps URL builder for every surface: list travel cells, detail rows,
     # beach lines. Templates used to concatenate free-text place names into
     # /maps/dir/ paths — unencoded, and resolvable to the wrong town.
