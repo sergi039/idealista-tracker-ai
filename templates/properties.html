@@ -89,14 +89,31 @@
    "far from the sea", which is #98's mistake wearing a legal coat.
 
    Houses are deliberately excluded: the ban is on *building*, so an existing
-   legal house inside the band is not what it decides. #}
+   legal house inside the band is not what it decides.
+
+   The raw `distance_m` is a locality centroid's distance when the row's
+   coordinate is not precise (#358): four plots on one village centroid would
+   otherwise get one shared verdict about a point none of them sits on. So
+   this reads `sea_distance_for` -- the same `parcel_measurement` restatement
+   the travel marker above and the scorer use -- rather than the enrichment
+   block directly, and asks only what the 5 km slack cannot take back:
+   * the ban only when even the *farthest* the parcel could sit
+     (`max_distance_m`) is still inside 500 m;
+   * the clearance only when even the *nearest* it could sit
+     (`min_distance_m`) is already outside it;
+   * "no coastline nearby" only when the shrunken search radius
+     (`searched_m`, guaranteed *around the parcel*, not the centroid) still
+     reaches past 500 m.
+   Anywhere the 500 m line falls inside those bounds, the honest answer is
+   that it was not measured for this parcel -- not a guess painted red or
+   green. #}
 {% macro plot_badges(p) -%}
     {% if p.property_category == 'land' or p.property_subtype == 'plot' %}
         {% set attrs = p.attributes if p.attributes is mapping else {} %}
-        {% set enr = p.enrichment if p.enrichment is mapping else {} %}
-        {% set sea = enr.get('sea') if enr.get('sea') is mapping else {} %}
-        {% set dist = sea.get('distance_m') %}
-        {% if dist is number %}
+        {% set sea = sea_distance_for(p) %}
+        {% set sea_status = sea.status %}
+        {% if sea_status == 'ok' and sea.distance_m is number %}
+            {% set dist = sea.distance_m %}
             {% if dist < 500 %}
                 <span class="badge bg-danger fw-normal"
                       title="{{ t('plot_coast_ban') }} (POLA/PESC): {{ dist | round | int }} m">
@@ -108,9 +125,26 @@
                     <i class="fas fa-water me-1"></i>{{ dist | round | int }} m
                 </span>
             {% endif %}
-        {% elif sea.get('status') == 'no_coastline_within_radius' %}
+        {% elif sea_status == 'approximate_origin' and sea.max_distance_m is number and sea.max_distance_m < 500 %}
+            <span class="badge bg-danger fw-normal"
+                  title="{{ t('plot_coast_ban') }} (POLA/PESC): {{ sea.max_distance_m | round | int }} m — {{ t('approximate_origin_tooltip') }}">
+                <i class="fas fa-ban me-1"></i>{{ sea.max_distance_m | round | int }} m
+            </span>
+        {% elif sea_status == 'approximate_origin' and sea.min_distance_m is number and sea.min_distance_m >= 500 %}
+            <span class="badge bg-success fw-normal"
+                  title="{{ t('plot_coast_ok') }}: {{ sea.min_distance_m | round | int }} m — {{ t('approximate_origin_tooltip') }}">
+                <i class="fas fa-water me-1"></i>{{ sea.min_distance_m | round | int }} m
+            </span>
+        {% elif sea_status == 'no_coastline_within_radius' and (sea.searched_m is none or sea.searched_m >= 500) %}
             <span class="badge bg-success fw-normal" title="{{ t('plot_coast_none_near') }}">
                 <i class="fas fa-water me-1"></i>{{ t('plot_coast_none_near') }}
+            </span>
+        {% elif sea_status in ('approximate_origin', 'no_coastline_within_radius') %}
+            {# Ran, and still cannot answer for the parcel: the 500 m line
+               sits inside the bounds the slack allows, or the shrunken
+               search radius does not reach that far either way. #}
+            <span class="badge bg-secondary fw-normal" title="{{ t('plot_coast_unmeasured_approximate') }}">
+                <i class="fas fa-question me-1"></i>{{ t('plot_coast_unmeasured_approximate') }}
             </span>
         {% else %}
             <span class="badge bg-secondary fw-normal" title="{{ t('plot_coast_unmeasured') }}">
@@ -197,9 +231,22 @@
        used. Same data, a quarter of the row height. #}
     {% set travel = p.travel if p.travel is mapping else {} %}
     {% set travel_targets = travel.get('targets') or {} %}
+    {# A locality centroid measures routes from a point this listing is merely
+       near, so the column says which rows those are. One line for the cell,
+       not a mark per duration: they all share the origin, and the map pin in
+       the Coords column -- which this table hides in portrait -- is the only
+       other place the page admits it. #}
+    {% set _origin_approximate = travel_state_for(p) == 'approximate_origin' %}
     {% if display_targets %}
         {% set visible_travel_targets = display_targets[:3] %}
         <div class="d-flex flex-column small properties-travel-times">
+            {% if _origin_approximate %}
+                <span class="d-inline-flex align-items-center text-warning-emphasis"
+                      title="{{ t('approximate_origin_tooltip') }}">
+                    <i class="fas fa-map-marker-alt me-1"></i>
+                    <small>{{ t('approximate_origin_short') }}</small>
+                </span>
+            {% endif %}
             {% for tt in visible_travel_targets %}
                 {% set tdata = travel_targets.get(tt.key) if travel_targets else None %}
                 {% set minutes = tdata.duration_min if tdata else None %}

@@ -339,7 +339,7 @@ document.addEventListener('DOMContentLoaded', function() {
             .replaceAll("'", '&#39;');
     }
 
-    function renderTravelBadges(travel) {
+    function renderTravelBadges(travel, originApproximate) {
         if (!travel || typeof travel !== 'object') return '';
         const targets = travel.targets && typeof travel.targets === 'object' ? travel.targets : {};
         if (!travelDisplayTargets.length) return '';
@@ -365,7 +365,14 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         if (!chunks.length) return '';
-        return `<div class="mt-2">${chunks.join('')}</div>`;
+        // The marker itself is on the locality centroid, so every badge above
+        // is a route from there. Said once, above them all, the way the list
+        // and the detail page say it.
+        const note = originApproximate
+            ? '<div class="small text-warning-emphasis mt-1">' +
+              '<i class="fas fa-map-marker-alt me-1"></i>Approximate location</div>'
+            : '';
+        return `<div class="mt-2">${chunks.join('')}${note}</div>`;
     }
 
     // Create custom icon
@@ -486,7 +493,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function buildPopupContent(prop) {
         const typeLabel = [prop.category, prop.subtype].filter(Boolean).join(' / ');
-        const travelBlock = renderTravelBadges(prop.travel);
+        const travelBlock = renderTravelBadges(prop.travel, prop.origin_approximate === true);
 
         return `
             <div class="property-popup">

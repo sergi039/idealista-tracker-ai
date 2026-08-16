@@ -1967,6 +1967,7 @@ def manual_property_enrichment(property_id: int):
         from models import Property
         from services.property_enrichment_service import PropertyEnrichmentService
         from services.property_travel_service import (
+            TRAVEL_STATE_APPROXIMATE_ORIGIN,
             TRAVEL_STATE_UNAVAILABLE,
             travel_api_state,
         )
@@ -1994,6 +1995,20 @@ def manual_property_enrichment(property_id: int):
                 return {
                     "success": True,
                     "message": "Property enriched successfully with Google API data",
+                }
+
+            # Neither a refused API nor a bad address: the address resolved,
+            # to the middle of the locality. Pressing Enrich again buys
+            # nothing, so the message names the repair instead of a retry.
+            if travel_api_state(prop_local) == TRAVEL_STATE_APPROXIMATE_ORIGIN:
+                return {
+                    "success": False,
+                    "error": (
+                        "This listing's coordinate is a locality centroid, not its "
+                        "address, so travel times were not measured — they would "
+                        "describe that point, not the property. Re-geocode it "
+                        "first (utils/refresh_property_accuracy.py)."
+                    ),
                 }
 
             # A refused API is not a bad address: say which one it was (#98).

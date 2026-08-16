@@ -452,6 +452,55 @@ lookup actually covers scores `None` rather than 0, because nobody looked there.
 `utils/recalc_sea_distance.py` backfills; it writes a rollback snapshot of the
 score columns first, since rolling the app back does not undo a data rewrite.
 
+**A coordinate that is not the parcel measures nothing about it, and every
+consumer asks before it measures** (#358). `location_accuracy` is Google's own
+word for what it matched: `precise` is an address, anything else is a locality
+centroid. At 11:08 UTC on 2026-08-16 that was **532 of the 725 located rows**,
+280 of them sharing a point with another listing across 78 points (21 listings
+on the worst one, 39 of the sharers labelled `precise`). Two hours earlier the
+same query said 466 of 652: the set grows with every ingest, so re-measure
+rather than quoting these. `sea_view_service` has refused such
+a point since #196; `sea_distance_service` and `property_travel_service` did
+not, so a listing scored the centroid's sea distance and the centroid's drive
+times, and nothing on the page said so. Properties 460, 461, 574 and 641 are
+four different streets of Santa María del Mar resolved to one point 23.8 m from
+the coastline — including `San Miguel de Quiloño s/n`, which is inland by the
+airport. It is the *fourth* way a geocode goes wrong and the first three guards
+all pass it: not a coarse type (#331), the right province (#348), an accepted
+accuracy label (#321). Right place, wrong precision.
+
+The policy has one home, `services/coordinate_quality.py`, and it is
+`sea_view_service`'s idea rather than a second one: an approximate coordinate
+may still decide a question **when the answer cannot change anywhere inside the
+5 km slack**. So a measured distance is scored only if its lower and upper
+bounds score the same — which for a precise row is one number twice, so nothing
+about that path is special-cased — and a travel duration only if both ends of
+the slack, converted at the mode's own assumed speed by
+`estimate_duration_seconds`, land in the same flat region. "No coastline within
+17 km of the centroid" survives it, which is why `searched_m` on an approximate
+row is 12 km: the radius the answer is guaranteed for *around the parcel*.
+
+Three consequences worth knowing before changing it. Travel refuses **before**
+the Places and Distance Matrix calls, so a recalc over such rows is free rather
+than money spent on numbers that must then be marked unattributable — but it
+does *not* clear what the row already holds, unlike #350's `--clear-orphaned`,
+because that row has a real coordinate and a re-geocode makes those durations
+meaningful again. The scorer and the templates read the row's *current*
+accuracy through `parcel_measurement` and `effective_travel_state`, not the
+stored block, because 264 sea blocks and 532 travel blocks say `ok` from runs
+that predate the rule and no amount of re-reading them reveals it. The
+exemption is asked of the travel *average*, never target by target: 690 of
+those durations sit under `best`, where the slack cannot move them, against 9
+past `worst`, so keeping the individually-safe ones would keep the near ones
+and report ~100 for a listing whose real mix is nothing of the sort. And a
+shared
+coordinate is surfaced as evidence, never as a gate: two flats in one building
+share a point legitimately, the coordinate alone cannot tell that from four
+plots on a centroid, so it is shown next to the coordinate and counted by
+`utils/report_coordinate_quality.py` (free, read-only) — repairing the rows is
+`utils/refresh_property_accuracy.py`, which is billed and therefore the owner's
+call.
+
 **The pool criterion ships weightless and is live in production anyway**
 (proposal D17, #278; turned on on the mini 2026-08-14). Every category in
 `services/property_scoring_service.py` carries `pool_score: 0.0` in both
@@ -768,8 +817,12 @@ and TODO.md; respect it if you ever run both side by side.
   mid-flight and nothing recorded it — healthz was green either side and the
   watcher logged an ordinary successful deploy. So every long `utils/*` entry
   point wraps its loop in `utils/inflight.inflight(...)`, which writes
-  `data/.inflight/<module>.<pid>.json` while it runs and reports — on the next
-  start — any marker a killed predecessor left behind. `resumable=True` is a
+  `data/.inflight/<module>.<run_id>.json` (a per-run id, not the PID — a
+  containerised run is always PID 1, so the PID cannot tell two runs apart,
+  #359; the body also records `host`, the container id, because a PID is only
+  a name inside one namespace and a marker from another container reads as
+  "cannot tell", never as dead or alive) while it runs and reports — on the
+  next start — any marker a killed predecessor left behind. `resumable=True` is a
   *claim*: set it only where a restart really does resume, meaning a per-row
   commit and a scope that finished rows leave (`needs_pool`, `needs_beaches`,
   `--only-missing`). Where that depends on a flag, pass the flag

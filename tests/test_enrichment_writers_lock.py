@@ -165,6 +165,13 @@ class TestARefusalYieldsToAMeasurementItNeverSaw:
                 "searched_m": 20000,
                 "source": "osm_coastline",
                 "origin": {"lat": 43.5, "lon": -6.2},
+                # Matches `_prop()`'s `location_accuracy="approximate"` --
+                # `_last_known_good` (services/coordinate_quality.py) refuses
+                # to reuse a stored measurement whose recorded accuracy
+                # disagrees with the row's current one (a re-geocode changes
+                # what the payload may claim), so the fixture has to state the
+                # accuracy it was "measured" under like any real payload does.
+                "origin_accuracy": "approximate",
                 "updated_at": "2026-08-16T09:00:00+00:00",
             },
         )

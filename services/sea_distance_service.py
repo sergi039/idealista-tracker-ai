@@ -8,9 +8,14 @@ travel target still returns empty (issue #98).
 The coastline itself is *not* fetched here. `services/sea_view_service.py`
 already owns that: one Overpass query per grid cell, cached for a month,
 throttled, with the User-Agent and 504 handling its own comments explain. This
-module is the thin part -- nearest-node distance, the four statuses, and the
+module is the thin part -- nearest-node distance, the statuses below, and the
 record on the property -- so the repository keeps one coastline client instead
 of two drifting apart.
+
+What it will not do is answer for a property whose coordinate is not the
+property: `location_accuracy` decides whether the measured distance may be
+called this parcel's at all, on the same reasoning and the same slack
+`sea_view_service` applies to a view verdict.
 """
 
 import logging
@@ -24,8 +29,13 @@ from services.enrichment_write import check_writable, locked_write
 
 from config import Config
 from models import Property
-from services.sea_view_service import (
+from services.coordinate_quality import (
     APPROXIMATE_COORD_SLACK_M,
+    coordinate_slack_m,
+    distance_bounds_m,
+    normalize_accuracy,
+)
+from services.sea_view_service import (
     MAX_SEA_DISTANCE_M,
     ORIGIN_TOLERANCE_DEG,
     SeaViewSourceError,
@@ -41,10 +51,22 @@ STATUS_OK = "ok"
 STATUS_NO_COASTLINE = "no_coastline_within_radius"
 STATUS_UNAVAILABLE = "unavailable"
 STATUS_NO_COORDINATES = "no_coordinates"
+# The coastline was found, and it is not this property's distance to it: the
+# row's coordinate is a locality centroid, so what was measured is the distance
+# from a point the parcel is merely near. Kept apart from `unavailable` for the
+# #98 reason -- the source answered perfectly, and re-running the lookup will
+# never improve it. Only a re-geocode will.
+STATUS_APPROXIMATE_ORIGIN = "approximate_origin"
+# Not a measurement outcome: the row has no sea block at all. Named here with
+# the rest so a reader finds every value `parcel_measurement` can return in one
+# place.
+STATUS_MISSING = "missing_sea_distance"
 
 # A measured status is one the data can be trusted for; it survives a later
-# outage as last-known-good. The coastline does not move.
-MEASURED_STATUSES = (STATUS_OK, STATUS_NO_COASTLINE)
+# outage as last-known-good. The coastline does not move -- and neither does
+# the fact that a centroid cannot answer for the parcel, which is why the
+# approximate verdict is kept over a later refusal too.
+MEASURED_STATUSES = (STATUS_OK, STATUS_NO_COASTLINE, STATUS_APPROXIMATE_ORIGIN)
 
 SOURCE = "osm_coastline"
 
@@ -111,36 +133,65 @@ def _nearest_point_distance_m(
 class SeaDistanceService:
     """Straight-line distance to the OSM coastline, per property."""
 
-    def measure(self, lat: float, lon: float) -> Dict[str, Any]:
-        """Measure distance to the coastline for one point."""
+    def measure(
+        self, lat: float, lon: float, accuracy: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Measure distance to the coastline for one point.
+
+        `accuracy` is the row's `location_accuracy`, and it decides what the
+        measurement is allowed to claim. There is no default of "precise": a
+        caller that does not say gets the honest reading of silence, which is
+        that the point may be a centroid.
+
+        `searched_m` is what the answer is guaranteed for *around the parcel*,
+        so an approximate origin shrinks it by the slack -- the radius was
+        searched around the centroid, and the parcel may sit that far outside
+        it. `services/property_scoring_service.py` reads exactly that field to
+        decide whether a profile's horizon reaches past the measurement.
+        """
+        accuracy = normalize_accuracy(accuracy)
+        slack = coordinate_slack_m(accuracy)
+        guaranteed_m = SEARCH_RADIUS_M - slack
+        base = {
+            "searched_m": guaranteed_m,
+            "source": SOURCE,
+            "origin_accuracy": accuracy,
+            "slack_m": slack,
+        }
+
         try:
             points = fetch_coastline_points(lat, lon)
         except SeaViewSourceError as exc:
             logger.warning("Coastline lookup unavailable for %s,%s: %s", lat, lon, exc)
-            return {
-                "status": STATUS_UNAVAILABLE,
-                "distance_m": None,
-                "searched_m": SEARCH_RADIUS_M,
-                "source": SOURCE,
-            }
+            return {**base, "status": STATUS_UNAVAILABLE, "distance_m": None}
 
         distance = _nearest_point_distance_m(lat, lon, points)
         if distance is None or distance > SEARCH_RADIUS_M:
             # Either the cell held no coastline, or the nearest one sits beyond
             # the radius the query guarantees. Both are measured facts rather
-            # than failures: the property is simply not near the sea.
-            return {
-                "status": STATUS_NO_COASTLINE,
-                "distance_m": None,
-                "searched_m": SEARCH_RADIUS_M,
-                "source": SOURCE,
-            }
+            # than failures: the property is simply not near the sea. This is
+            # the negative the slack keeps honest -- nothing within 17 km of
+            # the centroid means nothing within 12 km of the parcel, whichever
+            # point inside the locality it turns out to be.
+            return {**base, "status": STATUS_NO_COASTLINE, "distance_m": None}
 
+        distance = round(distance, 1)
+        if not slack:
+            return {**base, "status": STATUS_OK, "distance_m": distance}
+
+        # The coastline was found and measured, and the result is a fact about
+        # the centroid rather than about this property. `distance_m` stays None
+        # because that key means "how far this property is from the sea";
+        # `origin_distance_m` says what was actually measured, and the bounds
+        # say the only thing the geometry supports about the parcel.
+        lower, upper = distance_bounds_m(distance, slack)
         return {
-            "status": STATUS_OK,
-            "distance_m": round(distance, 1),
-            "searched_m": SEARCH_RADIUS_M,
-            "source": SOURCE,
+            **base,
+            "status": STATUS_APPROXIMATE_ORIGIN,
+            "distance_m": None,
+            "origin_distance_m": distance,
+            "min_distance_m": lower,
+            "max_distance_m": upper,
         }
 
     def update_property(
@@ -166,6 +217,7 @@ class SeaDistanceService:
 
         lat = _coordinate(prop.location_lat, limit=90.0)
         lon = _coordinate(prop.location_lon, limit=180.0)
+        accuracy = normalize_accuracy(getattr(prop, "location_accuracy", None))
         now = _now_iso()
 
         if lat is None or lon is None:
@@ -177,6 +229,7 @@ class SeaDistanceService:
                 "searched_m": SEARCH_RADIUS_M,
                 "source": SOURCE,
                 "origin": None,
+                "origin_accuracy": accuracy,
                 "updated_at": now,
                 "last_attempt_status": STATUS_NO_COORDINATES,
                 "last_attempt_at": now,
@@ -185,7 +238,7 @@ class SeaDistanceService:
                 self._store(prop, payload)
             return payload
 
-        measurement = self.measure(lat, lon)
+        measurement = self.measure(lat, lon, accuracy)
 
         # `previous` is read here, under the lock, and not before the
         # measurement: a refusal must yield to whatever is *stored* when the
@@ -195,7 +248,7 @@ class SeaDistanceService:
             previous = self._stored_payload(prop)
 
             if measurement["status"] == STATUS_UNAVAILABLE:
-                kept = self._last_known_good(previous, lat, lon)
+                kept = self._last_known_good(previous, lat, lon, accuracy)
                 if kept is not None:
                     payload = {
                         **kept,
@@ -223,7 +276,10 @@ class SeaDistanceService:
 
     @staticmethod
     def _last_known_good(
-        previous: Optional[Dict[str, Any]], lat: float, lon: float
+        previous: Optional[Dict[str, Any]],
+        lat: float,
+        lon: float,
+        accuracy: str,
     ) -> Optional[Dict[str, Any]]:
         """Reusable previous measurement, if it belongs to these coordinates."""
         if not previous:
@@ -243,15 +299,23 @@ class SeaDistanceService:
             return None
         if abs(origin_lon - lon) > ORIGIN_TOLERANCE_DEG:
             return None
+        # A row re-geocoded from centroid to address has not moved, and its
+        # stored verdict is still about the centroid. Same point, different
+        # claim: keeping it would serve "we cannot say" for a row that can now
+        # be answered, and the reverse would serve a parcel distance for a row
+        # that has just lost the right to one.
+        if normalize_accuracy(previous.get("origin_accuracy")) != accuracy:
+            return None
 
-        return {
-            "status": previous.get("status"),
-            "distance_m": previous.get("distance_m"),
-            "searched_m": previous.get("searched_m", SEARCH_RADIUS_M),
-            "source": previous.get("source", SOURCE),
-            "origin": {"lat": origin_lat, "lon": origin_lon},
-            "updated_at": previous.get("updated_at"),
-        }
+        # Every key except the attempt pair, which the caller restamps: the
+        # payload grew `origin_distance_m` and the bounds, and a copy that
+        # names its keys one by one silently drops whatever it was written
+        # before.
+        kept = {k: v for k, v in previous.items() if not k.startswith("last_attempt")}
+        kept.setdefault("searched_m", SEARCH_RADIUS_M)
+        kept.setdefault("source", SOURCE)
+        kept["origin"] = {"lat": origin_lat, "lon": origin_lon}
+        return kept
 
     @staticmethod
     def _store(prop: Property, payload: Dict[str, Any]) -> None:
@@ -262,3 +326,62 @@ class SeaDistanceService:
         enrichment["sea"] = payload
         prop.enrichment = enrichment
         flag_modified(prop, "enrichment")
+
+
+def parcel_measurement(prop: Property) -> Dict[str, Any]:
+    """The stored measurement, restated as a claim about *this parcel*.
+
+    One home for the slack arithmetic, because there are two ways a stored
+    payload can disagree with the row it sits on and both must come out the
+    same:
+
+    * 264 rows on the live database hold `status: ok` with a distance measured
+      before this rule existed, from a coordinate that is a locality centroid.
+      Rewriting them is a free Overpass recalc, but a score must not wait for
+      somebody to remember to run one, so the restatement happens on read.
+    * a row re-geocoded since the measurement carries a payload whose
+      `slack_m` no longer matches its accuracy, in either direction.
+
+    So the raw measurement is recovered (`searched_m` and the bounds both have
+    the stored slack added back) and the current slack is applied to it. A
+    precise row gets `min == max` and comes out as the plain `ok` it always
+    was; nothing about the precise path is special-cased.
+    """
+    stored = prop.enrichment.get("sea") if isinstance(prop.enrichment, dict) else None
+    accuracy = normalize_accuracy(getattr(prop, "location_accuracy", None))
+    slack = coordinate_slack_m(accuracy)
+    base = {"origin_accuracy": accuracy, "slack_m": slack}
+
+    if not isinstance(stored, dict):
+        return {**base, "status": STATUS_MISSING}
+
+    status = stored.get("status")
+    applied_slack = _safe_float(stored.get("slack_m")) or 0.0
+    guaranteed_m = _safe_float(stored.get("searched_m"))
+    if guaranteed_m is not None:
+        guaranteed_m = guaranteed_m + applied_slack - slack
+
+    if status == STATUS_NO_COASTLINE:
+        return {**base, "status": STATUS_NO_COASTLINE, "searched_m": guaranteed_m}
+
+    if status not in (STATUS_OK, STATUS_APPROXIMATE_ORIGIN):
+        # unavailable / no_coordinates / anything a future version writes: no
+        # measurement to restate, and inventing one is the #98 defect.
+        return {**base, "status": status or STATUS_MISSING}
+
+    measured = _safe_float(stored.get("origin_distance_m"))
+    if measured is None:
+        measured = _safe_float(stored.get("distance_m"))
+    if measured is None:
+        return {**base, "status": "missing_distance"}
+
+    lower, upper = distance_bounds_m(measured, slack)
+    return {
+        **base,
+        "status": STATUS_OK if not slack else STATUS_APPROXIMATE_ORIGIN,
+        "distance_m": measured if not slack else None,
+        "origin_distance_m": measured,
+        "min_distance_m": lower,
+        "max_distance_m": upper,
+        "searched_m": guaranteed_m,
+    }
