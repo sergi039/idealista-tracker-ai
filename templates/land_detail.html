@@ -92,22 +92,32 @@
                        the coordinate -- an unrecorded or approximate one is why a
                        sea-view verdict can come back unknown, so it is not
                        decoration. #}
-                    {# Where the status came from, same four sources as the
-                       property page. #}
-                    {% set _status_note = {
-                        'email': "Recorded from Idealista's own removal email.",
-                        'check': 'Recorded by a status check that read the listing page.',
-                        'manual': 'Set by hand.',
-                        'ingest': 'The default this listing was ingested with — never verified.',
-                    }.get(land.listing_status_source, 'Source not recorded.') %}
+                    {# Where the status came from, and whether anybody
+                       established it at all: the same rule and the same
+                       sentences as the property page, read from the one module
+                       that owns them (services/listing_verification.py). This
+                       page kept its own copy of the source map until then. #}
+                    {% set _verdict = listing_verdict_for(land) %}
+                    {% set _status_note = _verdict.note %}
                     <div class="d-flex flex-wrap align-items-center gap-2 text-body-secondary small">
-                        {% if land.listing_status == 'removed' %}
+                        {% if _verdict.state == 'removed' %}
                             <span class="badge bg-danger" title="{{ _status_note }}">
                                 <i class="fas fa-times-circle me-1"></i>REMOVED
                             </span>
-                        {% elif land.listing_status == 'sold' %}
+                        {% elif _verdict.state == 'sold' %}
                             <span class="badge bg-secondary" title="{{ _status_note }}">
                                 <i class="fas fa-check-circle me-1"></i>SOLD
+                            </span>
+                        {% elif _verdict.state == 'active' %}
+                            <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle fw-normal"
+                                  title="{{ t('listing_verified_tooltip') }} — {{ _status_note }}">
+                                <i class="fas fa-circle-check me-1"></i>{{ t('listing_state_active') }}
+                            </span>
+                        {% else %}
+                            <span class="badge bg-body-tertiary text-body-secondary border fw-normal"
+                                  id="listing-unverified-badge"
+                                  title="{{ _status_note }}">
+                                <i class="fas fa-circle-question me-1"></i>{{ t('listing_state_unchecked') }}
                             </span>
                         {% endif %}
                         {% if land.municipality %}
@@ -153,14 +163,14 @@
     </div>
 </div>
 
-{% if land.listing_status in ('removed', 'sold') %}
+{% if _verdict.state in ('removed', 'sold') %}
 <div class="row mb-3">
     <div class="col-12">
-        <div class="alert alert-{{ 'danger' if land.listing_status == 'removed' else 'secondary' }} d-flex align-items-center" role="alert">
-            <i class="fas fa-{{ 'times-circle' if land.listing_status == 'removed' else 'check-circle' }} me-3 fa-2x"></i>
+        <div class="alert alert-{{ 'danger' if _verdict.state == 'removed' else 'secondary' }} d-flex align-items-center" role="alert">
+            <i class="fas fa-{{ 'times-circle' if _verdict.state == 'removed' else 'check-circle' }} me-3 fa-2x"></i>
             <div>
                 <h5 class="mb-1">
-                    {% if land.listing_status == 'removed' %}
+                    {% if _verdict.state == 'removed' %}
                         This listing is no longer available on Idealista
                     {% else %}
                         This property has been sold
