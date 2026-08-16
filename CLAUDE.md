@@ -359,6 +359,27 @@ User-Agent token because Overpass answers 406 to anything else). Do not add a
 second Overpass client — measured the hard way, a per-property or wide-box query
 gets 504s.
 
+**"Cached a month" is true of the deployment only because `REDIS_URL` is set**
+(#356). `utils/cache.py` falls back to `SimpleCache` without it, and that lives
+in the process — so until 2026-08-16 the 30-day intent lasted exactly as long as
+the interpreter that filled it, and every deploy restart, every `docker exec`
+and every `compose run` sibling re-paid Overpass for cells the last one had
+already fetched. `docker-compose.yml` now runs a `redis` service with
+`--appendonly` so the cells survive the container too. If a run is suddenly
+slow, check that the app really has `REDIS_URL` before looking anywhere else:
+the code, the docs and the deployment disagreeing is what this cost.
+
+Two consequences worth knowing before an incident, not during one. **Rate
+limiting rides the same switch** — `app.py` builds its `Limiter` with
+`storage_uri=REDIS_URL`, so limits are now shared across gunicorn workers
+rather than counted per process. And **a shared cache is a shared blast radius
+for 30 days**: a poisoned coastline entry used to die with its process and now
+does not. The key carries a version (`sea_view_coastline_cell_r25000_v1`), so
+bumping `_v1` is the escape hatch — that is what it is for, and it is cheaper
+than reasoning about which cells are wrong. A cache that cannot be reached is a
+*miss*, never an error: `utils/cache.py` guards every read and write, because
+on the Google paths the write happens after the billed call.
+
 The result lands in `Property.enrichment["sea"]` (a JSON column — no migration,
 and a different key from sea view's `enrichment.environment.sea_view`) with one
 of four statuses: `ok`, `no_coastline_within_radius`, `unavailable`,

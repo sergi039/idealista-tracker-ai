@@ -29,10 +29,18 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     env_file:
       - .env
     environment:
       - DATABASE_URL=postgresql://${DB_USER:-idealista}:${DB_PASSWORD}@db:5432/${DB_NAME:-idealista_universal}
+      # The cache asked for 30 days and got the lifetime of a process (#356):
+      # without this, utils/cache.py falls back to SimpleCache and every run -
+      # every deploy restart, every `docker exec`, every `compose run` sibling -
+      # re-pays Overpass for coastline cells the last one already fetched.
+      # Overridable so an external Redis can be pointed at instead.
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - AUTO_START_SCHEDULER=${AUTO_START_SCHEDULER:-true}
       # AI runs on the owner's subscriptions via the host bridge, never on API keys.
       - AI_BRIDGE_URL=${AI_BRIDGE_URL:-http://host.docker.internal:5061}
@@ -66,11 +74,50 @@ services:
     networks:
       - idealista-network
 
+  redis:
+    image: redis:7-alpine
+    container_name: ${COMPOSE_CONTAINER_PREFIX:-idealista}-redis
+    # No published port, deliberately. Only the app, a `docker exec` and a
+    # `compose run` sibling need it and they reach it over this network. This
+    # stack has no authentication (see CLAUDE.md), so nothing gets a host
+    # binding it does not need.
+    command:
+      - redis-server
+      # The point of the ticket is surviving a process, so the data has to
+      # survive the container too - otherwise a redis restart re-pays Overpass
+      # for every cell exactly as SimpleCache did.
+      - --appendonly
+      - "yes"
+      # Bounded rather than unbounded: coastline geometry is the big payload,
+      # and an unbounded cache on a shared machine is a memory leak with a TTL.
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-256mb}
+      # volatile-lru, not allkeys-lru: it evicts only keys that carry a TTL.
+      # Every key this app writes has one - cache entries and flask-limiter
+      # counters alike - so nothing is immortal, and a key without a TTL is a
+      # bug that will be noticed rather than silently discarded.
+      - --maxmemory-policy
+      - volatile-lru
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - idealista-network
+
 volumes:
   pgdata_universal:
     # Prefixed for the same reason as the containers: an unscoped volume name
     # means a branch build runs its migrations against the production data.
     name: ${COMPOSE_CONTAINER_PREFIX:-idealista}-universal-pgdata
+  redisdata:
+    # Prefixed for the same reason: a branch build must not inherit - or
+    # poison - the production cache, which now lives for 30 days.
+    name: ${COMPOSE_CONTAINER_PREFIX:-idealista}-redis-data
 
 networks:
   idealista-network:
