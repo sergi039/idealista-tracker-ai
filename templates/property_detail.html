@@ -1350,16 +1350,6 @@
                     </h6>
                 </div>
                 <div class="card-body">
-                        {# Read-only (#346): the block's own origin vs the property's
-                           current coordinate. Silent on matches/unknown -- unknown
-                           covers the ~200 blocks measured before origins existed,
-                           and assuming those "match" would invent provenance they
-                           were never stamped with. Nothing here changes the score. #}
-                        {% if pool_origin_state_for(property) == 'differs' %}
-                            <div class="small text-body-secondary mb-1">
-                                <i class="fas fa-triangle-exclamation me-1"></i>{{ t('pool_origin_differs') }}
-                            </div>
-                        {% endif %}
                         {% if qol_pool.get('owner_no_pool') is mapping %}
                             <div class="small mb-1">
                                 <span class="badge bg-secondary">{{ t('pool_owner_absence') }}</span>
