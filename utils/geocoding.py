@@ -1,10 +1,98 @@
 import logging
 import requests
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from config import Config
 from utils.http import request_with_retries
 
 logger = logging.getLogger(__name__)
+
+
+# --- Nominatim -> Google vocabulary (issue #342, residue item 4) ------------
+#
+# `services/property_location_service.py` has exactly one rule for refusing a
+# too-coarse geocoding result (`_is_too_coarse`, issue #331) and one for a
+# result about the wrong place (`_result_province`, issue #348). Both read
+# Google's own vocabulary -- `types` and a `postal_code` address component --
+# and until now the Nominatim fallback supplied neither, so a Nominatim
+# country-level answer was invisible to the rule that exists. The fix is to
+# translate the fallback's answer into that vocabulary, not to add a second
+# copy of either rule.
+#
+# Nominatim's `place_rank` is documented at
+# https://nominatim.org/release-docs/latest/customize/Ranking/ -- countries
+# sit at rank <= 4, states/regions at 5-8, counties/provinces at 9-12.
+# `addresstype` (Nominatim >= 4) names the same scale in words and is checked
+# first: it is less likely to drift across a Nominatim release than the
+# numeric boundaries are.
+_NOMINATIM_COUNTRY_TYPES = {"country"}
+_NOMINATIM_REGION_TYPES = {"state", "region"}
+_NOMINATIM_PROVINCE_TYPES = {"province", "county"}
+_NOMINATIM_LOCALITY_TYPES = {
+    "city",
+    "town",
+    "village",
+    "municipality",
+    "hamlet",
+    "suburb",
+    "borough",
+}
+_NOMINATIM_ROUTE_TYPES = {"road", "highway", "residential", "pedestrian"}
+
+
+def _nominatim_result_types(result: Dict) -> List[str]:
+    """Map a Nominatim `addressdetails=1` answer to Google's `types` list.
+
+    Only the coarse levels `_is_too_coarse` refuses need to land precisely;
+    the finer mapping is best-effort. An answer carrying neither
+    `addresstype` nor a usable `place_rank` maps to `[]` -- unknown scale is
+    not a claim of precision.
+    """
+    addresstype = str(result.get("addresstype") or "").strip().lower()
+    try:
+        place_rank = (
+            int(result["place_rank"]) if result.get("place_rank") is not None else None
+        )
+    except (TypeError, ValueError):
+        place_rank = None
+
+    if addresstype in _NOMINATIM_COUNTRY_TYPES or (
+        place_rank is not None and place_rank <= 4
+    ):
+        return ["country"]
+    if addresstype in _NOMINATIM_REGION_TYPES or (
+        place_rank is not None and 5 <= place_rank <= 8
+    ):
+        return ["administrative_area_level_1"]
+    if addresstype in _NOMINATIM_PROVINCE_TYPES or (
+        place_rank is not None and 9 <= place_rank <= 12
+    ):
+        return ["administrative_area_level_2"]
+    if addresstype in _NOMINATIM_LOCALITY_TYPES or (
+        place_rank is not None and 13 <= place_rank <= 21
+    ):
+        return ["locality"]
+    if addresstype in _NOMINATIM_ROUTE_TYPES:
+        return ["route"]
+    if addresstype:
+        # Named but finer than a locality -- a house, building or POI, closer
+        # to a single property than to a place.
+        return ["premise"]
+    return []
+
+
+def _nominatim_address_components(result: Dict) -> List[Dict]:
+    """Map Nominatim's `address` dict into Google's `address_components` shape.
+
+    Only `postcode` is mapped -- it is the only field
+    `services.property_location_service._result_province` reads.
+    """
+    address = result.get("address")
+    if not isinstance(address, dict):
+        return []
+    postcode = str(address.get("postcode") or "").strip()
+    if not postcode:
+        return []
+    return [{"long_name": postcode, "short_name": postcode, "types": ["postal_code"]}]
 
 
 class GeocodingService:
@@ -84,7 +172,17 @@ class GeocodingService:
         try:
             # Use Nominatim as fallback
             url = "https://nominatim.openstreetmap.org/search"
-            params = {"q": address, "format": "json", "countrycodes": "es", "limit": 1}
+            params = {
+                "q": address,
+                "format": "json",
+                "countrycodes": "es",
+                "limit": 1,
+                # Documented Nominatim parameter: returns an "address"
+                # breakdown (postcode, state, ...) plus "addresstype" and
+                # "place_rank" on the result itself, which is what lets this
+                # answer be mapped into Google's vocabulary below.
+                "addressdetails": 1,
+            }
 
             headers = {"User-Agent": "Idealista-Property-Watch/1.0"}
 
@@ -105,8 +203,13 @@ class GeocodingService:
                         "lat": float(result["lat"]),
                         "lng": float(result["lon"]),
                         "formatted_address": result["display_name"],
-                        "address_components": [],
+                        "address_components": _nominatim_address_components(result),
                         "location_type": None,
+                        # See _nominatim_result_types: maps this answer onto
+                        # Google's vocabulary so the one existing coarse-result
+                        # rule in property_location_service.py covers both
+                        # providers (issue #342, residue item 4).
+                        "types": _nominatim_result_types(result),
                         "accuracy": "approximate",
                     }
 
