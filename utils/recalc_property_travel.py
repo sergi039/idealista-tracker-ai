@@ -42,7 +42,11 @@ from typing import Any, Dict, List, Optional
 from app import create_app, db
 from models import Property
 from services.property_scoring_service import PropertyScoringService
-from services.property_travel_service import PropertyTravelService
+from services.property_travel_service import (
+    TRAVEL_STATE_APPROXIMATE_ORIGIN,
+    PropertyTravelService,
+    travel_api_state,
+)
 from utils import score_snapshot
 from utils.inflight import inflight
 
@@ -233,6 +237,7 @@ def main() -> None:
 
         processed = 0
         failed = 0
+        approximate_origin = 0
         changed_places: List[Dict[str, Any]] = []
 
         # Never resumable: the scope is every matching property on each run,
@@ -257,7 +262,15 @@ def main() -> None:
                     # Every target refused or unanswerable.
                     # `calculate_for_property` has already recorded that on the
                     # row; it is not a crash.
-                    failed += 1
+                    if travel_api_state(prop) == TRAVEL_STATE_APPROXIMATE_ORIGIN:
+                        # Not a failure and not a cost: the row's coordinate is
+                        # a locality centroid, so nothing was asked of Google.
+                        # Counted apart so a run over such rows does not read
+                        # as an outage -- and so the operator can see how much
+                        # of the scope a re-geocode would unlock.
+                        approximate_origin += 1
+                    else:
+                        failed += 1
 
                 try:
                     scoring_service.calculate_for_property(prop, commit=False)
@@ -282,6 +295,7 @@ def main() -> None:
         summary = {
             "processed": processed,
             "failed": failed,
+            "approximate_origin": approximate_origin,
             "properties_with_a_changed_place": len(changed_places),
         }
         logger.info("Done: %s", summary)

@@ -299,6 +299,7 @@ class TestEndToEndPersistedTravel:
             search_profile_id=profile.id,
             location_lat=43.551663,
             location_lon=-6.831426,
+            location_accuracy="precise",
         )
         db.session.add(prop)
         db.session.commit()

@@ -439,6 +439,7 @@ def test_property_travel_service_populates_travel_for_enabled_presets(app):
             search_profile_id=profile.id,
             location_lat=Decimal("40.4168"),
             location_lon=Decimal("-3.7038"),
+            location_accuracy="precise",
         )
         db.session.add(prop)
         db.session.commit()

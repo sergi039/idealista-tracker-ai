@@ -51,6 +51,15 @@ TRANSLATIONS = {
         "plot_coast_ban": "Coastal ban zone",
         "plot_coast_ok": "Outside coastal ban",
         "plot_coast_unmeasured": "Coast distance unmeasured",
+        # The coordinate is a locality centroid (#358), and the 500 m band it
+        # sits inside or outside cannot be told apart within the slack: the
+        # bounds straddle 500 m, so the verdict is neither a robust ban nor a
+        # robust clearance. Kept apart from `plot_coast_unmeasured`, which
+        # means the lookup itself never ran -- this one ran and still could
+        # not answer for the parcel.
+        "plot_coast_unmeasured_approximate": (
+            "Coast distance unmeasured (approximate location)"
+        ),
         "plot_coast_none_near": "No coast within radius",
         "plot_class_check": "Classification unverified",
         "plot_pgou_warning": "Outside PGOU urban zones?",
@@ -112,6 +121,26 @@ TRANSLATIONS = {
         "sea_distance_no_coastline": "No coastline within",
         "sea_distance_unavailable": "Coastline data unavailable",
         "sea_distance_not_measured": "Not measured yet",
+        # An approximate coordinate is a locality centroid, so anything
+        # measured from it belongs to the locality and not to this parcel.
+        "sea_distance_approximate_origin": "Not measured (approximate location)",
+        "approximate_origin_short": "Approximate location",
+        "approximate_origin_tooltip": (
+            "This listing's coordinate is a locality centroid, not its address. "
+            "Distances and travel times measured from it describe that point, "
+            "not this property."
+        ),
+        "approximate_origin_notice": (
+            "The coordinate on this listing is a locality centroid, not its "
+            "address, so the times below are routes from that point rather "
+            "than from this property. They do not count towards its score."
+        ),
+        "from_the_geocoded_point": "from the geocoded point",
+        "shared_coordinate_with": "same coordinate as",
+        "shared_coordinate_tooltip": (
+            "Another listing is stored at exactly this point. Two homes in one "
+            "building can share one legitimately; separate plots cannot."
+        ),
         "beaches_within": "Beaches ≤",
         "minutes_drive": "min by car",
         "nearest_beach": "Nearest beach",
@@ -303,6 +332,9 @@ TRANSLATIONS = {
         "plot_coast_ban": "Zona de prohibición costera",
         "plot_coast_ok": "Fuera de la franja costera",
         "plot_coast_unmeasured": "Distancia a la costa sin medir",
+        "plot_coast_unmeasured_approximate": (
+            "Distancia a la costa sin medir (ubicación aproximada)"
+        ),
         "plot_coast_none_near": "Sin costa en el radio",
         "plot_class_check": "Clasificación sin verificar",
         "plot_pgou_warning": "¿Fuera de zonas urbanas del PGOU?",
@@ -356,6 +388,25 @@ TRANSLATIONS = {
         "sea_distance_no_coastline": "Sin costa en",
         "sea_distance_unavailable": "Datos de costa no disponibles",
         "sea_distance_not_measured": "Aún no medido",
+        "sea_distance_approximate_origin": "Sin medir (ubicación aproximada)",
+        "approximate_origin_short": "Ubicación aproximada",
+        "approximate_origin_tooltip": (
+            "La coordenada de este anuncio es el centro de la localidad, no su "
+            "dirección. Las distancias y los tiempos medidos desde ese punto "
+            "describen la localidad, no esta propiedad."
+        ),
+        "approximate_origin_notice": (
+            "La coordenada de este anuncio es el centro de la localidad, no su "
+            "dirección: los tiempos de abajo son rutas desde ese punto, no "
+            "desde esta propiedad. No cuentan para su puntuación."
+        ),
+        "from_the_geocoded_point": "desde el punto geocodificado",
+        "shared_coordinate_with": "misma coordenada que",
+        "shared_coordinate_tooltip": (
+            "Otro anuncio está guardado exactamente en este punto. Dos "
+            "viviendas de un mismo edificio pueden compartirlo; dos parcelas "
+            "distintas no."
+        ),
         "beaches_within": "Playas ≤",
         "minutes_drive": "min en coche",
         "nearest_beach": "Playa más cercana",

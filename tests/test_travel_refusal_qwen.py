@@ -201,6 +201,7 @@ def prop(app):
         url="https://example.com/test",
         location_lat=51.5074,
         location_lon=-0.1278,
+        location_accuracy="precise",
     )
     db.session.add(p)
     db.session.commit()
