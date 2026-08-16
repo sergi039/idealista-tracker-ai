@@ -83,6 +83,49 @@ def init_cache(app):
     return cache
 
 
+def _safe_get(cache_key):
+    """Read the cache. A backend that cannot answer is a MISS, never an error.
+
+    This mattered the moment `REDIS_URL` was set (#356). With `SimpleCache`
+    neither of these calls can fail, so the twenty-one call sites in
+    `travel_time_service`, `property_travel_service` and `enrichment_service`
+    were written without a guard and were right to be. A network backend can
+    refuse, and on the Google paths the write happens *after* the paid call -
+    so an unreachable Redis would have spent the money and then thrown the
+    result away, and an unreachable Redis on a read would have surfaced as a
+    measurement that could not be taken rather than one that was not cached.
+
+    A cache is an optimisation. Failing to reach it means "fetch it", never
+    "this could not be measured" - the #98 distinction, one layer down.
+
+    `services/sea_view_service.py` reached this rule first, for a different
+    reason (a script or a unit test has no application context) and kept its
+    own `_cache_get`/`_cache_set`. That guard stays: it covers the missing
+    context, this one covers the refusing backend, and they overlap harmlessly.
+    """
+    try:
+        return cache.get(cache_key)
+    except Exception as exc:
+        # warning, not debug: a cache that is down turns every hit into a paid
+        # round trip, and that is worth seeing in a log before the bill.
+        logger.warning("Cache read failed for %s: %s", cache_key, exc)
+        return None
+
+
+def _safe_set(cache_key, value, timeout):
+    """Write to the cache. Returns whether it was actually stored.
+
+    The return value exists so a caller cannot log "cached" over a write that
+    did not happen; `cache_enrichment_data` used to say so unconditionally.
+    """
+    try:
+        cache.set(cache_key, value, timeout=timeout)
+        return True
+    except Exception as exc:
+        logger.warning("Cache write failed for %s: %s", cache_key, exc)
+        return False
+
+
 def cache_key_from_args(*args, **kwargs):
     """Generate a cache key from function arguments"""
     key_parts = []
@@ -113,15 +156,15 @@ def cache_api_response(timeout=300):
             cache_key = f"api:{f.__name__}:{cache_key_from_args(*args, **kwargs)}"
 
             # Try to get from cache
-            cached_value = cache.get(cache_key)
+            cached_value = _safe_get(cache_key)
             if cached_value is not None:
                 logger.debug(f"Cache hit for {cache_key}")
                 return cached_value
 
             # Call function and cache result
             result = f(*args, **kwargs)
-            cache.set(cache_key, result, timeout=timeout)
-            logger.debug(f"Cached result for {cache_key}")
+            if _safe_set(cache_key, result, timeout):
+                logger.debug(f"Cached result for {cache_key}")
 
             return result
 
@@ -137,8 +180,8 @@ def cache_enrichment_data(lat, lon, data_type, data, timeout=86400):
     lon_rounded = round(lon, 4)
 
     cache_key = f"enrichment:{data_type}:{lat_rounded}:{lon_rounded}"
-    cache.set(cache_key, data, timeout=timeout)
-    logger.debug(f"Cached enrichment data: {cache_key}")
+    if _safe_set(cache_key, data, timeout):
+        logger.debug(f"Cached enrichment data: {cache_key}")
 
 
 def get_cached_enrichment_data(lat, lon, data_type):
@@ -147,7 +190,7 @@ def get_cached_enrichment_data(lat, lon, data_type):
     lon_rounded = round(lon, 4)
 
     cache_key = f"enrichment:{data_type}:{lat_rounded}:{lon_rounded}"
-    data = cache.get(cache_key)
+    data = _safe_get(cache_key)
 
     if data is not None:
         logger.debug(f"Enrichment cache hit: {cache_key}")
