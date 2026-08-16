@@ -35,13 +35,25 @@ chmod +x "${WORK}/repo/tools/backfill_status.sh"
 cat >"${WORK}/bin/docker" <<'STUB'
 #!/bin/bash
 case "$1" in
-    ps) printf '%s\n' "${DOCKER_PS_OUTPUT-}" ;;
+    ps)
+        if [ "${DOCKER_PS_RC:-0}" != "0" ]; then
+            echo "stub docker: ps failed" >&2
+            exit "${DOCKER_PS_RC}"
+        fi
+        printf '%s\n' "${DOCKER_PS_OUTPUT-}"
+        ;;
     top)
         if [ "${DOCKER_TOP_RC:-0}" != "0" ]; then
             echo "stub docker: top failed" >&2
             exit "${DOCKER_TOP_RC}"
         fi
-        cat "${DOCKER_TOP_FILE:-/dev/null}" 2>/dev/null || true
+        # `top` takes a container name, and a one-off `docker compose run`
+        # sibling holds different processes from the app container. A stub
+        # answering the same table for every name could not fail on that.
+        case "$2" in
+            *-app-run-*) cat "${DOCKER_TOP_SIBLING_FILE:-/dev/null}" 2>/dev/null || true ;;
+            *) cat "${DOCKER_TOP_FILE:-/dev/null}" 2>/dev/null || true ;;
+        esac
         ;;
 esac
 exit 0
@@ -69,11 +81,16 @@ clear_markers() { rm -f "${WORK}"/repo/data/.inflight/*.json; }
 ( exit 0 ) & DEAD_PID=$!
 wait "$DEAD_PID" 2>/dev/null || true
 
+SIBLING_TOP="${WORK}/sibling_top.txt"
+: >"$SIBLING_TOP"
+
 run_status() {
     set +e
     PATH="${WORK}/bin:${PATH}" \
     DOCKER_TOP_FILE="$TOP" \
+    DOCKER_TOP_SIBLING_FILE="$SIBLING_TOP" \
     DOCKER_TOP_RC="${DOCKER_TOP_RC:-0}" \
+    DOCKER_PS_RC="${DOCKER_PS_RC:-0}" \
     DOCKER_PS_OUTPUT="${DOCKER_PS_OUTPUT-idealista-app}" \
         bash "${WORK}/repo/tools/backfill_status.sh" --container idealista-app "$@" >"${WORK}/out" 2>&1
     RC=$?
@@ -166,3 +183,34 @@ run_status
 [ "$RC" = "0" ] || fail "scenario 9: a leftover marker was read as a lock (rc=$RC)"
 grep -q "a report, not a lock" "${WORK}/out" || fail "scenario 9 did not report the marker at all"
 printf 'OK: a leftover marker is reported but does not block - it is a report, not a lock\n'
+
+# --- scenario 10: a job moved into its own container is still a job -------
+# Once deploys have killed a long run a few times, the operator moves it out:
+# `docker compose run --rm --no-deps app python -m utils....` makes a sibling
+# named <project>-app-run-<hash>, which no deploy recreates. Measured on the
+# mini 2026-08-16: a 292-row recalc_sea_distance ran in
+# idealistarank-app-run-63587a11c7b0 while idealista-app held only gunicorn.
+# Every check that names one container - docker top idealista-app, the deploy
+# watcher's survey, and this tool before this scenario - called that idle.
+set_top; clear_locks; clear_markers
+{
+    printf '%s\n' "$HEADER"
+    printf '%s\n' 'appuser 900 1 0 12:00 ? 00:00:07 python -m utils.recalc_sea_distance --only-missing'
+} >"$SIBLING_TOP"
+DOCKER_PS_OUTPUT="$(printf 'idealista-app\nidealistarank-app-run-63587a11c7b0')" run_status
+[ "$RC" = "1" ] || fail "scenario 10: a job in a one-off run container read as idle (rc=$RC)"
+grep -q "running now in idealistarank-app-run-63587a11c7b0: python -m utils.recalc_sea_distance" "${WORK}/out" \
+    || fail "scenario 10 did not name the container the job actually runs in"
+: >"$SIBLING_TOP"
+printf 'OK: a job moved into its own compose-run container is still seen, and named\n'
+
+# --- scenario 11: an unreadable container list is UNKNOWN ------------------
+# The sibling scan is only as honest as the listing it starts from. A `docker
+# ps` that fails must not silently mean "there are no one-off containers".
+set_top; clear_locks; clear_markers
+DOCKER_PS_RC=1 run_status
+[ "$RC" = "2" ] || fail "scenario 11: a failed docker ps read as 'no run containers' (rc=$RC)"
+grep -q "docker ps could not be read" "${WORK}/out" \
+    || fail "scenario 11 did not say the container list was unreadable"
+unset DOCKER_PS_RC
+printf 'OK: a docker ps that fails is unknown, not an empty machine\n'

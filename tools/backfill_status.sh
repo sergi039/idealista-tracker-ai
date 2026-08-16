@@ -44,6 +44,9 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 CONTAINER="${BACKFILL_STATUS_CONTAINER:-${COMPOSE_CONTAINER_PREFIX:-idealista}-app}"
+# One-off `docker compose run` siblings of the app service. Matched by shape
+# rather than by prefix - see the note at section 1b.
+RUN_CONTAINER_PATTERN="${BACKFILL_STATUS_RUN_PATTERN:--app-run-}"
 MODULE=""
 QUIET=0
 
@@ -121,6 +124,48 @@ else
             done <<<"$match"
         fi
     fi
+fi
+
+# --- 1b. what is running in a one-off container ----------------------------
+# Once a long job has been killed by a deploy a few times, the operator moves
+# it out of the app container: `docker compose run --rm --no-deps app python -m
+# utils....` gets a sibling named `<project>-app-run-<hash>`, which no deploy
+# recreates. That is the right answer to being killed, and it hides the job
+# from every check that names one container - `docker top idealista-app`, the
+# deploy watcher's survey, and section 1 above. Measured on the mini
+# 2026-08-16: a 292-row `recalc_sea_distance` ran in
+# `idealistarank-app-run-63587a11c7b0` while `idealista-app` held only
+# gunicorn.
+#
+# It bites the *careful* operator hardest, which is why it belongs here and not
+# in a follow-up: a one-off container is exactly where long work goes once
+# someone has been burned.
+#
+# The name is matched on `-app-run-`, not built from a prefix: the app
+# container is `${COMPOSE_CONTAINER_PREFIX}-app` (`idealista-app`) while the
+# one-off is named for the compose *project* (`idealistarank-app-run-...`), so
+# they do not share a prefix, and reading .env to learn the second is both
+# forbidden here and unnecessary.
+if ! run_containers="$(docker ps --format '{{.Names}}' 2>/dev/null)"; then
+    note_unknown "docker ps could not be read - a one-off run container may be writing right now"
+else
+    for sibling in $(printf '%s\n' "$run_containers" | grep -E -- "$RUN_CONTAINER_PATTERN" || true); do
+        if ! sibling_rows="$(docker top "$sibling" 2>/dev/null | awk 'NR > 1')"; then
+            note_unknown "docker top ${sibling} could not be read - a one-off run container may be writing right now"
+            continue
+        fi
+        if [ -n "$MODULE" ]; then
+            sibling_match="$(printf '%s\n' "$sibling_rows" | grep -E -- "$(module_regex "$MODULE")" || true)"
+        else
+            sibling_match="$(printf '%s\n' "$sibling_rows" | grep -E -- 'python.*utils[./]' || true)"
+        fi
+        if [ -n "$sibling_match" ]; then
+            while IFS= read -r line; do
+                [ -n "$line" ] || continue
+                note_busy "running now in ${sibling}: $(printf '%s' "$line" | awk '{ $1=$2=$3=$4=$5=$6=$7=""; sub(/^ +/, ""); print }')"
+            done <<<"$sibling_match"
+        fi
+    done
 fi
 
 # --- 2. what is expected shortly -------------------------------------------
