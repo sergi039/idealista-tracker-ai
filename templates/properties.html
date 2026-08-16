@@ -499,10 +499,17 @@
                     <select class="form-select form-select-sm properties-filter-select" id="municipality" name="municipality"
                             aria-label="{{ t('municipality') }}">
                         <option value="">{{ t('all_municipalities') }}</option>
+                        {# One option per real municipality, not per stored spelling:
+                           "Gijón" and "Gijon" are one place and one count. Which
+                           option is selected is decided in Python, by the same
+                           canonical key the query groups on -- comparing the raw
+                           strings here would leave the control reading "All
+                           municipalities" over a filtered page whenever the URL
+                           carried the other spelling. #}
                         {% for municipality in municipalities %}
-                            <option value="{{ municipality }}"
-                                    {{ 'selected' if current_filters.municipality == municipality }}>
-                                {{ municipality }}
+                            <option value="{{ municipality.value }}"
+                                    {{ 'selected' if municipality.selected }}>
+                                {{ municipality.label }}{% if municipality.count %} ({{ municipality.count }}){% endif %}
                             </option>
                         {% endfor %}
                     </select>

@@ -10,6 +10,7 @@ from werkzeug.exceptions import HTTPException
 from models import Land, LandHistory, SyncHistory, AiAnalysisVariant
 from services.listing_verification import read_verdict as listing_verdict
 from utils.api_errors import json_http_error
+from utils.municipality_grouping import municipality_filter_clause
 from app import db
 from app import limiter
 
@@ -1662,9 +1663,7 @@ def get_properties():
             else:
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
-            query = query.filter(
-                Property.municipality.ilike(f"%{municipality_filter}%")
-            )
+            query = query.filter(municipality_filter_clause(municipality_filter))
         if search_query:
             pattern = f"%{search_query}%"
             query = query.filter(

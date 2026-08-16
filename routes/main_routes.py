@@ -19,7 +19,7 @@ from flask import (
 # below would answer 500 for it: every one of them re-raises it first so an
 # unknown id stays a 404 (issue #136).
 from werkzeug.exceptions import HTTPException
-from sqlalchemy import and_, or_, case, func
+from sqlalchemy import or_, case, func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
@@ -39,9 +39,10 @@ from services.profile_selection import (
     parse_profile_selection,
     resolve_profile_selection,
 )
-from utils.idealista_extractors import (
-    MUNICIPALITY_TRUNCATION_MARKERS,
-    is_truncated_municipality,
+from utils.municipality_grouping import (
+    group_key,
+    group_municipalities,
+    municipality_filter_clause,
 )
 from utils.redirects import safe_referrer_redirect
 
@@ -708,23 +709,6 @@ def _unclassified_clause(column):
     return or_(column.is_(None), column == "")
 
 
-def _not_truncated_clause(column):
-    """Values that do not end in the alert email's truncation marker.
-
-    Idealista alert emails cut long municipality names to "Ovi..." and
-    ingestion stored them verbatim (issue #298). Ingestion now resolves those
-    against stored full names when the match is unique, but an unresolvable
-    one keeps its marker -- explicitly truncated, never guessed -- and must
-    not be offered in the dropdown as a municipality of its own next to the
-    full names. `_keep_applied_choice` still keeps one that is already
-    applied, so a hand-typed URL keeps agreeing with its dropdown. The
-    markers hold no LIKE wildcard (`%`/`_`), so no escaping is needed.
-    """
-    return and_(
-        *[column.notlike(f"%{marker}") for marker in MUNICIPALITY_TRUNCATION_MARKERS]
-    )
-
-
 def _visible_distinct_values(column, profile_selection, extra_filter=None):
     """Distinct non-empty values of `column` within the subscriptions shown."""
     query = apply_profile_filter(
@@ -760,6 +744,61 @@ def _keep_applied_choice(values, applied):
         values.append(applied)
         values.sort()
     return values
+
+
+def _municipality_choices(profile_selection, applied=""):
+    """One dropdown option per real municipality, however the rows spell it.
+
+    `properties.municipality` is free text and the same place arrives under
+    several spellings, so a dropdown built from the raw distinct values
+    offered "Gijón" and "Gijon" separately: picking one showed 57 of 73
+    listings and said nothing about the rest. The options are grouped by
+    `utils.municipality_grouping` -- one entry per municipality, the most
+    readable spelling as its label, and the *combined* count beside it.
+
+    Two rules survive from issue #298 and are the grouping module's now: a
+    truncated artifact ("Ovi...") has no group and is therefore not offered
+    as a municipality of its own, and one that is already applied is put back
+    below, so a hand-typed URL keeps agreeing with its dropdown.
+
+    Counts follow the same selection as the options themselves -- the
+    subscriptions on screen, not the other filters -- so the number beside a
+    name answers "how many listings does this municipality have here", the
+    same question the subscription chips answer.
+    """
+    rows = apply_profile_filter(
+        db.session.query(Property.municipality, func.count(Property.id)).group_by(
+            Property.municipality
+        ),
+        Property.search_profile_id,
+        profile_selection,
+    ).all()
+
+    applied_key = group_key(applied)
+    choices = [
+        {
+            "value": group.label,
+            "label": group.label,
+            "count": group.count,
+            "selected": applied_key is not None and group.key == applied_key,
+        }
+        for group in group_municipalities(rows)
+    ]
+    if (
+        applied
+        and applied != UNCLASSIFIED_FILTER
+        and not any(choice["selected"] for choice in choices)
+    ):
+        # Either a value the selection does not hold (switching subscriptions
+        # with a filter on) or one that has no group at all (a truncated
+        # artifact, a hand-typed prefix). Both must stay on screen: the
+        # control has to agree with the query it produced. No count -- this
+        # entry is outside the grouping the others were counted by.
+        choices.append(
+            {"value": applied, "label": applied, "count": None, "selected": True}
+        )
+        choices.sort(key=lambda choice: choice["label"])
+    return choices
 
 
 def _property_filter_options(
@@ -799,14 +838,7 @@ def _property_filter_options(
             ),
             subtype_filter,
         ),
-        "municipalities": _keep_applied_choice(
-            _visible_distinct_values(
-                Property.municipality,
-                profile_selection,
-                _not_truncated_clause(Property.municipality),
-            ),
-            municipality_filter,
-        ),
+        "municipalities": _municipality_choices(profile_selection, municipality_filter),
         "has_unclassified_category": _selection_has_unclassified(
             Property.property_category, profile_selection
         ),
@@ -942,9 +974,7 @@ def properties():
             else:
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
-            query = query.filter(
-                Property.municipality.ilike(f"%{municipality_filter}%")
-            )
+            query = query.filter(municipality_filter_clause(municipality_filter))
         if search_query:
             pattern = f"%{search_query}%"
             query = query.filter(
@@ -2401,13 +2431,10 @@ def municipalities():
 
         # Truncated email artifacts ("Ovi...", issue #298) count with the
         # unnamed listings: build_rows skips both, for the same reason -- a
-        # value that names no municipality cannot be compared by one.
-        unnamed = sum(
-            1
-            for p in properties
-            if not (p.municipality or "").strip()
-            or is_truncated_municipality(p.municipality)
-        )
+        # value that names no municipality cannot be compared by one. Both
+        # sides ask `group_key`, so the footnote cannot drift from the table
+        # it is explaining.
+        unnamed = sum(1 for p in properties if group_key(p.municipality) is None)
         return render_template(
             "municipalities.html",
             rows=rows,
@@ -2486,9 +2513,7 @@ def map_view():
             else:
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
-            query = query.filter(
-                Property.municipality.ilike(f"%{municipality_filter}%")
-            )
+            query = query.filter(municipality_filter_clause(municipality_filter))
         if search_query:
             pattern = f"%{search_query}%"
             query = query.filter(
@@ -3581,9 +3606,7 @@ def export_properties_csv():
             else:
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
-            query = query.filter(
-                Property.municipality.ilike(f"%{municipality_filter}%")
-            )
+            query = query.filter(municipality_filter_clause(municipality_filter))
         if search_query:
             pattern = f"%{search_query}%"
             query = query.filter(

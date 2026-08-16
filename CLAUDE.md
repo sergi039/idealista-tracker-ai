@@ -500,6 +500,29 @@ renders it as a labeled proxy against población and never as the official
 unemployment rate. Listings whose municipality is empty or email-truncated
 (#298) are counted aside, not compared.
 
+**`properties.municipality` is free text, so anything that groups by it goes
+through one key.** The same place arrives under several spellings — measured
+2026-08-16, "Gijón" (57 rows) beside "Gijon" (16), "Castrillon" (28) beside
+"Castrillón" (18), 247 rows across 8 municipalities — and both surfaces that
+grouped by the raw string reported a partial result as a complete one: the
+`/properties` dropdown offered each spelling separately, so picking "Gijón"
+showed 57 of 73 listings and said nothing about the rest, and `/municipalities`
+keyed on `name.lower()`, which lowercases without stripping accents, and drew
+one municipality as two rows with two medians and two coverage counts. The key
+is `utils/municipality_codes.normalize()` — the function the INE join already
+folds *both* sides of its lookup with — wrapped by `utils/municipality_grouping.
+py`, which owns the grouping, the shared filter clause the four listing surfaces
+use, and the rule for which stored spelling a human is shown (accents beat
+frequency, `MUROS DE NALON` never wins, and the label is always a string that is
+really in the table). Do not add a second normalizer, and do not canonicalise on
+write: the stored string is what the email said and the input the #298 repair
+reads, a derived column would have to be maintained by every writer, and the one
+that forgot would hide rows from their own filter — the defect being removed,
+relocated. A truncated artifact ("Ovi...") has **no** key: `normalize("Ovi...")`
+is `"ovi"`, and folding it into `oviedo` by prefix is exactly the wrong-pick
+hazard `resolve_truncated_municipality` refuses. It stays out of the dropdown,
+out of `/municipalities` and out of every group's rows.
+
 **Three reference files are committed on purpose, and `.gitignore` re-includes
 them one at a time.** `data/*` excludes the runtime artifacts — backfill
 snapshots, ledgers, logs — and `!data/ine_municipal.json`,
