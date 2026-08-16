@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 # unknown id stays a 404 (issue #136).
 from werkzeug.exceptions import HTTPException
 from models import Land, LandHistory, SyncHistory, AiAnalysisVariant
+from services.listing_verification import read_verdict as listing_verdict
 from utils.api_errors import json_http_error
 from utils.municipality_grouping import municipality_filter_clause
 from app import db
@@ -1719,7 +1720,12 @@ def get_properties():
                         if p.score_lifestyle
                         else None,
                         "is_favorite": bool(p.is_favorite),
+                        # Both, for the reason `to_dict` carries both: the raw
+                        # column is 'active' by default and nobody verified that
+                        # default, so a consumer reading it alone cannot tell a
+                        # live listing from a never-checked one.
                         "listing_status": p.listing_status or "active",
+                        "listing_status_verdict": listing_verdict(p)["state"],
                         "created_at": p.created_at.isoformat()
                         if p.created_at
                         else None,
@@ -2193,6 +2199,12 @@ def check_land_status(land_id):
                 # reads success:true and says "no change" for a check that
                 # never reached the listing.
                 "observed": result.get("new_status"),
+                # Why the check learned nothing, when it learned nothing.
+                # 'blocked' and 'backing_off' are idealista refusing this
+                # machine, a standing condition the reader can act on; a
+                # 'timeout' is a bad moment they can retry. Without the
+                # distinction every refusal reads as a fault in here.
+                "refusal": result.get("refusal"),
                 "previous_status": result.get("previous_status"),
                 "changed": result.get("changed", False),
                 "last_checked": land_local.listing_last_checked.isoformat()
@@ -2269,6 +2281,17 @@ def check_property_status(property_id):
                 # fetch was blocked or failed: that case reports "error" here
                 # while `status` keeps whatever we already knew.
                 "observed": result.get("new_status"),
+                # Why the check learned nothing, when it learned nothing.
+                # 'blocked' and 'backing_off' are idealista refusing this
+                # machine, a standing condition the reader can act on; a
+                # 'timeout' is a bad moment they can retry. Without the
+                # distinction every refusal reads as a fault in here.
+                "refusal": result.get("refusal"),
+                # The standing condition itself: how many refusals in a row and
+                # until when the service has stopped dialling. A reader pressing
+                # the button on the tenth listing should learn that the wall is
+                # the site, not this listing.
+                "breaker": result.get("breaker"),
                 "previous_status": result.get("previous_status"),
                 "changed": result.get("changed", False),
                 "last_checked": prop_local.listing_last_checked.isoformat()

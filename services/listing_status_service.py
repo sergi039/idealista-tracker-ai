@@ -6,16 +6,129 @@ Periodically checks if listings are still active or have been removed.
 import logging
 import re
 import requests
+import threading
 import time
 import random
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Tuple
+from typing import NamedTuple, Optional, Dict, Tuple
 
 from models import Land, LandHistory, Property, SyncHistory
 from app import db
 from utils.http import request_with_retries
 
 logger = logging.getLogger(__name__)
+
+
+class Observation(NamedTuple):
+    """What one fetch established, and -- when it established nothing -- why.
+
+    `status` keeps the four values the storage path knows ('active', 'removed',
+    'sold', 'error'); `refusal` is the reason behind an 'error' and is None on
+    every other status. Splitting them is what lets the page say "idealista is
+    blocking this machine" instead of "something went wrong", without changing
+    what gets written: an 'error' still writes nothing at all.
+    """
+
+    status: str
+    removed_date: Optional[str]
+    refusal: Optional[str] = None
+
+
+class RefusalBreaker:
+    """Stop dialling a host that has already said no, and say so.
+
+    idealista answers this machine with DataDome bot protection -- measured
+    2026-08-15 over 76 consecutive properties, every one of them a captcha, not
+    one listing page reached. The service was right to record nothing, but it
+    kept spending a request per press to learn the same thing, and the reader
+    got a generic failure each time.
+
+    So refusals are counted across calls. After `threshold` in a row the
+    breaker opens and later checks return immediately, spending nothing, and
+    reporting the refusal as the standing condition it is. When the cooldown
+    expires exactly one request goes out -- the breaker does not heal on a
+    timer, it heals on evidence -- and a refusal re-arms it.
+
+    Deliberately process-local and in-memory. It paces outbound traffic, so it
+    must be cheap and must not need a table; each gunicorn worker keeping its
+    own count means at worst `workers x threshold` requests before everything
+    is quiet, which is a handful, not a sweep. It is a class attribute rather
+    than an instance one because every caller builds a fresh service.
+    """
+
+    def __init__(self, threshold: int, cooldown_s: int):
+        self.threshold = threshold
+        self.cooldown_s = cooldown_s
+        self._lock = threading.Lock()
+        self._consecutive = 0
+        self._blocked_until: Optional[datetime] = None
+        self._last_reason: Optional[str] = None
+        self._last_refusal_at: Optional[datetime] = None
+
+    def should_skip(self, now: Optional[datetime] = None) -> bool:
+        """May this caller dial? Answering False **claims** the probe.
+
+        Deliberately not a pure query, and named in `observe` as the gate it is.
+        A read-only version had a race an independent review found: with the
+        cooldown expiring at 12:30:00, two request threads calling at 12:30:01
+        both saw "not blocked" before either recorded a result, and both dialled
+        a host that is refusing us. Exactly the failure this class exists to
+        prevent, one level up -- and the docstring above promised "exactly one
+        request goes out", which the code did not deliver.
+
+        So the expiry is consumed inside the lock: the first caller through
+        re-arms the window and dials, and everyone behind it keeps skipping
+        until that probe reports. `record_success` clears the window if the
+        probe reached the listing; `record_refusal` re-arms it if it did not,
+        which is what it would have done anyway.
+        """
+        now = now or datetime.now(timezone.utc)
+        with self._lock:
+            if self._blocked_until is None:
+                return False
+            if now < self._blocked_until:
+                return True
+            # The cooldown has expired and this caller is the one probe.
+            self._blocked_until = now + timedelta(seconds=self.cooldown_s)
+            return False
+
+    def record_refusal(self, reason: str, now: Optional[datetime] = None) -> None:
+        now = now or datetime.now(timezone.utc)
+        with self._lock:
+            self._consecutive += 1
+            self._last_reason = reason
+            self._last_refusal_at = now
+            if self._consecutive >= self.threshold:
+                self._blocked_until = now + timedelta(seconds=self.cooldown_s)
+
+    def record_success(self, now: Optional[datetime] = None) -> None:
+        """A fetch reached the listing page: the host is answering us again."""
+        with self._lock:
+            self._consecutive = 0
+            self._blocked_until = None
+            self._last_reason = None
+
+    def state(self) -> Dict:
+        with self._lock:
+            return {
+                "open": self._blocked_until is not None,
+                "consecutive_refusals": self._consecutive,
+                "last_reason": self._last_reason,
+                "last_refusal_at": self._last_refusal_at.isoformat()
+                if self._last_refusal_at
+                else None,
+                "blocked_until": self._blocked_until.isoformat()
+                if self._blocked_until
+                else None,
+            }
+
+    def reset(self) -> None:
+        """For tests and for a deliberate retry after the owner changes the route."""
+        with self._lock:
+            self._consecutive = 0
+            self._blocked_until = None
+            self._last_reason = None
+            self._last_refusal_at = None
 
 
 class ListingStatusService:
@@ -61,6 +174,18 @@ class ListingStatusService:
     # the run was cut short -- an unfinished sweep is not a finished one.
     CONSECUTIVE_ERROR_LIMIT = 3
 
+    # The cross-call counterpart of the limit above. That one ends a sweep;
+    # this one outlives it, so the next sweep -- and the next press of the
+    # per-listing button -- does not start the same wall from scratch.
+    REFUSAL_BREAKER_THRESHOLD = 3
+    REFUSAL_COOLDOWN_S = 30 * 60
+
+    # Shared by every instance: each caller constructs its own service, so an
+    # instance attribute would forget the refusal the moment it answered.
+    breaker = RefusalBreaker(
+        threshold=REFUSAL_BREAKER_THRESHOLD, cooldown_s=REFUSAL_COOLDOWN_S
+    )
+
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update(
@@ -81,9 +206,34 @@ class ListingStatusService:
             Tuple of (status, removed_date_str)
             status: 'active', 'removed', 'sold', 'error'
             removed_date_str: Date when removed (if found in page), or None
+
+        The two-value shape every caller has always unpacked. `observe` below
+        carries the same answer plus the reason behind an 'error'.
+        """
+        observation = self.observe(url)
+        return observation.status, observation.removed_date
+
+    def observe(self, url: str) -> Observation:
+        """`check_listing_status` plus the reason a refusal was a refusal.
+
+        Every path that returns 'error' names why, and tells the breaker. The
+        storage contract is unchanged: 'error' still writes nothing, so no
+        reason here can become a status.
         """
         if not url:
-            return "error", None
+            return Observation("error", None, "no_url")
+
+        if self.breaker.should_skip():
+            state = self.breaker.state()
+            logger.info(
+                "Skipping the status check for %s: idealista refused the last %s "
+                "checks (%s); backing off until %s",
+                url,
+                state["consecutive_refusals"],
+                state["last_reason"],
+                state["blocked_until"],
+            )
+            return Observation("error", None, "backing_off")
 
         try:
             response = request_with_retries(
@@ -96,7 +246,9 @@ class ListingStatusService:
 
             # Check for 404
             if response.status_code == 404:
-                return "removed", None
+                # A reached answer, not a refusal: the host talked to us.
+                self.breaker.record_success()
+                return Observation("removed", None)
 
             # Check response content
             content = response.text.lower()
@@ -105,7 +257,7 @@ class ListingStatusService:
             for pattern in self.CAPTCHA_PATTERNS:
                 if pattern.lower() in content:
                     logger.warning(f"Hit captcha protection for: {url}")
-                    return "error", None
+                    return self._refused("blocked", url)
 
             # Everything below reads the body as if it were the listing page,
             # so refuse anything that is not a plain 200 first. An error page
@@ -118,13 +270,20 @@ class ListingStatusService:
                     response.status_code,
                     url,
                 )
-                return "error", None
+                # 403 is how the bot protection answers once it stops serving
+                # the captcha page itself, so it is a refusal by this host and
+                # not a fault of ours; the rest are the server's own trouble.
+                reason = (
+                    "blocked" if response.status_code in (401, 403) else "http_error"
+                )
+                return self._refused(reason, url)
 
             # Check for sold patterns
             for pattern in self.SOLD_PATTERNS:
                 if pattern.lower() in content:
                     logger.info(f"Listing sold: {url}")
-                    return "sold", None
+                    self.breaker.record_success()
+                    return Observation("sold", None)
 
             # Check for removed patterns
             for pattern in self.REMOVED_PATTERNS:
@@ -132,7 +291,8 @@ class ListingStatusService:
                     logger.info(f"Listing removed: {url}")
                     # Try to extract removal date
                     removed_date = self._extract_removal_date(response.text)
-                    return "removed", removed_date
+                    self.breaker.record_success()
+                    return Observation("removed", removed_date)
 
             # A 200 only proves the listing is up if what came back *is* the
             # listing page. idealista answers plenty of requests by sending us
@@ -144,16 +304,33 @@ class ListingStatusService:
                     "200 for %s did not come back as the listing page; reporting as error",
                     url,
                 )
-                return "error", None
+                # The other shape of the block: idealista takes the request and
+                # answers 200 with its home page instead of the listing.
+                return self._refused("not_the_listing_page", url)
 
-            return "active", None
+            self.breaker.record_success()
+            return Observation("active", None)
 
         except requests.Timeout:
             logger.warning(f"Timeout checking listing: {url}")
-            return "error", None
+            return self._refused("timeout", url)
         except requests.RequestException:
             logger.error("Error checking listing %s", url, exc_info=True)
-            return "error", None
+            return self._refused("unreachable", url)
+
+    def _refused(self, reason: str, url: str) -> Observation:
+        """One exit for every path that learned nothing about the listing."""
+        self.breaker.record_refusal(reason)
+        state = self.breaker.state()
+        if state["open"]:
+            logger.warning(
+                "idealista has refused %s checks in a row (%s); pausing status "
+                "checks until %s",
+                state["consecutive_refusals"],
+                reason,
+                state["blocked_until"],
+            )
+        return Observation("error", None, reason)
 
     @staticmethod
     def _listing_id_from_url(url: str) -> Optional[str]:
@@ -274,7 +451,7 @@ class ListingStatusService:
             return {"success": False, "error": "No URL available", "land_id": land.id}
 
         # Check the listing
-        status, removed_date_str = self.check_listing_status(land.url)
+        status, removed_date_str, refusal = self.observe(land.url)
         previous_status = land.listing_status
 
         changed, transition = self._apply_observed_status(
@@ -307,6 +484,7 @@ class ListingStatusService:
             "previous_status": previous_status,
             "new_status": status,
             "changed": changed,
+            "refusal": refusal,
         }
 
     def check_property_status(self, prop: Property) -> Dict:
@@ -324,7 +502,7 @@ class ListingStatusService:
                 "property_id": prop.id,
             }
 
-        status, removed_date_str = self.check_listing_status(prop.url)
+        status, removed_date_str, refusal = self.observe(prop.url)
         previous_status = prop.listing_status
 
         changed, _ = self._apply_observed_status(prop, status, removed_date_str)
@@ -344,6 +522,11 @@ class ListingStatusService:
             "previous_status": previous_status,
             "new_status": status,
             "changed": changed,
+            # Why nothing was learned, when nothing was. The page says
+            # "idealista is refusing this machine" off this rather than
+            # reporting every refusal as an unexplained failure.
+            "refusal": refusal,
+            "breaker": self.breaker.state(),
         }
 
     @staticmethod
@@ -448,6 +631,10 @@ class ListingStatusService:
             f"{results['sold']} sold, {results['errors']} errors"
         )
 
+        # What the run met, not just what it did: a sweep that checked nothing
+        # because the host is refusing us reads identically to a quiet one
+        # without this.
+        results["breaker"] = self.breaker.state()
         return results
 
     def check_all_active_listings(
@@ -576,4 +763,8 @@ class ListingStatusService:
             f"{results['sold']} sold, {results['errors']} errors"
         )
 
+        # What the run met, not just what it did: a sweep that checked nothing
+        # because the host is refusing us reads identically to a quiet one
+        # without this.
+        results["breaker"] = self.breaker.state()
         return results
