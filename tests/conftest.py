@@ -53,6 +53,28 @@ from tests import network_guard, skip_guard
 from utils.cache import cache as flask_cache
 
 
+def pytest_runtest_setup(item) -> None:
+    """Close the listing-status refusal breaker before every test.
+
+    `ListingStatusService.breaker` is process-global on purpose: it counts
+    idealista's refusals across calls so the next press of the check button
+    does not walk into the same wall (services/listing_status_service.py). That
+    is exactly the state this file exists to keep out of other tests. Three
+    refusal tests in a row open it, and every later test in the process then
+    gets `backing_off` -- including the ones asserting that a live listing page
+    reads as active, which fail with no reference to the file that armed it.
+    Measured: 21 such failures across three modules, all from the first module
+    that exercised a captcha.
+
+    A hook rather than an autouse fixture, for the ordering reason in the
+    teardown wrapper below. Before rather than after, so a test that arms it
+    deliberately can still read it in its own teardown.
+    """
+    from services.listing_status_service import ListingStatusService
+
+    ListingStatusService.breaker.reset()
+
+
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_teardown(item, nextitem):
     """Fail a test that leaks Flask state, and scrub what it leaked.
