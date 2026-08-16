@@ -21,6 +21,16 @@ first:
 
     python -m utils.recalc_property_travel --snapshot data/travel_backfill.json
     python -m utils.recalc_property_travel --restore data/travel_backfill.json
+
+`--clear-orphaned` is the one mode that spends nothing. It drops the travel
+block of rows that have **no coordinates** and rescores them: every number in
+such a block was measured from a point the row no longer has, and cannot be
+re-measured until it gets one. Issue #331 produced four of those deliberately
+-- their geocode resolved to the country and was refused -- and their six
+preset durations went on rendering from the fabricated origin:
+
+    python -m utils.recalc_property_travel --clear-orphaned \
+        --snapshot data/travel_orphaned.json
 """
 
 import argparse
@@ -79,6 +89,72 @@ def _target_places(travel: Any) -> Dict[str, Optional[str]]:
     return out
 
 
+def orphaned_travel_rows(properties) -> List[Property]:
+    """Rows carrying a travel block they no longer have an origin for.
+
+    Every number in `travel` -- six preset durations, the beaches list, the
+    travel component of the score -- is measured *from* `location_lat/lon`. A
+    row with no coordinates therefore holds measurements from a point it does
+    not have, and cannot be re-measured until it gets one.
+
+    Issue #331 produced four of these deliberately: their geocode resolved to
+    the country and was refused, which is the honest outcome, but the travel
+    measured from the fabricated point stayed behind and still renders.
+    """
+    return [
+        p
+        for p in properties
+        if (p.location_lat is None or p.location_lon is None)
+        and isinstance(p.travel, dict)
+        and p.travel
+    ]
+
+
+def _clear_orphaned(snapshot_path: Optional[str], ids: Optional[str]) -> int:
+    """Drop those blocks and rescore. Spends nothing -- no Google call at all.
+
+    The rescore is not optional: the travel component feeds `score_total`, so
+    clearing the block without it would leave the row ranked on a number whose
+    evidence has just been deleted.
+    """
+    query = Property.query.filter(
+        (Property.location_lat.is_(None)) | (Property.location_lon.is_(None))
+    )
+    if ids:
+        wanted = [int(x) for x in ids.split(",") if x.strip()]
+        query = query.filter(Property.id.in_(wanted))
+    rows = orphaned_travel_rows(query.order_by(Property.id.asc()).all())
+
+    logger.info("%s row(s) hold travel measured from a coordinate they lost", len(rows))
+    if not rows:
+        return 0
+
+    if snapshot_path:
+        _write_snapshot([_snapshot_row(p) for p in rows], snapshot_path)
+    else:
+        logger.warning("No --snapshot: this clears travel and scores with no way back")
+
+    scoring_service = PropertyScoringService()
+    cleared = 0
+    with inflight("recalc_property_travel_clear", resumable=True):
+        for prop in rows:
+            prop.travel = None
+            try:
+                scoring_service.calculate_for_property(prop, commit=False)
+            except Exception:
+                logger.exception(
+                    "Rescoring property %s failed; left untouched", prop.id
+                )
+                db.session.rollback()
+                continue
+            db.session.add(prop)
+            db.session.commit()
+            cleared += 1
+            logger.info("Cleared travel for property %s", prop.id)
+    logger.info("Cleared %s row(s)", cleared)
+    return cleared
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -107,6 +183,15 @@ def main() -> None:
         help="Restore travel and scores from a snapshot file, then exit.",
     )
     parser.add_argument(
+        "--clear-orphaned",
+        action="store_true",
+        help=(
+            "Spend nothing: clear the travel block of rows that have no "
+            "coordinates, and rescore them. Every number in such a block was "
+            "measured from a point the row no longer has."
+        ),
+    )
+    parser.add_argument(
         "--report",
         help="Write a per-property before/after report of resolved places here.",
     )
@@ -121,6 +206,11 @@ def main() -> None:
             restored = _restore(args.restore)
             logger.info("Restored %s properties from %s", restored, args.restore)
             print(f"restored={restored}")
+            return
+
+        if args.clear_orphaned:
+            cleared = _clear_orphaned(args.snapshot, args.ids)
+            print(f"cleared={cleared}")
             return
 
         query = Property.query.filter(
