@@ -31,6 +31,7 @@ import logging
 import math
 import time
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import requests
@@ -626,6 +627,22 @@ def evaluate_geometry(
     distance = haversine_m(lat, lon, nearest[0], nearest[1])
     detail["distance_m"] = round(distance, 1)
     detail["bearing_deg"] = round(bearing_deg(lat, lon, nearest[0], nearest[1]), 1)
+    # The point this verdict is *about*. A distance and a bearing describe it
+    # only if you are willing to do spherical trigonometry, which is why
+    # answering "what water did it actually look at?" for one property
+    # (#334) took a day of OSM archaeology rather than one SQL query. Six
+    # decimals is
+    # about 0.1 m -- far finer than the coastline itself is mapped, and the
+    # point is a stored OSM node, so rounding it further would move the
+    # verdict's subject off the node it was measured to.
+    #
+    # Additive on purpose: no cache version bump. Entries written by an earlier
+    # run simply lack these keys, and every reader below treats a missing
+    # target as "not recorded" rather than as an error. Bumping the key would
+    # force every cell through Overpass again to gain a field that changes no
+    # verdict, and 5 s of pacing per cell is a real cost to spend on that.
+    detail["target_lat"] = round(nearest[0], 6)
+    detail["target_lon"] = round(nearest[1], 6)
 
     if distance > decisive_distance:
         detail.update({"state": NO, "reason": "sea_too_far"})
@@ -1026,16 +1043,81 @@ def repaired_with_stored_geometry(
     return {"sea_view": state, "sea_view_detail": repaired_detail}
 
 
+def _coerce_coordinate(value: Any, limit: float) -> Optional[float]:
+    """A stored coordinate as a float, or None if it is not usable as one.
+
+    `enrichment` is a JSON column that anything may have written, so a target
+    read back out is untrusted input and must not become a map link pointing
+    somewhere the verdict never looked. Only real numbers are accepted --
+    `float("43,55")` style guessing at text is refused for the reason
+    `utils/maps_urls._coord` refuses it, and a bool is refused because
+    `float(True)` is 1.0, a perfectly plausible latitude.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        return None
+    number = float(value)
+    # NaN and infinity fail this too: every comparison against NaN is False.
+    if not (-limit <= number <= limit):
+        return None
+    return number
+
+
+def geometry_target(detail: Dict[str, Any]) -> Optional[Dict[str, float]]:
+    """The coastline point a verdict's geometry was measured to, or None.
+
+    None covers three different rows and deliberately does not distinguish
+    them, because a caller can only do one thing with any of them: a verdict
+    from before `target_lat` was recorded (#334), one whose geometry found no
+    coastline at all, and one whose coordinates did not survive the round trip
+    through the JSON column.
+    """
+    geometry = detail.get("geometry")
+    geometry = geometry if isinstance(geometry, dict) else {}
+    lat = _coerce_coordinate(geometry.get("target_lat"), 90.0)
+    lon = _coerce_coordinate(geometry.get("target_lon"), 180.0)
+    if lat is None or lon is None:
+        return None
+    return {"lat": lat, "lon": lon}
+
+
+def state_label_key(verdict: Dict[str, Any]) -> str:
+    """How a verdict should be *named*, which is not always its state.
+
+    `likely` covers two different claims and the page said "Sea view likely"
+    for both. One of them is a listing that says so; the other is terrain that
+    merely fails to rule it out -- and on this coast that is a weaker statement
+    than the words suggest. Property 125 looks 4.2 km up the ría de
+    Villaviciosa and reaches open sea through the mouth at Rodiles: measured,
+    correct, and not what a buyer reads into "sea view likely" (#334).
+
+    So a `likely` that rests on geometry alone is named for what was actually
+    computed -- the terrain permits it -- and every other state keeps its own
+    name. Returned as a key *suffix* so the `sea_view_state_` prefix and the
+    wording stay in the presentation layer; what lives here is the
+    distinction, in one place, for the three templates that draw this badge.
+    """
+    state = normalize_state(verdict.get("state"))
+    if state == LIKELY and verdict.get("source") == "geometry":
+        return "likely_geometry"
+    return state
+
+
 def read_verdict(prop) -> Dict[str, Any]:
     """The effective verdict for a property, for templates and the API."""
     environment = prop.environment if isinstance(prop.environment, dict) else {}
     detail = environment.get("sea_view_detail")
     detail = detail if isinstance(detail, dict) else {}
+    geometry = detail.get("geometry")
+    geometry = geometry if isinstance(geometry, dict) else {}
     return {
         "state": normalize_state(environment.get("sea_view")),
         "source": detail.get("source") or ("legacy" if environment else "none"),
         "reason": detail.get("reason") or "",
         "detail": detail,
+        # Lifted out of `detail` so the page, the list and the CSV export read
+        # the shape of the geometry half in one place rather than three.
+        "target": geometry_target(detail),
+        "distance_m": _coerce_coordinate(geometry.get("distance_m"), 1e9),
     }
 
 

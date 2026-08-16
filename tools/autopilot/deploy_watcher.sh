@@ -16,6 +16,13 @@
 
 set -euo pipefail
 
+# Where this script really is, and what it was called with. Both are needed to
+# hand over to the version of itself that a fast-forward brings in (#293), and
+# the path has to be resolved before anything can rewrite the file.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
+SCRIPT_ARGS=("$@")
+
 REPO_DIR="${AUTOPILOT_REPO_DIR:-/Users/ss/IdealistaRank}"
 BRANCH="${AUTOPILOT_BRANCH:-main}"
 COMPOSE_FILE="${AUTOPILOT_COMPOSE_FILE:-docker-compose.yml}"
@@ -63,10 +70,62 @@ RENDER_LIB="${AUTOPILOT_LIB_DIR}/render_check.sh"
 APP_CONTAINER="${AUTOPILOT_APP_CONTAINER:-${COMPOSE_CONTAINER_PREFIX:-idealista}-app}"
 INFLIGHT_DIR="${AUTOPILOT_INFLIGHT_DIR:-${REPO_DIR}/data/.inflight}"
 # Which container processes count as a job. Both spellings the repo uses.
-INFLIGHT_PATTERN="${AUTOPILOT_INFLIGHT_PATTERN:-python.*(-m +utils\.|utils/)}"
+# This pattern is a deliberately generous PRE-FILTER, and it must stay one.
+# Three spellings of the same command defeated three successive attempts to be
+# precise here: `-m utils.x`, `-mutils.x` (python takes the argument joined),
+# and `-um utils.x` (a cluster - `-u` is what a logged background job is
+# usually started with). Each time, a job the pattern did not match was not
+# reported as `unknown`; it was not reported at all, and the deploy killed it
+# in silence. That asymmetry decides the design: an extra process named here
+# costs a bounded deferral and a log line, while a missing one costs work
+# nobody knows was lost. So match any python whose command mentions `utils.`
+# or `utils/` at all, and let the marker join below be the precise layer.
+INFLIGHT_PATTERN="${AUTOPILOT_INFLIGHT_PATTERN:-python.*utils[./]}"
 DEFER_ON_INFLIGHT="${AUTOPILOT_DEFER_ON_INFLIGHT:-0}"
 DEFER_BUDGET="${AUTOPILOT_DEFER_BUDGET:-6}"
 DEFER_STATE="${AUTOPILOT_DEFER_STATE:-${REPO_DIR}/data/.deploy_deferrals}"
+# What a truthful process list for THIS container must contain. The Dockerfile
+# CMD runs gunicorn, so a table without it is not an idle container - it is a
+# probe that answered without looking. Shape alone is too weak: eight columns
+# and a numeric PID can be satisfied by junk. Set empty to fall back to the
+# shape check alone.
+CONTAINER_SENTINEL="${AUTOPILOT_CONTAINER_SENTINEL-gunicorn}"
+
+# --- this watcher deploys its own source (#293) -----------------------------
+# The tick that rolled out #285 on 2026-08-14 16:33:30 ran the *pre*-#285
+# script: bash had read this file before the tick's own `git merge --ff-only`
+# replaced it, so that deploy had neither the in-flight survey nor the page
+# check it was shipping, and it killed a pool backfill at 32 ledger rows
+# silently. A watcher that deploys its own source has to hand over to the
+# version it is deploying, before it deploys it.
+#
+# Set AUTOPILOT_SELF_UPDATE=0 to keep the old behaviour; the tick then says
+# loudly that it deployed a watcher it did not run.
+SELF_UPDATE="${AUTOPILOT_SELF_UPDATE:-1}"
+# The interpreter that will run the new watcher, and therefore the only one
+# entitled to vet it. A bare `bash` is not it: the LaunchAgent execs /bin/bash
+# (3.2.57 on this Mac) while handing the job a PATH that starts with
+# /opt/homebrew/bin, where bash is 5.x. Measured, `cmd &>>file`, `;;&`, `|&`
+# and `coproc` all pass `bash -n` under 5.x and are syntax errors under 3.2 -
+# and `>>"$LOG_FILE" 2>&1` is written a dozen times in this file, so `&>>` is
+# one keystroke away. Lines 153-163 harden git and docker against exactly this
+# first-match-on-PATH trap; bash deserves the same. It is a floor, not a
+# guarantee: `declare -A` parses under 3.2 and fails at runtime.
+SELF_INTERPRETER="${BASH:-/bin/bash}"
+# One handover per tick. main moving again mid-tick is legitimate but has to
+# terminate, and the next tick is five minutes away.
+REEXEC_MAX="${AUTOPILOT_REEXEC_MAX:-1}"
+
+# State carried across the handover. Read once, then unset: these must not leak
+# into docker, git, curl or python3, and an operator's stale export must not
+# look like a handover that never happened.
+REEXEC_DEPTH="${AUTOPILOT_REEXEC_DEPTH:-0}"
+case "$REEXEC_DEPTH" in
+    '' | *[!0-9]*) REEXEC_DEPTH=0 ;;
+esac
+HANDOVER_ROLLBACK_SHA="${AUTOPILOT_ROLLBACK_SHA:-}"
+HANDOVER_LOCK="${AUTOPILOT_LOCK_INHERITED:-}"
+unset AUTOPILOT_REEXEC_DEPTH AUTOPILOT_ROLLBACK_SHA AUTOPILOT_LOCK_INHERITED
 
 log() {
     printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG_FILE"
@@ -100,11 +159,46 @@ PAGE_URL="$(deploy_render_url "$(deploy_render_origin "$HEALTH_URL")")"
 # A build takes minutes; the timer fires more often than that.
 # shellcheck source=lib/lock.sh
 source "${AUTOPILOT_LIB_DIR}/lock.sh"
-if ! autopilot_acquire_lock "$LOCK_DIR"; then
+# A handover (#293) replaces the program, not the process, and bash sets no
+# close-on-exec on fd 9 - so the descriptor, and the flock(2) on it, are still
+# ours. Measured on this Mac: after `exec`, /dev/fd/9 is still open and an
+# unrelated process is still denied the lock.
+#
+# Taking it again would *work* - `exec 9>file` closes the old description
+# before it locks the new one, which was measured too - and that is exactly the
+# problem: it drops the lock for the length of a fork and exec, during which
+# another tick can take it and start a second concurrent build. A watcher whose
+# whole point is that two ticks never build at once should not open that window
+# once per self-update.
+#
+# The lock path has to match as well as the descriptor be open, so a stray
+# export in somebody's shell cannot talk this script out of locking; if either
+# check fails it acquires normally, which is the fail-safe direction.
+if [ -n "$HANDOVER_LOCK" ] && [ "$HANDOVER_LOCK" = "$LOCK_DIR" ] \
+    && [ -e "/dev/fd/${AUTOPILOT_LOCK_FD}" ]; then
+    log "still holding the deploy lock handed over with this tick"
+elif ! autopilot_acquire_lock "$LOCK_DIR"; then
     echo "$(date '+%Y-%m-%d %H:%M:%S')  another deploy is in progress, skipping" >>"$LOG_FILE"
     exit 0
 fi
 cd "$REPO_DIR" || die "repo not found: $REPO_DIR"
+
+# Is this script part of the repository it deploys? On the mini it is; in the
+# shell tests the real script runs against a throwaway repo that does not
+# contain it, and then there is nothing to hand over to. `pwd -P` on both sides
+# so a symlinked path does not read as a different tree.
+REPO_PHYS="$(pwd -P)"
+SELF_REL_DIR=""
+case "$SCRIPT_DIR" in
+    "$REPO_PHYS"/*) SELF_REL_DIR="${SCRIPT_DIR#"$REPO_PHYS"/}" ;;
+esac
+# The files this process actually executes: itself, and the library it sources.
+SELF_PATHS=()
+SELF_REL_SCRIPT=""
+if [ -n "$SELF_REL_DIR" ]; then
+    SELF_REL_SCRIPT="${SELF_REL_DIR}/$(basename "$SCRIPT_PATH")"
+    SELF_PATHS=("$SELF_REL_SCRIPT" "${SELF_REL_DIR}/lib")
+fi
 
 # --- the tools have to be the right ones, not merely present ---------------
 # launchd resolves the first match on PATH, and this Mac carries a Homebrew
@@ -115,6 +209,13 @@ cd "$REPO_DIR" || die "repo not found: $REPO_DIR"
 # what was serving. Prove both tools work here rather than discovering it
 # halfway through a build.
 command -v docker >/dev/null 2>&1 || die "docker not on PATH (${PATH})"
+
+# A malformed AUTOPILOT_INFLIGHT_PATTERN makes `grep -E` exit 2 on every call,
+# which the survey's pipeline would turn into "no jobs are running" - a gate
+# that always passes because it is broken. Prove the pattern compiles once,
+# here, where the failure is loud.
+printf '' | grep -E "$INFLIGHT_PATTERN" >/dev/null 2>&1 || [ $? -eq 1 ] \
+    || die "AUTOPILOT_INFLIGHT_PATTERN is not a valid extended regex: ${INFLIGHT_PATTERN}"
 git rev-parse --git-dir >/dev/null 2>&1 \
     || die "$(command -v git) ($(git --version 2>&1 | head -1)) cannot read ${REPO_DIR} - PATH is ${PATH}"
 
@@ -136,12 +237,50 @@ local_sha="$(git rev-parse HEAD)"
 remote_sha="$(git rev-parse "origin/${BRANCH}")"
 deployed_sha="$(cat "$DEPLOYED_MARKER" 2>/dev/null || true)"
 
+# Where a rollback goes: the commit that is *serving*. Normally that is the
+# checkout before the fast-forward, but a handover (#293) merged before this
+# process started, so its HEAD is already the commit under test and the serving
+# commit has to be carried in.
+ROLLBACK_SHA="$local_sha"
+if [ -n "$HANDOVER_ROLLBACK_SHA" ]; then
+    if git rev-parse --verify --quiet "${HANDOVER_ROLLBACK_SHA}^{commit}" >/dev/null; then
+        ROLLBACK_SHA="$HANDOVER_ROLLBACK_SHA"
+    else
+        log "WARNING: AUTOPILOT_ROLLBACK_SHA=${HANDOVER_ROLLBACK_SHA} is not a commit here"
+        log "  a rollback would return to ${local_sha:0:7} instead"
+    fi
+elif [ -n "$deployed_sha" ] && [ "$deployed_sha" != "$local_sha" ]; then
+    # The handover above carries the serving commit for the length of one tick,
+    # and one tick is not always enough: a tick that hands over and then
+    # *defers* to an in-flight job ends without deploying, leaving the checkout
+    # on the commit under test while the container still runs the previous one.
+    # The next tick is a fresh process with nothing handed to it, so `local_sha`
+    # is the commit that has not deployed yet - and rolling back to it would
+    # "return" to the very build being rolled back, then rebuild it from the
+    # tree if no saved image was available.
+    #
+    # The marker answers this, and it answers it across processes because it is
+    # on disk: it is written only after a build passed health, so it names what
+    # is serving. This also covers the plain case of a checkout someone moved
+    # ahead of the container by hand.
+    if git rev-parse --verify --quiet "${deployed_sha}^{commit}" >/dev/null; then
+        ROLLBACK_SHA="$deployed_sha"
+    else
+        log "WARNING: the deployment marker names ${deployed_sha:0:7}, which is not a commit here"
+        log "  a rollback would return to ${local_sha:0:7} instead"
+    fi
+fi
+
 # Two separate questions: is the checkout current, and is the container built
 # from it. Answering only the first is what let a hand-run `git pull` convince
 # the watcher that a stale container was up to date.
 if [ "$local_sha" = "$remote_sha" ] && [ "$remote_sha" = "$deployed_sha" ]; then
     # Nothing new. Stay quiet: this runs every few minutes and the log is read
-    # by a human.
+    # by a human - except after a handover, where silence would read as the
+    # tick having disappeared.
+    if [ "$REEXEC_DEPTH" != "0" ]; then
+        log "handed-over watcher found ${remote_sha:0:7} already deployed - nothing to build"
+    fi
     exit 0
 fi
 
@@ -210,12 +349,12 @@ clear_marker() {
 
 rollback() {
     local reason="$1"
-    log "ROLLBACK (${reason}): returning to ${local_sha:0:7}"
+    log "ROLLBACK (${reason}): returning to ${ROLLBACK_SHA:0:7}"
 
     # Every step here runs on the failure path, where `set -e` aborting
     # mid-rollback would leave the app down with no further attempt. Each
     # command is therefore guarded and reported rather than allowed to exit.
-    git reset --hard "$local_sha" >/dev/null 2>&1 \
+    git reset --hard "$ROLLBACK_SHA" >/dev/null 2>&1 \
         || log "  git reset failed - the tree may not match the image"
 
     local restored=0
@@ -254,7 +393,7 @@ rollback() {
     log "rollback healthy - previous version is serving again"
 
     # The marker must name the commit that is *serving*, and only the rebuild
-    # path knows that: it built from local_sha and then passed health.
+    # path knows that: it built from ROLLBACK_SHA and then passed health.
     #
     # The saved image carries no such guarantee. With no marker to start from,
     # that image can predate the checkout entirely - built from B while the tree
@@ -269,7 +408,7 @@ rollback() {
 
     # A rebuild that failed leaves the previous container running, and a
     # container that was never stopped answers healthz perfectly well - so
-    # "healthy" here does not mean local_sha is serving. Recording it anyway
+    # "healthy" here does not mean ROLLBACK_SHA is serving. Recording it anyway
     # is how the marker came to claim e926de6 while the container still ran
     # the build before it, and the watcher then skipped every later tick
     # because marker == HEAD. Observed on 2026-08-08.
@@ -278,8 +417,8 @@ rollback() {
         return
     fi
 
-    if ! record_deployed "$local_sha"; then
-        clear_marker "the rollback rebuilt ${local_sha:0:7} but the marker could not be written"
+    if ! record_deployed "$ROLLBACK_SHA"; then
+        clear_marker "the rollback rebuilt ${ROLLBACK_SHA:0:7} but the marker could not be written"
     fi
 }
 
@@ -335,24 +474,105 @@ check_health() {
 # `resumable`. One job, two contradictory verdicts, and with deferring on the
 # wrapper alone is enough to hold a deploy for a job that was safe to kill.
 #
-# So keep the leaves: drop any match that is the parent of another match. A
-# job with no wrapper has no matched child and survives untouched. (A job that
-# deliberately spawned a second `utils` module would lose its parent line;
-# nothing in this repository does that, and the leaf is the process doing the
-# work either way.)
+# So drop the wrapper - but ONLY a wrapper. The rule is not "any match that is
+# the parent of another match": `utils.coordinator` legitimately spawning
+# `utils.worker` would lose the coordinator, and if the coordinator were the
+# non-resumable half its disappearance would take `inflight_unsafe` to zero
+# and let the deploy run straight over it. So a parent is dropped only when
+# its own command is a shell `-c` invocation, which is what an `sh -c 'python
+# -m utils.X ... >> log'` launch actually looks like. Two genuine `utils`
+# processes in a parent/child relationship stay two jobs.
 #
-# Output: one "<pid>\t<command>" line per matching job.
+# Output: one "<pid>\t<command>" line per matching job. Returns non-zero when
+# the process list could not be read at all - see the fail-open note below.
 inflight_processes() {
-    docker top "$APP_CONTAINER" 2>/dev/null \
-        | awk 'NR > 1 { pid = $2; ppid = $3; $1=$2=$3=$4=$5=$6=$7=""; sub(/^ +/, ""); print pid "\t" ppid "\t" $0 }' \
+    local raw
+    # Failure and emptiness are different answers and must not collapse. A
+    # `docker top` that exits non-zero with no stdout used to become an empty
+    # pipeline through `|| true`, which reads as "no jobs are running" and
+    # deploys in silence - the exact defect this survey exists to prevent,
+    # reproduced inside the survey itself.
+    raw="$(docker top "$APP_CONTAINER" 2>/dev/null)" || return 1
+    # It must contain the process this container cannot be without. Shape is
+    # satisfiable by junk; the app's own server is not.
+    if [ -n "$CONTAINER_SENTINEL" ]; then
+        printf '%s\n' "$raw" | awk 'NR > 1' | grep -qF -- "$CONTAINER_SENTINEL" || return 1
+    fi
+
+    # The layout is read off the header, never assumed. `docker top` renders
+    # whatever ps format it is handed, and the previous parse *checked* one
+    # shape (eight fields, numeric PID) while *assuming* a stricter one (the
+    # command starting at field 8, fields 1-7 blanked positionally). A table
+    # can satisfy the check and still be split wrongly by the parse - and a
+    # mis-split command matches the pattern no more, so the job it described
+    # disappears from the survey instead of being reported. Check and parse
+    # now describe the same table because both come from the same header.
+    local rows
+    rows="$(printf '%s\n' "$raw" | awk '
+        NR == 1 {
+            for (i = 1; i <= NF; i++) {
+                if ($i == "PID") pid_col = i
+                else if ($i == "PPID") ppid_col = i
+                else if ($i == "CMD" || $i == "COMMAND") cmd_col = i
+            }
+            # No header, or one naming no command column, is not a process
+            # list this code can read. Guessing a layout is how a job goes
+            # missing quietly.
+            if (!pid_col || !cmd_col) exit 1
+            next
+        }
+        # A row the header cannot describe is unreadable, and unreadable is
+        # not empty: ONE such row makes the whole table unknown rather than
+        # silently dropping the process it was describing.
+        NF < cmd_col || $pid_col !~ /^[0-9]+$/ { exit 1 }
+        {
+            cmd = $cmd_col
+            for (i = cmd_col + 1; i <= NF; i++) cmd = cmd " " $i
+            print $pid_col "\t" (ppid_col ? $ppid_col : "") "\t" cmd
+            seen = 1
+        }
+        # A header with no data rows is not an idle container: this one always
+        # runs the app server, so an empty table means the probe did not work.
+        END { if (!seen) exit 1 }
+    ')" || return 1
+
+    printf '%s\n' "$rows" \
         | grep -E "$INFLIGHT_PATTERN" \
         | awk -F'\t' '
+            # A shell running `-c`, however it spells it: `sh -c`, `sh -cx`,
+            # `/bin/bash --login -c`, `bash -o pipefail -c`.
+            #
+            # Every token is scanned, deliberately, rather than stopping at
+            # the first non-option: an option that takes an operand puts a
+            # bare word in the middle of the option run (`-o pipefail`,
+            # `--rcfile /x`), and a scan that halts there misses the `-c`
+            # behind it. Knowing where the options end means knowing an
+            # optstring per shell, and a parser covering `-o` but not
+            # `--rcfile` would read as complete while still being wrong.
+            #
+            # Scanning wide can only mistake a shell whose *operand* happens
+            # to be `-c` for a wrapper - and this is asked only of a shell
+            # that already has a matched `utils` child, where dropping it is
+            # right anyway: that shell launched the job, killing it kills the
+            # job, and the child is the row carrying the marker.
+            function is_shell_wrapper(c,   parts, n, i, base) {
+                n = split(c, parts, /[ \t]+/)
+                if (n < 2) return 0
+                base = parts[1]
+                sub(/^.*\//, "", base)
+                if (base !~ /^(sh|bash|dash|ash|zsh)$/) return 0
+                for (i = 2; i <= n; i++)
+                    if (parts[i] ~ /^-[A-Za-z]*c[A-Za-z]*$/) return 1
+                return 0
+            }
             { pid[NR] = $1; ppid[NR] = $2; cmd[NR] = $3; n = NR }
             END {
-                for (i = 1; i <= n; i++) is_parent[ppid[i]] = 1
+                for (i = 1; i <= n; i++) has_matched_child[ppid[i]] = 1
                 for (i = 1; i <= n; i++)
-                    if (!(pid[i] in is_parent)) print pid[i] "\t" cmd[i]
+                    if (!((pid[i] in has_matched_child) && is_shell_wrapper(cmd[i])))
+                        print pid[i] "\t" cmd[i]
             }' || true
+    return 0
 }
 
 # The marker a job wrote for itself, if it wrote one. Prints
@@ -361,21 +581,124 @@ inflight_processes() {
 # deploy cannot tell them apart, and guessing "resumable" is how work gets
 # lost silently.
 #
-# The marker is keyed by PID, and a PID left behind by a killed run can be
-# reused by an unrelated job in the container that replaced it. So the
-# marker's own module has to appear in the command line before its claim is
-# believed - otherwise a stale `resumable: true` could vouch for a job that
-# is nothing of the sort.
+# **The join is the command line, never the PID.** The two sides do not share
+# a PID namespace: `utils/inflight.py` records `os.getpid()` from inside the
+# container, `docker top` reports the host/VM view. Measured on the mini
+# 2026-08-14: the marker said `"pid": 41` while `docker top` reported 21974
+# for the same process, so a PID-keyed lookup matched nothing, every job read
+# as `unknown`, and the whole `resumable` half of #283 was dead in production
+# - eleven "no marker" lines in the deploy log before anyone noticed.
+#
+# So a marker vouches for a process when its `module` and *every* one of its
+# recorded `argv` tokens appear in that process's command line. That also
+# separates two concurrent runs of the same module, because their `--snapshot`
+# paths differ, and it keeps a stale marker from a killed run from vouching
+# for anything still alive under a different argv.
+#
+# If several markers match and disagree about `resumable`, the answer is
+# `unknown`: an ambiguous claim must not be resolved in the deploy's favour.
 inflight_marker() {
-    local pid="$1" command="$2"
-    python3 - "$INFLIGHT_DIR" "$pid" "$command" <<'PY' 2>/dev/null || printf 'unknown\t\n'
+    local command="$1"
+    python3 - "$INFLIGHT_DIR" "$command" <<'PY' 2>/dev/null || printf 'unknown\t\n'
 import glob
 import json
 import os
 import sys
 
-directory, pid, command = sys.argv[1], sys.argv[2], sys.argv[3]
-for path in sorted(glob.glob(os.path.join(directory, f"*.{pid}.json"))):
+directory, command = sys.argv[1], sys.argv[2]
+tokens = command.split()
+
+
+def _program(tokens):
+    """What these tokens actually run: ("module"|"script", name, args).
+
+    Position matters. Scanning for the module *anywhere* let a snapshot path
+    impersonate the program - `--snapshot data/utils.backfill_pool.json`
+    satisfied a `backfill_pool` marker, and so did
+    `--snapshot data/utils/backfill_pool.py`. The program is whichever comes
+    first: the token after `-m`, or the first `.py` token (arguments follow
+    the script, never precede it). Everything after it is the argv.
+
+    Short options are read the way python reads them, not matched as a
+    literal `-m`. Three spellings of one command have already defeated three
+    attempts to anchor on a form: `-m utils.x`, `-mutils.x`, and `-um utils.x`
+    - the last is a cluster, and `-u` is what a background job writing to a
+    log is usually started with. Anchoring closes the example it was given and
+    leaves the class open, so this walks the cluster instead: on `m`, the
+    module is the rest of the token if there is one and the next token
+    otherwise; `c` means python is running a command string, so there is no
+    module to find; `W`, `X` and `Q` swallow their own operand and cannot be
+    read as options themselves.
+    """
+    takes_operand = "cmWXQ"
+    i, n = 1, len(tokens)  # tokens[0] is the interpreter itself
+    while i < n:
+        tok = tokens[i]
+        if tok == "--":
+            i += 1
+            break
+        if tok == "-" or not tok.startswith("-"):
+            # `-` means the program is read from stdin, and the first token
+            # that is not an option ends option parsing and IS the program -
+            # with or without a `.py`. Treating only `.py` as a script let
+            # `python worker -m utils.x` read as running utils.x, so a marker
+            # for utils.x vouched for a process that is not it.
+            break
+        if tok.startswith("--"):
+            i += 1
+            continue
+        rest = tok[1:]
+        j = 0
+        while j < len(rest):
+            ch = rest[j]
+            if ch not in takes_operand:
+                j += 1
+                continue
+            operand = rest[j + 1 :]
+            if ch == "c":
+                return None  # `python -c '...'` runs a command, never a module
+            if ch == "m":
+                if operand:
+                    return ("module", operand, list(tokens[i + 1 :]))
+                if i + 1 < n:
+                    return ("module", tokens[i + 1], list(tokens[i + 2 :]))
+                return None
+            # -W/-X/-Q take an operand too, joined or as the next token. The
+            # separate form has to be stepped over or it reads as the script:
+            # `python -X pycache_prefix=/tmp/utils/x.py -m utils.y` ran y, not
+            # the path in the -X operand.
+            if not operand:
+                i += 1
+            break
+        i += 1
+    if i < n and tokens[i] != "-":
+        return ("script", tokens[i], list(tokens[i + 1 :]))
+    return None
+
+
+def _render(argv):
+    """The arguments as a process table would show them.
+
+    `docker top` returns one whitespace-joined line, so a tab or a run of
+    spaces inside an argument survives in the marker and not in the table.
+    Comparing the raw strings therefore made a job miss its own marker and
+    spend the deferral budget as `unknown`. Both sides are normalised the
+    same way instead, which is the only comparison the process list supports.
+    """
+    return " ".join(" ".join(a.split()) for a in argv)
+
+
+def _runs_module(program, module):
+    kind, name, _args = program
+    if kind == "module":
+        return name == f"utils.{module}"
+    parts = name.split("/")
+    return len(parts) >= 2 and parts[-1] == f"{module}.py" and parts[-2] == "utils"
+
+
+program = _program(tokens)
+matches = []
+for path in sorted(glob.glob(os.path.join(directory, "*.json"))):
     try:
         with open(path, encoding="utf-8") as handle:
             data = json.load(handle)
@@ -384,13 +707,69 @@ for path in sorted(glob.glob(os.path.join(directory, f"*.{pid}.json"))):
     if not isinstance(data, dict):
         continue
     module = data.get("module")
-    if not isinstance(module, str) or module not in command:
+    if not isinstance(module, str) or not module:
         continue
-    resumable = "true" if data.get("resumable") is True else "false"
-    print(f"{resumable}\t{data.get('ledger') or ''}")
-    break
-else:
+    if program is None or not _runs_module(program, module):
+        continue
+    # The argv must be the SAME argv, in order - not a set of tokens that
+    # happen to occur. Membership let a marker recording `data/a` vouch for a
+    # live `data/aaa.json`, let a reordered argv match, and worst of all made
+    # an EMPTY argv vacuously true: a stale `bulk_ai_analysis` marker with no
+    # args (resumable, because no --force) then vouched for a live
+    # `--force` run, which is precisely the run that is not resumable.
+    #
+    # Compared as the rendered string, not as token lists, because `docker
+    # top` returns one whitespace-joined line and the shell's quoting is
+    # already gone by then. A job launched with `--snapshot 'data/My Pool.json'`
+    # arrives as four tokens against the marker's two, so a list comparison
+    # missed the live job's own marker and reported the run it was looking at
+    # as unknown. Joining both sides asks the only question the process list
+    # can actually answer - "is this the same command line" - and keeps order
+    # and exactness, which is what membership threw away.
+    # A marker that does not describe an argv describes nothing, and must be
+    # REJECTED rather than normalised. Coercing a missing or malformed `argv`
+    # to `[]` gave it the identity of a job with no arguments, so a corrupt
+    # marker claiming `resumable: true` vouched for a live no-argument job -
+    # inventing a claim out of damaged data, which is the opposite of what
+    # every other guard in this reader does.
+    argv = data.get("argv")
+    if not isinstance(argv, list) or any(not isinstance(a, str) for a in argv):
+        continue
+    # An argument that is empty, or nothing but whitespace, cannot be told
+    # apart from *no argument* once rendered - `[""]` and `[]` both render to
+    # "". Rather than let that ambiguity resolve in the deploy's favour, such
+    # a marker matches nothing and the job reads as unknown.
+    if any(not a.split() for a in argv):
+        continue
+    # KNOWN LIMIT, stated rather than discovered. Rendering cannot recover
+    # argument boundaries: `["--force", "data/x"]` and `["--force data/x"]`
+    # are one identical line in a process table, so a marker recording the
+    # second could vouch for a live job running the first. It is not fixable
+    # from this side - `docker top` lost the quoting before we saw it - and
+    # the fix that would work, reading /proc/<pid>/cmdline through
+    # `docker exec`, means going back into the container's PID namespace,
+    # which is the join this whole file exists to remove.
+    #
+    # What bounds it: nothing in `utils/` can write such a marker (every
+    # entry point runs `parse_args()` before `inflight()`, so an argument
+    # spelled "--force data/x" is rejected and the process exits before any
+    # marker exists), and a live job that wrote its own marker makes the two
+    # disagree, which already resolves to unknown below. Reported by an
+    # independent review 2026-08-15 and left in place deliberately.
+    if _render(argv) != _render(program[2]):
+        continue
+    matches.append(data)
+
+if not matches:
     print("unknown\t")
+else:
+    verdicts = {m.get("resumable") is True for m in matches}
+    if len(verdicts) > 1:
+        print("unknown\t")
+    else:
+        resumable = "true" if verdicts.pop() else "false"
+        ledger = next((m.get("ledger") for m in matches if m.get("ledger")), "")
+        print(f"{resumable}\t{ledger}")
 PY
 }
 
@@ -399,26 +778,45 @@ PY
 # are the jobs a deferral exists for.
 inflight_count=0
 inflight_unsafe=0
+# Set when the process list could not be read. "I do not know" is a third
+# answer, distinct from "nothing is running", and it has to block exactly like
+# a job that did not claim to be resumable - otherwise a broken probe is a
+# free pass.
+inflight_unknown=0
 survey_inflight() {
     inflight_count=0
     inflight_unsafe=0
+    inflight_unknown=0
 
-    if [ -z "$(docker ps --filter "name=^/${APP_CONTAINER}$" --format '{{.Names}}' 2>/dev/null)" ]; then
+    local running
+    if ! running="$(docker ps --filter "name=^/${APP_CONTAINER}$" --format '{{.Names}}' 2>/dev/null)"; then
+        inflight_unknown=1
+        log "WARNING: could not ask docker whether ${APP_CONTAINER} is running."
+        log "  work may be in flight; this tick cannot tell."
+        return 0
+    fi
+    if [ -z "$running" ]; then
         # Nothing is running, so nothing can be killed. Not an error: the very
         # first deploy on a machine starts the container.
         return 0
     fi
 
-    local procs line pid command marker resumable ledger
-    procs="$(inflight_processes)"
+    local procs line command marker resumable ledger
+    if ! procs="$(inflight_processes)"; then
+        inflight_unknown=1
+        log "WARNING: 'docker top ${APP_CONTAINER}' gave no readable process list."
+        log "  that is UNKNOWN, not empty - a long job may be running right now."
+        return 0
+    fi
     [ -n "$procs" ] || return 0
     log "long-running work is in flight inside ${APP_CONTAINER}:"
 
     while IFS= read -r line; do
         [ -n "$line" ] || continue
-        pid="${line%%$'\t'*}"
+        # The PID column is still emitted so the process list stays readable
+        # in a debug run, but nothing joins on it any more - see above.
         command="${line#*$'\t'}"
-        marker="$(inflight_marker "$pid" "$command")"
+        marker="$(inflight_marker "$command")"
         resumable="${marker%%$'\t'*}"
         ledger="${marker#*$'\t'}"
 
@@ -472,22 +870,176 @@ write_deferrals() {
     mv -f "$tmp" "$DEFER_STATE" || { rm -f "$tmp"; return 1; }
 }
 
+# --- hand over to the watcher this deploy brings (#293) --------------------
+# The tick that rolled out #285 executed the pre-#285 script and therefore
+# deployed the in-flight survey and the page check without running either -
+# killing a pool backfill at 32 ledger rows silently.
+#
+# Why the fast-forward alone cannot fix it, measured on this Mac: `git merge`
+# writes a file by creating a new one and renaming over it, so the inode
+# changes (654567352 -> 654567361 in the experiment). The shell's open
+# descriptor still points at the old, now-unlinked inode, and it keeps reading
+# the *previous* script to the end of the tick - reliably, not intermittently.
+# That is a mercy, because a rewrite that kept the inode does corrupt the run:
+# the same script overwritten in place with `cat >` resumed at the old byte
+# offset inside the new bytes and executed a comment fragment. But it also
+# means no amount of care after the merge can make this tick run new code.
+#
+# The only handover is a new process. So: when origin/main changes this script
+# or the library it sources, fast-forward and `exec` *before* deciding
+# anything, and let the new version survey, defer, build and verify.
+#
+# Deliberately placed before the in-flight survey rather than after: the survey
+# is exactly the kind of thing a new watcher changes (#290 rewrote it), so
+# running the old one first and then repeating it under the new one would log
+# two contradictory answers to the same question.
+self_update_and_reexec() {
+    [ "$local_sha" != "$remote_sha" ] || return 0
+    [ -n "$SELF_REL_DIR" ] || return 0
+
+    local rc=0
+    git diff --quiet "$local_sha" "$remote_sha" -- "${SELF_PATHS[@]}" || rc=$?
+    case "$rc" in
+        0) return 0 ;;
+        1) ;;
+        *)
+            log "could not compare ${SELF_PATHS[*]} across ${local_sha:0:7}..${remote_sha:0:7}"
+            log "  assuming this watcher changes, which is the safe way to be wrong"
+            ;;
+    esac
+
+    log "${remote_sha:0:7} changes this watcher itself (${SELF_PATHS[*]})"
+
+    if ! git cat-file -e "${remote_sha}:${SELF_REL_SCRIPT}" 2>/dev/null; then
+        log "  ALERT: ${remote_sha:0:7} removes ${SELF_REL_SCRIPT} - there is nothing to hand over to"
+        log "  this tick deploys that removal while running the script it removes"
+        return 0
+    fi
+
+    if [ "$SELF_UPDATE" != "1" ]; then
+        log "  ALERT: AUTOPILOT_SELF_UPDATE is off - this tick deploys the new watcher while running the old one"
+        log "  whatever ${remote_sha:0:7} changes about deploying does not apply until the next tick"
+        return 0
+    fi
+
+    if [ "$REEXEC_DEPTH" -ge "$REEXEC_MAX" ]; then
+        # Deploying anyway is the whole defect this ticket exists to remove:
+        # the deploy would be governed by the watcher from local_sha while
+        # putting remote_sha's watcher on disk. The budget bounds handovers per
+        # tick, and the honest way to respect it is to stop, not to fall back to
+        # the behaviour being fixed.
+        #
+        # Stopping costs one tick and nothing else. The checkout already holds
+        # the watcher this process is running, so the next tick starts from it
+        # and hands over to remote_sha normally - and that handover deploys
+        # itself, which is the point. Nothing has been merged for remote_sha,
+        # the container and the marker are untouched, and the previous build
+        # keeps serving.
+        log "  ALERT: already handed over ${REEXEC_DEPTH}x this tick and ${BRANCH} moved again"
+        log "  refusing to deploy ${remote_sha:0:7} under the watcher from ${local_sha:0:7}"
+        log "  the next tick runs ${local_sha:0:7}'s watcher and hands over to ${remote_sha:0:7} then"
+        exit 0
+    fi
+
+    # A watcher that does not parse cannot be handed over to, and deploying it
+    # would kill the deploy chain at the *next* tick instead of this one, with
+    # the checkout already advanced. Checked before the fast-forward, where
+    # refusing costs nothing: checkout, container and marker are all untouched
+    # and the previous build keeps serving.
+    local listing entry mode kind file tmp
+    # With modes, not just names: a syntax check reads the *blob*, and a
+    # symlink's blob is its target path - one word, which parses as a valid
+    # command and tells the gate nothing about what `exec` would actually run.
+    # A dangling one would pass, be merged, and kill every later tick with the
+    # checkout already advanced. Only a regular file can be the script this
+    # process execs, so anything else is refused here, where refusing is free.
+    listing="$(git ls-tree -r "$remote_sha" -- "${SELF_PATHS[@]}" 2>>"$LOG_FILE")" \
+        || die "cannot list ${SELF_PATHS[*]} at ${remote_sha:0:7} - refusing to hand over blind"
+    tmp="$(mktemp "${TMPDIR:-/tmp}/deploy-watcher-parse.XXXXXX")" \
+        || die "cannot write a temporary file to syntax-check ${remote_sha:0:7}"
+    while IFS= read -r entry; do
+        [ -n "$entry" ] || continue
+        # "<mode> <type> <sha>\t<path>"
+        mode="${entry%% *}"
+        kind="${entry#* }"
+        kind="${kind%% *}"
+        file="${entry#*$'\t'}"
+        case "$file" in
+            *.sh) ;;
+            *) continue ;;
+        esac
+        if [ "$kind" != "blob" ] || { [ "$mode" != "100644" ] && [ "$mode" != "100755" ]; }; then
+            rm -f "$tmp"
+            die "${file} at ${remote_sha:0:7} is a ${kind} with mode ${mode}, not a regular file - refusing to hand over to something that is not a script (nothing merged; ${deployed_sha:0:7} keeps serving)"
+        fi
+        if ! git show "${remote_sha}:${file}" >"$tmp" 2>>"$LOG_FILE"; then
+            rm -f "$tmp"
+            die "cannot read ${file} at ${remote_sha:0:7} - refusing to hand over blind"
+        fi
+        if ! "$SELF_INTERPRETER" -n "$tmp" 2>>"$LOG_FILE"; then
+            rm -f "$tmp"
+            die "${file} does not parse at ${remote_sha:0:7} - refusing to deploy a watcher that cannot run (nothing merged; ${deployed_sha:0:7} keeps serving)"
+        fi
+    done <<EOF
+${listing}
+EOF
+    rm -f "$tmp"
+
+    # The commit that was vetted, not the ref that named it. Several sessions
+    # and a human fetch into this same clone, so origin/main can advance
+    # between `git rev-parse` above and here - and the seconds in between hold
+    # a `docker image inspect`, a `docker tag` and this whole syntax gate. A
+    # ref here would fast-forward to, and then `exec`, a watcher nothing
+    # checked. The next tick deploys the newer commit five minutes later.
+    if ! git merge --ff-only "$remote_sha" >>"$LOG_FILE" 2>&1; then
+        die "fast-forward to ${remote_sha:0:7} (origin/${BRANCH}) failed - local ${BRANCH} has diverged"
+    fi
+    log "  fast-forwarded to ${remote_sha:0:7}; handing this tick over to its ${SELF_REL_SCRIPT}"
+
+    # The lock rides across on fd 9 (see the acquire above). ROLLBACK_SHA is the
+    # commit that is *serving*: after the merge HEAD is the commit under test,
+    # so the new process cannot work it out for itself.
+    export AUTOPILOT_LOCK_INHERITED="$LOCK_DIR"
+    export AUTOPILOT_REEXEC_DEPTH="$((REEXEC_DEPTH + 1))"
+    export AUTOPILOT_ROLLBACK_SHA="$ROLLBACK_SHA"
+    exec "$SELF_INTERPRETER" "$SCRIPT_PATH" ${SCRIPT_ARGS[@]+"${SCRIPT_ARGS[@]}"}
+    die "could not re-execute ${SCRIPT_PATH}"
+}
+
+self_update_and_reexec
+
 # --- who is about to be killed ---------------------------------------------
 # Runs before the fast-forward, so a deferred tick leaves the checkout and the
 # deployment marker exactly as they were and the next tick decides afresh. The
 # rollback image was already re-tagged above; that is idempotent and costs a
-# deferred tick nothing.
+# deferred tick nothing. (After a handover the fast-forward has already
+# happened, in the tick that handed over - so there the checkout is one commit
+# ahead of the container while a deferral waits. The marker still names what is
+# serving, which is the part anything downstream reads.)
 survey_inflight
-if [ "$inflight_count" != "0" ]; then
+# An unreadable process list blocks exactly like a job with no marker: both
+# mean "this tick cannot say that killing costs nothing".
+blocking=$((inflight_unsafe + inflight_unknown))
+if [ "$inflight_count" != "0" ] || [ "$inflight_unknown" != "0" ]; then
     if [ "$DEFER_ON_INFLIGHT" != "1" ]; then
-        log "  deploying anyway (AUTOPILOT_DEFER_ON_INFLIGHT is off); the ${inflight_count} job(s) above will be killed"
-    elif [ "$inflight_unsafe" = "0" ]; then
+        # The two branches are genuinely exclusive: an unreadable list returns
+        # from the survey before a single job is counted. Reporting the count
+        # anyway would print "the 0 job(s) above will be killed" for the one
+        # case where the count is not an observation but the failed probe's
+        # residue - a deploy claiming it killed nothing precisely when it
+        # cannot know what it killed.
+        if [ "$inflight_unknown" != "0" ]; then
+            log "  deploying anyway (AUTOPILOT_DEFER_ON_INFLIGHT is off); what this kills is UNKNOWN - the process list could not be read"
+        else
+            log "  deploying anyway (AUTOPILOT_DEFER_ON_INFLIGHT is off); the ${inflight_count} job(s) above will be killed"
+        fi
+    elif [ "$blocking" = "0" ]; then
         log "  every job above reports itself resumable; deploying and killing them"
     else
         deferrals="$(read_deferrals "$remote_sha")"
         if [ "$deferrals" -ge "$DEFER_BUDGET" ]; then
             log "  deferral budget exhausted (${deferrals}/${DEFER_BUDGET} ticks waited for ${remote_sha:0:7})"
-            log "  deploying and killing the ${inflight_unsafe} job(s) that did not claim to be resumable"
+            log "  deploying and killing the ${blocking} job(s)/unknown(s) that did not claim to be resumable"
         else
             deferrals=$((deferrals + 1))
             if ! write_deferrals "$remote_sha" "$deferrals"; then
@@ -497,7 +1049,7 @@ if [ "$inflight_count" != "0" ]; then
                 log "  ALERT: could not record the deferral in ${DEFER_STATE}"
                 log "  an unbounded wait is worse than a killed job - deploying now"
             else
-                log "  deferring this tick (${deferrals}/${DEFER_BUDGET}) - ${inflight_unsafe} job(s) would lose work"
+                log "  deferring this tick (${deferrals}/${DEFER_BUDGET}) - ${blocking} job(s)/unknown(s) may lose work"
                 log "  set AUTOPILOT_DEFER_ON_INFLIGHT=0 to deploy immediately instead"
                 exit 0
             fi
@@ -510,8 +1062,11 @@ fi
 rm -f "$DEFER_STATE" 2>/dev/null || true
 
 # --- deploy ----------------------------------------------------------------
-if ! git merge --ff-only "origin/${BRANCH}" >>"$LOG_FILE" 2>&1; then
-    die "fast-forward to origin/${BRANCH} failed - local ${BRANCH} has diverged"
+# The vetted commit, not the ref - same reason as the handover merge above, and
+# the same commit the survey and the deferral budget were decided against. A
+# no-op after a handover: that tick fast-forwarded before re-executing.
+if ! git merge --ff-only "$remote_sha" >>"$LOG_FILE" 2>&1; then
+    die "fast-forward to ${remote_sha:0:7} (origin/${BRANCH}) failed - local ${BRANCH} has diverged"
 fi
 
 log "building..."

@@ -76,7 +76,7 @@
     {% if verdict.state in ('yes', 'likely') %}
         <span class="badge {{ 'bg-success' if verdict.state == 'yes' else 'bg-info text-dark' }} fw-normal"
               title="{{ verdict.source }}{% if verdict.reason %} — {{ verdict.reason }}{% endif %}">
-            <i class="fas fa-water me-1"></i>{{ t('sea_view_state_' ~ verdict.state) }}
+            <i class="fas fa-water me-1"></i>{{ t('sea_view_state_' ~ sea_view_state_key(verdict)) }}
         </span>
     {% endif %}
 {%- endmacro %}

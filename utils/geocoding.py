@@ -53,6 +53,13 @@ class GeocodingService:
                         "formatted_address": result["formatted_address"],
                         "address_components": result.get("address_components", []),
                         "location_type": location_type,
+                        # What Google says the matched place *is* -- "country",
+                        # "locality", "route" and so on. `location_type` only
+                        # says how the point was derived, so it cannot tell a
+                        # street centroid from an entire country: both are
+                        # APPROXIMATE. Callers that care about scale need this
+                        # (issue #331).
+                        "types": result.get("types", []),
                         "accuracy": accuracy,
                     }
                 else:

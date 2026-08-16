@@ -304,13 +304,40 @@ decides whether an automated merge happens, and a reviewer that runs
 practice - the reviewer invoked gh pr merge and only a missing flag stopped it."
 }
 
+# Every prompt ends with this, because a verdict nobody can parse is a review
+# thrown away. `rx` reads the first line and only the first line: it accepts the
+# bare keyword, optionally wrapped in Markdown emphasis, and calls everything
+# else UNAVAILABLE - which this script correctly refuses to treat as a pass, so
+# the PR sits unmergeable and a bounded reviewer attempt is spent on nothing.
+#
+# Until now no prompt here said so. Measured 2026-08-15 on PR #312: the codex
+# reviewer returned two well-argued BLOCKER findings under an opening line of
+# prose, and rx reported `outcome=UNAVAILABLE reason="verdict not recognised"`.
+# A real review with real findings, discarded on presentation. With this
+# paragraph appended, codex complied on the first try, twice in a row.
+#
+# It states the rule instead of pointing at the parser on purpose: this text
+# travels to a model that cannot read reviewer_coordinator.py, and that parser
+# is not ours to change - it decides what counts as a verdict for every gate on
+# this machine.
+#
+# One function, appended by both prompts, for the reason #292 gives about the
+# render check: a rule written down twice is one that eventually ships
+# half-changed. `tests/test_merge_bot_verdict_format.py` fails if either prompt
+# stops carrying it.
+verdict_format_rule() {
+    printf '%s' "FORMAT: your very first line must be exactly 'PASS' or 'BLOCKER', with no
+Markdown heading, no prefix and nothing else on that line. Reasoning and any
+findings follow on the lines after it."
+}
+
 standard_review_prompt() {
-    printf '%s\n\n%s\n' "$(review_preamble)" "Read the diff. Judge correctness, security, error handling and whether the
+    printf '%s\n\n%s\n\n%s\n' "$(review_preamble)" "Read the diff. Judge correctness, security, error handling and whether the
 tests actually prove the claimed behaviour rather than mocking past it. This
 repository has a history of tests that mock the failing call itself and
 therefore pass against a broken fix. Return BLOCKER if the change is wrong,
 unproven, or weakens the existing security posture (auth on state-changing
-endpoints, CSRF, rate limits, parameterised queries)."
+endpoints, CSRF, rate limits, parameterised queries)." "$(verdict_format_rule)"
 }
 
 # A documentation-only diff cannot be judged by that prompt, and the failure is
@@ -419,7 +446,10 @@ docs_only_review_prompt() {
     esac
     evidence="${evidence#*$'\n'}"
 
-    DOCS_ONLY_PROMPT="$(printf '%s\n\n%s\n\n%s\n' "$(review_preamble)" "Every path in this diff is documentation. There is no executable behaviour to
+    # The format rule goes after the evidence, not before it: the excerpts run
+    # to thousands of lines, and the instruction the reviewer has to obey when
+    # it starts writing should be the last thing it read.
+    DOCS_ONLY_PROMPT="$(printf '%s\n\n%s\n\n%s\n\n%s\n' "$(review_preamble)" "Every path in this diff is documentation. There is no executable behaviour to
 get wrong, so the question is not whether the change works - it is whether it
 tells the truth about code that already shipped. The implementation it describes
 is in the base commit and is deliberately outside this diff.
@@ -467,7 +497,7 @@ Return BLOCKER only for:
     look. A gate that certifies what it cannot read is worth nothing
   - a TRUNCATED notice below: the evidence did not fit, so ask for a smaller PR
 
-Otherwise return PASS." "$evidence")"
+Otherwise return PASS." "$evidence" "$(verdict_format_rule)")"
 }
 
 review_is_pass() {
@@ -564,17 +594,32 @@ review_is_pass() {
     set +e
     # Pin the reviewer to Codex instead of inheriting rx's `fallback` chain.
     #
-    # `fallback` tries Claude first, and Claude answers correctly - but its
-    # verdict opens with a Markdown heading (`## PASS`), while `_parse_verdict`
-    # requires the first line to start with PASS or BLOCKER. The answer is
-    # discarded as UNAVAILABLE and the chain falls through to Codex anyway.
-    # Measured 2026-08-09: 18 of 18 Claude legs UNAVAILABLE, 14 of them burning
+    # The reason this pin was added is gone. `fallback` tries Claude first, and
+    # on 2026-08-09 its verdict opened with a Markdown heading (`## PASS`) that
+    # the parser discarded: 18 of 18 Claude legs UNAVAILABLE, 14 of them burning
     # the full 120s RX_CLAUDE_TIMEOUT, on top of a Codex review that then
-    # succeeded. Skipping the leg takes a bot review from ~150s to ~12s.
+    # succeeded. Nine hours later the parser learned to unwrap `## PASS`,
+    # `**PASS**` and `` `PASS` ``, and the rx release this machine runs accepts
+    # all three - measured 2026-08-15 by calling `_parse_verdict` in that
+    # release directly, not the checkout it was built from.
     #
-    # This is a workaround, not the fix. The fix is the parser, which is not
-    # ours to change here: it decides what counts as a verdict for every gate
-    # on this machine. Drop this pin once Claude's answers are accepted.
+    # The pin stays because un-pinning cannot be proven right now, and an
+    # unproven change to the merge gate is the thing this file exists to
+    # prevent. Every Claude leg on this machine since 2026-08-13 has failed in
+    # under 4.1s with rc=1 and the same ~835-byte reply: HTTP 429, "You've hit
+    # your weekly limit - resets Aug 18 at 3pm". 28 of 28 in
+    # ~/.cache/owner-guardrails/reviewer/events.jsonl, reproduced by hand on
+    # 2026-08-15 with the same argv the coordinator uses. A leg that answers 429
+    # is not a second opinion, and switching it on today would measure the quota
+    # rather than the formatting.
+    #
+    # To drop the pin after the quota resets: run a real review with
+    # RX_PROVIDER_POLICY=fallback and read the `provider=claude` rows of that
+    # events.jsonl - PASS or BLOCKER, not UNAVAILABLE, twice. Being wrong costs
+    # more than it did: RX_CLAUDE_TIMEOUT now defaults to 460s rather than the
+    # 120s of the measurement above, so a leg that hangs holds the merge lock
+    # nearly four times as long. `verdict_format_rule` above removes the *stated*
+    # obstacle for both providers; it does not license removing the pin unmeasured.
     RX_PROVIDER_POLICY=codex-only \
     rx --range "${base_sha}..${ref}" "$prompt" >>"$LOG_FILE" 2>&1
     rc=$?
