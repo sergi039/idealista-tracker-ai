@@ -81,6 +81,66 @@
     {% endif %}
 {%- endmacro %}
 
+{# For a plot, distance to the shoreline is a verdict rather than a detail:
+   POLA/PESC forbids a dwelling within 500 m of the Asturian coast -- in all
+   three of its categories, and over the top of whatever the municipal PGOU
+   says. So the badge is red inside that band and green outside it, and a row
+   that was never measured says so out loud. Leaving it blank would read as
+   "far from the sea", which is #98's mistake wearing a legal coat.
+
+   Houses are deliberately excluded: the ban is on *building*, so an existing
+   legal house inside the band is not what it decides. #}
+{% macro plot_badges(p) -%}
+    {% if p.property_category == 'land' or p.property_subtype == 'plot' %}
+        {% set attrs = p.attributes if p.attributes is mapping else {} %}
+        {% set enr = p.enrichment if p.enrichment is mapping else {} %}
+        {% set sea = enr.get('sea') if enr.get('sea') is mapping else {} %}
+        {% set dist = sea.get('distance_m') %}
+        {% if dist is number %}
+            {% if dist < 500 %}
+                <span class="badge bg-danger fw-normal"
+                      title="{{ t('plot_coast_ban') }} (POLA/PESC): {{ dist | round | int }} m">
+                    <i class="fas fa-ban me-1"></i>{{ dist | round | int }} m
+                </span>
+            {% else %}
+                <span class="badge bg-success fw-normal"
+                      title="{{ t('plot_coast_ok') }}: {{ dist | round | int }} m">
+                    <i class="fas fa-water me-1"></i>{{ dist | round | int }} m
+                </span>
+            {% endif %}
+        {% elif sea.get('status') == 'no_coastline_within_radius' %}
+            <span class="badge bg-success fw-normal" title="{{ t('plot_coast_none_near') }}">
+                <i class="fas fa-water me-1"></i>{{ t('plot_coast_none_near') }}
+            </span>
+        {% else %}
+            <span class="badge bg-secondary fw-normal" title="{{ t('plot_coast_unmeasured') }}">
+                <i class="fas fa-question me-1"></i>{{ t('plot_coast_unmeasured') }}
+            </span>
+        {% endif %}
+        {% if attrs.get('land_classification') %}
+            <span class="badge bg-body-tertiary text-body-secondary border fw-normal"
+                  title="{{ attrs.get('classification_source') or '' }} — {{ t('plot_class_check') }}">
+                {{ attrs.get('land_classification') | replace('_', ' ') }}
+            </span>
+        {% endif %}
+        {% if attrs.get('geocoding_failure') %}
+            <span class="badge bg-danger fw-normal" title="{{ attrs.get('geocoding_failure') }}">
+                <i class="fas fa-crosshairs me-1"></i>{{ t('plot_geocoding_failed') }}
+            </span>
+        {% endif %}
+        {% if attrs.get('classification_conflict') %}
+            <span class="badge bg-warning text-dark fw-normal" title="{{ attrs.get('classification_conflict') }}">
+                <i class="fas fa-exclamation-triangle me-1"></i>{{ t('plot_listing_conflict') }}
+            </span>
+        {% endif %}
+        {% if attrs.get('pgou_zone_warning') %}
+            <span class="badge bg-warning text-dark fw-normal" title="{{ attrs.get('pgou_zone_warning') }}">
+                <i class="fas fa-exclamation-triangle me-1"></i>{{ t('plot_pgou_warning') }}
+            </span>
+        {% endif %}
+    {% endif %}
+{%- endmacro %}
+
 {# Short label under a travel time, the way /lands captioned its OV | GJ
    column. The full destination stays in the tooltip. #}
 {% set TRAVEL_ABBR = {
@@ -718,6 +778,7 @@
                                                 <div class="mt-1 d-flex flex-wrap gap-1">
                                                     {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
                                                     {{ sea_view_badge(p) }}
+                                                    {{ plot_badges(p) }}
                                                 </div>
                                             </td>
                                             <td class="col-price">
@@ -891,6 +952,7 @@
                                 <div class="mb-2 d-flex flex-wrap gap-1">
                                     {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
                                     {{ sea_view_badge(p) }}
+                                                    {{ plot_badges(p) }}
                                 </div>
 
                                 <!-- Price and Area -->

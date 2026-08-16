@@ -45,6 +45,17 @@ TRANSLATIONS = {
         "sea_view_state_likely_geometry": "Terrain allows a sea view",
         "sea_view_state_no": "No sea view",
         "sea_view_state_unknown": "Sea view unknown",
+        # A plot inside the 500 m coastal band cannot carry a dwelling at all
+        # (POLA/PESC, which outranks the municipal PGOU), so the list states
+        # the verdict rather than the raw metre count alone.
+        "plot_coast_ban": "Coastal ban zone",
+        "plot_coast_ok": "Outside coastal ban",
+        "plot_coast_unmeasured": "Coast distance unmeasured",
+        "plot_coast_none_near": "No coast within radius",
+        "plot_class_check": "Classification unverified",
+        "plot_pgou_warning": "Outside PGOU urban zones?",
+        "plot_listing_conflict": "Listing contradicts itself",
+        "plot_geocoding_failed": "Coordinate is wrong",
         # The coastline point the geometry was measured to, on a map: the one
         # thing that answers "what water is this?" without re-deriving it from
         # a distance and a bearing.
@@ -279,6 +290,14 @@ TRANSLATIONS = {
         "sea_view_state_likely_geometry": "El terreno permite vista al mar",
         "sea_view_state_no": "Sin vista al mar",
         "sea_view_state_unknown": "Vista al mar sin determinar",
+        "plot_coast_ban": "Zona de prohibición costera",
+        "plot_coast_ok": "Fuera de la franja costera",
+        "plot_coast_unmeasured": "Distancia a la costa sin medir",
+        "plot_coast_none_near": "Sin costa en el radio",
+        "plot_class_check": "Clasificación sin verificar",
+        "plot_pgou_warning": "¿Fuera de zonas urbanas del PGOU?",
+        "plot_listing_conflict": "El anuncio se contradice",
+        "plot_geocoding_failed": "Coordenada errónea",
         "sea_view_not_computed": "Sin calcular todavía",
         "sea_view_target_link": "ver el punto medido",
         "favorites": "Favoritos",
