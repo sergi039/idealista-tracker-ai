@@ -51,6 +51,15 @@ TRANSLATIONS = {
         "plot_coast_ban": "Coastal ban zone",
         "plot_coast_ok": "Outside coastal ban",
         "plot_coast_unmeasured": "Coast distance unmeasured",
+        # The coordinate is a locality centroid (#358), and the 500 m band it
+        # sits inside or outside cannot be told apart within the slack: the
+        # bounds straddle 500 m, so the verdict is neither a robust ban nor a
+        # robust clearance. Kept apart from `plot_coast_unmeasured`, which
+        # means the lookup itself never ran -- this one ran and still could
+        # not answer for the parcel.
+        "plot_coast_unmeasured_approximate": (
+            "Coast distance unmeasured (approximate location)"
+        ),
         "plot_coast_none_near": "No coast within radius",
         "plot_class_check": "Classification unverified",
         "plot_pgou_warning": "Outside PGOU urban zones?",
@@ -323,6 +332,9 @@ TRANSLATIONS = {
         "plot_coast_ban": "Zona de prohibición costera",
         "plot_coast_ok": "Fuera de la franja costera",
         "plot_coast_unmeasured": "Distancia a la costa sin medir",
+        "plot_coast_unmeasured_approximate": (
+            "Distancia a la costa sin medir (ubicación aproximada)"
+        ),
         "plot_coast_none_near": "Sin costa en el radio",
         "plot_class_check": "Clasificación sin verificar",
         "plot_pgou_warning": "¿Fuera de zonas urbanas del PGOU?",

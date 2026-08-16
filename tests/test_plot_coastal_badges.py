@@ -24,6 +24,11 @@ from tests import setup_test_environment
 BAN = "Coastal ban zone"
 OUTSIDE = "Outside coastal ban"
 UNMEASURED = "Coast distance unmeasured"
+NO_COAST_NEAR = "No coast within radius"
+# The approximate-origin wording (services/coordinate_quality.py) starts with
+# the same text as UNMEASURED, so a plain substring check cannot tell them
+# apart -- the exact string is what proves the badge names the reason.
+UNMEASURED_APPROXIMATE = "Coast distance unmeasured (approximate location)"
 
 
 @pytest.fixture
@@ -57,8 +62,23 @@ def profile(app):
         return profile.id
 
 
-def _add(profile_id, key, *, sea=None, category="land", attributes=None):
-    """One listing. `sea` None means the measurement never ran."""
+def _add(
+    profile_id,
+    key,
+    *,
+    sea=None,
+    category="land",
+    attributes=None,
+    location_accuracy="precise",
+):
+    """One listing. `sea` None means the measurement never ran.
+
+    `location_accuracy` defaults to `precise` so a plain `_add(..., sea=...)`
+    keeps behaving exactly as before #358: the badge reads the raw distance
+    at face value only for a coordinate Google matched to an address. Tests
+    for the approximate-origin case (services/coordinate_quality.py) pass
+    `location_accuracy="approximate"` explicitly.
+    """
     enrichment = {}
     if sea is not None:
         enrichment["sea"] = dict(sea)
@@ -75,6 +95,7 @@ def _add(profile_id, key, *, sea=None, category="land", attributes=None):
             area=1300,
             location_lat=43.5723,
             location_lon=-6.2123,
+            location_accuracy=location_accuracy,
             enrichment=enrichment or None,
             attributes=attributes,
         )
@@ -141,6 +162,70 @@ class TestCoastalBadge:
         assert BAN not in body
         assert OUTSIDE not in body
         assert UNMEASURED not in body
+
+
+class TestApproximateOriginCoastalBadge:
+    """The coordinate is a locality centroid (#358): a raw distance from it is
+    not a fact about the parcel, so the badge must not paint the ban colours
+    off a number the 5 km slack cannot stand behind.
+    """
+
+    def test_a_precise_230m_plot_is_still_flagged_as_a_ban(self, client, app, profile):
+        """The precise path is unchanged -- #360's original assertion, restated
+        at 230 m so it sits next to its approximate-origin counterpart below.
+        """
+        with app.app_context():
+            _add(
+                profile,
+                "precise-230",
+                sea={"status": "ok", "distance_m": 230},
+                location_accuracy="precise",
+            )
+        body = _body(client)
+        assert BAN in body
+        assert OUTSIDE not in body
+        assert UNMEASURED_APPROXIMATE not in body
+
+    def test_an_approximate_230m_plot_is_not_flagged_as_a_ban(
+        self, client, app, profile
+    ):
+        """230 m measured from a centroid: within the 5 km slack the true
+        parcel distance could be anywhere from 0 to 5230 m, so 500 m falls
+        inside the bounds on both sides. Neither colour is defensible -- the
+        badge must say "unmeasured", not guess red off the raw number.
+        """
+        with app.app_context():
+            _add(
+                profile,
+                "approx-230",
+                sea={"status": "ok", "distance_m": 230},
+                location_accuracy="approximate",
+            )
+        body = _body(client)
+        assert UNMEASURED_APPROXIMATE in body
+        assert BAN not in body
+        assert OUTSIDE not in body
+
+    def test_an_approximate_plot_with_no_coastline_in_17km_stays_green(
+        self, client, app, profile
+    ):
+        """The stored search covered 17 km around the centroid
+        (services/sea_distance_service.SEARCH_RADIUS_M); shrunk by the 5 km
+        slack that still guarantees 12 km *around the parcel* -- well past
+        the 500 m the ban cares about, so "no coastline nearby" survives the
+        restatement and stays green rather than falling back to unmeasured.
+        """
+        with app.app_context():
+            _add(
+                profile,
+                "approx-nocoast",
+                sea={"status": "no_coastline_within_radius", "searched_m": 17000},
+                location_accuracy="approximate",
+            )
+        body = _body(client)
+        assert NO_COAST_NEAR in body
+        assert BAN not in body
+        assert UNMEASURED_APPROXIMATE not in body
 
 
 class TestClassificationFlags:
