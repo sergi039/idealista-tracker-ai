@@ -24,7 +24,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 from utils.inflight import (
     describe,
@@ -141,19 +140,32 @@ def test_a_live_run_of_the_same_job_is_not_treated_as_a_corpse(tmp_path, caplog)
 
 
 def test_a_reused_pid_is_not_mistaken_for_a_live_run(tmp_path, caplog):
-    """The next container starts PIDs at 1, so the number alone proves nothing."""
+    """The next container starts PIDs at 1, so the number alone proves nothing.
+
+    A restarted container keeps its id (its hostname) and starts PID 1 again,
+    so a marker from the previous incarnation carries this reader's own host
+    *and* its own pid. That is settled by the pid rule, not by cmdline - so
+    the answer is the same on every platform, and this test no longer skips
+    where `/proc` is missing. (Before #359 this only passed because pytest's
+    cmdline happens not to contain "backfill_pool"; a real `python -m
+    utils.backfill_pool` reader would have found itself and said "alive".)
+    """
     directory = tmp_path / "inflight"
     directory.mkdir()
-    # This very process is alive, but it is pytest, not the backfill.
     (directory / f"backfill_pool.{os.getpid()}.json").write_text(
-        json.dumps({"module": "backfill_pool", "pid": os.getpid(), "resumable": True})
+        json.dumps(
+            {
+                "module": "backfill_pool",
+                "pid": os.getpid(),
+                "host": socket.gethostname(),
+                "resumable": True,
+            }
+        )
     )
 
     with caplog.at_level(logging.WARNING):
         interrupted = report_interrupted("backfill_pool", directory=str(directory))
 
-    if not Path(f"/proc/{os.getpid()}/cmdline").exists():
-        pytest.skip("no /proc here: liveness is all this platform can answer")
     assert len(interrupted) == 1, "a reused PID was reported as the job still running"
     assert "did not finish" in caplog.text
 
