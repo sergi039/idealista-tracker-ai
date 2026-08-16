@@ -71,6 +71,7 @@ def coastal_property(app):
         search_profile_id=profile.id,
         location_lat=43.55,
         location_lon=-6.83,
+        location_accuracy="precise",
     )
     db.session.add(prop)
     db.session.commit()
@@ -190,6 +191,7 @@ class TestTheMergedGroupFitsOneRequest:
             search_profile_id=profile.id,
             location_lat=43.55,
             location_lon=-6.83,
+            location_accuracy="precise",
         )
         db.session.add(prop)
         db.session.commit()

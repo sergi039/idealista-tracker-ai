@@ -9,6 +9,7 @@ import requests
 from app import db
 from config import Config
 from models import Property, SearchProfile
+from services.coordinate_quality import is_precise, normalize_accuracy
 from services.place_rules import PlaceRules as _PlaceRules
 from services.place_rules import place_rules_from as _place_rules
 from services.property_location_service import PropertyLocationService
@@ -47,6 +48,13 @@ STAGE_DISTANCE_MATRIX = "distance_matrix"
 TRAVEL_STATE_OK = "ok"
 TRAVEL_STATE_DEGRADED = "degraded"
 TRAVEL_STATE_UNAVAILABLE = "unavailable"
+# The run did not happen, and no retry will help: the row's coordinate is a
+# locality centroid, so every duration would be a route from a point the
+# property is merely near. Distinct from `unavailable` because that one means
+# Google refused and is worth retrying; this one is fixed by a re-geocode
+# (`utils/refresh_property_accuracy.py`), which is billed and therefore the
+# owner's call, not this service's.
+TRAVEL_STATE_APPROXIMATE_ORIGIN = "approximate_origin"
 
 # Bumped from v1 with #98: v1 entries can hold an all-None distance list
 # produced by a refused request, which would keep serving an empty result for
@@ -142,8 +150,14 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return r * c * 1000.0
 
 
-def _estimate_duration_seconds(distance_m: float, mode: str) -> int:
-    # Rough fallback when Distance Matrix isn't available.
+def estimate_duration_seconds(distance_m: float, mode: str) -> int:
+    """Rough fallback when Distance Matrix isn't available.
+
+    Public because `services/property_scoring_service.py` converts an
+    approximate origin's positional slack into minutes with it: the score has
+    to know how much travel time 5 km of coordinate error is worth, and the
+    answer already exists here.
+    """
     mode = (mode or "driving").lower()
     speed_kmh = {
         "driving": 45.0,
@@ -290,6 +304,28 @@ class _RunTally:
         )
 
 
+def effective_travel_state(prop: Property) -> Optional[str]:
+    """The verdict a reader should act on, not merely the one on record.
+
+    The row's coordinate quality outranks the stored run state, because 466 of
+    the 652 located rows carry `state: ok` from a run that predates this rule
+    and measured from a locality centroid. Those durations are not wrong about
+    the point they were measured from; they are just not about the property,
+    and no amount of re-reading the stored block reveals that. The column does.
+
+    `travel_api_state` stays what it always was -- what the last run wrote --
+    because "did Google answer" and "is this the parcel" are two questions and
+    the ledger of the first is worth keeping intact.
+    """
+    if prop is None:
+        return None
+    if prop.location_lat is None or prop.location_lon is None:
+        return travel_api_state(prop)
+    if not is_precise(getattr(prop, "location_accuracy", None)):
+        return TRAVEL_STATE_APPROXIMATE_ORIGIN
+    return travel_api_state(prop)
+
+
 def travel_api_state(prop: Property) -> Optional[str]:
     """Read back the verdict the last travel run stored on a property."""
     travel = getattr(prop, "travel", None)
@@ -358,6 +394,14 @@ class PropertyTravelService:
             origin_lat = float(prop.location_lat)
             origin_lon = float(prop.location_lon)
         except Exception:
+            return False
+
+        if not is_precise(getattr(prop, "location_accuracy", None)):
+            # Refused *before* the Places and Distance Matrix calls, not after:
+            # a duration from a locality centroid is not this property's, so
+            # buying one is spending Google credit on a number that has to be
+            # marked unattributable the moment it lands.
+            self._record_approximate_origin(prop, commit=commit)
             return False
 
         profile = self._resolve_profile(prop)
@@ -573,6 +617,37 @@ class PropertyTravelService:
             db.session.commit()
 
         return tally.state != TRAVEL_STATE_UNAVAILABLE
+
+    def _record_approximate_origin(self, prop: Property, *, commit: bool) -> None:
+        """Stamp the row as unmeasurable and leave whatever it already holds.
+
+        Deliberately not the `--clear-orphaned` treatment of #350. There the
+        row had *no* coordinate, so the block described nowhere and the only
+        truth was an empty one. Here the coordinate is real and the durations
+        are correct about it -- they are simply about the locality, not the
+        parcel -- so a re-geocode that resolves this row to an address makes
+        them meaningful again. Deleting them would spend Google credit twice
+        for one answer. Nothing reads them as the parcel's in the meantime:
+        `effective_travel_state` reports the refusal from the row itself, and
+        the scorer applies the slack before it counts a single minute.
+        """
+        accuracy = normalize_accuracy(getattr(prop, "location_accuracy", None))
+        travel = dict(prop.travel) if isinstance(prop.travel, dict) else {}
+        travel["api_status"] = {
+            "state": TRAVEL_STATE_APPROXIMATE_ORIGIN,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "origin_accuracy": accuracy,
+            "reason": "coordinate is a locality centroid, not this property",
+        }
+        prop.travel = travel
+
+        logger.info(
+            "Property %s has an %s coordinate; travel not measured (no API call)",
+            prop.id,
+            accuracy,
+        )
+        if commit:
+            db.session.commit()
 
     def calculate_for_property_id(self, property_id: int, commit: bool = True) -> bool:
         prop = db.session.get(Property, property_id)
@@ -1166,7 +1241,7 @@ class PropertyTravelService:
         distance_m = int(round(_haversine_m(lat, lon, dlat, dlon)))
         return DistanceResult(
             distance_m=distance_m,
-            duration_s=_estimate_duration_seconds(distance_m, mode=mode),
+            duration_s=estimate_duration_seconds(distance_m, mode=mode),
             estimated=True,
         )
 

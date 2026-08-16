@@ -134,6 +134,9 @@ def _listing(key, lat=ORIGIN[0], lon=ORIGIN[1], travel=None):
         municipality="Villaviciosa",
         location_lat=lat,
         location_lon=lon,
+        # A measured route needs an origin that is the property: travel
+        # refuses a locality centroid before it calls Google.
+        location_accuracy="precise",
     )
     if travel is not None:
         prop.travel = travel

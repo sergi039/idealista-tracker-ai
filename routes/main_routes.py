@@ -25,6 +25,7 @@ from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
 from app import db
 from services import sea_view_service
+from services.coordinate_quality import shared_coordinate_peers
 from services.profile_selection import (
     MAX_SELECTED_PROFILE_IDS,
     PROFILE_UNASSIGNED_SENTINEL,
@@ -1263,6 +1264,10 @@ def property_detail(property_id):
             ),
             travel_display_targets=travel_display_targets,
             sea_view_verdict=sea_view_service.read_verdict(prop),
+            # One row, one query, and only on this page: the list would run it
+            # per row. It is evidence about the coordinate, next to the
+            # coordinate, and nothing scores on it.
+            shared_coordinate_ids=shared_coordinate_peers(prop),
         )
     except HTTPException:
         raise
@@ -2009,6 +2014,7 @@ def recalculate_profile_travel(profile_id: int):
         properties = query.order_by(Property.created_at.desc()).limit(limit).all()
 
         from services.property_travel_service import (
+            TRAVEL_STATE_APPROXIMATE_ORIGIN,
             TRAVEL_STATE_UNAVAILABLE,
             PropertyTravelService,
             travel_api_state,
@@ -2017,10 +2023,16 @@ def recalculate_profile_travel(profile_id: int):
         service = PropertyTravelService()
         updated = 0
         api_refused = 0
+        approximate_origin = 0
         for prop in properties:
             try:
                 if service.calculate_for_property(prop, commit=True):
                     updated += 1
+                elif travel_api_state(prop) == TRAVEL_STATE_APPROXIMATE_ORIGIN:
+                    # Nothing was asked of Google and nothing failed: the row
+                    # has no coordinate worth routing from. Counting it as a
+                    # refusal would send the operator hunting an outage.
+                    approximate_origin += 1
                 elif travel_api_state(prop) == TRAVEL_STATE_UNAVAILABLE:
                     api_refused += 1
             except Exception as inner:
@@ -2033,6 +2045,11 @@ def recalculate_profile_travel(profile_id: int):
         # A run where Google refused everything used to flash the same green
         # count as a real one (#98); the refusals get their own number now.
         summary = f"Recalculated travel for {updated} / {len(properties)} properties"
+        if approximate_origin:
+            summary += (
+                f"; {approximate_origin} not measured (approximate location — "
+                "re-geocode first)"
+            )
         if api_refused:
             summary += f"; {api_refused} skipped because Google was unavailable"
             logger.error(
@@ -2042,7 +2059,7 @@ def recalculate_profile_travel(profile_id: int):
                 api_refused,
                 len(properties),
             )
-        flash(summary, "warning" if api_refused else "success")
+        flash(summary, "warning" if (api_refused or approximate_origin) else "success")
         return redirect(
             safe_referrer_redirect(url_for("main.properties", profile_id=profile_id))
         )
@@ -2417,6 +2434,10 @@ def municipalities():
 def map_view():
     """Interactive map view of all properties with coordinates"""
     try:
+        from services.property_travel_service import (
+            TRAVEL_STATE_APPROXIMATE_ORIGIN,
+            effective_travel_state,
+        )
         from services.search_profile_service import SearchProfileService
 
         default_profile = SearchProfileService.get_default_profile(create=True)
@@ -2589,6 +2610,13 @@ def map_view():
                     "url": prop.url,
                     "municipality": prop.municipality,
                     "travel": prop.travel if isinstance(prop.travel, dict) else None,
+                    # The popup draws the same travel badges the list does, so
+                    # it needs the same warning: a marker on a locality
+                    # centroid is not where the property is, and its durations
+                    # are routes from there.
+                    "origin_approximate": (
+                        effective_travel_state(prop) == TRAVEL_STATE_APPROXIMATE_ORIGIN
+                    ),
                     "is_favorite": bool(prop.is_favorite),
                 }
             )
@@ -3706,6 +3734,11 @@ def export_properties_csv():
             "Sea View Target Lon",
             "Latitude",
             "Longitude",
+            # Which rows the travel columns below actually describe. An
+            # `approximate` coordinate is a locality centroid, so those
+            # durations are routes from the village, not from the parcel --
+            # and a spreadsheet sorting on them cannot tell without this.
+            "Location Accuracy",
             "Created At",
         ]
 
@@ -3758,6 +3791,7 @@ def export_properties_csv():
                 sea_view_target["lon"] if sea_view_target else None,
                 float(prop.location_lat) if prop.location_lat else None,
                 float(prop.location_lon) if prop.location_lon else None,
+                prop.location_accuracy or "unknown",
                 prop.created_at.isoformat() if prop.created_at else "",
             ]
 

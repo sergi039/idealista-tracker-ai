@@ -277,6 +277,19 @@ def create_app(testing: bool = False):
     # all three places that draw it.
     app.jinja_env.globals["sea_view_state_key"] = sea_view_state_key
 
+    # Whether a row's derived numbers are about the property at all. Both read
+    # `location_accuracy`, so a template can show a locality centroid's travel
+    # times and sea distance as what they are instead of as measurements of the
+    # parcel. Passed as globals for the same reason the verdict above is: every
+    # list row needs them, and the rule has one home in Python.
+    from services.property_travel_service import (
+        effective_travel_state as travel_state_for,
+    )
+    from services.sea_distance_service import parcel_measurement as sea_distance_for
+
+    app.jinja_env.globals["travel_state_for"] = travel_state_for
+    app.jinja_env.globals["sea_distance_for"] = sea_distance_for
+
     # One Maps URL builder for every surface: list travel cells, detail rows,
     # beach lines. Templates used to concatenate free-text place names into
     # /maps/dir/ paths — unencoded, and resolvable to the wrong town.

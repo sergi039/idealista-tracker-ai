@@ -96,6 +96,9 @@ def _make_property(profile, source_email_id):
         search_profile_id=profile.id,
         location_lat=Decimal("43.6516865"),
         location_lon=Decimal("-7.8400525"),
+        # Google's refusal is the subject here, so the origin has to be one
+        # travel would actually spend a request on.
+        location_accuracy="precise",
     )
     db.session.add(prop)
     db.session.commit()

@@ -98,9 +98,22 @@
        used. Same data, a quarter of the row height. #}
     {% set travel = p.travel if p.travel is mapping else {} %}
     {% set travel_targets = travel.get('targets') or {} %}
+    {# A locality centroid measures routes from a point this listing is merely
+       near, so the column says which rows those are. One line for the cell,
+       not a mark per duration: they all share the origin, and the map pin in
+       the Coords column -- which this table hides in portrait -- is the only
+       other place the page admits it. #}
+    {% set _origin_approximate = travel_state_for(p) == 'approximate_origin' %}
     {% if display_targets %}
         {% set visible_travel_targets = display_targets[:3] %}
         <div class="d-flex flex-column small properties-travel-times">
+            {% if _origin_approximate %}
+                <span class="d-inline-flex align-items-center text-warning-emphasis"
+                      title="{{ t('approximate_origin_tooltip') }}">
+                    <i class="fas fa-map-marker-alt me-1"></i>
+                    <small>{{ t('approximate_origin_short') }}</small>
+                </span>
+            {% endif %}
             {% for tt in visible_travel_targets %}
                 {% set tdata = travel_targets.get(tt.key) if travel_targets else None %}
                 {% set minutes = tdata.duration_min if tdata else None %}

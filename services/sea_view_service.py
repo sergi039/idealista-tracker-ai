@@ -37,6 +37,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import requests
 
 from config import Config
+from services.coordinate_quality import (
+    APPROXIMATE_COORD_SLACK_M,
+    is_precise,
+)
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 from utils.http import (
     HTTP_USER_AGENT,
@@ -87,7 +91,12 @@ MAX_SEA_DISTANCE_M = 12_000
 # Siero share one point. Geometry on that point is meaningless *unless* the
 # whole neighbourhood is far inland, so a negative verdict needs this much slack
 # on top of MAX_SEA_DISTANCE_M before it is honest.
-APPROXIMATE_COORD_SLACK_M = 5_000
+#
+# The number itself moved to `services/coordinate_quality.py` and is imported
+# above: sea distance and travel refuse an approximate origin on exactly this
+# reasoning, and three copies of one tolerance is three chances to disagree
+# about the same plot. Re-exported here because this module is where every
+# reader has looked for it since #196.
 
 # Observer sits above the plot: a house, or simply standing on rising ground.
 EYE_HEIGHT_M = 5.0
@@ -578,7 +587,7 @@ def evaluate_geometry(
 
     Returns a dict with `state` in VALID_STATES plus the numbers behind it.
     """
-    approximate = (coordinate_accuracy or "").lower() != "precise"
+    approximate = not is_precise(coordinate_accuracy)
     # Accuracy belongs in the key: the same point answers differently depending
     # on whether it is a surveyed address or a municipality centroid, and two
     # rows can share coordinates to four decimals while disagreeing about that.

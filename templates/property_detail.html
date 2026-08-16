@@ -190,6 +190,18 @@
                             <span class="text-nowrap">
                                 <span class="font-monospace">{{ _coords }}</span>
                                 <span class="ms-1">({{ property.location_accuracy or 'unknown' }})</span>
+                                {# Evidence, not a verdict: two flats in one block
+                                   legitimately share a point, four plots sharing a
+                                   village centroid do not, and the coordinate alone
+                                   cannot tell them apart. The reader can. #}
+                                {% if shared_coordinate_ids %}
+                                    <span class="ms-1 text-warning-emphasis"
+                                          title="{{ t('shared_coordinate_tooltip') }}">
+                                        <i class="fas fa-triangle-exclamation"></i>
+                                        {{ t('shared_coordinate_with') }}
+                                        {% for peer_id in shared_coordinate_ids %}<a href="{{ url_for('main.property_detail', property_id=peer_id) }}" class="text-decoration-none">#{{ peer_id }}</a>{{ ', ' if not loop.last }}{% endfor %}
+                                    </span>
+                                {% endif %}
                                 <button type="button" class="btn btn-link p-0 ms-1 align-baseline copy-coords-btn"
                                         data-copy-text="{{ _coords }}"
                                         title="Copy coordinates" aria-label="Copy coordinates">
@@ -395,8 +407,7 @@
                    thing back: the at-a-glance chip row — sea verdicts plus a
                    pill per measured travel target, each pill a route from the
                    listing. Chips, not controls; nothing else returns here. #}
-                {% set _hero_enrichment = property.enrichment if property.enrichment is mapping else {} %}
-                {% set _hero_sea = _hero_enrichment.get('sea') if _hero_enrichment.get('sea') is mapping else {} %}
+                {% set _hero_sea = sea_distance_for(property) %}
                 {% set _hero_travel = property.travel if property.travel is mapping else {} %}
                 {% set _hero_targets = _hero_travel.get('targets') if _hero_travel.get('targets') is mapping else {} %}
                 <div class="d-flex flex-wrap align-items-center gap-2 mt-1">
@@ -410,6 +421,13 @@
                         <span class="badge {{ 'bg-success' if sea_view_verdict.state == 'yes' else 'bg-info' }}"
                               title="{{ _sea_label }}">
                             <i class="fas fa-binoculars me-1"></i>{{ _sea_label }}
+                        </span>
+                    {% endif %}
+                    {# One chip for the whole row of pills, rather than a mark on
+                       each: the claim is about the origin they all share. #}
+                    {% if travel_state_for(property) == 'approximate_origin' %}
+                        <span class="badge bg-warning text-dark" title="{{ t('approximate_origin_tooltip') }}">
+                            <i class="fas fa-map-marker-alt me-1"></i>{{ t('approximate_origin_short') }}
                         </span>
                     {% endif %}
                     {% for tt in (travel_display_targets if travel_display_targets is iterable else []) %}
@@ -830,11 +848,24 @@
                 </h6>
             </div>
             <div class="card-body">
+                {# The durations below are kept and shown -- they are correct
+                   about the point they were measured from -- but that point is
+                   the locality, so the card says so once, above them all,
+                   instead of letting each row read as this parcel's. #}
+                {% if travel_state_for(property) == 'approximate_origin' %}
+                    <div class="alert alert-warning py-2 px-3 small mb-3" role="note">
+                        <i class="fas fa-map-marker-alt me-1"></i>
+                        {{ t('approximate_origin_notice') }}
+                    </div>
+                {% endif %}
                 {# Straight-line distance to the coastline (OSM), a scoring input in its
                    own right -- shown with the real status so an API refusal never reads
                    as "there is no sea nearby". #}
-                {% set _enrichment = property.enrichment if property.enrichment is mapping else {} %}
-                {% set sea = _enrichment.get('sea') if _enrichment is mapping else None %}
+                {# Read through `sea_distance_for`, not straight off the row: the
+                   stored block can say `ok` about a coordinate that is a
+                   locality centroid, and only the row's `location_accuracy`
+                   tells the two apart. Same rule as the scorer, one home. #}
+                {% set sea = sea_distance_for(property) %}
                 <div class="d-flex justify-content-between align-items-center mb-2 pb-2 border-bottom">
                     <span class="small fw-bold compact-text" title="{{ t('distance_to_sea') }}">
                         <i class="fas fa-water me-1 text-primary"></i>{{ t('distance_to_sea') }}
@@ -842,6 +873,17 @@
                     <div>
                         {% if sea is mapping and sea.get('status') == 'ok' and sea.get('distance_m') is not none %}
                             <span class="badge bg-primary">{{ "%.1f"|format(sea.get('distance_m') / 1000) }} km</span>
+                        {% elif sea is mapping and sea.get('status') == 'approximate_origin' %}
+                            {# Metres under a kilometre, on purpose: the centroid of
+                               Santa María del Mar is 23.8 m from the coastline, and
+                               "0.0 km" is the misleading number this whole change is
+                               about, restated in a tooltip. #}
+                            {% set _origin_m = sea.get('origin_distance_m') %}
+                            {% set _origin_text = ("%.1f m"|format(_origin_m)) if (_origin_m is not none and _origin_m < 1000) else (("%.1f km"|format(_origin_m / 1000)) if _origin_m is not none else '') %}
+                            <span class="badge bg-light text-dark"
+                                  title="{{ t('approximate_origin_tooltip') }}{% if _origin_text %} ({{ _origin_text }} {{ t('from_the_geocoded_point') }}){% endif %}">
+                                {{ t('sea_distance_approximate_origin') }}
+                            </span>
                         {% elif sea is mapping and sea.get('status') == 'no_coastline_within_radius' %}
                             <span class="badge bg-secondary">
                                 {{ t('sea_distance_no_coastline') }} {{ ((sea.get('searched_m') or 0) / 1000)|round|int }} km

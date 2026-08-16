@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from models import Property
 from services.quality_of_life_service import QualityOfLifeService
+from services.sea_distance_service import parcel_measurement
 from utils.idealista_extractors import is_truncated_municipality
 
 logger = logging.getLogger(__name__)
@@ -145,9 +146,13 @@ def _supermarket_km(prop: Property) -> Optional[float]:
 
 
 def _sea_km(prop: Property) -> Optional[float]:
-    enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
-    sea = enrichment.get("sea")
-    if not isinstance(sea, dict) or sea.get("status") != "ok":
+    # Read through `parcel_measurement`, not straight off the block: a stored
+    # `ok` can be the distance from a locality centroid, and a median over
+    # those ranks municipalities by where their town halls sit rather than by
+    # their listings. Such a row drops out, which the per-metric coverage
+    # count already reports -- it is a smaller sample, not a missing feature.
+    sea = parcel_measurement(prop)
+    if sea.get("status") != "ok":
         return None
     metres = _finite(sea.get("distance_m"))
     return round(metres / 1000.0, 1) if metres is not None else None

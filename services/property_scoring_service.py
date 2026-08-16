@@ -8,7 +8,13 @@ from typing import Any, Dict, Optional, Tuple
 from app import db
 from config import Config
 from models import Property, SearchProfile
-from services.sea_distance_service import STATUS_NO_COASTLINE, STATUS_OK
+from services.coordinate_quality import coordinate_slack_m, normalize_accuracy
+from services.sea_distance_service import (
+    STATUS_APPROXIMATE_ORIGIN,
+    STATUS_NO_COASTLINE,
+    STATUS_OK,
+    parcel_measurement,
+)
 from services.search_profile_service import SearchProfileService
 
 logger = logging.getLogger(__name__)
@@ -176,6 +182,50 @@ def _linear_minutes_score(
         return 0.0
     ratio = (worst - minutes) / (worst - best)
     return _clamp(ratio * 100.0)
+
+
+def _minutes_score_within_slack(
+    minutes: Optional[float],
+    *,
+    slack_m: float,
+    mode: str,
+    best: float,
+    worst: float,
+) -> Tuple[Optional[float], bool]:
+    """Score a duration only if the origin's error cannot change the answer.
+
+    Returns `(score, ambiguous)`. A duration measured from a locality centroid
+    describes a route that starts somewhere the property is merely near, and
+    the difference is worth minutes: the slack converted at the mode's assumed
+    speed. Inside the linear band that moves the score, so there is nothing
+    honest to report; past `worst` -- or under `best` -- both ends agree and
+    the imprecision is irrelevant, which is the same exemption
+    `sea_view_service` grants a negative it can prove from a centroid.
+
+    A precise coordinate has no slack, so both ends are the measurement and
+    this is the plain score it always was.
+    """
+    if minutes is None:
+        return None, False
+
+    slack_min = _slack_minutes(slack_m, mode)
+    low = _linear_minutes_score(max(0.0, minutes - slack_min), best=best, worst=worst)
+    high = _linear_minutes_score(minutes + slack_min, best=best, worst=worst)
+    if low != high:
+        return None, True
+    return low, False
+
+
+def _slack_minutes(slack_m: float, mode: str) -> float:
+    """The origin's positional error, in minutes of travel by `mode`."""
+    if slack_m <= 0:
+        return 0.0
+    # Imported here, not at module scope: `property_travel_service` reaches for
+    # `app.db` when it loads, and this module is on the import path of the app
+    # factory itself. The same reason `services/pool_service.py` takes it late.
+    from services.property_travel_service import estimate_duration_seconds
+
+    return estimate_duration_seconds(slack_m, mode) / 60.0
 
 
 @dataclass(frozen=True)
@@ -576,42 +626,74 @@ class HousingPropertyScorer(BasePropertyScorer):
         A refused measurement scores None so `_weighted_average` drops it and
         renormalises; only a measured "no coastline nearby" scores zero. Issue
         #98 is the reason those two are not allowed to look the same.
+
+        A measurement taken from a locality centroid is a third thing, and it
+        is scored the way `sea_view_service` decides a verdict on one: not by a
+        hard bar, but by asking whether the answer could change anywhere inside
+        the error. The centroid of Santa María del Mar is 23.8 m from the
+        coastline and four listings sit on it, one of them ten kilometres
+        inland -- so a 5 km slack spans the whole decay curve there and there
+        is no score to give. Far enough inland the same slack spans nothing:
+        both ends of the range are past `far_m`, the answer is zero either way,
+        and it is scored.
         """
         bounds = {"near_m": near_m, "far_m": far_m}
-        enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
-        sea = enrichment.get("sea")
-        if not isinstance(sea, dict):
-            return None, {**bounds, "status": "missing_sea_distance"}
+        measurement = parcel_measurement(prop)
+        status = measurement.get("status")
+        accuracy = {"origin_accuracy": measurement.get("origin_accuracy")}
 
-        status = sea.get("status")
         if status == STATUS_NO_COASTLINE:
             # "No coastline found" only rules out the radius that was actually
             # searched. A profile whose horizon reaches past it is asking about
             # ground the measurement never covered, so there is nothing to score.
-            searched = _finite_float(sea.get("searched_m"))
+            searched = _finite_float(measurement.get("searched_m"))
             if searched is None or far_m > searched:
                 return None, {
                     **bounds,
+                    **accuracy,
                     "status": "horizon_exceeds_search",
                     "searched_m": searched,
                 }
             return 0.0, {
                 **bounds,
+                **accuracy,
                 "status": STATUS_NO_COASTLINE,
                 "distance_m": None,
                 "searched_m": searched,
             }
 
-        if status != STATUS_OK:
-            # unavailable / no_coordinates: no measurement to score.
-            return None, {**bounds, "status": status or "unknown"}
+        if status not in (STATUS_OK, STATUS_APPROXIMATE_ORIGIN):
+            # unavailable / no_coordinates / never measured.
+            return None, {**bounds, **accuracy, "status": status or "unknown"}
 
-        distance = _finite_float(sea.get("distance_m"))
-        if distance is None:
-            return None, {**bounds, "status": "missing_distance"}
+        lower = _finite_float(measurement.get("min_distance_m"))
+        upper = _finite_float(measurement.get("max_distance_m"))
+        if lower is None or upper is None:
+            return None, {**bounds, **accuracy, "status": "missing_distance"}
 
-        score = _sea_distance_score(distance, near_m=near_m, far_m=far_m)
-        return score, {**bounds, "status": "ok", "distance_m": distance}
+        # Identical inputs for a precise row (lower == upper == the measured
+        # distance), so this is the whole rule for both kinds of coordinate
+        # rather than a special case bolted onto the side of one.
+        low_score = _sea_distance_score(lower, near_m=near_m, far_m=far_m)
+        high_score = _sea_distance_score(upper, near_m=near_m, far_m=far_m)
+        if low_score != high_score:
+            return None, {
+                **bounds,
+                **accuracy,
+                "status": STATUS_APPROXIMATE_ORIGIN,
+                "origin_distance_m": measurement.get("origin_distance_m"),
+                "min_distance_m": lower,
+                "max_distance_m": upper,
+            }
+
+        return low_score, {
+            **bounds,
+            **accuracy,
+            "status": status,
+            "distance_m": measurement.get("distance_m"),
+            "min_distance_m": lower,
+            "max_distance_m": upper,
+        }
 
     def _pool_score(
         self,
@@ -728,21 +810,42 @@ class HousingPropertyScorer(BasePropertyScorer):
                 if raw_id:
                     enabled_keys.append(f"custom:{raw_id}")
 
+        # The same question the sea score asks, in minutes: the parcel may sit
+        # up to the slack away from the coordinate every one of these durations
+        # was measured from, so a duration only scores if both ends of that
+        # range score the same. `estimate_duration_seconds` converts the slack
+        # at the mode's own assumed speed -- the repository's one answer to
+        # "how long does this far take", rather than a second speed constant
+        # invented here.
+        slack_m = coordinate_slack_m(getattr(prop, "location_accuracy", None))
+        origin_accuracy = normalize_accuracy(getattr(prop, "location_accuracy", None))
+
         key_scores: Dict[str, Dict[str, Any]] = {}
         scores: list[float] = []
+        unattributable = 0
         for key in enabled_keys:
             t = targets.get(key)
             minutes = None
+            mode = "driving"
             if isinstance(t, dict):
                 minutes = _safe_float(t.get("duration_min"))
-            s = _linear_minutes_score(minutes, best=best, worst=worst)
+                mode = str(t.get("mode") or "driving")
+            s, ambiguous = _minutes_score_within_slack(
+                minutes, slack_m=slack_m, mode=mode, best=best, worst=worst
+            )
             key_scores[key] = {"minutes": minutes, "score": s}
+            if ambiguous:
+                unattributable += 1
+                key_scores[key]["status"] = STATUS_APPROXIMATE_ORIGIN
             if s is not None:
                 scores.append(s)
 
         if not scores:
             return None, {
-                "status": "missing_travel",
+                "status": STATUS_APPROXIMATE_ORIGIN
+                if unattributable
+                else "missing_travel",
+                "origin_accuracy": origin_accuracy,
                 "targets": key_scores,
                 "best": best,
                 "worst": worst,
@@ -751,6 +854,8 @@ class HousingPropertyScorer(BasePropertyScorer):
         avg = sum(scores) / len(scores)
         return _clamp(avg), {
             "status": "ok",
+            "origin_accuracy": origin_accuracy,
+            "unattributable_targets": unattributable,
             "targets": key_scores,
             "best": best,
             "worst": worst,

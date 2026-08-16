@@ -97,6 +97,10 @@ def _listing(municipality, **overrides):
         listing_status="active",
         location_lat=43.54,
         location_lon=-6.72,
+        # A median of sea distances only counts rows whose coordinate is the
+        # parcel: a distance measured from a locality centroid would rank the
+        # municipality by where its town sits, not by its listings.
+        location_accuracy="precise",
         property_category="housing",
     )
     fields.update(overrides)
