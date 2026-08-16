@@ -312,9 +312,14 @@ def test_moved_property_discards_the_old_measurement(app, monkeypatch):
         _patch_coastline(monkeypatch, _coast_nodes())
         _service().update_property(prop, commit=True)
 
-        # Re-geocoded somewhere else: the stored distance is about another point.
+        # Re-geocoded somewhere else: the stored distance is about another
+        # point. Committed, because that is how a move actually reaches this
+        # service -- the location service persists coordinates, and since
+        # #352 `update_property(commit=True)` refuses a session with other
+        # work pending rather than commit or discard it wholesale.
         prop.location_lat = Decimal("40.4000000")
         prop.location_lon = Decimal("-3.7000000")
+        db.session.commit()
         cache.clear()
         _patch_coastline(monkeypatch, SeaViewSourceError("Overpass returned HTTP 503"))
         result = _service().update_property(prop, commit=True)

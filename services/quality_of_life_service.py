@@ -26,6 +26,8 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.orm.attributes import flag_modified
 
+from services.enrichment_write import check_writable, locked_write
+
 from models import Property
 from services.enrichment_service import EnrichmentService
 from services.sea_view_service import haversine_m
@@ -273,6 +275,10 @@ class QualityOfLifeService:
         `unavailable` with the error class, mirroring the enrichment
         pipeline's own rule that an advisory source never fails a run.
         """
+        # Before the parts are computed: a caller that cannot be committed is
+        # a cheap raise, not three lookups followed by one (#352).
+        locked = check_writable(prop, commit)
+
         parts: Dict[str, Any] = {}
         for key, compute in (
             ("municipality", lambda: self.municipality_context(prop.municipality)),
@@ -292,32 +298,35 @@ class QualityOfLifeService:
         # precedent, applied per part (diff review, 2026-08-14): when the new
         # part is retryable and the stored one holds an answer, the answer
         # stays and the failed attempt is stamped beside it.
-        enrichment = dict(prop.enrichment) if isinstance(prop.enrichment, dict) else {}
-        previous = enrichment.get("quality_of_life")
-        previous = previous if isinstance(previous, dict) else {}
-        now_iso = datetime.now(timezone.utc).isoformat()
-        for key, new_part in list(parts.items()):
-            old_part = previous.get(key)
-            if (
-                new_part.get("status") in RETRYABLE_STATUSES
-                and isinstance(old_part, dict)
-                and old_part.get("status") not in RETRYABLE_STATUSES
-                and old_part.get("status") is not None
-            ):
-                kept = dict(old_part)
-                kept["last_attempt_status"] = new_part.get("status")
-                kept["last_attempt_at"] = now_iso
-                parts[key] = kept
+        #
+        # The stored block is read *inside* the lock, after the parts are
+        # computed: reading it before means comparing a refusal against
+        # whatever this session loaded before three Overpass round trips, not
+        # against what another writer has since stored (#339/#352).
+        with locked_write(prop, locked=locked, commit=commit):
+            enrichment = (
+                dict(prop.enrichment) if isinstance(prop.enrichment, dict) else {}
+            )
+            previous = enrichment.get("quality_of_life")
+            previous = previous if isinstance(previous, dict) else {}
+            now_iso = datetime.now(timezone.utc).isoformat()
+            for key, new_part in list(parts.items()):
+                old_part = previous.get(key)
+                if (
+                    new_part.get("status") in RETRYABLE_STATUSES
+                    and isinstance(old_part, dict)
+                    and old_part.get("status") not in RETRYABLE_STATUSES
+                    and old_part.get("status") is not None
+                ):
+                    kept = dict(old_part)
+                    kept["last_attempt_status"] = new_part.get("status")
+                    kept["last_attempt_at"] = now_iso
+                    parts[key] = kept
 
-        payload = dict(parts)
-        payload["updated_at"] = now_iso
+            payload = dict(parts)
+            payload["updated_at"] = now_iso
 
-        enrichment["quality_of_life"] = payload
-        prop.enrichment = enrichment
-        flag_modified(prop, "enrichment")
-
-        if commit:
-            from app import db
-
-            db.session.commit()
+            enrichment["quality_of_life"] = payload
+            prop.enrichment = enrichment
+            flag_modified(prop, "enrichment")
         return payload
