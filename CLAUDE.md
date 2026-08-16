@@ -734,9 +734,17 @@ and TODO.md; respect it if you ever run both side by side.
   refreshes with `with_for_update=True` (#196) against this exact hazard, and
   `services/pool_service.py` contains no `with_for_update` at all. It takes
   that lock only when `commit=True`, because with `commit=False` the caller
-  owns a transaction whose end it cannot see, so the lock belongs around the
-  per-row unit in `utils/backfill_pool.py` and `utils/recalc_property_travel.py`
-  rather than inside `enrich`. And the boundary is **any** writer of
+  owns a transaction whose end this function cannot see, and taking one on
+  their behalf for an interval it cannot close is worse than the race — that
+  mode makes no concurrency promise at all. **The lock lives inside the one
+  writer, on its `commit=True` path, and never at a call site**
+  (`services/sea_view_service.py:1294` says so: a lock at a call site protects
+  that call site, and `utils/backfill_sea_view.py` "and every future caller
+  would otherwise reopen the same hole" — the Enrich button, an endpoint, next
+  month's script). So what the tools change is the opposite of a lock of their
+  own: `utils/backfill_pool.py` and `utils/recalc_property_travel.py` call
+  their services with `commit=False` and commit themselves, and they have to
+  give that ownership up and pass `commit=True`. And the boundary is **any** writer of
   `enrichment`, not the paid ones: a one-row free script run by hand through
   `docker exec` clobbers a backfill exactly as thoroughly, cost only setting
   the size of the loss.
