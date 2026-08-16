@@ -14,6 +14,45 @@ logger = logging.getLogger(__name__)
 
 _LOCATION_FROM_TITLE_RE = re.compile(r"\b(?:in|en)\s+(?P<loc>.+)$", re.IGNORECASE)
 
+# How far into a title the "in"/"en" may sit and still be the portal's
+# `<type> in <location>` separator rather than an ordinary preposition in a
+# sentence.
+#
+# Measured over all 401 production titles on 2026-08-16: 392 carry the marker
+# at word 1, 2 or 3 -- "Land in", "Land plot in", "Flat / apartment in", the
+# longest legitimate prefix being three words. Exactly 3 carry it at word 8,
+# and those are descriptions rather than titles:
+#
+#   "FINCA 529 An excellent investment opportunity is presented in a farm for
+#    sale, loca"
+#
+# from which the regex extracted "a farm for sale, loca" and asked Google to
+# geocode it. Nothing at all falls between 4 and 7, so the threshold sits in a
+# clean gap with headroom on both sides rather than on a guessed boundary.
+# Past it the whole title is used, which is what a title carrying no marker
+# already does.
+_LOCATION_MARKER_MAX_WORDS = 4
+
+# Idealista writes a missing street number as the literal "n/a", and it rides
+# into the query as an address component: "Tiñana, n/a, Viella-Granda-Meres,
+# Siero, Spain". 42 of those 401 titles carry one. It cannot help a geocoder
+# and it is one more token for a fuzzy match to work with.
+#
+# "s/n" -- sin número -- is deliberately NOT dropped: it is a real Spanish
+# addressing convention that geocoders understand, and it does not appear in
+# this data anyway.
+_PLACEHOLDER_COMPONENT_RE = re.compile(r"^n/a\.?$", re.IGNORECASE)
+
+
+def _drop_placeholder_components(text: str) -> str:
+    """Remove address components that are only a "no value" placeholder."""
+    parts = [part.strip() for part in text.split(",")]
+    kept = [
+        part for part in parts if part and not _PLACEHOLDER_COMPONENT_RE.match(part)
+    ]
+    return ", ".join(kept)
+
+
 # A result at these scales is not a place this listing is at -- it is what
 # Google falls back to when the query means nothing to it. Every query built
 # here ends in ", Spain", so a title fragment like "Finca offers for" resolves
@@ -124,6 +163,7 @@ def _normalize_query(value: str) -> Optional[str]:
         return None
     text = re.sub(r"\s+\d[\d.,]*\s*€.*$", "", text).strip()
     text = re.sub(r"\s+\d[\d.,]*\s*m[²2].*$", "", text).strip()
+    text = _drop_placeholder_components(text)
     return text or None
 
 
@@ -133,7 +173,12 @@ def _build_geocoding_queries(prop: Property) -> List[str]:
     title = _normalize_query(prop.title or "")
     if title:
         match = _LOCATION_FROM_TITLE_RE.search(title)
-        loc = _normalize_query(match.group("loc")) if match else title
+        # A marker buried in a sentence is not a separator. Fall back to the
+        # whole title, exactly as a title with no marker at all already does.
+        if match and len(title[: match.start()].split()) <= _LOCATION_MARKER_MAX_WORDS:
+            loc = _normalize_query(match.group("loc"))
+        else:
+            loc = title
         if loc:
             queries.append(loc)
 
