@@ -16,7 +16,6 @@ import textwrap
 from pathlib import Path
 
 import flask
-import pytest
 
 from tests import setup_test_environment
 
@@ -60,10 +59,19 @@ class TestTheAmbientCacheBindingIsScrubbed:
             "the conftest guard did not scrub the app flask-caching retained "
             "from the previous test"
         )
-        # The fresh-process behaviour the scrub restores: the backend lookup
-        # raises, and cache-using code paths treat that as "no cache".
-        with pytest.raises(AttributeError):
-            get_cached_enrichment_data(41.0, 3.0, "isolation-probe")
+        # The fresh-process behaviour the scrub restores: there is no backend
+        # to ask, and cache-using code paths treat that as "no cache".
+        #
+        # This used to assert `pytest.raises(AttributeError)`, because the
+        # lookup raised and each caller was expected to catch it. Since #356
+        # the guard lives in `utils/cache.py` instead: an unreachable backend
+        # is a *miss* for everyone, because `REDIS_URL` gave twenty-one
+        # unguarded call sites a way to fail, and on the Google paths the write
+        # happens after the billed call. What this test is really about is
+        # unchanged and is the assertion above - the retained app was scrubbed.
+        # This half now pins the consequence in its current form: no value, no
+        # exception.
+        assert get_cached_enrichment_data(41.0, 3.0, "isolation-probe") is None
 
 
 class TestALeakedContextFailsLoudly:
