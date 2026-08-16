@@ -187,6 +187,7 @@ TRANSLATIONS = {
             "OSM found none and one Places cross-check agreed; a single "
             "query proves nothing about completeness, so this is never a 0"
         ),
+        "pool_origin_differs": "Measured at a different coordinate",
         # Municipality comparison page (proposal D22).
         "municipalities": "Municipalities",
         "listings_lower": "listings",
@@ -422,6 +423,7 @@ TRANSLATIONS = {
             "OSM no encontró ninguna y una comprobación en Places coincidió; "
             "una sola consulta no prueba exhaustividad, así que nunca es un 0"
         ),
+        "pool_origin_differs": "Medido en una coordenada distinta",
         # Municipality comparison page (proposal D22). "municipality" itself
         # is already defined above with the table headers.
         "municipalities": "Municipios",
