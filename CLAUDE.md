@@ -167,8 +167,11 @@ above verified the only page that could not have caught the defect.
 **A hand build also kills whatever is running inside the container**, and
 unlike a deploy it leaves no trace at all: `docker compose up -d --build`
 recreates `idealista-app`, so an hours-long backfill in there dies mid-row and
-nothing logs it. `docker top idealista-app` answers the question in one
-command — run it. The in-flight machinery the watcher grew for this (#283)
+nothing logs it. `tools/backfill_status.sh` answers the question — run it, and
+not `docker top idealista-app` alone, which names one container and therefore
+misses both a respawn a supervisor is about to make and a job someone moved
+into a `docker compose run` sibling (#338). The in-flight machinery the watcher
+grew for this (#283)
 lives inside `deploy_watcher.sh` and does not reach a build you start by hand,
 so here the check is yours to make. A killed backfill is recoverable — the
 tools commit per row and skip finished ones — but only if someone knows to
@@ -733,10 +736,16 @@ and TODO.md; respect it if you ever run both side by side.
   one** — it outlives its process by design, because surviving the kill is
   what lets the next run report the interruption. A file in `data/.inflight/`
   therefore means "a run started and did not clean up", which is true of a
-  live job and of a corpse alike. `docker top idealista-app` is the question
+  live job and of a corpse alike. `tools/backfill_status.sh` is the question
   "is anything running", there and before a hand build ("Building by hand in
   the shared checkout" above); the marker only answers "and would killing it
-  cost anything". Deferring is opt-in and bounded
+  cost anything". It is that script and **not** a bare
+  `docker top idealista-app`, which is correct only about one container at one
+  instant: it cannot see the respawn a supervisor is a tick away from making,
+  and it cannot see a job moved into a `docker compose run` sibling — which is
+  where long work goes precisely *because* deploys kill it in the app
+  container, so the operator who reacted correctly is the one the bare command
+  reports as idle (#338). Deferring is opt-in and bounded
   (`AUTOPILOT_DEFER_ON_INFLIGHT`, `AUTOPILOT_DEFER_BUDGET`) — a deploy that
   never lands is a failure too. See `tools/autopilot/README.md`.
 - **Two processes writing `enrichment` lose a measurement, and the #98 guard

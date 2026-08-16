@@ -84,8 +84,10 @@ def main() -> None:
         with inflight("backfill_quality_of_life", resumable=True):
             for idx, prop in enumerate(properties, start=1):
                 try:
-                    payload = service.enrich(prop, commit=False)
-                    db.session.commit()
+                    # `commit=True` so the write happens under FOR UPDATE: this
+                    # tool and any other writer of `enrichment` were
+                    # overwriting each other's blocks (#339/#352).
+                    payload = service.enrich(prop, commit=True)
                     for part in ("municipality", "supermarkets", "hospitals"):
                         status = (payload.get(part) or {}).get("status") or "missing"
                         per_part = status_counts.setdefault(part, {})
