@@ -114,9 +114,17 @@ def main() -> None:
                         "ts": datetime.now(timezone.utc).isoformat(),
                     }
                     try:
-                        part = service.enrich(prop, commit=False)
-                        scoring.calculate_for_property(prop, commit=False)
-                        db.session.commit()
+                        # `commit=True` so the write happens under FOR UPDATE:
+                        # a second run of this module measuring the same row
+                        # overwrote two good measurements with its refusals on
+                        # 2026-08-16 (#339). It owns and ends its own
+                        # transaction, so scoring follows in a second one --
+                        # `pool_score` reads the block this just wrote, and a
+                        # row briefly holding new pool data and a score from a
+                        # moment earlier is the same state every recompute
+                        # passes through.
+                        part = service.enrich(prop, commit=True)
+                        scoring.calculate_for_property(prop, commit=True)
                         entry["status"] = part.get("status")
                         entry["candidates"] = len(part.get("candidates") or [])
                         entry["cross_check"] = (part.get("cross_check") or {}).get(

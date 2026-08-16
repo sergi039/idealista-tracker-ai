@@ -211,3 +211,78 @@ class TestTheIdsOption:
 
         with pytest.raises(SystemExit):
             _parse_ids(" , ")
+
+
+class TestARefusalIsAResultNotAFailure:
+    """Measured defect, first #331 repair run: 4 of 8 rows kept the fake point.
+
+    The tool rolled back on every `ok is False`, which threw away both the
+    nulled coordinates and the refusal record `PropertyLocationService` had
+    just written. The log read "4 could not be geocoded" while those rows still
+    said 40.463667,-3.749220 -- a run that reported doing nothing, and had in
+    fact undone its own work.
+
+    A transient failure still rolls back: there the old coordinates are the
+    best thing known about the row.
+    """
+
+    def _row(self, **enrichment):
+        prop = Property(
+            source_email_id=f"persist_{len(enrichment)}_{id(enrichment)}",
+            title="Finca offers for",
+            location_lat=40.463667,
+            location_lon=-3.749220,
+            location_accuracy="approximate",
+            enrichment=enrichment or None,
+        )
+        db.session.add(prop)
+        db.session.commit()
+        return prop
+
+    def test_a_refusal_is_committed_so_the_fake_point_really_goes(self, app):
+        from utils.refresh_property_accuracy import _persist_outcome
+
+        with app.app_context():
+            prop = self._row()
+            # What ensure_coordinates leaves behind when every candidate is
+            # refused: no coordinates, and a record saying why.
+            prop.location_lat = None
+            prop.location_lon = None
+            prop.location_accuracy = "unknown"
+            prop.enrichment = {
+                "geocoding": {
+                    "query": "Finca offers for, Spain",
+                    "formatted_address": "Spain",
+                    "accuracy": "unknown",
+                    "refused": "result_too_coarse",
+                    "result_types": ["country", "political"],
+                }
+            }
+
+            assert _persist_outcome(prop, False) == "refused"
+
+            db.session.expire_all()
+            stored = db.session.get(Property, prop.id)
+            assert stored.location_lat is None
+            assert stored.enrichment["geocoding"]["refused"] == "result_too_coarse"
+
+    def test_a_transient_failure_keeps_the_old_coordinates(self, app):
+        from utils.refresh_property_accuracy import _persist_outcome
+
+        with app.app_context():
+            prop = self._row()
+            prop.location_lat = None
+            prop.location_lon = None  # what refresh=True nulls before trying
+
+            assert _persist_outcome(prop, False) == "failed"
+
+            db.session.expire_all()
+            stored = db.session.get(Property, prop.id)
+            assert stored.location_lat is not None
+
+    def test_a_record_without_the_marker_is_not_a_refusal(self, app):
+        from utils.refresh_property_accuracy import _was_refused
+
+        with app.app_context():
+            prop = self._row(geocoding={"query": "x", "accuracy": "approximate"})
+            assert _was_refused(prop) is False
