@@ -755,11 +755,26 @@ and TODO.md; respect it if you ever run both side by side.
   earlier (09:01:02 in the deploy log) and `tools/backfill_supervisor.sh`
   refilled the container at 09:01:59, on its next tick. A kill makes the process list read empty precisely
   when a respawn is imminent, and every deploy manufactures one such window.
-  Until something can express "nothing is running here, and that is
-  temporary", sessions sharing this machine announce a `utils.backfill_*` /
-  `utils.recalc_*` — or any hand-run `docker exec` that writes `enrichment` —
-  before starting it, naming the module, the rows and the cost. That is a
-  protocol, not a guarantee: it holds while every writer is listening.
+  What was missing was anything that could express "nothing is running here,
+  **and that is temporary**". `tools/backfill_status.sh` expresses exactly
+  that, and it is what to run before starting one: it reads what is running
+  now (`docker top`), what is *expected* — the supervisor's lock, taken under
+  `noclobber` at startup and released only by its `EXIT` trap, so it spans the
+  whole kill→respawn gap and is the one thing in the system that knows the
+  future — and what started and never cleaned up (`data/.inflight/`, a report,
+  never a lock). It answers in three states, and `unknown` blocks exactly like
+  `busy`, because every defect in this family began with a failed probe
+  reading as a negative answer. Its judgement about a stale lock is *copied*
+  from `acquire_lock()` rather than re-derived — that refuses on any existing
+  lock file, live pid or dead (#319) — because a tool calling a state "safe"
+  that the supervisor calls "stop" is how two of them come to disagree about
+  one file.
+  It answers; it does not enforce. So sessions sharing this machine still
+  announce a `utils.backfill_*` / `utils.recalc_*` — or any hand-run
+  `docker exec` that writes `enrichment` — before starting it, naming the
+  module, the rows and the cost. That is a protocol, not a guarantee: it holds
+  while every writer is listening, and the next one may not be in the
+  conversation at all.
 - **A deploy is healthy when a page renders, not when healthz answers** (#283).
   `/api/healthz` reports database, scheduler and schema and renders no
   template, so it stayed green through the 15 minutes of 2026-08-14 in which a
