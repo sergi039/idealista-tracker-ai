@@ -172,6 +172,17 @@
                 <i class="fas fa-exclamation-triangle me-1"></i>{{ t('plot_pgou_warning') }}
             </span>
         {% endif %}
+        {# Price per m2 is the cheapest lie-detector on the card field. Two of
+           the three rows the owner questioned sat in the bottom decile, and
+           reading them showed why: one was a 33.51% share of an urbanizable
+           sector with an expired plan, the other was land carrying a house
+           with hillside behind. The badge says "read the advert", not "bad
+           plot" -- a cheap plot is sometimes just a cheap plot. #}
+        {% if attrs.get('price_per_m2_outlier') %}
+            <span class="badge bg-warning text-dark fw-normal" title="{{ attrs.get('price_per_m2_outlier') }}">
+                <i class="fas fa-tag me-1"></i>{{ t('plot_price_outlier') }}
+            </span>
+        {% endif %}
     {% endif %}
 {%- endmacro %}
 

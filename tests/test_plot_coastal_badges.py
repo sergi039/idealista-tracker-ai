@@ -258,6 +258,22 @@ class TestClassificationFlags:
             )
         assert "Coordinate is wrong" in _body(client)
 
+    def test_a_price_outlier_is_surfaced(self, client, app, profile):
+        """Price per m2 is the cheapest check on the portal's own class field."""
+        with app.app_context():
+            _add(
+                profile,
+                "cheap",
+                sea={"status": "ok", "distance_m": 1892.4},
+                attributes={"price_per_m2_outlier": "3.2 EUR/m2 — bottom decile"},
+            )
+        assert "Price per m² far below the norm" in _body(client)
+
+    def test_an_ordinary_price_is_not_flagged(self, client, app, profile):
+        with app.app_context():
+            _add(profile, "normal", sea={"status": "ok", "distance_m": 1892.4})
+        assert "Price per m² far below the norm" not in _body(client)
+
     def test_a_resolved_coordinate_is_no_longer_flagged(self, client, app, profile):
         """A warning that outlives its problem is one nobody reads."""
         with app.app_context():

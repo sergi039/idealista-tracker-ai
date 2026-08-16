@@ -65,6 +65,7 @@ TRANSLATIONS = {
         "plot_pgou_warning": "Outside PGOU urban zones?",
         "plot_listing_conflict": "Listing contradicts itself",
         "plot_geocoding_failed": "Coordinate is wrong",
+        "plot_price_outlier": "Price per m² far below the norm",
         # The coastline point the geometry was measured to, on a map: the one
         # thing that answers "what water is this?" without re-deriving it from
         # a distance and a bearing.
@@ -340,6 +341,7 @@ TRANSLATIONS = {
         "plot_pgou_warning": "¿Fuera de zonas urbanas del PGOU?",
         "plot_listing_conflict": "El anuncio se contradice",
         "plot_geocoding_failed": "Coordenada errónea",
+        "plot_price_outlier": "Precio por m² muy por debajo de lo normal",
         "sea_view_not_computed": "Sin calcular todavía",
         "sea_view_target_link": "ver el punto medido",
         # Ver services/listing_verification.py.
