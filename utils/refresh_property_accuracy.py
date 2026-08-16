@@ -29,6 +29,15 @@ first, because rolling the application back does not roll a data rewrite back:
     python -m utils.refresh_property_accuracy --snapshot data/accuracy_321.json
     python -m utils.refresh_property_accuracy --restore data/accuracy_321.json
 
+`--ids` re-geocodes a named set instead of the default scope, with every other
+guarantee unchanged. That is what repairs the rows of issue #331 -- the eight
+that sat on Spain's own centroid because their query degraded to ", Spain" --
+which the default scope does not select, since they are not legacy-labelled and
+already carry a geocoding record:
+
+    python -m utils.refresh_property_accuracy --ids 115,116,117 \
+        --snapshot data/accuracy_331.json
+
 Sea-view and sea-distance verdicts are NOT recomputed here; the coordinates
 they were derived from have changed, so re-run their own backfills afterwards.
 """
@@ -62,6 +71,27 @@ def _is_legacy_labelled(prop: Property) -> bool:
     return "legacy_land" in enrichment and not isinstance(
         enrichment.get("geocoding"), dict
     )
+
+
+def _parse_ids(raw: str) -> List[int]:
+    """Property ids from a comma-separated string, in the order given.
+
+    Anything that is not an integer is refused outright rather than skipped: a
+    silently dropped id would make a paid run report success over a smaller set
+    than the caller asked for.
+    """
+    ids: List[int] = []
+    for chunk in str(raw or "").split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            ids.append(int(chunk))
+        except ValueError:
+            raise SystemExit(f"--ids: {chunk!r} is not a property id")
+    if not ids:
+        raise SystemExit("--ids was given but names no property")
+    return ids
 
 
 def _snapshot_row(prop: Property) -> Dict[str, Any]:
@@ -114,6 +144,14 @@ def main() -> None:
         "--limit", type=int, default=0, help="Rows to process (0 = all)."
     )
     parser.add_argument(
+        "--ids",
+        help=(
+            "Comma-separated property ids to re-geocode instead of the default "
+            "scope. Every other guarantee -- snapshot, per-row commit, in-flight "
+            "marker -- applies unchanged."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Call the geocoder and report, without writing. Costs the same as a real run.",
@@ -143,13 +181,29 @@ def main() -> None:
             logger.info("Restored %d rows from %s", count, args.restore)
             return
 
-        rows = [p for p in db.session.query(Property).all() if _is_legacy_labelled(p)]
+        if args.ids:
+            wanted = _parse_ids(args.ids)
+            rows = [db.session.get(Property, pid) for pid in wanted]
+            missing = [pid for pid, row in zip(wanted, rows) if row is None]
+            rows = [row for row in rows if row is not None]
+            if missing:
+                # Naming them matters: a typo'd id must not read as a row that
+                # was processed and found nothing to change.
+                logger.warning(
+                    "No such property: %s", ", ".join(str(m) for m in missing)
+                )
+            logger.info("Re-geocoding %d row(s) named by --ids", len(rows))
+        else:
+            rows = [
+                p for p in db.session.query(Property).all() if _is_legacy_labelled(p)
+            ]
+
         if args.limit:
             rows = rows[: args.limit]
 
         before = Counter((p.location_accuracy or "unknown").lower() for p in rows)
         logger.info(
-            "%d rows carry a guessed label (%s)",
+            "%d rows in scope (%s)",
             len(rows),
             ", ".join(f"{k}={v}" for k, v in sorted(before.items())),
         )

@@ -179,3 +179,35 @@ class TestWhoTheRepairToolPaysFor:
         with app.app_context():
             prop = self._prop(legacy_land={"id": 5}, geocoding="yes")
             assert _is_legacy_labelled(prop) is True
+
+
+class TestTheIdsOption:
+    """`--ids` names the rows a paid run will touch, so it must not lose one.
+
+    It exists because the default scope cannot reach issue #331's eight rows:
+    they are not legacy-labelled and they already carry a geocoding record.
+    """
+
+    def test_ids_are_parsed_in_the_order_given(self):
+        from utils.refresh_property_accuracy import _parse_ids
+
+        assert _parse_ids("115, 116,117") == [115, 116, 117]
+
+    def test_blank_entries_are_ignored(self):
+        from utils.refresh_property_accuracy import _parse_ids
+
+        assert _parse_ids("115,,116,") == [115, 116]
+
+    def test_a_non_integer_stops_the_run_instead_of_being_skipped(self):
+        """A silently dropped id makes a paid run report success over a
+        smaller set than the caller asked for."""
+        from utils.refresh_property_accuracy import _parse_ids
+
+        with pytest.raises(SystemExit):
+            _parse_ids("115,oops,117")
+
+    def test_naming_nothing_stops_the_run(self):
+        from utils.refresh_property_accuracy import _parse_ids
+
+        with pytest.raises(SystemExit):
+            _parse_ids(" , ")
