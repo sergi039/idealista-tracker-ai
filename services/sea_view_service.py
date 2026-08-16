@@ -37,6 +37,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import requests
 
 from config import Config
+from services.enrichment_origin import (
+    ORIGIN_TOLERANCE_DEG as ORIGIN_TOLERANCE_DEG,  # re-exported: services/sea_distance_service.py
+)
+from services.enrichment_origin import origin_of, origins_agree
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 from utils.http import (
     HTTP_USER_AGENT,
@@ -72,10 +76,10 @@ SOURCE_REFUSAL_REASONS = frozenset(
 )
 
 # Coordinates are compared to decide whether a stored verdict still belongs to
-# this property; 1e-5 degrees is about a metre. Defined here and imported by
-# services/sea_distance_service.py, which applies the same rule to the same
-# coastline -- one definition, because two would drift.
-ORIGIN_TOLERANCE_DEG = 1e-5
+# this property; 1e-5 degrees is about a metre. Defined in
+# services/enrichment_origin.py (issue #346) and re-exported here for
+# backward compatibility -- services/sea_distance_service.py still imports it
+# from this module, which applies the same rule to the same coastline.
 
 # --- tuning constants -------------------------------------------------------
 
@@ -870,16 +874,11 @@ def _origin_of(prop) -> Optional[Dict[str, float]]:
 
     Stored beside the verdict so a later run can tell "this property's own
     verdict" from one measured somewhere else -- the same provenance
-    `Property.enrichment["sea"]` keeps for the distance.
+    `Property.enrichment["sea"]` keeps for the distance. Delegates to
+    `services/enrichment_origin.py` (issue #346), which `enrichment["pool"]`
+    now shares -- same primitive, same behaviour, one definition.
     """
-    lat = getattr(prop, "location_lat", None)
-    lon = getattr(prop, "location_lon", None)
-    if lat is None or lon is None:
-        return None
-    try:
-        return {"lat": float(lat), "lon": float(lon)}
-    except (TypeError, ValueError):
-        return None
+    return origin_of(prop)
 
 
 def _geometry_refusal_reason(verdict: Dict[str, Any]) -> Optional[str]:
@@ -904,21 +903,7 @@ def _origins_agree(
     stored_detail: Dict[str, Any], new_detail: Dict[str, Any]
 ) -> Optional[bool]:
     """True/False when both origins are readable, None when one is missing."""
-    stored_origin = stored_detail.get("origin")
-    new_origin = new_detail.get("origin")
-    if not isinstance(stored_origin, dict) or not isinstance(new_origin, dict):
-        return None
-    try:
-        return (
-            abs(float(stored_origin["lat"]) - float(new_origin["lat"]))
-            <= ORIGIN_TOLERANCE_DEG
-            and abs(float(stored_origin["lon"]) - float(new_origin["lon"]))
-            <= ORIGIN_TOLERANCE_DEG
-        )
-    except (KeyError, TypeError, ValueError):
-        # An unreadable origin proves nothing either way -- neither a match
-        # nor a move.
-        return None
+    return origins_agree(stored_detail.get("origin"), new_detail.get("origin"))
 
 
 def repaired_with_stored_geometry(

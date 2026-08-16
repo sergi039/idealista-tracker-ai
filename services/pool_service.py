@@ -18,7 +18,11 @@ in the proposal review:
 * a refusal never overwrites measured candidates (QoL/sea precedent: the
   old answer stays, the failed attempt is stamped);
 * Overpass rides the shared transport in services/enrichment_service.py —
-  the gate, the UA and the #144 refusal triad live exactly once.
+  the gate, the UA and the #144 refusal triad live exactly once;
+* the block records the coordinate it was measured from (`origin`), the
+  same provenance every other enrichment block already keeps (#346) — a
+  kept refusal preserves the previous origin rather than stamping today's,
+  and `pool_origin_state()` reads it back without writing anything.
 
 Verified live (2026-08-13, both coasts): `sports_centre` + `sport~swimming`
 finds the real municipal pools — 6 named around El Franco (Ribadeo indoor),
@@ -34,6 +38,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from models import Property
 from services import place_rules
+from services.enrichment_origin import origin_of, origins_agree
 from services.enrichment_service import EnrichmentService
 from services.enrichment_write import check_writable, locked_write
 from services.sea_view_service import haversine_m
@@ -133,6 +138,31 @@ def _qualifies(tags: Dict[str, Any]) -> bool:
     if leisure == "swimming_pool" and str(tags.get("name") or "").strip():
         return True
     return False
+
+
+def pool_origin_state(prop) -> str:
+    """ "matches" / "differs" / "unknown" -- read-only, writes nothing (#346).
+
+    Compares the coordinate the stored pool block was measured from against
+    the property's *current* coordinate, at the same tolerance every other
+    enrichment block already uses (`services/enrichment_origin.py`).
+
+    "unknown" covers four cases the caller must not tell apart, because none
+    of them is evidence of a move: no pool block at all; a block measured
+    before this ticket, which carries no `origin` (~200 rows); an origin that
+    cannot be read; or a property with no coordinates of its own to compare
+    against. Reading any of those as "matches" would be inventing provenance
+    for a block that was never stamped with any -- the same claim the sea-view
+    precedent refuses to make about a pre-origin verdict.
+    """
+    enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
+    pool = enrichment.get("pool")
+    if not isinstance(pool, dict):
+        return "unknown"
+    agree = origins_agree(pool.get("origin"), origin_of(prop))
+    if agree is None:
+        return "unknown"
+    return "matches" if agree else "differs"
 
 
 class PoolService:
@@ -287,6 +317,11 @@ class PoolService:
         # in `services/enrichment_write.py` -- one home for three writers.
         locked = check_writable(prop, commit)
 
+        # Captured before `_compute` measures anything -- the coordinate the
+        # measurement is about to be made *from* (#346), the same primitive
+        # `services/sea_view_service.py` already uses for the same purpose.
+        # None when the property has no coordinates; never invented.
+        origin = origin_of(prop)
         part = self._compute(prop)
 
         with locked_write(prop, locked=locked, commit=commit):
@@ -304,10 +339,16 @@ class PoolService:
                 part.get("status") in (STATUS_UNAVAILABLE, STATUS_PENDING)
                 and previous.get("status") in MEASURED_STATUSES
             ):
+                # `dict(previous)` already carries forward whatever origin the
+                # kept measurement was stamped with (or none, for a legacy
+                # block) -- a refused attempt describes nothing and must not
+                # overwrite it with today's coordinate (#346).
                 kept = dict(previous)
                 kept["last_attempt_status"] = part.get("status")
                 kept["last_attempt_at"] = now_iso
                 part = kept
+            else:
+                part["origin"] = origin
             if isinstance(previous.get("owner_no_pool"), dict):
                 part["owner_no_pool"] = previous["owner_no_pool"]
 
