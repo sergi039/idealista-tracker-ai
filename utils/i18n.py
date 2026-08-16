@@ -38,8 +38,17 @@ TRANSLATIONS = {
         "sea_view_yes_or_likely": "Sea view: confirmed or likely",
         "sea_view_state_yes": "Sea view",
         "sea_view_state_likely": "Sea view likely",
+        # A `likely` that rests on bare-earth terrain alone. It says the ground
+        # does not block the line, not that the listing has a sea view -- and
+        # what the line reaches can be an estuary channel rather than open
+        # water (#334). Named for what was computed; see state_label_key().
+        "sea_view_state_likely_geometry": "Terrain allows a sea view",
         "sea_view_state_no": "No sea view",
         "sea_view_state_unknown": "Sea view unknown",
+        # The coastline point the geometry was measured to, on a map: the one
+        # thing that answers "what water is this?" without re-deriving it from
+        # a distance and a bearing.
+        "sea_view_target_link": "see the point measured to",
         # Shown instead of the literal source code "none": nobody computed a
         # verdict here, which is not the same as computing "no sea view".
         "sea_view_not_computed": "Not computed yet",
@@ -267,9 +276,11 @@ TRANSLATIONS = {
         "sea_view_yes_or_likely": "Vista al mar: confirmada o probable",
         "sea_view_state_yes": "Vista al mar",
         "sea_view_state_likely": "Vista al mar probable",
+        "sea_view_state_likely_geometry": "El terreno permite vista al mar",
         "sea_view_state_no": "Sin vista al mar",
         "sea_view_state_unknown": "Vista al mar sin determinar",
         "sea_view_not_computed": "Sin calcular todavía",
+        "sea_view_target_link": "ver el punto medido",
         "favorites": "Favoritos",
         "hide_removed": "Ocultar retirados",
         "price": "Precio",
