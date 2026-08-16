@@ -94,6 +94,44 @@ def _parse_ids(raw: str) -> List[int]:
     return ids
 
 
+def _was_refused(prop: Property) -> bool:
+    """Did the geocoder refuse deliberately, rather than merely fail?
+
+    `PropertyLocationService` writes `refused` into the geocoding record when
+    every candidate query resolved to something coarser than a locality -- a
+    country, a region (#331). That is an *outcome*: the row is meant to end
+    with no coordinates and a record saying why. A transient failure -- the
+    geocoder unreachable, an exception, an empty answer -- writes nothing, and
+    there the previous coordinates must survive untouched.
+    """
+    enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
+    record = enrichment.get("geocoding")
+    return isinstance(record, dict) and bool(record.get("refused"))
+
+
+def _persist_outcome(prop: Property, ok: bool) -> str:
+    """Commit or roll back one row, and name what happened to it.
+
+    The refusal branch exists because of a measured defect: the first #331
+    repair run rolled back on every `ok is False`, which discarded both the
+    nulled coordinates and the refusal record, so four of eight rows kept the
+    fabricated coordinate the run was there to remove. The log said
+    "4 could not be geocoded" and the rows said 40.463667,-3.749220.
+    """
+    if ok:
+        db.session.add(prop)
+        db.session.commit()
+        return (prop.location_accuracy or "unknown").lower()
+
+    if _was_refused(prop):
+        db.session.add(prop)
+        db.session.commit()
+        return "refused"
+
+    db.session.rollback()
+    return "failed"
+
+
 def _snapshot_row(prop: Property) -> Dict[str, Any]:
     return {
         "id": prop.id,
@@ -221,6 +259,7 @@ def main() -> None:
         after = Counter()
         moved = 0
         failed = 0
+        refused = 0
 
         # Resumable: each row commits on its own and leaves the scope by gaining
         # an enrichment["geocoding"] record, so a killed run resumes where it
@@ -242,22 +281,17 @@ def main() -> None:
                     db.session.rollback()
                 else:
                     ok = service.ensure_coordinates(prop, refresh=True)
-                    if ok:
-                        db.session.add(prop)
-                        db.session.commit()
-                    else:
-                        db.session.rollback()
-                    new = (
-                        (prop.location_accuracy or "unknown").lower()
-                        if ok
-                        else "(failed)"
-                    )
+                    new = _persist_outcome(prop, ok)
 
-                if not ok:
+                if new == "refused":
+                    # Counted apart from a failure on purpose: the row changed,
+                    # it lost a coordinate it should never have had, and the
+                    # summary must not report that as nothing having happened.
+                    refused += 1
+                elif not ok:
                     failed += 1
-                else:
-                    if (old_lat, old_lon) != (prop.location_lat, prop.location_lon):
-                        moved += 1
+                elif (old_lat, old_lon) != (prop.location_lat, prop.location_lon):
+                    moved += 1
                 after[new] += 1
 
                 logger.info(
@@ -267,9 +301,11 @@ def main() -> None:
                     time.sleep(args.sleep)
 
         logger.info(
-            "Done. %d rows, %d moved, %d could not be geocoded. Labels now: %s",
+            "Done. %d rows, %d moved, %d refused (coordinates removed), "
+            "%d could not be geocoded. Labels now: %s",
             len(rows),
             moved,
+            refused,
             failed,
             ", ".join(f"{k}={v}" for k, v in sorted(after.items())),
         )
