@@ -6,6 +6,8 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from models import Property
 from utils.geocoding import GeocodingService
+from utils.municipality_codes import load_name_index
+from utils.municipality_codes import match as match_municipality
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,79 @@ COARSE_RESULT_TYPES = frozenset(
 def _is_too_coarse(geo: dict) -> bool:
     """Whether Google matched something far larger than a property."""
     return bool(COARSE_RESULT_TYPES.intersection(geo.get("types") or ()))
+
+
+# --- the result must be about the place we asked about (#348) ---------------
+#
+# `_is_too_coarse` is about *size*; this is about *place*. Google answered
+# "25530 Vielha, Lleida, Spain" for two Siero listings whose queries carry the
+# parish "Viella-Granda-Meres" -- a `locality`, exactly the scale a listing
+# should match, and 539 km away in Val d'Aran. The size rule passes it, and
+# re-geocoding cannot repair it: the query is deterministic and returns the
+# same wrong locality, only with a fresher-looking record.
+#
+# The reference is the row's *own* municipality, never a fixed geography: the
+# owner's archived subscriptions hold real listings in Alicante, so refusing
+# anything outside the five watched provinces would refuse good data.
+#
+# Both sides reduce to a two-digit province code, which is the one number the
+# two vocabularies share: an INE municipality code is province(2)+municipality
+# (3), and a Spanish postal code is province(2)+3. So 25530 is province 25 and
+# Siero is 33066, province 33 -- a contradiction that needs no knowledge of
+# Val d'Aran.
+#
+# The postal code is read from `address_components`, which
+# `GeocodingService.geocode_address` already returns and nothing read until
+# now. It could not be captured from the live API here (that spends the
+# owner's geocoding quota), so the evidence for the component's presence is
+# the recorded `formatted_address` beginning "25530". Where Google returns no
+# postal code -- "Villaviciosa, Asturias, Spain" does not -- the check reports
+# "cannot tell" rather than agreement.
+
+
+def _row_province(prop) -> Optional[str]:
+    """Province code of the row's own municipality, or None if unresolvable.
+
+    None is the common case and must stay cheap to reach: a great many rows
+    carry a municipality that is a parish list, an email truncation (#298) or
+    a title fragment ("Finca Offers For"). None of those can contradict
+    anything, and none of them is a reason to refuse a coordinate.
+    """
+    code = match_municipality(
+        str(getattr(prop, "municipality", "") or ""), load_name_index()
+    )
+    return code[:2] if code else None
+
+
+def _result_province(geo: dict) -> Optional[str]:
+    """Province code of Google's answer, from its postal code, or None."""
+    for component in geo.get("address_components") or ():
+        if not isinstance(component, dict):
+            continue
+        if "postal_code" not in (component.get("types") or ()):
+            continue
+        raw = component.get("long_name") or component.get("short_name") or ""
+        digits = "".join(char for char in str(raw) if char.isdigit())
+        if len(digits) >= 2:
+            return digits[:2]
+    return None
+
+
+def _municipality_agreement(prop, geo: dict):
+    """(state, row_province, result_province).
+
+    `state` is one of "agreed", "contradicted", "row_unmatched",
+    "result_has_no_postcode" -- four values rather than a boolean, because
+    "we could not compare" is a third answer and collapsing it into either
+    real one is the mistake #98 is about. Only "contradicted" refuses.
+    """
+    row = _row_province(prop)
+    result = _result_province(geo)
+    if row is None:
+        return "row_unmatched", row, result
+    if result is None:
+        return "result_has_no_postcode", row, result
+    return ("agreed" if row == result else "contradicted"), row, result
 
 
 def _normalize_query(value: str) -> Optional[str]:
@@ -147,9 +222,33 @@ class PropertyLocationService:
                     ", ".join(geo.get("types") or []),
                 )
                 refused = {
+                    "reason": "result_too_coarse",
                     "query": query,
                     "formatted_address": geo.get("formatted_address"),
                     "result_types": list(geo.get("types") or []),
+                }
+                continue
+
+            agreement, row_province, result_province = _municipality_agreement(
+                prop, geo
+            )
+            if agreement == "contradicted":
+                logger.warning(
+                    "Refusing %r: Google matched %r in province %s, but this row's "
+                    "municipality %r is in province %s",
+                    query,
+                    geo.get("formatted_address"),
+                    result_province,
+                    prop.municipality,
+                    row_province,
+                )
+                refused = {
+                    "reason": "result_in_wrong_province",
+                    "query": query,
+                    "formatted_address": geo.get("formatted_address"),
+                    "result_types": list(geo.get("types") or []),
+                    "row_province": row_province,
+                    "result_province": result_province,
                 }
                 continue
 
@@ -169,6 +268,14 @@ class PropertyLocationService:
                 "query": query,
                 "formatted_address": geo.get("formatted_address"),
                 "accuracy": accuracy,
+                # Whether anyone confirmed this result is about the row's own
+                # municipality. Recorded rather than assumed: three of these
+                # four values mean the coordinate was accepted *unchecked*, and
+                # a row that reads "agreed" is a stronger claim than one that
+                # reads "row_unmatched". Same reason `sea_view_service` stamps
+                # `origin_unverified` instead of quietly treating unverified
+                # provenance as verified.
+                "municipality_check": agreement,
             }
             prop.enrichment = enrichment
             flag_modified(prop, "enrichment")
@@ -179,13 +286,21 @@ class PropertyLocationService:
             # honest "nobody could locate this listing"; a country centroid is
             # six confident measurements taken 450 km from the property.
             enrichment = dict(prop.enrichment or {})
-            enrichment["geocoding"] = {
+            record = {
                 "query": refused["query"],
                 "formatted_address": refused["formatted_address"],
                 "accuracy": "unknown",
-                "refused": "result_too_coarse",
+                # The reason travels with the refusal rather than being
+                # hardcoded here: there are two of them now, and a row refused
+                # for sitting in the wrong province must not read as one
+                # refused for being a country.
+                "refused": refused["reason"],
                 "result_types": refused["result_types"],
             }
+            if refused.get("row_province") or refused.get("result_province"):
+                record["row_province"] = refused.get("row_province")
+                record["result_province"] = refused.get("result_province")
+            enrichment["geocoding"] = record
             prop.enrichment = enrichment
             flag_modified(prop, "enrichment")
 
