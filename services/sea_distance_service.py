@@ -25,6 +25,8 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 
 from sqlalchemy.orm.attributes import flag_modified
 
+from services.enrichment_write import check_writable, locked_write
+
 from config import Config
 from models import Property
 from services.coordinate_quality import (
@@ -204,10 +206,18 @@ class SeaDistanceService:
         if not getattr(Config, "SEA_DISTANCE_ENABLED", True):
             return None
 
+        # First, before *any* attribute of `prop` is touched. Two reasons, and
+        # the second is not obvious: a cheap raise beats a billed Overpass
+        # round for a write that could not persist (#352) -- and reading an
+        # expired attribute emits a SELECT, which autoflushes, which writes out
+        # the pending change this guard exists to refuse. Validating after
+        # `prop.location_lat` therefore reported a clean session every time,
+        # having just cleaned it.
+        locked = check_writable(prop, commit)
+
         lat = _coordinate(prop.location_lat, limit=90.0)
         lon = _coordinate(prop.location_lon, limit=180.0)
         accuracy = normalize_accuracy(getattr(prop, "location_accuracy", None))
-        previous = self._stored_payload(prop)
         now = _now_iso()
 
         if lat is None or lon is None:
@@ -224,30 +234,38 @@ class SeaDistanceService:
                 "last_attempt_status": STATUS_NO_COORDINATES,
                 "last_attempt_at": now,
             }
-            self._store(prop, payload, commit=commit)
+            with locked_write(prop, locked=locked, commit=commit):
+                self._store(prop, payload)
             return payload
 
         measurement = self.measure(lat, lon, accuracy)
 
-        if measurement["status"] == STATUS_UNAVAILABLE:
-            kept = self._last_known_good(previous, lat, lon, accuracy)
-            if kept is not None:
-                payload = {
-                    **kept,
-                    "last_attempt_status": STATUS_UNAVAILABLE,
-                    "last_attempt_at": now,
-                }
-                self._store(prop, payload, commit=commit)
-                return payload
+        # `previous` is read here, under the lock, and not before the
+        # measurement: a refusal must yield to whatever is *stored* when the
+        # write happens, not to whatever this session loaded a minute ago
+        # while Overpass was retrying (#339/#352).
+        with locked_write(prop, locked=locked, commit=commit):
+            previous = self._stored_payload(prop)
 
-        payload = {
-            **measurement,
-            "origin": {"lat": lat, "lon": lon},
-            "updated_at": now,
-            "last_attempt_status": measurement["status"],
-            "last_attempt_at": now,
-        }
-        self._store(prop, payload, commit=commit)
+            if measurement["status"] == STATUS_UNAVAILABLE:
+                kept = self._last_known_good(previous, lat, lon, accuracy)
+                if kept is not None:
+                    payload = {
+                        **kept,
+                        "last_attempt_status": STATUS_UNAVAILABLE,
+                        "last_attempt_at": now,
+                    }
+                    self._store(prop, payload)
+                    return payload
+
+            payload = {
+                **measurement,
+                "origin": {"lat": lat, "lon": lon},
+                "updated_at": now,
+                "last_attempt_status": measurement["status"],
+                "last_attempt_at": now,
+            }
+            self._store(prop, payload)
         return payload
 
     @staticmethod
@@ -300,18 +318,14 @@ class SeaDistanceService:
         return kept
 
     @staticmethod
-    def _store(prop: Property, payload: Dict[str, Any], *, commit: bool) -> None:
+    def _store(prop: Property, payload: Dict[str, Any]) -> None:
+        """Assign the block. The caller holds the lock and owns the commit."""
         # `enrichment` is a plain JSON column, not a MutableDict: mutating the
         # nested dict in place would not reach the UPDATE.
         enrichment = dict(prop.enrichment) if isinstance(prop.enrichment, dict) else {}
         enrichment["sea"] = payload
         prop.enrichment = enrichment
         flag_modified(prop, "enrichment")
-
-        if commit:
-            from app import db
-
-            db.session.commit()
 
 
 def parcel_measurement(prop: Property) -> Dict[str, Any]:

@@ -81,6 +81,94 @@
     {% endif %}
 {%- endmacro %}
 
+{# For a plot, distance to the shoreline is a verdict rather than a detail:
+   POLA/PESC forbids a dwelling within 500 m of the Asturian coast -- in all
+   three of its categories, and over the top of whatever the municipal PGOU
+   says. So the badge is red inside that band and green outside it, and a row
+   that was never measured says so out loud. Leaving it blank would read as
+   "far from the sea", which is #98's mistake wearing a legal coat.
+
+   Houses are deliberately excluded: the ban is on *building*, so an existing
+   legal house inside the band is not what it decides. #}
+{% macro plot_badges(p) -%}
+    {% if p.property_category == 'land' or p.property_subtype == 'plot' %}
+        {% set attrs = p.attributes if p.attributes is mapping else {} %}
+        {% set enr = p.enrichment if p.enrichment is mapping else {} %}
+        {% set sea = enr.get('sea') if enr.get('sea') is mapping else {} %}
+        {% set dist = sea.get('distance_m') %}
+        {% if dist is number %}
+            {% if dist < 500 %}
+                <span class="badge bg-danger fw-normal"
+                      title="{{ t('plot_coast_ban') }} (POLA/PESC): {{ dist | round | int }} m">
+                    <i class="fas fa-ban me-1"></i>{{ dist | round | int }} m
+                </span>
+            {% else %}
+                <span class="badge bg-success fw-normal"
+                      title="{{ t('plot_coast_ok') }}: {{ dist | round | int }} m">
+                    <i class="fas fa-water me-1"></i>{{ dist | round | int }} m
+                </span>
+            {% endif %}
+        {% elif sea.get('status') == 'no_coastline_within_radius' %}
+            <span class="badge bg-success fw-normal" title="{{ t('plot_coast_none_near') }}">
+                <i class="fas fa-water me-1"></i>{{ t('plot_coast_none_near') }}
+            </span>
+        {% else %}
+            <span class="badge bg-secondary fw-normal" title="{{ t('plot_coast_unmeasured') }}">
+                <i class="fas fa-question me-1"></i>{{ t('plot_coast_unmeasured') }}
+            </span>
+        {% endif %}
+        {% if attrs.get('land_classification') %}
+            <span class="badge bg-body-tertiary text-body-secondary border fw-normal"
+                  title="{{ attrs.get('classification_source') or '' }} — {{ t('plot_class_check') }}">
+                {{ attrs.get('land_classification') | replace('_', ' ') }}
+            </span>
+        {% endif %}
+        {% if attrs.get('geocoding_failure') %}
+            <span class="badge bg-danger fw-normal" title="{{ attrs.get('geocoding_failure') }}">
+                <i class="fas fa-crosshairs me-1"></i>{{ t('plot_geocoding_failed') }}
+            </span>
+        {% endif %}
+        {% if attrs.get('classification_conflict') %}
+            <span class="badge bg-warning text-dark fw-normal" title="{{ attrs.get('classification_conflict') }}">
+                <i class="fas fa-exclamation-triangle me-1"></i>{{ t('plot_listing_conflict') }}
+            </span>
+        {% endif %}
+        {% if attrs.get('pgou_zone_warning') %}
+            <span class="badge bg-warning text-dark fw-normal" title="{{ attrs.get('pgou_zone_warning') }}">
+                <i class="fas fa-exclamation-triangle me-1"></i>{{ t('plot_pgou_warning') }}
+            </span>
+        {% endif %}
+    {% endif %}
+{%- endmacro %}
+
+{# The listing status, and only when somebody established it. `active` is the
+   value a row is ingested with, so an unchecked row gets no badge at all --
+   badging every row "unverified" would put a grey pill on ~100% of the table,
+   which is why the coverage line above the list carries that half of the
+   disclosure instead. What a row may say for itself: a terminal status, or a
+   live one somebody confirmed. Rule and wording both come from
+   services/listing_verification.py. #}
+{% macro listing_status_badge(p) -%}
+    {% set verdict = listing_verdict_for(p) %}
+    {% if verdict.state in ('removed', 'sold') %}
+        <span class="badge bg-secondary" title="{{ verdict.note }}">{{ verdict.state }}</span>
+    {% elif verdict.state == 'active' %}
+        {# The age carries as colour and tooltip, never as extra words: measured
+           on the rendered page at 800px, "Live checked 140 d ago" wraps to
+           three lines in the Type column and doubles the row height. A check
+           older than STALE_AFTER_DAYS still verified something -- the listing
+           was up when it was read -- so it keeps the badge and loses the green:
+           "confirmed in March" is not the same claim about today as "confirmed
+           yesterday", and the list has room to say that in weight but not in
+           words. The exact date is on the property page. #}
+        {% set age_note = (' — ' ~ t('listing_checked_ago')|format(verdict.age_days)) if verdict.age_days is not none else '' %}
+        <span class="badge fw-normal {{ 'bg-body-tertiary text-body-secondary border' if verdict.stale else 'bg-success-subtle text-success-emphasis border border-success-subtle' }}"
+              title="{{ t('listing_verified_tooltip') }}{{ age_note }} — {{ verdict.note }}">
+            <i class="fas {{ 'fa-clock-rotate-left' if verdict.stale else 'fa-circle-check' }} me-1"></i>{{ t('listing_state_active') }}
+        </span>
+    {% endif %}
+{%- endmacro %}
+
 {# Short label under a travel time, the way /lands captioned its OV | GJ
    column. The full destination stays in the tooltip. #}
 {% set TRAVEL_ABBR = {
@@ -484,10 +572,17 @@
                     <select class="form-select form-select-sm properties-filter-select" id="municipality" name="municipality"
                             aria-label="{{ t('municipality') }}">
                         <option value="">{{ t('all_municipalities') }}</option>
+                        {# One option per real municipality, not per stored spelling:
+                           "Gijón" and "Gijon" are one place and one count. Which
+                           option is selected is decided in Python, by the same
+                           canonical key the query groups on -- comparing the raw
+                           strings here would leave the control reading "All
+                           municipalities" over a filtered page whenever the URL
+                           carried the other spelling. #}
                         {% for municipality in municipalities %}
-                            <option value="{{ municipality }}"
-                                    {{ 'selected' if current_filters.municipality == municipality }}>
-                                {{ municipality }}
+                            <option value="{{ municipality.value }}"
+                                    {{ 'selected' if municipality.selected }}>
+                                {{ municipality.label }}{% if municipality.count %} ({{ municipality.count }}){% endif %}
                             </option>
                         {% endfor %}
                     </select>
@@ -590,6 +685,22 @@
                                 (<a id="unassigned-count-link"
                                     href="{{ url_for('main.properties', **dict(base_args, profile_id='unassigned', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">show them</a>)</span>
                         {% endif %}
+                    {% endif %}
+                    {# How many of those rows carry a status anybody established.
+                       The other half of the disclosure the per-row badge cannot
+                       make: an unchecked row shows no badge, and without this
+                       line "no badge" reads as "nothing worth saying" rather
+                       than "never verified". Counted over the same filtered set
+                       as the total beside it, with the predicate the badges use
+                       (services/listing_verification.py). Rendered only when
+                       the page actually counted -- the error path renders this
+                       template with nothing, and a "0 of 0 verified" there would
+                       be a claim it cannot back up. #}
+                    {% if listing_verified_count is defined and pagination %}
+                        <span id="listing-verification-coverage" class="text-body-secondary small"
+                              title="{{ t('listing_status_coverage_tooltip') }}">
+                            <i class="fas fa-circle-info me-1"></i>{{ t('listing_status_coverage')|format(listing_verified_count, pagination.total) }}
+                        </span>
                     {% endif %}
                     {% if not selected_profile_id and profile_selection.withholds_profile_travel %}
                         <span class="small text-body-secondary" id="profile-travel-notice">
@@ -694,7 +805,7 @@
                                 <tbody>
                                     {% for p in properties %}
                                         <tr class="property-row {% if p.listing_status in ('removed', 'sold') %}listing-inactive{% endif %}"
-                                            data-listing-status="{{ p.listing_status or 'active' }}">
+                                            data-listing-status="{{ listing_verdict_for(p).state }}">
                                             <td class="col-score" {% if active_mode == 'investment' %}style="background-color: rgba(25, 135, 84, 0.2);"{% elif active_mode == 'lifestyle' %}style="background-color: rgba(255, 193, 7, 0.2);"{% endif %}>
                                                 {% if active_mode == 'investment' %}
                                                     {{ score_badge(p.score_investment|float if p.score_investment is not none else none, 'font-weight: bold; font-size: 0.9em;') }}
@@ -731,6 +842,7 @@
                                                 <div class="mt-1 d-flex flex-wrap gap-1">
                                                     {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
                                                     {{ sea_view_badge(p) }}
+                                                    {{ plot_badges(p) }}
                                                 </div>
                                             </td>
                                             <td class="col-price">
@@ -807,9 +919,7 @@
                                                     {% if p.property_subtype and p.property_subtype != p.property_category and not (p.property_category == 'land' and p.property_subtype == 'plot') %}
                                                         <span class="badge badge-neutral">{{ p.property_subtype }}</span>
                                                     {% endif %}
-                                                    {% if p.listing_status and p.listing_status != 'active' %}
-                                                        <span class="badge bg-secondary">{{ p.listing_status }}</span>
-                                                    {% endif %}
+                                                    {{ listing_status_badge(p) }}
                                                 </div>
                                             </td>
                                             <td class="col-added">
@@ -858,7 +968,7 @@
                     {# Two per row from the tablet breakpoint up: the container
                        is no longer capped at 720px there, and one card spanning
                        the whole width just stretches the same content. #}
-                    <div class="col-md-6 col-xl-4 mb-4" data-listing-status="{{ p.listing_status or 'active' }}">
+                    <div class="col-md-6 col-xl-4 mb-4" data-listing-status="{{ listing_verdict_for(p).state }}">
                         <div class="card h-100 property-card {% if p.listing_status in ('removed', 'sold') %}listing-inactive-card{% endif %}"
                              data-property-id="{{ p.id }}" style="overflow: hidden;">
                             <!-- Card Header with Score and Type -->
@@ -904,6 +1014,7 @@
                                 <div class="mb-2 d-flex flex-wrap gap-1">
                                     {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
                                     {{ sea_view_badge(p) }}
+                                                    {{ plot_badges(p) }}
                                 </div>
 
                                 <!-- Price and Area -->
@@ -987,9 +1098,7 @@
                                     {% endif %}
                                 </div>
                                 <div class="d-flex align-items-center gap-2">
-                                    {% if p.listing_status and p.listing_status != 'active' %}
-                                        <span class="badge bg-secondary">{{ p.listing_status }}</span>
-                                    {% endif %}
+                                    {{ listing_status_badge(p) }}
                                     <a class="btn btn-outline-secondary btn-sm"
                                        href="{{ url_for('main.property_detail', property_id=p.id) }}"
                                        title="{{ t('view_details') }}">

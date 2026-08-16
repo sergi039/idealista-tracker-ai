@@ -40,6 +40,27 @@ limiter = Limiter(
     key_func=get_remote_address,
     storage_uri=os.environ.get("REDIS_URL", "memory://"),
     default_limits=[],  # No global default; limits applied per-endpoint
+    # The limiter rides the same REDIS_URL switch as the cache (#356), and
+    # until that variable existed its storage could not fail: `memory://` is a
+    # dict. Redis can refuse, and flask-limiter checks the limit *inside* the
+    # request, where only HTTPException is handled - so a stopped Redis took
+    # the 15 rate-limited routes in routes/api_routes.py out entirely.
+    # Measured before this was added: with Redis up the route answered; with
+    # `docker stop` on Redis the same call raised ConnectionError out of the
+    # request. Those routes are the AI analysis, the bulk and manual
+    # enrichment, the email ingest and the status check - the buttons someone
+    # presses when something is already wrong.
+    #
+    # in_memory_fallback_enabled keeps enforcing the limit in this process
+    # while the shared storage is unreachable, so an outage relaxes the limit
+    # to per-process rather than removing it. swallow_errors makes a storage
+    # failure cost the *limit*, never the request.
+    #
+    # This is the cache's rule one step out: utils/cache.py got the outage
+    # guard for this switch and the limiter, flipped by the same variable, had
+    # none. A guard correct inside the scope it was written for.
+    in_memory_fallback_enabled=True,
+    swallow_errors=True,
 )
 
 
@@ -289,6 +310,13 @@ def create_app(testing: bool = False):
 
     app.jinja_env.globals["travel_state_for"] = travel_state_for
     app.jinja_env.globals["sea_distance_for"] = sea_distance_for
+
+    # `listing_status` defaults to 'active' at ingestion and nothing verified
+    # that default, so no template may render the column directly: they read
+    # the verdict, which has a fourth state for "never checked".
+    from services.listing_verification import read_verdict as listing_verdict_for
+
+    app.jinja_env.globals["listing_verdict_for"] = listing_verdict_for
 
     # One Maps URL builder for every surface: list travel cells, detail rows,
     # beach lines. Templates used to concatenate free-text place names into

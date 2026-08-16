@@ -14,6 +14,12 @@ time. Two kinds of column, deliberately labeled apart:
   minimum: a minimum would crown a municipality because one listing happens
   to sit next to a pool — the objection the proposal review raised.
 
+One municipality is one row, whatever the emails called it: rows are grouped
+by `utils.municipality_grouping.group_key`, because `municipality` is free
+text and "Gijón" / "Gijon" used to render as two places with two medians and
+two coverage counts. The name shown is the most readable spelling actually
+stored, never a form nobody wrote.
+
 Every metric carries its own coverage count, because a median over 2 of 30
 listings is a different claim from a median over 30 of 30, and the page says
 which it is. A municipality whose name the INE join cannot resolve shows its
@@ -28,7 +34,7 @@ from typing import Any, Dict, List, Optional
 from models import Property
 from services.quality_of_life_service import QualityOfLifeService
 from services.sea_distance_service import parcel_measurement
-from utils.idealista_extractors import is_truncated_municipality
+from utils.municipality_grouping import group_key, preferred_display
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +175,10 @@ def _price_per_m2(prop: Property) -> Optional[float]:
 # Column keys the page may sort by, and how to read them off a built row.
 # Kept here so the route's allow-list cannot drift from what the table shows.
 SORT_KEYS = {
-    "municipality": lambda row: (row["name"] or "").lower(),
+    # The canonical key, so "Avilés" sorts where "Aviles" does instead of
+    # after every unaccented name -- and so the order does not move when the
+    # preferred spelling of a group changes.
+    "municipality": lambda row: row["key"],
     "listings": lambda row: row["listings"],
     "price_per_m2": lambda row: row["price_per_m2"]["median"],
     "price": lambda row: row["price"]["median"],
@@ -204,7 +213,8 @@ class MunicipalityComparisonService:
         groups: Dict[str, Dict[str, Any]] = {}
         for prop in properties:
             name = (prop.municipality or "").strip()
-            if not name or is_truncated_municipality(name):
+            key = group_key(name)
+            if key is None:
                 # A listing with no municipality cannot be compared by one,
                 # and a truncated email artifact ("Ovi...", issue #298) is
                 # not a municipality either -- its INE join can only ever
@@ -212,11 +222,15 @@ class MunicipalityComparisonService:
                 # counted in the page's footnote instead of inventing a
                 # bucket for them.
                 continue
-            key = name.lower()
+            # The canonical key, not `name.lower()`: casefolding alone leaves
+            # "Gijón" and "Gijon" as two keys, which rendered one
+            # municipality as two rows with two medians and two coverage
+            # counts. The spellings are tallied so the row can show the most
+            # readable one rather than whichever listing came first.
             group = groups.get(key)
             if group is None:
                 group = {
-                    "name": name,
+                    "spellings": {},
                     "listings": 0,
                     "favorites": 0,
                     "metrics": {
@@ -239,6 +253,7 @@ class MunicipalityComparisonService:
                 }
                 groups[key] = group
 
+            group["spellings"][name] = group["spellings"].get(name, 0) + 1
             group["listings"] += 1
             if prop.is_favorite:
                 group["favorites"] += 1
@@ -259,17 +274,18 @@ class MunicipalityComparisonService:
             metrics["train_min"].add(_target_minutes(prop, "train_station"))
 
         rows = []
-        for group in groups.values():
+        for key, group in groups.items():
             if group["listings"] < min_listings:
                 continue
             row: Dict[str, Any] = {
-                "name": group["name"],
+                "key": key,
+                "name": preferred_display(group["spellings"]),
                 "listings": group["listings"],
                 "favorites": group["favorites"],
             }
             for metric, accumulator in group["metrics"].items():
                 row[metric] = accumulator.summary()
-            row["ine"] = self._ine_facts(group["name"])
+            row["ine"] = self._ine_facts(row["name"])
             row["unemployment"] = self._unemployment_facts(row["ine"])
             rows.append(row)
         return rows

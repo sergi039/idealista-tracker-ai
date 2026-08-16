@@ -350,6 +350,53 @@ legacy `tourist_attraction` + `playa` pair returned a fountain, a swimming pool
 and the town itself. Google lists the same beach under several place ids, so
 identical names are collapsed to the nearest one.
 
+**`listing_status` is `active` by default, so `active` is only shown when
+somebody established it.** The column is written at ingestion and nothing
+verifies it; measured 2026-08-15, 1 of 311 land rows had ever been checked, and
+`/properties` drew the other 310 exactly like confirmed live listings — property
+192, withdrawn by the advertiser on 08/05/2026, among them. That is #98 in the
+status column: an absence of measurement rendered as a measurement.
+`services/listing_verification.py` owns the rule and is the only thing the
+surfaces read. `removed`/`sold` always show, because no writer sets them by
+default; `active` shows only with `listing_status_source` of `check` (the
+scraper read the page) or `manual` (the owner looked); everything else,
+including `ingest`, NULL and the stored `unknown`, presents as **`unchecked`**.
+That is a fourth *presentation* state, not a fourth database value — no
+migration, no row rewritten, the database keeps what it knows. The module holds
+both readings of the rule, `read_verdict` for a row and `verified_expression`
+for a query, because the list draws them together: the coverage line beside the
+result count ("3 of 4 verified against Idealista") is the disclosure an
+unchecked row cannot make for itself, since badging ~100% of the table
+"unverified" is noise, and a header disagreeing with its own badges would be a
+third wrong number. A check older than 30 days keeps its badge and loses the
+green — it verified something, just not about today. The CSV export and
+`to_dict` carry the verdict too; a report built off the raw column is how a dead
+listing got recommended.
+
+**Idealista blocks the checker from this machine, and the app says so instead of
+retrying into the wall.** Measured 2026-08-15 over 76 properties, one at a time
+behind the service's own throttle: every call hit DataDome, zero listing pages;
+`curl` from the *host* with full browser headers gets 403 with the same block
+body, so it is not the container, and only the owner's real logged-in Chrome
+renders a listing. Defeating that is not on the table — it is bot-detection
+circumvention, and a headless profile would be one more thing to lose to
+DataDome's next update — so the honest half is what shipped. `RefusalBreaker`
+(`services/listing_status_service.py`) counts refusals *across* calls, and after
+three in a row the service answers from what it already knows for 30 minutes
+instead of spending a request per press; the cooldown buys back exactly one
+probe, and a refusal re-arms it, because it heals on evidence and not on a
+timer. Each refusal carries a reason — `blocked`, `backing_off`,
+`not_the_listing_page`, `http_error`, `timeout` — so the page can say "idealista
+is refusing this machine" rather than reporting 76 unrelated failures. None of
+this changes the #136 storage contract: an `error` still writes nothing, not
+even `listing_last_checked`. The breaker is process-local and shared by every
+instance (each caller builds its own service), which makes it exactly the kind
+of state `tests/conftest.py` resets between tests — it is reset there, and
+skipping that reset makes 21 tests in three other files fail with no reference
+to the file that armed it. There is still **no scheduled sweep for
+`Property`** and no `check_all_active_properties` to run — the bulk paths select
+on `Land` — so the per-listing button and the hand-set status are the way in.
+
 **Distance to the sea is a scoring criterion, and it reuses the sea-view
 coastline client.** `services/sea_distance_service.py` scores straight-line
 metres to the OSM coastline, but it does **not** fetch that coastline: it calls
@@ -358,6 +405,38 @@ the Overpass side (one query per 0.1° cell, cached a month, throttled, plain
 User-Agent token because Overpass answers 406 to anything else). Do not add a
 second Overpass client — measured the hard way, a per-property or wide-box query
 gets 504s.
+
+**"Cached a month" is true of the deployment only because `REDIS_URL` is set**
+(#356). `utils/cache.py` falls back to `SimpleCache` without it, and that lives
+in the process — so until 2026-08-16 the 30-day intent lasted exactly as long as
+the interpreter that filled it, and every deploy restart, every `docker exec`
+and every `compose run` sibling re-paid Overpass for cells the last one had
+already fetched. `docker-compose.yml` now runs a `redis` service with
+`--appendonly` so the cells survive the container too. If a run is suddenly
+slow, check that the app really has `REDIS_URL` before looking anywhere else:
+the code, the docs and the deployment disagreeing is what this cost.
+
+Two consequences worth knowing before an incident, not during one. **Rate
+limiting rides the same switch** — `app.py` builds its `Limiter` with
+`storage_uri=REDIS_URL`. What that buys here is *persistence across restarts*,
+not sharing between workers: the Dockerfile runs `--workers 1 --threads 4`, so
+there has only ever been one process counting. What it costs is a failure mode
+the limiter never had, because `memory://` is a dict and cannot refuse. The
+limiter therefore carries `in_memory_fallback_enabled=True, swallow_errors=True`
+— measured before they were added, stopping Redis made the 15 rate-limited
+routes in `routes/api_routes.py` raise `ConnectionError` out of the request,
+since flask-limiter checks the limit inside it and only `HTTPException` is
+handled. Those are the AI analysis, the bulk and manual enrichment, the email
+ingest and the status check: the buttons someone presses when something is
+already wrong. With the flags, an outage relaxes a shared limit to a
+per-process one and never fails a request. Do not remove either — `swallow_errors`
+alone deletes the limit instead of degrading it. And **a shared cache is a shared blast radius
+for 30 days**: a poisoned coastline entry used to die with its process and now
+does not. The key carries a version (`sea_view_coastline_cell_r25000_v1`), so
+bumping `_v1` is the escape hatch — that is what it is for, and it is cheaper
+than reasoning about which cells are wrong. A cache that cannot be reached is a
+*miss*, never an error: `utils/cache.py` guards every read and write, because
+on the Google paths the write happens after the billed call.
 
 The result lands in `Property.enrichment["sea"]` (a JSON column — no migration,
 and a different key from sea view's `enrichment.environment.sea_view`) with one
@@ -501,6 +580,29 @@ code (#98's shape, applied to a join). SEPE publishes a *count*, so the page
 renders it as a labeled proxy against población and never as the official
 unemployment rate. Listings whose municipality is empty or email-truncated
 (#298) are counted aside, not compared.
+
+**`properties.municipality` is free text, so anything that groups by it goes
+through one key.** The same place arrives under several spellings — measured
+2026-08-16, "Gijón" (57 rows) beside "Gijon" (16), "Castrillon" (28) beside
+"Castrillón" (18), 247 rows across 8 municipalities — and both surfaces that
+grouped by the raw string reported a partial result as a complete one: the
+`/properties` dropdown offered each spelling separately, so picking "Gijón"
+showed 57 of 73 listings and said nothing about the rest, and `/municipalities`
+keyed on `name.lower()`, which lowercases without stripping accents, and drew
+one municipality as two rows with two medians and two coverage counts. The key
+is `utils/municipality_codes.normalize()` — the function the INE join already
+folds *both* sides of its lookup with — wrapped by `utils/municipality_grouping.
+py`, which owns the grouping, the shared filter clause the four listing surfaces
+use, and the rule for which stored spelling a human is shown (accents beat
+frequency, `MUROS DE NALON` never wins, and the label is always a string that is
+really in the table). Do not add a second normalizer, and do not canonicalise on
+write: the stored string is what the email said and the input the #298 repair
+reads, a derived column would have to be maintained by every writer, and the one
+that forgot would hide rows from their own filter — the defect being removed,
+relocated. A truncated artifact ("Ovi...") has **no** key: `normalize("Ovi...")`
+is `"ovi"`, and folding it into `oviedo` by prefix is exactly the wrong-pick
+hazard `resolve_truncated_municipality` refuses. It stays out of the dropdown,
+out of `/municipalities` and out of every group's rows.
 
 **Three reference files are committed on purpose, and `.gitignore` re-includes
 them one at a time.** `data/*` excludes the runtime artifacts — backfill
