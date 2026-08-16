@@ -49,6 +49,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import socket
 import sys
 import uuid
 from contextlib import contextmanager
@@ -103,7 +104,21 @@ def _cmdline(pid: int) -> Optional[str]:
     return raw.replace(b"\0", b" ").decode("utf-8", "replace")
 
 
-def _marker_liveness(pid: int, module: str) -> str:
+def _this_host() -> str:
+    """The name of the PID namespace this reader lives in.
+
+    Inside a container `gethostname()` is the container id, unique per
+    container and stable across restarts of the *same* container; on the host
+    it is the machine's name. That is exactly the granularity a PID is
+    meaningful at, which is why the marker records it next to the PID.
+    """
+    try:
+        return socket.gethostname()
+    except OSError:
+        return ""
+
+
+def _marker_liveness(pid: int, module: str, host: Optional[str] = None) -> str:
     """ "alive", "dead", or "unknown" for `pid` as the owner of `module` (#359).
 
     Not a boolean: a boolean forces "cannot tell" to read as either "still
@@ -112,29 +127,38 @@ def _marker_liveness(pid: int, module: str) -> str:
     going) — both are a confident wrong answer manufactured out of a genuine
     unknown.
 
-    "dead" when `pid` is not alive in this namespace, or when it is alive but
-    plainly not this job (`/proc` is readable and its cmdline does not
-    contain `module`).
+    A PID is only a name inside one PID namespace, so the first question is
+    whether the marker was written in *this* one. `host` is the hostname the
+    writer recorded (`_this_host()`), which inside Docker is the container id.
 
-    "dead" also, deliberately, when `pid == os.getpid()`. A containerised run
-    is always PID 1, and every restart of the same module is PID 1 again: a
-    reader that only checked "is this pid alive and running my module" would
-    find itself and answer "yes" every time, which is precisely the defect
-    this function exists to close. A pid that is *me* is never evidence of a
-    concurrent run.
+    "unknown" when `host` names a different namespace from this reader's:
+    every `docker compose run` sibling is PID 1, so a marker from another
+    container can carry this reader's own pid while its job is still running
+    beside it (#339's shape), or be a corpse from a container that no longer
+    exists — and from in here nothing can tell those apart. `docker ps` on
+    the host can; the caller says so and leaves the marker alone.
 
-    "alive" when `pid` is alive, is not me, and (where `/proc` is readable)
-    its cmdline contains `module`.
+    "unknown" also when the marker records no `host` at all (written before
+    this field existed) and its pid is this reader's own: that is precisely
+    the ambiguous case above with the one discriminator missing.
 
-    "unknown" when `pid` is alive and not me, but `/proc` cannot be read
-    (macOS, a hardened runtime) so cmdline cannot confirm or refute it. The
-    caller must leave such a marker alone: it is neither proven concurrent
-    nor proven interrupted.
+    Within this namespace: "dead" when `pid` is not alive, or when it is
+    alive but plainly not this job (`/proc` is readable and its cmdline does
+    not contain `module`), or when `pid == os.getpid()` — a pid that is *me*
+    is never evidence of a concurrent run, and a same-host marker carrying my
+    pid is a previous incarnation of this container (`docker restart` keeps
+    the id and starts PID 1 again). "alive" when `pid` is alive, is not me,
+    and (where `/proc` is readable) its cmdline contains `module`. "unknown"
+    when `pid` is alive and not me but `/proc` cannot be read (macOS, a
+    hardened runtime), so cmdline can neither confirm nor refute it.
     """
+    mine = _this_host()
+    if isinstance(host, str) and host and mine and host != mine:
+        return "unknown"
     if not _pid_is_alive(pid):
         return "dead"
     if pid == os.getpid():
-        return "dead"
+        return "dead" if isinstance(host, str) and host else "unknown"
     cmdline = _cmdline(pid)
     if cmdline is None:
         return "unknown"
@@ -213,14 +237,20 @@ def report_interrupted(
         # container - a corrupt marker holding `true` must not read as "the
         # job is still running" and suppress the report.
         pid = pid if isinstance(pid, int) and not isinstance(pid, bool) else -1
-        liveness = _marker_liveness(pid, name)
+        host = marker.get("host")
+        host = host if isinstance(host, str) else None
+        liveness = _marker_liveness(pid, name, host)
         if liveness == "unknown":
             logger.warning(
                 "cannot tell whether the earlier run of %s is still active "
-                "(pid %s, started %s); leaving its marker in place.",
+                "(pid %s in %s, started %s; this reader is in %s); leaving its "
+                "marker in place. A different container cannot be seen from in "
+                "here: `docker ps` on the host says whether it still runs.",
                 name,
                 pid,
+                host or "an unrecorded container",
                 marker.get("started_at"),
+                _this_host() or "?",
             )
             continue
         if liveness == "alive":
@@ -286,7 +316,10 @@ def write_marker(
     call; a caller that already has one for this run (`inflight()` does)
     passes it through so the marker `report_interrupted` was told to skip is
     the one actually written. `pid` is still recorded in the body, for a
-    human reading the file and for the same-namespace liveness check.
+    human reading the file and for the same-namespace liveness check — and
+    `host` (the container id, inside Docker) says which namespace that pid
+    is a name in, because without it PID 1 in one `compose run` container is
+    indistinguishable from PID 1 in the next.
 
     Written with a temporary file and an atomic rename: the watcher polls
     every few minutes and must never read half a JSON object.
@@ -298,6 +331,7 @@ def write_marker(
     payload = {
         "module": name,
         "pid": os.getpid(),
+        "host": _this_host(),
         "run_id": run_id,
         "argv": list(argv if argv is not None else sys.argv[1:]),
         "started_at": datetime.now(timezone.utc).isoformat(),

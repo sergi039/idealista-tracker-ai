@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -121,6 +122,10 @@ def test_a_live_run_of_the_same_job_is_not_treated_as_a_corpse(tmp_path, caplog)
         (directory / f"backfill_pool.{probe.pid}.json").write_text(
             json.dumps({"module": "backfill_pool", "pid": probe.pid, "resumable": True})
         )
+        # Decided while the probe is alive: after `kill()` below /proc/<pid>
+        # is gone on Linux too, and the branch would silently flip to the
+        # macOS expectation - which is how this test went red on CI once.
+        proc_readable = Path(f"/proc/{probe.pid}/cmdline").exists()
         with caplog.at_level(logging.WARNING):
             interrupted = report_interrupted("backfill_pool", directory=str(directory))
     finally:
@@ -129,7 +134,7 @@ def test_a_live_run_of_the_same_job_is_not_treated_as_a_corpse(tmp_path, caplog)
 
     assert interrupted == []
     assert len(_markers(directory)) == 1
-    if Path(f"/proc/{probe.pid}/cmdline").exists():
+    if proc_readable:
         assert "appears to be active" in caplog.text
     else:
         assert "cannot tell whether" in caplog.text
@@ -231,6 +236,12 @@ def test_a_marker_recording_my_own_pid_is_never_evidence_of_a_concurrent_run(
     generate for itself, and `report_interrupted` is called with no `run_id`
     of its own (the default) - this test is about the pid rule, not the
     run-id skip.
+
+    The marker records this reader's own `host`: a same-namespace marker
+    carrying my pid can only be a previous incarnation of this container
+    (`docker restart` keeps the id and starts PID 1 again). A marker from a
+    *different* container is the next test - it is not this case, and must
+    not be read as it.
     """
     directory = tmp_path / "inflight"
     directory.mkdir()
@@ -239,6 +250,7 @@ def test_a_marker_recording_my_own_pid_is_never_evidence_of_a_concurrent_run(
             {
                 "module": "backfill_pool",
                 "pid": os.getpid(),
+                "host": socket.gethostname(),
                 "run_id": "deadbeefdeadbeefdeadbeefdeadbeef",
                 "resumable": True,
                 "started_at": "2026-08-16T10:15:44.339133+00:00",
@@ -254,6 +266,84 @@ def test_a_marker_recording_my_own_pid_is_never_evidence_of_a_concurrent_run(
     )
     assert "did not finish" in caplog.text
     assert _markers(directory) == [], "an interrupted run's marker must be cleared"
+
+
+def test_a_marker_from_another_container_with_my_pid_is_undecidable(tmp_path, caplog):
+    """Two `compose run` siblings are both PID 1, and neither can see the other.
+
+    The reviewer's case against the first cut of #359: a marker carrying this
+    reader's own pid but a *different* host is either a sibling container
+    still running the same module beside us (#339's overlap) or a corpse from
+    a container that no longer exists - and from inside this namespace the
+    two are indistinguishable. Reading it as "dead" would delete a live run's
+    marker mid-flight; reading it as "alive" is the confident wrong answer
+    #359 was filed about. It must be "cannot tell", the marker left in place,
+    and the message must say where a human can find out (`docker ps`).
+    """
+    directory = tmp_path / "inflight"
+    directory.mkdir()
+    (directory / "backfill_pool.0123456789abcdef0123456789abcdef.json").write_text(
+        json.dumps(
+            {
+                "module": "backfill_pool",
+                "pid": os.getpid(),
+                "host": "c0ffee0ther1d",
+                "run_id": "0123456789abcdef0123456789abcdef",
+                "resumable": True,
+                "started_at": "2026-08-16T10:15:44.339133+00:00",
+            }
+        )
+    )
+
+    with caplog.at_level(logging.WARNING):
+        interrupted = report_interrupted("backfill_pool", directory=str(directory))
+
+    assert interrupted == [], "another container's live run was reported interrupted"
+    assert len(_markers(directory)) == 1, "another container's marker was deleted"
+    assert "cannot tell whether" in caplog.text
+    assert "c0ffee0ther1d" in caplog.text
+    assert "docker ps" in caplog.text
+    assert "appears to be active" not in caplog.text
+    assert "did not finish" not in caplog.text
+
+
+def test_a_legacy_marker_with_my_pid_and_no_host_is_undecidable(tmp_path, caplog):
+    """A marker written before `host` existed cannot say which namespace its
+    pid is a name in. With the pid equal to mine that is exactly the
+    ambiguous case above minus the discriminator, so it stays "cannot tell";
+    the production marker `recalc_sea_distance.1.json` left on the mini on
+    2026-08-16 is one of these.
+    """
+    directory = tmp_path / "inflight"
+    directory.mkdir()
+    (directory / "recalc_sea_distance.1.json").write_text(
+        json.dumps(
+            {
+                "module": "recalc_sea_distance",
+                "pid": os.getpid(),
+                "argv": ["--only-missing"],
+                "resumable": True,
+            }
+        )
+    )
+
+    with caplog.at_level(logging.WARNING):
+        interrupted = report_interrupted(
+            "recalc_sea_distance", directory=str(directory)
+        )
+
+    assert interrupted == []
+    assert len(_markers(directory)) == 1
+    assert "cannot tell whether" in caplog.text
+    assert "an unrecorded container" in caplog.text
+
+
+def test_write_marker_records_the_host(tmp_path):
+    """The namespace a pid belongs to travels with the pid."""
+    path = write_marker("backfill_pool", argv=[], directory=str(tmp_path / "inflight"))
+    body = json.loads(path.read_text())
+    assert body["host"] == socket.gethostname()
+    assert body["pid"] == os.getpid()
 
 
 def test_a_restart_does_not_clobber_its_predecessors_marker(tmp_path):
