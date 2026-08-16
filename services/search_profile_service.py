@@ -153,7 +153,31 @@ _HOSPITAL_REJECT_NAMES = [
     "hospital de dia",
     "unidad de hospitalización",
     "unidad de hospitalizacion",
+    # A *former* hospital is a building, not a service. "Antiguo Hospital"
+    # (43.0126463,-7.5694497) is the old hospital in Lugo; the nearest working
+    # one, Hospital Quirón Salud Lugo, is 0.6 km further on and CHU Lugo with
+    # its 817 beds 3.0 km, so refusing this one costs the measurement almost
+    # nothing and stops the app naming a building as medical access.
+    "antiguo hospital",
+    "antigo hospital",
+    # A street named after the hospital it leads to. "Ronda Hospital FE 13"
+    # (43.5101180,-8.2192715) is an address in Ferrol, 2.4 km from Complexo
+    # Hospitalario Universitario de Ferrol -- and it was recorded at 8 minutes
+    # while the hospital itself is further out, so this one really did
+    # understate. `ronda` is a ring road, so the two words only collide this
+    # way round: a hospital named after the town of Ronda reads "Hospital de
+    # Ronda" and is untouched.
+    "ronda hospital",
 ]
+# Deliberately *not* refused, though the name invites it: "Santo Hospital de
+# Caridad" (11 rows) is the historic name of a working hospital, not a charity
+# house. Its coordinate (43.4803537,-8.2025734) is **0.0 km** from Hospital
+# Ribera Juan Cardona in the CNH catalogue (`data/hospitals_cnh.json`, 150
+# beds) -- the same site under the name it was founded with, which Google
+# indexes as a second place. The drive time is therefore already correct and
+# refusing it would trade a right answer for a differently-named one at the
+# same coordinate. Checking the catalogue is what settled this; the name alone
+# said the opposite.
 
 # The supermarket preset takes the opposite approach to airport and hospital,
 # and the data is why. Requiring the name to say "supermercado" would refuse
