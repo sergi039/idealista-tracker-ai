@@ -371,8 +371,19 @@ the code, the docs and the deployment disagreeing is what this cost.
 
 Two consequences worth knowing before an incident, not during one. **Rate
 limiting rides the same switch** — `app.py` builds its `Limiter` with
-`storage_uri=REDIS_URL`, so limits are now shared across gunicorn workers
-rather than counted per process. And **a shared cache is a shared blast radius
+`storage_uri=REDIS_URL`. What that buys here is *persistence across restarts*,
+not sharing between workers: the Dockerfile runs `--workers 1 --threads 4`, so
+there has only ever been one process counting. What it costs is a failure mode
+the limiter never had, because `memory://` is a dict and cannot refuse. The
+limiter therefore carries `in_memory_fallback_enabled=True, swallow_errors=True`
+— measured before they were added, stopping Redis made the 15 rate-limited
+routes in `routes/api_routes.py` raise `ConnectionError` out of the request,
+since flask-limiter checks the limit inside it and only `HTTPException` is
+handled. Those are the AI analysis, the bulk and manual enrichment, the email
+ingest and the status check: the buttons someone presses when something is
+already wrong. With the flags, an outage relaxes a shared limit to a
+per-process one and never fails a request. Do not remove either — `swallow_errors`
+alone deletes the limit instead of degrading it. And **a shared cache is a shared blast radius
 for 30 days**: a poisoned coastline entry used to die with its process and now
 does not. The key carries a version (`sea_view_coastline_cell_r25000_v1`), so
 bumping `_v1` is the escape hatch — that is what it is for, and it is cheaper
