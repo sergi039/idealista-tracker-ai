@@ -34,11 +34,35 @@ worse than the race it would close. That is the mode
 commit.
 """
 
+import logging
 from contextlib import contextmanager
 from typing import Any
 
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import NoInspectionAvailable
+
+logger = logging.getLogger(__name__)
+
+
+class EnrichmentWriteContractError(RuntimeError):
+    """The caller cannot be honoured: a programming error, not a refusal.
+
+    Distinct from every measurement failure on purpose. Both writers that take
+    `commit=True` sit inside a blanket `except Exception` that logs a warning
+    and rolls back -- `services/property_imap_service.py` at ingestion and
+    `utils/backfill_quality_of_life.py` in its loop. Raising a bare
+    `RuntimeError` there would be swallowed and logged as *"Sea distance
+    measurement failed"*, indistinguishable from Overpass refusing: the row
+    would carry no measurement, `--only-missing` would re-attempt it forever,
+    and nobody would learn that the caller was at fault rather than the
+    network. That is #98's shape one level up -- a caller error wearing a
+    refusal's clothes.
+
+    It subclasses `RuntimeError` so existing handlers still catch it, and the
+    guard logs at `error` with its own wording before raising, so even a
+    caller that swallows it leaves a line that cannot be read as a transport
+    problem.
+    """
 
 
 def check_writable(prop: Any, commit: bool) -> bool:
@@ -62,7 +86,7 @@ def check_writable(prop: Any, commit: bool) -> bool:
     # `state.session` is always unequal; ask the proxy whether it holds the
     # object. This covers a detached one too, whose `state.session` is None.
     if prop not in db.session:
-        raise RuntimeError(
+        raise _contract_error(
             "an enrichment write was asked to commit a property this session "
             "does not hold; the write would not be persisted"
         )
@@ -72,12 +96,23 @@ def check_writable(prop: Any, commit: bool) -> bool:
     # every exit ends the transaction, a caller's uncommitted work would be
     # committed or discarded wholesale.
     if db.session.new or db.session.dirty or db.session.deleted:
-        raise RuntimeError(
+        raise _contract_error(
             "an enrichment write with commit=True needs a session with nothing "
             "pending: it ends the transaction on every exit, which would commit "
             "or discard whatever else is in flight"
         )
     return True
+
+
+def _contract_error(message: str) -> EnrichmentWriteContractError:
+    """Log it as a programming error, then hand it back to be raised.
+
+    Logged here rather than left to the caller because both `commit=True`
+    callers swallow exceptions into a warning about the *measurement*. This
+    line is the one that survives that.
+    """
+    logger.error("enrichment write contract violated: %s", message)
+    return EnrichmentWriteContractError(message)
 
 
 @contextmanager

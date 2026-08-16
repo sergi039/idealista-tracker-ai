@@ -26,6 +26,7 @@ changed underneath the session and the writer has to see it.
 """
 
 import json
+import logging
 
 import pytest
 from sqlalchemy import text
@@ -36,6 +37,9 @@ setup_test_environment()
 
 from app import create_app, db  # noqa: E402
 from models import Property  # noqa: E402
+from services.enrichment_write import (  # noqa: E402
+    EnrichmentWriteContractError,
+)
 from services.pool_service import PoolService  # noqa: E402
 from services.quality_of_life_service import QualityOfLifeService  # noqa: E402
 from services.sea_distance_service import SeaDistanceService  # noqa: E402
@@ -300,3 +304,47 @@ class TestTheContractIsTheSameForAllThree:
 
         with pytest.raises(RuntimeError, match="does not hold"):
             writer(prop, True)
+
+
+class TestAContractBreachIsNotAMeasurementFailure:
+    """#98's shape one level up, found in review of #352.
+
+    Both `commit=True` callers wrap the write in a blanket `except Exception`
+    that logs a warning about the *measurement* and rolls back --
+    `services/property_imap_service.py` at ingestion, and
+    `utils/backfill_quality_of_life.py` in its loop. A bare `RuntimeError`
+    there is swallowed and reads as "Overpass refused": the row carries no
+    measurement, `--only-missing` re-attempts it forever, and nobody learns
+    the caller was at fault.
+    """
+
+    def test_the_error_has_its_own_type(self, app, monkeypatch):
+        prop = _prop()
+        db.session.expunge(prop)
+
+        with pytest.raises(EnrichmentWriteContractError):
+            _pool_writer()(prop, True)
+
+    def test_it_is_still_a_runtime_error_for_existing_handlers(self, app):
+        prop = _prop()
+        db.session.expunge(prop)
+
+        with pytest.raises(RuntimeError):
+            _pool_writer()(prop, True)
+
+    def test_it_is_logged_as_a_contract_violation_before_it_is_raised(
+        self, app, caplog
+    ):
+        """The line that survives a caller swallowing the exception."""
+        prop = _prop()
+        db.session.expunge(prop)
+
+        with caplog.at_level(logging.ERROR, logger="services.enrichment_write"):
+            with pytest.raises(EnrichmentWriteContractError):
+                _pool_writer()(prop, True)
+
+        assert any(
+            record.levelno >= logging.ERROR
+            and "contract violated" in record.getMessage()
+            for record in caplog.records
+        ), "a swallowed breach would leave nothing distinguishable in the log"
