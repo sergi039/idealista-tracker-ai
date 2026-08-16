@@ -130,6 +130,46 @@ class TestTheBreakerItself:
         assert breaker.should_skip(after) is True
         assert breaker.should_skip(after + timedelta(seconds=900)) is True
 
+    def test_only_one_caller_gets_the_probe(self):
+        """The expired cooldown is consumed, not merely observed.
+
+        Found by an independent review of this PR: a read-only `should_skip`
+        let every caller arriving in the same instant through, so a breaker
+        promising "exactly one request" sent as many as there were threads --
+        at a host that is refusing us, which is the one place extra requests
+        are worst. Second and third callers must still skip, and they must keep
+        skipping until the probe reports.
+        """
+        breaker = RefusalBreaker(threshold=3, cooldown_s=1800)
+        start = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
+        for _ in range(3):
+            breaker.record_refusal("blocked", start)
+
+        after = start + timedelta(seconds=1801)
+        verdicts = [breaker.should_skip(after) for _ in range(5)]
+        assert verdicts == [False, True, True, True, True], verdicts
+
+    def test_the_probe_holder_is_not_starved_by_the_others(self):
+        """Consuming the expiry must not push the *next* window out forever.
+
+        The callers that skip do not touch the clock, so once the probe
+        reports the breaker behaves exactly as it did the first time round:
+        an answer clears it, a refusal re-arms one cooldown from that moment.
+        """
+        breaker = RefusalBreaker(threshold=3, cooldown_s=1800)
+        start = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
+        for _ in range(3):
+            breaker.record_refusal("blocked", start)
+
+        after = start + timedelta(seconds=1801)
+        assert breaker.should_skip(after) is False  # the probe
+        for _ in range(4):
+            breaker.should_skip(after + timedelta(seconds=1))
+
+        breaker.record_success(after + timedelta(seconds=2))
+        assert breaker.should_skip(after + timedelta(seconds=3)) is False
+        assert breaker.state()["open"] is False
+
     def test_a_probe_that_lands_reopens_it(self):
         breaker = RefusalBreaker(threshold=3, cooldown_s=1800)
         start = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)

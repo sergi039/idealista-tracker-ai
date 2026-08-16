@@ -66,9 +66,31 @@ class RefusalBreaker:
         self._last_refusal_at: Optional[datetime] = None
 
     def should_skip(self, now: Optional[datetime] = None) -> bool:
+        """May this caller dial? Answering False **claims** the probe.
+
+        Deliberately not a pure query, and named in `observe` as the gate it is.
+        A read-only version had a race an independent review found: with the
+        cooldown expiring at 12:30:00, two request threads calling at 12:30:01
+        both saw "not blocked" before either recorded a result, and both dialled
+        a host that is refusing us. Exactly the failure this class exists to
+        prevent, one level up -- and the docstring above promised "exactly one
+        request goes out", which the code did not deliver.
+
+        So the expiry is consumed inside the lock: the first caller through
+        re-arms the window and dials, and everyone behind it keeps skipping
+        until that probe reports. `record_success` clears the window if the
+        probe reached the listing; `record_refusal` re-arms it if it did not,
+        which is what it would have done anyway.
+        """
         now = now or datetime.now(timezone.utc)
         with self._lock:
-            return self._blocked_until is not None and now < self._blocked_until
+            if self._blocked_until is None:
+                return False
+            if now < self._blocked_until:
+                return True
+            # The cooldown has expired and this caller is the one probe.
+            self._blocked_until = now + timedelta(seconds=self.cooldown_s)
+            return False
 
     def record_refusal(self, reason: str, now: Optional[datetime] = None) -> None:
         now = now or datetime.now(timezone.utc)
