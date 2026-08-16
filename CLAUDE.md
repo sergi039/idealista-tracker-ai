@@ -716,6 +716,42 @@ and TODO.md; respect it if you ever run both side by side.
   cost anything". Deferring is opt-in and bounded
   (`AUTOPILOT_DEFER_ON_INFLIGHT`, `AUTOPILOT_DEFER_BUDGET`) — a deploy that
   never lands is a failure too. See `tools/autopilot/README.md`.
+- **Two processes writing `enrichment` lose a measurement, and the #98 guard
+  cannot see it happen** (#339, incident 2026-08-16). Two runs of
+  `utils.backfill_pool` overlapped on the mini; properties 399 and 400 ended
+  the afternoon holding `unavailable` with zero candidates, over measurements
+  another run had committed seconds earlier, and three rows were billed to
+  Google twice. `enrichment` is one JSON column, so every write is a
+  read-modify-write over all of it, and `PoolService.enrich` consults the
+  previous status from **the copy its own session loaded** — after `_compute`
+  has spent seconds on external calls, which under Overpass 504s and four
+  retries ran to about 90 s per row. The rule "a refusal never overwrites
+  measured candidates" is therefore a guarantee about one transaction's view,
+  not about the row. Do not fix it with ordering or a timestamp: on 399 the
+  measurement was written 63 s *after* the refusal and still lost, so any
+  comparison of write times would have left that row broken. The primitive
+  is already here — `apply_to_property` in `services/sea_view_service.py`
+  refreshes with `with_for_update=True` (#196) against this exact hazard, and
+  `services/pool_service.py` contains no `with_for_update` at all. It takes
+  that lock only when `commit=True`, because with `commit=False` the caller
+  owns a transaction whose end it cannot see, so the lock belongs around the
+  per-row unit in `utils/backfill_pool.py` and `utils/recalc_property_travel.py`
+  rather than inside `enrich`. And the boundary is **any** writer of
+  `enrichment`, not the paid ones: a one-row free script run by hand through
+  `docker exec` clobbers a backfill exactly as thoroughly, cost only setting
+  the size of the loss.
+- **A liveness check is not a claim about the next minute** (#338). A marker is
+  not a lock, and `docker top` is not a reservation. The second run above was
+  started after its session ran `docker top idealista-app` and correctly saw
+  no `utils` process — because the deploy had killed the first run 58 seconds
+  earlier and `tools/backfill_supervisor.sh` refilled the container at
+  09:01:59, one tick later. A kill makes the process list read empty precisely
+  when a respawn is imminent, and every deploy manufactures one such window.
+  Until something can express "nothing is running here, and that is
+  temporary", sessions sharing this machine announce a `utils.backfill_*` /
+  `utils.recalc_*` — or any hand-run `docker exec` that writes `enrichment` —
+  before starting it, naming the module, the rows and the cost. That is a
+  protocol, not a guarantee: it holds while every writer is listening.
 - **A deploy is healthy when a page renders, not when healthz answers** (#283).
   `/api/healthz` reports database, scheduler and schema and renders no
   template, so it stayed green through the 15 minutes of 2026-08-14 in which a
