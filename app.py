@@ -124,7 +124,10 @@ def create_app(testing: bool = False):
     """Application factory.
 
     The deployment entrypoint applies SQL migrations before importing this
-    factory. Scheduler startup remains gated by config and disabled in tests.
+    factory. This factory does **not** start the scheduler: every `utils/*`
+    backfill builds an app through it, and one built inside a
+    `docker compose run` container would otherwise take the scheduler over.
+    `main.py` starts it, via `should_start_scheduler` (issue #333).
     """
     app = Flask(__name__)
     app.config.from_object(Config)
@@ -315,17 +318,57 @@ def create_app(testing: bool = False):
                 interrupted,
             )
 
-        # Start the scheduler only after the migration entrypoint has completed.
-        if app.config.get("AUTO_START_SCHEDULER", False) and not app.config.get(
-            "TESTING", False
-        ):
-            from services.scheduler_service import init_scheduler
-
-            init_scheduler(app)
+        # The scheduler is NOT started here. It belongs to the web process and
+        # is started by main.py, the module gunicorn loads -- see
+        # `should_start_scheduler` below for why (issue #333).
 
     logger.info("Application initialized successfully")
 
     return app
+
+
+def should_start_scheduler(app) -> bool:
+    """Whether this process is the one entitled to own the scheduler.
+
+    `create_app()` used to start it itself, gated only on
+    `AUTO_START_SCHEDULER`. That flag is set on the compose *service*
+    (`docker-compose.yml`: `AUTO_START_SCHEDULER=${AUTO_START_SCHEDULER:-true}`),
+    so every container built from that service inherits it -- including the
+    throwaway one from `docker compose run --rm app python -m utils.<backfill>`,
+    whose whole job is a backfill.
+
+    What stopped that being obvious is that the guard inside `init_scheduler`
+    is an `flock` on a file in `tempfile.gettempdir()`, i.e. the *container's
+    own* `/tmp`. `docker exec idealista-app ...` shares that filesystem with the
+    running app and correctly logs "another scheduler instance is already
+    running"; a separate container has its own `/tmp`, finds no lock, and takes
+    it. The guard works within a container and silently does not work between
+    containers -- so the safe-looking case was safe by accident.
+
+    Measured on the mini, 2026-08-15: `docker compose run --rm app python -m
+    utils.backfill_sea_view` logged `Acquired scheduler lock (PID: 1)`, then
+    scheduled IMAP ingestion, the daily listing-status check and the lease
+    reconciliation, and ran the last of those 45 times in an 18-minute run. The
+    ingestion and status jobs did not fire only because the window missed their
+    clock times. A run straddling 19:00 would have ingested mail from a
+    throwaway container, and one straddling 10:00 would have started the
+    idealista status scrape -- the one thing in this repository that is
+    deliberately throttled.
+
+    Keeping long jobs out of `idealista-app` is the owner's standing decision,
+    because a deploy recreates that container and kills whatever runs inside it.
+    So the two safe practices collided: the safe place to run a backfill was the
+    place that stole the scheduler. The fix is to stop inferring the answer.
+    `main.py` is the module gunicorn loads and the only entry point that serves
+    HTTP; nothing under `utils/` imports it. Asking there, and only there, is
+    what makes the intent explicit rather than environmental.
+
+    The flock stays as a second line of defence for two workers inside one
+    container. It is not this decision.
+    """
+    return bool(app.config.get("AUTO_START_SCHEDULER", False)) and not app.config.get(
+        "TESTING", False
+    )
 
 
 __all__ = ["create_app", "db", "csrf", "limiter"]
