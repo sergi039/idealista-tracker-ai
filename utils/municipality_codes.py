@@ -23,9 +23,14 @@ the names collide ("Mieres" exists in Girona too), so a code from any other
 province is treated as no match.
 """
 
+import json
+import logging
+import pathlib
 import re
 import unicodedata
 from typing import Dict, Mapping, Optional
+
+logger = logging.getLogger(__name__)
 
 # The provinces the tracker watches. Codes are the first two digits of the
 # 5-digit INE municipality code.
@@ -117,3 +122,50 @@ def match(name: str, index: Mapping[str, str]) -> Optional[str]:
     if code is None or code[:2] not in PROVINCE_CODES:
         return None
     return code
+
+
+# --- the shared name index, loaded once ------------------------------------
+
+# `build_index` needs `{code: name}`, and the only place that mapping lives is
+# the committed INE reference file. `QualityOfLifeService` builds its own from
+# the same file because it is already holding that data for renta and
+# población; this loader exists for callers that want nothing but the join —
+# `PropertyLocationService`, which needs a province code to check that a
+# geocoding result is about the row's own municipality (#348).
+#
+# Cached because it is read per property during ingestion and the file does not
+# change under a running process. A missing or unreadable file yields an empty
+# index, and `match()` against an empty index returns None for everything —
+# which the caller must read as "cannot tell", never as a contradiction.
+_INE_DATA_PATH = (
+    pathlib.Path(__file__).resolve().parent.parent / "data" / "ine_municipal.json"
+)
+
+_name_index_cache: Optional[Dict[str, str]] = None
+
+
+def load_name_index() -> Dict[str, str]:
+    """Normalized INE municipality name -> 5-digit code, built once."""
+    global _name_index_cache
+    if _name_index_cache is None:
+        try:
+            with open(_INE_DATA_PATH, encoding="utf-8") as handle:
+                payload = json.load(handle)
+            municipalities = (payload or {}).get("municipalities") or {}
+            code_to_name = {
+                code: (row or {}).get("name")
+                for code, row in municipalities.items()
+                if isinstance(row, dict) and (row or {}).get("name")
+            }
+            _name_index_cache = build_index(code_to_name)
+        except Exception:
+            # An absent reference file is "cannot tell", not a reason to refuse
+            # every geocoding result on the machine.
+            logger.warning(
+                "INE reference file unusable at %s; municipality checks will "
+                "report `cannot tell`",
+                _INE_DATA_PATH,
+                exc_info=True,
+            )
+            _name_index_cache = {}
+    return _name_index_cache
