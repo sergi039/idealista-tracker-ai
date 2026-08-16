@@ -666,8 +666,10 @@ and TODO.md; respect it if you ever run both side by side.
   mid-flight and nothing recorded it — healthz was green either side and the
   watcher logged an ordinary successful deploy. So every long `utils/*` entry
   point wraps its loop in `utils/inflight.inflight(...)`, which writes
-  `data/.inflight/<module>.<pid>.json` while it runs and reports — on the next
-  start — any marker a killed predecessor left behind. `resumable=True` is a
+  `data/.inflight/<module>.<run_id>.json` (a per-run id, not the PID — a
+  containerised run is always PID 1, so the PID cannot tell two runs apart,
+  #359) while it runs and reports — on the next start — any marker a killed
+  predecessor left behind. `resumable=True` is a
   *claim*: set it only where a restart really does resume, meaning a per-row
   commit and a scope that finished rows leave (`needs_pool`, `needs_beaches`,
   `--only-missing`). Where that depends on a flag, pass the flag
