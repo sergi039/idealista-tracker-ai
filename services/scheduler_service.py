@@ -243,11 +243,18 @@ def run_listing_status_check():
             target = getattr(Config, "INGESTION_TARGET", "properties")
             if target != "lands":
                 # Not "email-driven" -- nothing checks Property statuses on a
-                # schedule at all. ListingStatusService.check_all_active_properties
-                # exists and works, but idealista currently answers 403 + captcha
-                # to the scraper, so an unattended sweep would only burn requests
-                # against a blocked host. The per-listing button on
-                # /properties/<id> is the way in until that changes (issue #136).
+                # schedule at all, and there is no bulk Property sweep to run:
+                # `check_favorites_status` and `check_all_active_listings` both
+                # select on `Land`. (This comment used to name a
+                # `check_all_active_properties` that has never existed, which
+                # read as a deliberate opt-out from a working sweep.) Writing
+                # one would only burn requests against a host that answers 403
+                # plus a DataDome captcha to this machine -- measured again
+                # 2026-08-15, 76 properties, zero listing pages reached. So
+                # /properties/<id> keeps its per-listing button, the pages say
+                # plainly that an unchecked status was never verified
+                # (services/listing_verification.py), and the owner sets a
+                # status by hand when they have looked themselves.
                 logger.info(
                     "Skipping scheduled listing status check: target=%s has no "
                     "scheduled sweep, use the per-listing check on /properties/<id>",

@@ -45,6 +45,17 @@ TRANSLATIONS = {
         "sea_view_state_likely_geometry": "Terrain allows a sea view",
         "sea_view_state_no": "No sea view",
         "sea_view_state_unknown": "Sea view unknown",
+        # A plot inside the 500 m coastal band cannot carry a dwelling at all
+        # (POLA/PESC, which outranks the municipal PGOU), so the list states
+        # the verdict rather than the raw metre count alone.
+        "plot_coast_ban": "Coastal ban zone",
+        "plot_coast_ok": "Outside coastal ban",
+        "plot_coast_unmeasured": "Coast distance unmeasured",
+        "plot_coast_none_near": "No coast within radius",
+        "plot_class_check": "Classification unverified",
+        "plot_pgou_warning": "Outside PGOU urban zones?",
+        "plot_listing_conflict": "Listing contradicts itself",
+        "plot_geocoding_failed": "Coordinate is wrong",
         # The coastline point the geometry was measured to, on a map: the one
         # thing that answers "what water is this?" without re-deriving it from
         # a distance and a bearing.
@@ -52,6 +63,16 @@ TRANSLATIONS = {
         # Shown instead of the literal source code "none": nobody computed a
         # verdict here, which is not the same as computing "no sea view".
         "sea_view_not_computed": "Not computed yet",
+        # Listing status is a claim, and a claim needs a source: `active` is
+        # the default a row is ingested with, so the surfaces say when nobody
+        # ever verified it (services/listing_verification.py).
+        "listing_state_active": "Live",
+        "listing_state_unchecked": "Unverified",
+        "listing_verified_tooltip": "Confirmed against Idealista",
+        "listing_unchecked_tooltip": "Never verified against Idealista — the default a new listing carries",
+        "listing_checked_ago": "checked %s d ago",
+        "listing_status_coverage": "Listing status: %s of %s verified against Idealista",
+        "listing_status_coverage_tooltip": "The rest carry the status they were ingested with, which nobody confirmed. Idealista blocks the automatic checker from this machine.",
         # Quick scope switches on the properties toolbar
         "favorites": "Favorites",
         "hide_removed": "Hide removed",
@@ -279,8 +300,24 @@ TRANSLATIONS = {
         "sea_view_state_likely_geometry": "El terreno permite vista al mar",
         "sea_view_state_no": "Sin vista al mar",
         "sea_view_state_unknown": "Vista al mar sin determinar",
+        "plot_coast_ban": "Zona de prohibición costera",
+        "plot_coast_ok": "Fuera de la franja costera",
+        "plot_coast_unmeasured": "Distancia a la costa sin medir",
+        "plot_coast_none_near": "Sin costa en el radio",
+        "plot_class_check": "Clasificación sin verificar",
+        "plot_pgou_warning": "¿Fuera de zonas urbanas del PGOU?",
+        "plot_listing_conflict": "El anuncio se contradice",
+        "plot_geocoding_failed": "Coordenada errónea",
         "sea_view_not_computed": "Sin calcular todavía",
         "sea_view_target_link": "ver el punto medido",
+        # Ver services/listing_verification.py.
+        "listing_state_active": "Activo",
+        "listing_state_unchecked": "Sin verificar",
+        "listing_verified_tooltip": "Confirmado en Idealista",
+        "listing_unchecked_tooltip": "Nunca verificado en Idealista — es el valor por defecto de un anuncio nuevo",
+        "listing_checked_ago": "comprobado hace %s d",
+        "listing_status_coverage": "Estado del anuncio: %s de %s verificados en Idealista",
+        "listing_status_coverage_tooltip": "El resto conserva el estado con el que se importó, que nadie confirmó. Idealista bloquea el comprobador automático desde esta máquina.",
         "favorites": "Favoritos",
         "hide_removed": "Ocultar retirados",
         "price": "Precio",
