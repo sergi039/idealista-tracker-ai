@@ -30,6 +30,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.exc import NoInspectionAvailable
 from sqlalchemy.orm.attributes import flag_modified
 
 from models import Property
@@ -257,35 +259,104 @@ class PoolService:
     # -- measurement + storage --------------------------------------------
 
     def enrich(self, prop: Property, commit: bool = False) -> Dict[str, Any]:
+        """Measure the pool datum and fold it into `enrichment["pool"]`.
+
+        `enrichment` is one JSON column, so writing it is a read-modify-write
+        over everything in it, and `_compute` above spends seconds on Overpass,
+        Places and Distance Matrix before the read happens. Any commit another
+        process makes inside that window is invisible to a comparison against
+        the copy this session loaded -- which is how the "a refusal never
+        overwrites an answer" guard below, correct within one process, lost two
+        measured rows to a concurrent backfill's refusals on 2026-08-16 (#339).
+
+        With `commit=True` the row is re-read under `FOR UPDATE` *after* the
+        measurement, so the guard compares against what is actually stored, and
+        this method owns the transaction outright: every exit ends it. It can
+        afford to because the session is required to hold nothing else, so a
+        rollback discards only this method's own locked read. Nothing survives
+        past the return -- no row lock, no open transaction to drag across the
+        rows of a backfill (the shape `sea_view_service.apply_to_property`
+        settled in #196; this is that primitive, not a second one).
+
+        With `commit=False` the caller owns the transaction, so no lock is
+        taken: holding one for an interval this method cannot see the end of is
+        worse than the race it would close. That mode makes no concurrency
+        promise, and a caller that needs one asks for `commit=True`.
+        """
+        from app import db
+
+        try:
+            state = sa_inspect(prop)
+        except NoInspectionAvailable:
+            state = None  # not a mapped instance; nothing to lock
+
+        # Validated *before* `_compute`, which spends real money: a caller
+        # error is worth a cheap raise, not a full round of Overpass, Places
+        # and Distance Matrix followed by one. The lock itself is taken after
+        # the measurement, because holding the row across those seconds is the
+        # cost #196 was avoiding.
+        locked = commit and state is not None
+        if locked:
+            # `db.session` is a scoped-session proxy, so comparing it against
+            # `state.session` is always unequal; ask the proxy whether it holds
+            # the object. This covers a detached one too.
+            if prop not in db.session:
+                raise RuntimeError(
+                    "PoolService.enrich was asked to commit a property this "
+                    "session does not hold; the write would not be persisted"
+                )
+            # The locked refresh autoflushes, which would write out anything
+            # else pending -- including a stale `enrichment` assigned before
+            # this call, erasing the very block the locked read is about to
+            # inspect. And since every exit ends the transaction, a caller's
+            # uncommitted work would be committed or discarded wholesale.
+            if db.session.new or db.session.dirty or db.session.deleted:
+                raise RuntimeError(
+                    "PoolService.enrich(commit=True) needs a session with "
+                    "nothing pending: it ends the transaction on every exit, "
+                    "which would commit or discard whatever else is in flight"
+                )
+
         part = self._compute(prop)
 
-        enrichment = dict(prop.enrichment) if isinstance(prop.enrichment, dict) else {}
-        previous = enrichment.get("pool")
-        previous = previous if isinstance(previous, dict) else {}
-        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            if locked:
+                db.session.refresh(prop, with_for_update=True)
 
-        # A refusal never overwrites an answer (sea/QoL precedent). The
-        # owner's hand-set flag lives inside the block and must survive
-        # every recompute, whatever the new status is.
-        if (
-            part.get("status") in (STATUS_UNAVAILABLE, STATUS_PENDING)
-            and previous.get("status") in MEASURED_STATUSES
-        ):
-            kept = dict(previous)
-            kept["last_attempt_status"] = part.get("status")
-            kept["last_attempt_at"] = now_iso
-            part = kept
-        if isinstance(previous.get("owner_no_pool"), dict):
-            part["owner_no_pool"] = previous["owner_no_pool"]
+            enrichment = (
+                dict(prop.enrichment) if isinstance(prop.enrichment, dict) else {}
+            )
+            previous = enrichment.get("pool")
+            previous = previous if isinstance(previous, dict) else {}
+            now_iso = datetime.now(timezone.utc).isoformat()
 
-        part["updated_at"] = now_iso
-        enrichment["pool"] = part
-        prop.enrichment = enrichment
-        flag_modified(prop, "enrichment")
-        if commit:
-            from app import db
+            # A refusal never overwrites an answer (sea/QoL precedent). The
+            # owner's hand-set flag lives inside the block and must survive
+            # every recompute, whatever the new status is.
+            if (
+                part.get("status") in (STATUS_UNAVAILABLE, STATUS_PENDING)
+                and previous.get("status") in MEASURED_STATUSES
+            ):
+                kept = dict(previous)
+                kept["last_attempt_status"] = part.get("status")
+                kept["last_attempt_at"] = now_iso
+                part = kept
+            if isinstance(previous.get("owner_no_pool"), dict):
+                part["owner_no_pool"] = previous["owner_no_pool"]
 
-            db.session.commit()
+            part["updated_at"] = now_iso
+            enrichment["pool"] = part
+            prop.enrichment = enrichment
+            flag_modified(prop, "enrichment")
+            if commit:
+                db.session.commit()
+        except Exception:
+            if locked:
+                # The FOR UPDATE is still held and this method owns the
+                # transaction; end it rather than leave the row locked for the
+                # rest of a backfill.
+                db.session.rollback()
+            raise
         return part
 
     def _compute(self, prop: Property) -> Dict[str, Any]:
