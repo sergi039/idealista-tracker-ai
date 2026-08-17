@@ -28,7 +28,7 @@ import logging
 import pathlib
 import re
 import unicodedata
-from typing import Dict, Mapping, Optional
+from typing import Dict, Mapping, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -169,3 +169,93 @@ def load_name_index() -> Dict[str, str]:
             )
             _name_index_cache = {}
     return _name_index_cache
+
+
+# Province name -> two-digit INE province code, for the case where Google's
+# answer carries no postal code (issue #371).
+#
+# Why every province and not the five this tracker watches. The check must be
+# able to tell "a different province" (a contradiction, refuse) from "not a
+# province at all" (cannot tell, accept and record). With only the watched five
+# in the table, `Lleida` would be unrecognised and read as cannot-tell — which
+# is the exact answer #348 exists to avoid giving. With all 52, a name that is
+# still unrecognised really is not a province: measured on production, the one
+# such value is `Galicia`, an autonomous community, and cannot-tell is the
+# right answer for it.
+#
+# Keys are normalized by `normalize()`, so accents fold and a leading article
+# is dropped: "A Coruña" and "La Coruña" both become "coruna", "Las Palmas"
+# becomes "palmas", "La Rioja" becomes "rioja". The alternates listed here are
+# the ones normalization cannot bridge on its own — a different word, not a
+# different spelling of the same one ("Ourense"/"Orense", "Lleida"/"Lérida",
+# "Bizkaia"/"Vizcaya").
+_PROVINCE_NAMES: Dict[str, Tuple[str, ...]] = {
+    "01": ("Álava", "Araba"),
+    "02": ("Albacete",),
+    "03": ("Alicante", "Alacant"),
+    "04": ("Almería",),
+    "05": ("Ávila",),
+    "06": ("Badajoz",),
+    "07": ("Baleares", "Illes Balears", "Islas Baleares"),
+    "08": ("Barcelona",),
+    "09": ("Burgos",),
+    "10": ("Cáceres",),
+    "11": ("Cádiz",),
+    "12": ("Castellón", "Castelló"),
+    "13": ("Ciudad Real",),
+    "14": ("Córdoba",),
+    "15": ("A Coruña", "La Coruña"),
+    "16": ("Cuenca",),
+    "17": ("Girona", "Gerona"),
+    "18": ("Granada",),
+    "19": ("Guadalajara",),
+    "20": ("Gipuzkoa", "Guipúzcoa"),
+    "21": ("Huelva",),
+    "22": ("Huesca",),
+    "23": ("Jaén",),
+    "24": ("León",),
+    "25": ("Lleida", "Lérida"),
+    "26": ("La Rioja",),
+    "27": ("Lugo",),
+    "28": ("Madrid",),
+    "29": ("Málaga",),
+    "30": ("Murcia",),
+    "31": ("Navarra", "Nafarroa"),
+    "32": ("Ourense", "Orense"),
+    "33": ("Asturias",),
+    "34": ("Palencia",),
+    "35": ("Las Palmas",),
+    "36": ("Pontevedra",),
+    "37": ("Salamanca",),
+    "38": ("Santa Cruz de Tenerife",),
+    "39": ("Cantabria",),
+    "40": ("Segovia",),
+    "41": ("Sevilla",),
+    "42": ("Soria",),
+    "43": ("Tarragona",),
+    "44": ("Teruel",),
+    "45": ("Toledo",),
+    "46": ("Valencia", "València"),
+    "47": ("Valladolid",),
+    "48": ("Bizkaia", "Vizcaya"),
+    "49": ("Zamora",),
+    "50": ("Zaragoza",),
+    "51": ("Ceuta",),
+    "52": ("Melilla",),
+}
+
+_PROVINCE_CODE_BY_NAME: Dict[str, str] = {
+    normalize(name): code for code, names in _PROVINCE_NAMES.items() for name in names
+}
+
+
+def province_code_for_name(name: str) -> Optional[str]:
+    """Two-digit province code for a province name, or None if it is not one.
+
+    None is a real answer and the caller must treat it as "cannot tell": an
+    autonomous community, a region, a country or anything else that is not one
+    of Spain's 52 provinces lands here, and none of those may contradict a
+    municipality.
+    """
+    key = normalize(str(name or ""))
+    return _PROVINCE_CODE_BY_NAME.get(key) if key else None
