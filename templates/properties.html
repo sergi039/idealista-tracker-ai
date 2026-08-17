@@ -21,6 +21,7 @@
     'search': current_filters.search or None,
     'inv_metr': current_filters.inv_metr or None,
     'sea_view': current_filters.sea_view or None,
+    'measured': current_filters.measured or None,
     'favorites': 'on' if current_filters.favorites else None,
     'hide_removed': 'on' if current_filters.hide_removed else None,
     'mode': current_filters.mode,
@@ -58,6 +59,22 @@
         </span>
     {% else %}
         <span class="text-muted">-</span>
+    {% endif %}
+{%- endmacro %}
+
+{# How much of the enabled weight the combined score rests on (#379). The
+   number itself is untouched -- owner decision: an unmeasured criterion is
+   shown, never given a value -- so this is the disclosure beside it:
+   measured/enabled, with the share and the missing criteria in the tooltip.
+   Silent when everything was measured; derived for payloads that predate
+   the recorded coverage. #}
+{% macro coverage_hint(p) -%}
+    {% set _cov = score_coverage_for(p.scoring) %}
+    {% if _cov and _cov.share is not none and _cov.share < 0.999 %}
+        <span class="small text-body-secondary text-nowrap"
+              title="{{ t('score_coverage_tooltip') }}: {{ '%.0f'|format(_cov.share * 100) }}%{% if _cov.missing %} — {{ t('score_coverage_missing') }}: {{ _cov.missing | map('replace', '_score', '') | join(', ') }}{% endif %}">
+            {{ _cov.measured }}/{{ _cov.enabled }}
+        </span>
     {% endif %}
 {%- endmacro %}
 
@@ -649,6 +666,16 @@
                         <option value="likely" {{ 'selected' if current_filters.sea_view in ('likely', 'on') }}>{{ t('sea_view_yes_or_likely') }}</option>
                     </select>
 
+                    {# #379: the score rests on the criteria that answered, and this
+                       is the reader's lever -- not a reorder the app decides for
+                       them. "Fully measured" is coverage recorded at 100%; a row
+                       scored before coverage was recorded is not full until rescored. #}
+                    <select class="form-select form-select-sm properties-filter-select" id="measured" name="measured"
+                            aria-label="{{ t('measured_filter') }}">
+                        <option value="" {{ 'selected' if not current_filters.measured }}>{{ t('measured_any') }}</option>
+                        <option value="full" {{ 'selected' if current_filters.measured == 'full' }}>{{ t('measured_full') }}</option>
+                    </select>
+
                     <select class="form-select form-select-sm properties-filter-select" id="inv_metr" name="inv_metr"
                             aria-label="Investment metrics rating">
                         <option value="" {{ 'selected' if not current_filters.inv_metr }}>Inv. metr: all</option>
@@ -858,6 +885,7 @@
                                                     {{ score_badge(p.score_lifestyle|float if p.score_lifestyle is not none else none, 'font-weight: bold; font-size: 0.9em;') }}
                                                 {% else %}
                                                     {{ score_badge(p.score_total|float if p.score_total is not none else none, '') }}
+                                                    {{ coverage_hint(p) }}
                                                 {% endif %}
                                             </td>
                                             <td class="col-fav">
@@ -1026,6 +1054,7 @@
                                             {{ score_badge(p.score_lifestyle|float if p.score_lifestyle is not none else none, 'border: 2px solid #ffc107; font-weight: bold;') }}
                                         {% else %}
                                             {{ score_badge(p.score_total|float if p.score_total is not none else none, '') }}
+                                            {{ coverage_hint(p) }}
                                         {% endif %}
                                         {% if p.property_category %}
                                             <span class="badge text-bg-secondary" style="flex-shrink: 0;">{{ p.property_category }}</span>

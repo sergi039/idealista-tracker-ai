@@ -182,16 +182,31 @@ def municipality_filter_clause(value: str):
     themselves, which have to stay reachable by the literal value the
     dropdown puts back when one is applied.
     """
+    from models import Property
+
+    spellings = stored_spellings_of(value)
+    if spellings:
+        return Property.municipality.in_(spellings)
+    return Property.municipality.ilike(f"%{value}%")
+
+
+def stored_spellings_of(value: Optional[str]) -> List[str]:
+    """Every stored spelling of the municipality `value` names; [] without a key.
+
+    The one DISTINCT-and-fold walk both the listing filter above and the
+    scorer's peer collectors (#377) use, so "same municipality" cannot drift
+    between the pages and the score. A value with no key (a truncated
+    `Ovi...`) gets [], and each caller keeps its own fallback: the filter its
+    substring match, the scorer an exact match.
+    """
     from app import db
     from models import Property
 
     key = group_key(value)
-    if key is not None:
-        spellings = [
-            stored
-            for (stored,) in db.session.query(Property.municipality).distinct()
-            if stored and group_key(stored) == key
-        ]
-        if spellings:
-            return Property.municipality.in_(spellings)
-    return Property.municipality.ilike(f"%{value}%")
+    if key is None:
+        return []
+    return [
+        stored
+        for (stored,) in db.session.query(Property.municipality).distinct()
+        if stored and group_key(stored) == key
+    ]
