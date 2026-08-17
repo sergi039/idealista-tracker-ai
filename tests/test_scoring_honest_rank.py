@@ -190,7 +190,9 @@ class TestPeersShareTheMunicipalityKey:
         values, meta = LandPropertyScorer()._collect_peer_ppm2(
             subject, min_peers=3, limit=600
         )
-        assert meta["comparable_scope"] == "municipality+subtype"
+        # #378 appends "+area_band" when the peers are also a comparable size,
+        # which these are; the tier is what this test is about.
+        assert meta["comparable_scope"].startswith("municipality+subtype")
         assert len(values) == 4
 
     def test_a_truncated_value_keeps_the_exact_match(self, app):
@@ -202,7 +204,10 @@ class TestPeersShareTheMunicipalityKey:
         values, meta = LandPropertyScorer()._collect_peer_ppm2(
             subject, min_peers=3, limit=600
         )
-        assert meta["comparable_scope"] != "municipality+subtype"
+        # A prefix check, not an inequality: since #378 the tier can carry an
+        # "+area_band" suffix, and `!=` would pass on
+        # "municipality+subtype+area_band" while the tier it denies was used.
+        assert not meta["comparable_scope"].startswith("municipality+subtype")
 
 
 # --- #379 on the page: the hint, the detail line, and the filter -------------
