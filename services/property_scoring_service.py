@@ -19,6 +19,12 @@ from services.search_profile_service import SearchProfileService
 
 logger = logging.getLogger(__name__)
 
+# How far from a listing's own area a peer may be and still be a comparable,
+# as a factor either way: 1.25 means 800-1,250 m² for a 1,000 m² plot. Measured
+# on production 2026-08-17; the table and the reasoning are in
+# `_collect_peer_ppm2`, which is the only place that reads this (#378).
+PEER_AREA_BAND_FACTOR = 1.25
+
 
 def _safe_float(value: Any) -> Optional[float]:
     try:
@@ -700,7 +706,51 @@ class HousingPropertyScorer(BasePropertyScorer):
     def _collect_peer_ppm2(
         self, prop: Property, *, min_peers: int, limit: int
     ) -> Tuple[list[float], Dict[str, Any]]:
-        """Collect peer price/m² values with progressive scope relaxation to avoid 'no peers' dead-ends."""
+        """Peer price/m² values, from comparables of a comparable size (#378).
+
+        Price per m² falls as a plot grows, so ranking a listing against every
+        size at once makes `value_score` a second reading of `size_score`.
+        Measured on production 2026-08-17 as rank correlations, which is what
+        these components are rather than an approximation of them:
+
+            land     n=319   corr(area, value%) = +0.702
+            housing  n= 87   corr(area, value%) = +0.779
+
+        (Those two are the raw signal, every size in one pool. Through this
+        ladder, with #377's key, land measures +0.604 -- the municipality tier
+        already narrows it a little.)
+
+        Both weightings look innocent on their own -- land carries value only
+        in the investment profile and size only in the lifestyle one -- but the
+        combined score is the saved mix (#257), and at the default 0.32/0.68 the
+        two channels together drive 46% of the number `/properties` sorts by.
+
+        The band is the fix: a listing is ranked against plots within a factor
+        of `PEER_AREA_BAND_FACTOR` of its own area, which is what a human means
+        by a comparable. The factor is measured, not chosen -- run through this
+        ladder over the 319 production land rows, after #377 gave the
+        municipality tier its normalised key:
+
+            factor    corr(area, value%)   rows scored   in band   median peers
+            (none)          +0.604            318/319        0          14
+            1.15            +0.109            318/319      302          17
+            1.25            +0.085            318/319      309          22
+            1.35            +0.123            318/319      311          20
+            1.50            +0.185            318/319      313          16
+
+        1.25 is the minimum of that curve, not a compromise on it: tighter
+        thins the municipality tier until the ladder falls through to a wider
+        scope (which is why 1.15 is *worse*), looser lets the confound back in.
+        It removes 86% of the double count and still finds a median of 22
+        comparables, and every row that scored before still scores.
+
+        Geography relaxes *inside* the banded pass before the band is given up,
+        because size is the confound this is about: comparing a 1,200 m² plot
+        with 1,200 m² plots in the next municipality is closer to the truth than
+        comparing it with 40,000 m² parcels next door. Only when no scope finds
+        `min_peers` at a comparable size does the old unbanded ladder run, and
+        the scope name records which happened.
+        """
         scopes: list[tuple[str, Dict[str, bool]]] = []
         # Strict -> relaxed: municipality+subtype -> subtype -> category-only.
         if prop.municipality and prop.property_subtype:
@@ -711,38 +761,62 @@ class HousingPropertyScorer(BasePropertyScorer):
             scopes.append(("subtype", {"municipality": False, "subtype": True}))
         scopes.append(("category", {"municipality": False, "subtype": False}))
 
+        area = _safe_float(prop.area)
+        band: Optional[Tuple[float, float]] = None
+        if area is not None and area > 0:
+            band = (area / PEER_AREA_BAND_FACTOR, area * PEER_AREA_BAND_FACTOR)
+
+        passes: list[Tuple[Optional[Tuple[float, float]], str]] = []
+        if band is not None:
+            passes.append((band, "+area_band"))
+        passes.append((None, ""))
+
         best_values: list[float] = []
         best_meta: Dict[str, Any] = {"comparable_scope": None}
 
-        for scope_name, cfg in scopes:
-            q = Property.query
-            if prop.search_profile_id is not None:
-                q = q.filter(Property.search_profile_id == prop.search_profile_id)
-            q = q.filter(Property.id != prop.id)
-            q = q.filter(Property.property_category == self.category)
-            if cfg.get("subtype") and prop.property_subtype:
-                q = q.filter(Property.property_subtype == prop.property_subtype)
-            if cfg.get("municipality") and prop.municipality:
-                q = q.filter(_same_municipality(prop.municipality))
-            q = q.filter(
-                Property.price.isnot(None), Property.area.isnot(None), Property.area > 0
-            )
+        for bounds, suffix in passes:
+            for scope_name, cfg in scopes:
+                q = Property.query
+                if prop.search_profile_id is not None:
+                    q = q.filter(Property.search_profile_id == prop.search_profile_id)
+                q = q.filter(Property.id != prop.id)
+                q = q.filter(Property.property_category == self.category)
+                if cfg.get("subtype") and prop.property_subtype:
+                    q = q.filter(Property.property_subtype == prop.property_subtype)
+                if cfg.get("municipality") and prop.municipality:
+                    # #377's normalised key, inside *both* passes: the banded
+                    # municipality scope is the one most listings land in, so
+                    # leaving the raw string here would keep #377's worst case
+                    # alive in the strictest tier while looking closed.
+                    q = q.filter(_same_municipality(prop.municipality))
+                q = q.filter(
+                    Property.price.isnot(None),
+                    Property.area.isnot(None),
+                    Property.area > 0,
+                )
+                if bounds is not None:
+                    q = q.filter(Property.area >= bounds[0], Property.area <= bounds[1])
 
-            peers = q.limit(limit).all()
-            values: list[float] = []
-            for p in peers:
-                p_price = _safe_float(p.price)
-                p_area = _safe_float(p.area)
-                if p_price is None or p_area is None or p_area <= 0:
-                    continue
-                values.append(p_price / p_area)
+                peers = q.limit(limit).all()
+                values: list[float] = []
+                for p in peers:
+                    p_price = _safe_float(p.price)
+                    p_area = _safe_float(p.area)
+                    if p_price is None or p_area is None or p_area <= 0:
+                        continue
+                    values.append(p_price / p_area)
 
-            if len(values) > len(best_values):
-                best_values = values
-                best_meta = {"comparable_scope": scope_name}
+                meta = {"comparable_scope": f"{scope_name}{suffix}"}
+                if bounds is not None:
+                    meta["area_band_m2"] = [round(bounds[0], 1), round(bounds[1], 1)]
 
-            if len(values) >= min_peers:
-                return values, {"comparable_scope": scope_name}
+                # A banded scope with too few peers must not win on count alone:
+                # the fallback exists to produce a score, not to be preferred.
+                if len(values) >= min_peers:
+                    return values, meta
+                if len(values) > len(best_values):
+                    best_values = values
+                    best_meta = meta
 
         return best_values, best_meta
 
