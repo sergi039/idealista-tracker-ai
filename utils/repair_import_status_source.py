@@ -43,11 +43,17 @@ the record of it. Which process wrote it is not established, and naming one
 without evidence is how a repository acquires a confident wrong fact, so this
 says what the snapshot proves and no more. The script finds nothing there
 today (measured after the fact: `listing_status_source = 'manual'`
-is 0 of 732 rows, and the 324 importer rows carry NULL). It is here because the
-out-of-band importer that produced them is unchanged and still writes `manual`
-for the batches this app's own import does not cover, so the defect can recur;
-and because a repair that is going to be run again should be one with tests, a
-snapshot and a `restore`, not one improvised each time.
+is 0 of 732 rows, and the 324 importer rows carry NULL).
+
+It is here anyway, and not because those six scripts are still broken -- they
+were fixed to write `null()` on 2026-08-17, verified by reading them. It is
+here because they live in a session scratchpad outside this repository, so
+nothing here can pin their behaviour, hold them to that fix, or notice the
+seventh script somebody writes next month. What recurs is not those files but
+the shape: an importer that *chooses* a provenance value instead of carrying
+one over. A repair for a recurring shape should have tests, a snapshot and a
+tested `restore` rather than being improvised again under time pressure, which
+is the state the first one was done in.
 
 NULL rather than `ingest`, because the app did not ingest them either. NULL is
 how this schema says nobody knows, and `read_verdict` renders it `unchecked`.
