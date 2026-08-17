@@ -53,6 +53,7 @@ from collections import Counter
 from app import create_app, db
 from models import Property
 from services.coordinate_quality import portal_coordinate, record_portal_coordinate
+from services.enrichment_write import check_writable, locked_write
 from services.fotocasa_source import SOURCE_NAME, fetch_listing
 from utils.inflight import inflight
 from utils.listing_source import FOTOCASA, source_of
@@ -75,6 +76,7 @@ OUTCOME_DIFFERS = "differs"
 OUTCOME_NO_COORDINATE = "no_coordinate_on_page"
 OUTCOME_UNREADABLE = "unreadable"
 OUTCOME_NO_STORED_COORDINATE = "row_has_no_coordinate"
+OUTCOME_ALREADY_RECORDED = "already_recorded_by_another_writer"
 
 
 def _metres_apart(lat1, lon1, lat2, lon2) -> float:
@@ -144,15 +146,29 @@ def process(prop, *, session=None, apply: bool = True) -> dict:
         }
 
     if apply:
-        # The stored value, not the page's: they agree to within a metre, and
-        # the row's own number is what every measurement on it was taken from.
-        prop.enrichment = record_portal_coordinate(
-            prop.enrichment,
-            source=SOURCE_NAME,
-            lat=prop.location_lat,
-            lon=prop.location_lon,
-        )
-        db.session.commit()
+        # Under the row lock, and the block is read *inside* it.
+        #
+        # `_scope` loads every row up front and the page reads are paced 30 s
+        # apart, so by the fortieth row this instance's copy of `enrichment`
+        # is twenty minutes old. Writing it back would restore whatever else
+        # was in it twenty minutes ago -- the #339 shape, and one that cost a
+        # coordinate on property 733 the same day this was written. What makes
+        # it non-obvious is that this tool touches one key: the loss is not of
+        # the key it writes but of every other block somebody else wrote while
+        # it was reading pages.
+        locked = check_writable(prop, True)
+        with locked_write(prop, locked=locked, commit=True):
+            # Re-check under the lock: another writer may have recorded the pin
+            # while this run was reading pages, and the refresh above has just
+            # replaced this instance's view with the stored one.
+            if portal_coordinate(prop) is not None:
+                return {"outcome": OUTCOME_ALREADY_RECORDED}
+            prop.enrichment = record_portal_coordinate(
+                prop.enrichment,
+                source=SOURCE_NAME,
+                lat=prop.location_lat,
+                lon=prop.location_lon,
+            )
 
     return {"outcome": OUTCOME_RECORDED, "metres_apart": round(apart, 1)}
 
