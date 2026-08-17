@@ -85,6 +85,25 @@ def client(app):
     return app.test_client()
 
 
+def _csrf_token(app, client):
+    """A token the test client's own session will accept.
+
+    Generated inside a request context on that session rather than scraped out
+    of a page, so a template change cannot quietly turn these tests into ones
+    that post nothing and still pass.
+    """
+    from flask_wtf.csrf import generate_csrf
+
+    with client.session_transaction():
+        pass
+    with app.test_request_context():
+        token = generate_csrf()
+        session_token = __import__("flask").session.get("csrf_token")
+    with client.session_transaction() as flask_session:
+        flask_session["csrf_token"] = session_token
+    return token
+
+
 class TestTheAlertLinkAnswersForFree:
     """408 of 730 rows carry the answer in the URL they were born with."""
 
@@ -517,3 +536,198 @@ class TestTheListSaysIt:
         assert "Advertiser,Advertiser Source" in body
         assert "owner,alert_campaign" in body
         assert "unchecked," in body
+
+
+class TestTheOwnerCanSetItByHand:
+    """The last resort, and for most of what it will touch the only one.
+
+    268 rows here are idealista links with no alert campaign, and idealista
+    answers a captcha to every request from this machine, so nothing automatic
+    can ever establish them. What this must not do is lose anything: a hand-set
+    verdict displaces a computed one under the same key, and on a fotocasa row
+    that computed one cost a fetch and a 30 s wait.
+    """
+
+    def test_a_hand_set_verdict_wins_and_says_so(self, app):
+        row = _prop(source_email_id="hs", url=URL_AGENCY)
+        db.session.add(row)
+        db.session.commit()
+
+        advertiser.set_by_hand(row, "owner")
+
+        stored = Property.query.filter_by(source_email_id="hs").one()
+        verdict = advertiser.read_verdict(stored)
+        assert verdict["state"] == "owner"
+        assert verdict["source"] == "manual"
+
+    def test_the_sql_reading_agrees(self, app):
+        """Or the seller dropdown would count a row the badge marks otherwise."""
+        row = _prop(source_email_id="hs2", url=URL_AGENCY)
+        db.session.add(row)
+        db.session.commit()
+        advertiser.set_by_hand(row, "owner")
+
+        state = (
+            db.session.query(advertiser.state_expression(Property))
+            .filter(Property.source_email_id == "hs2")
+            .scalar()
+        )
+        assert state == "owner"
+
+    def test_clearing_restores_the_reading_it_displaced(self, app):
+        """A fotocasa page reading costs a fetch and a 30 s wait; changing your
+        mind twice must not spend it again."""
+        row = _prop(
+            source_email_id="hs3",
+            url=URL_FOTOCASA,
+            enrichment={
+                "advertiser": {
+                    "state": "agency",
+                    "source": "portal_payload",
+                    "evidence": {"publisher_type": "professional"},
+                }
+            },
+        )
+        db.session.add(row)
+        db.session.commit()
+
+        advertiser.set_by_hand(row, "owner")
+        assert advertiser.read_verdict(row)["state"] == "owner"
+
+        result = advertiser.set_by_hand(row, None)
+        assert result["restored"] is True
+
+        stored = Property.query.filter_by(source_email_id="hs3").one()
+        block = stored.enrichment["advertiser"]
+        assert block["source"] == "portal_payload"
+        assert block["evidence"]["publisher_type"] == "professional"
+        assert advertiser.read_verdict(stored)["state"] == "agency"
+
+    def test_a_second_hand_set_keeps_the_computed_one_underneath(self, app):
+        """Not the first hand-set verdict: chaining must not bury the reading."""
+        row = _prop(
+            source_email_id="hs4",
+            url=URL_FOTOCASA,
+            enrichment={"advertiser": {"state": "agency", "source": "portal_payload"}},
+        )
+        db.session.add(row)
+        db.session.commit()
+
+        advertiser.set_by_hand(row, "owner")
+        advertiser.set_by_hand(row, "agency")
+        advertiser.set_by_hand(row, None)
+
+        stored = Property.query.filter_by(source_email_id="hs4").one()
+        assert stored.enrichment["advertiser"]["source"] == "portal_payload"
+
+    def test_clearing_a_row_that_had_nothing_removes_the_block(self, app):
+        row = _prop(source_email_id="hs5", url=URL_SILENT)
+        db.session.add(row)
+        db.session.commit()
+
+        advertiser.set_by_hand(row, "owner")
+        result = advertiser.set_by_hand(row, None)
+
+        assert result["restored"] is False
+        stored = Property.query.filter_by(source_email_id="hs5").one()
+        assert "advertiser" not in (stored.enrichment or {})
+        assert advertiser.read_verdict(stored)["state"] == "unchecked"
+
+    def test_only_the_two_states_a_person_can_see_are_settable(self, app):
+        """`unknown` is not offered: somebody who looked and cannot tell leaves
+        the row alone, and a hand-set silence would only overwrite a computed
+        answer."""
+        row = _prop(url=URL_SILENT)
+        for bad in ("unknown", "unchecked", "landlord", "OWNER "):
+            if bad.strip().lower() in advertiser.HAND_SET_STATES:
+                continue
+            with pytest.raises(ValueError):
+                advertiser.set_by_hand(row, bad, commit=False)
+
+
+class TestTheControlOnThePage:
+    """It is on the page, it is CSRF-protected, and it really writes."""
+
+    @staticmethod
+    def _rendered(response):
+        assert response.status_code == 200
+        body = response.get_data(as_text=True)
+        assert "An error occurred" not in body
+        return body
+
+    def test_the_control_is_rendered_with_both_choices(self, app, client):
+        row = _prop(source_email_id="ctl", url=URL_SILENT)
+        db.session.add(row)
+        db.session.commit()
+
+        body = self._rendered(client.get(f"/properties/{row.id}"))
+        assert 'id="advertiser-control"' in body
+        assert f"/properties/{row.id}/advertiser" in body
+        assert 'value="owner"' in body and 'value="agency"' in body
+        # Nothing to clear yet, so the option that would clear it is absent.
+        assert 'value="clear"' not in body
+
+    def test_a_post_without_a_token_is_refused(self, app, client):
+        """The page forms are not in the CSRF-exempt API blueprint, and this one
+        writes. There is no authentication in front of it (owner decision,
+        2026-08-08), so the token is the whole of what stops another page from
+        relabelling a listing."""
+        row = _prop(source_email_id="ctl-csrf", url=URL_SILENT)
+        db.session.add(row)
+        db.session.commit()
+        row_id = row.id
+
+        response = client.post(
+            f"/properties/{row_id}/advertiser", data={"advertiser": "owner"}
+        )
+        assert response.status_code == 400
+
+        stored = db.session.get(Property, row_id)
+        assert "advertiser" not in (stored.enrichment or {})
+
+    def test_pressing_it_records_the_verdict(self, app, client):
+        row = _prop(source_email_id="ctl2", url=URL_SILENT)
+        db.session.add(row)
+        db.session.commit()
+        row_id = row.id
+
+        response = client.post(
+            f"/properties/{row_id}/advertiser",
+            data={"advertiser": "owner", "csrf_token": _csrf_token(app, client)},
+        )
+        assert response.status_code == 302
+
+        stored = db.session.get(Property, row_id)
+        assert advertiser.read_verdict(stored)["state"] == "owner"
+
+        body = self._rendered(client.get(f"/properties/{row_id}"))
+        assert 'id="advertiser-hand-set-note"' in body
+        assert 'value="clear"' in body
+
+    def test_an_unknown_action_changes_nothing(self, app, client):
+        row = _prop(source_email_id="ctl3", url=URL_SILENT)
+        db.session.add(row)
+        db.session.commit()
+        row_id = row.id
+
+        client.post(
+            f"/properties/{row_id}/advertiser",
+            data={"advertiser": "unknown", "csrf_token": _csrf_token(app, client)},
+        )
+
+        stored = db.session.get(Property, row_id)
+        assert "advertiser" not in (stored.enrichment or {})
+
+    def test_a_recompute_leaves_a_hand_set_row_alone(self, app, monkeypatch):
+        """The Enrich button must not spend a fetch to overwrite the owner."""
+        row = _prop(source_email_id="ctl4", url=URL_FOTOCASA)
+        db.session.add(row)
+        db.session.commit()
+        advertiser.set_by_hand(row, "owner")
+
+        def explode(*args, **kwargs):
+            raise AssertionError("a listing page was fetched")
+
+        monkeypatch.setattr("services.fotocasa_source.fetch_listing", explode)
+        assert advertiser.enrich(row)["refusal"] == advertiser.REFUSAL_HAND_SET
+        assert advertiser.read_verdict(row)["state"] == "owner"

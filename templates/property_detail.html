@@ -185,21 +185,68 @@
                            where "nobody established it" has to be legible as
                            itself rather than as a missing badge, and where the
                            evidence behind the answer has room to be named. #}
+                        {# The badge is also the control. For 268 rows in this
+                           table nothing automatic can ever answer -- they are
+                           idealista links and idealista refuses this machine --
+                           so the person with the page open in their own browser
+                           is the only reader left, and the place to record what
+                           they saw is next to what the app currently believes.
+                           A hand-set verdict outranks every computed one and no
+                           recompute overwrites it. #}
                         {% set _seller = advertiser_verdict_for(property) %}
-                        {% if _seller.state == 'owner' %}
-                            <span class="badge bg-primary fw-normal" title="{{ _seller.note }}">
-                                <i class="fas fa-user me-1"></i>{{ t('advertiser_owner') }}
-                            </span>
-                        {% elif _seller.state == 'agency' %}
-                            <span class="badge bg-body-tertiary text-body-secondary border fw-normal"
-                                  title="{{ _seller.note }}{% if _seller.evidence.client_name %} — {{ _seller.evidence.client_name }}{% endif %}">
-                                <i class="fas fa-building me-1"></i>{{ t('advertiser_agency') }}
-                            </span>
-                        {% else %}
-                            <span class="badge bg-body-tertiary text-body-secondary border fw-normal"
-                                  id="advertiser-badge"
-                                  title="{{ _seller.note }}">
-                                <i class="fas fa-user-slash me-1"></i>{{ t('advertiser_' ~ _seller.state) }}
+                        {% set _seller_hand_set = _seller.source == 'manual' %}
+                        <div class="dropdown d-inline-block">
+                            <button class="btn btn-sm p-0 border-0 bg-transparent dropdown-toggle"
+                                    type="button" id="advertiser-control"
+                                    data-bs-toggle="dropdown" aria-expanded="false"
+                                    title="{{ _seller.note }}{% if _seller.evidence.client_name %} — {{ _seller.evidence.client_name }}{% endif %}">
+                                {% if _seller.state == 'owner' %}
+                                    <span class="badge bg-primary fw-normal">
+                                        <i class="fas fa-user me-1"></i>{{ t('advertiser_owner') }}
+                                    </span>
+                                {% elif _seller.state == 'agency' %}
+                                    <span class="badge bg-body-tertiary text-body-secondary border fw-normal">
+                                        <i class="fas fa-building me-1"></i>{{ t('advertiser_agency') }}
+                                    </span>
+                                {% else %}
+                                    <span class="badge bg-body-tertiary text-body-secondary border fw-normal"
+                                          id="advertiser-badge">
+                                        <i class="fas fa-user-slash me-1"></i>{{ t('advertiser_' ~ _seller.state) }}
+                                    </span>
+                                {% endif %}
+                            </button>
+                            <ul class="dropdown-menu" aria-labelledby="advertiser-control">
+                                <li><h6 class="dropdown-header">{{ t('advertiser_set_header') }}</h6></li>
+                                {% for _choice in ['owner', 'agency'] %}
+                                    <li>
+                                        <form method="POST"
+                                              action="{{ url_for('main.set_advertiser', property_id=property.id) }}">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                            <input type="hidden" name="advertiser" value="{{ _choice }}">
+                                            <button type="submit" class="dropdown-item{{ ' active' if _seller_hand_set and _seller.state == _choice }}">
+                                                {{ t('advertiser_' ~ _choice) }}
+                                            </button>
+                                        </form>
+                                    </li>
+                                {% endfor %}
+                                {% if _seller_hand_set %}
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li>
+                                        <form method="POST"
+                                              action="{{ url_for('main.set_advertiser', property_id=property.id) }}">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                            <input type="hidden" name="advertiser" value="clear">
+                                            <button type="submit" class="dropdown-item">
+                                                {{ t('advertiser_clear') }}
+                                            </button>
+                                        </form>
+                                    </li>
+                                {% endif %}
+                            </ul>
+                        </div>
+                        {% if _seller_hand_set %}
+                            <span class="text-body-secondary small" id="advertiser-hand-set-note">
+                                <i class="fas fa-pen me-1"></i>{{ t('advertiser_source_manual') }}
                             </span>
                         {% endif %}
                         {# The geocoded address, which the enrichment pass has been
