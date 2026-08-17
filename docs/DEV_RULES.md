@@ -62,6 +62,23 @@ named differently.
   `name` in `docker-compose.yml`. `tests/test_isolation_rules.py` fails if the
   variables disappear, and it also fails if their defaults stop rendering
   today's production values.
+- **A second stack must set `AUTO_START_SCHEDULER=false` in its own `.env`.**
+  Ports, container names and databases isolate; the *mailbox* does not.
+  `docker-compose.yml` defaults that flag to true, so any second stack reads
+  the same IMAP folder as production, keeps its own UID cursor, and ingests
+  the same alert emails independently. Until 2026-08-17 that also meant paying
+  Google a second time for every listing — `AUTO_TRAVEL_ENRICHMENT` defaulted
+  to on, at ~$0.36 a listing, into a database that gets thrown away and
+  restored from the mini's dump. On 2026-08-16 four new saved searches
+  delivered 306 listings to the laptop that way in three hours. Travel is off
+  by default now, so the same mistake costs about a cent a day instead of a
+  hundred dollars a morning, but the duplicate ingest itself is still not
+  something you want. `/api/healthz` answers 503 with the scheduler off, so
+  the `HEALTHCHECK` in the `Dockerfile` marks the container **unhealthy** —
+  on a dev stack that is the honest report of a deliberate choice, and it is
+  cosmetic: `restart: unless-stopped` restarts on exit, not on health. Do not
+  quiet it by making healthz accept a missing scheduler; on the mini that
+  reading is what proves ingestion is alive.
 - Legacy `IdealistaRank` (the pre-cutover project), if you still run it, is the
   other side of this contract: it owns whatever names and ports its own tree
   declares, so give this one a prefix rather than editing that one.

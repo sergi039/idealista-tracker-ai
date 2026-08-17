@@ -667,6 +667,46 @@ and TODO.md; respect it if you ever run both side by side.
 - Never read or echo `.env` — it holds IMAP and API credentials. Required
   config is validated at startup and fails fast; do not add silent
   fallbacks around it.
+- **Nothing unattended spends Google money any more** (owner decision
+  2026-08-17, after a billing overrun). `AUTO_TRAVEL_ENRICHMENT` defaults to
+  **false**; it was `true`, and it was the only automatic caller of a billed
+  Google API in this repository — everything else is behind a button press or
+  a CLI backfill. One automatic run is 6 preset Places Nearby lookups + 1 for
+  the beaches + a Distance Matrix request of ~26 elements: about **$0.36 a
+  listing**, twice a day, for however many alert emails arrived. Travel is
+  measured on request now — the Enrich button on `/properties/<id>`, or
+  `utils/recalc_property_travel.py`.
+
+  What made it expensive rather than merely wasteful is that **the scheduler
+  ran on both machines against one mailbox.** `AUTO_START_SCHEDULER` defaults
+  to true whenever `DEV_MODE` is set, so the laptop ingested the same alert
+  emails as the mini and paid Google a second time for every listing — into a
+  database that is thrown away and restored from the mini's dump. Measured
+  2026-08-17 from both databases: the mini's ingest is ~7 listings a day, and
+  on 2026-08-16 four new saved searches delivered **306 listings to the laptop
+  between 07:00 and 10:00** — roughly $110 of Google credit in one morning
+  that nobody asked for and nobody read. A dev checkout must not run the
+  scheduler; the laptop's `.env` now says `AUTO_START_SCHEDULER=false`, at the
+  cost of `/api/healthz` answering 503 there, which is correct and is what
+  `.env.example` already warned about.
+
+  **`AUTO_GEOCODING` is a separate flag and stays on**, because the paid step
+  was also the *geocoding* step: `calculate_for_property` opens with
+  `ensure_coordinates`, so switching travel off silently took the coordinate
+  with it — and with the coordinate the sea distance, the sea-view verdict,
+  the OSM amenities and the quality-of-life block, four free measurements lost
+  to a flag about a paid one, leaving a row that reads "nothing nearby" when
+  the truth is "nobody looked". That is #98's defect arriving through the back
+  door of a cost control. Geocoding is $0.005 a listing, ~$1 a month here
+  against ~$75 for the travel step. Set it false only for a machine that must
+  reach no Google API at all; ingestion then makes no billed call whatsoever.
+  `tests/test_paid_google_is_on_request.py` pins the defaults (read from a
+  clean interpreter, not from the suite's own patched `Config`), that
+  ingestion fires no Places/Distance Matrix call, that it still geocodes
+  exactly once, and that turning travel back on does not geocode twice.
+  `tests/conftest.py` forces `AUTO_GEOCODING` off per test — nine ingestion
+  modules assert something else entirely and mock no geocoder, and left on
+  they reached live Nominatim.
 - External APIs cost real money (Anthropic, OpenAI, Google Places /
   Distance Matrix). Never run bulk backfills (`utils/bulk_ai_analysis.py`,
   `utils/recalc_travel_times.py`) without an explicit ticket saying so.

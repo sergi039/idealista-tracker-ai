@@ -135,15 +135,50 @@ class Config:
         os.environ.get("AUTO_START_SCHEDULER", "true" if DEV_MODE else "false").lower()
         == "true"
     )
+    # Google Places + Distance Matrix at ingestion. **Off by default since
+    # 2026-08-17** (owner decision: "будем пересчитывать по запросу"), where it
+    # used to default to on.
+    #
+    # What that default cost, measured from both databases on 2026-08-17: one
+    # automatic run is 6 preset Places Nearby lookups + 1 for the beaches +
+    # one Distance Matrix request of ~26 elements, about $0.36 per listing.
+    # The scheduler was running on the mini *and* on the laptop against the
+    # same mailbox, so every listing was paid for twice, and the laptop's half
+    # landed in a throwaway dev database. On 2026-08-16 four new saved
+    # searches delivered 306 listings to the laptop between 07:00 and 10:00 —
+    # roughly $110 of Google credit in one morning that nobody asked for and
+    # nobody read.
+    #
+    # Travel is the only *automatic* paid caller in this repository; every
+    # other Google call is behind a button press or a CLI backfill. So turning
+    # this off is what makes the automatic path free, and the per-listing
+    # Enrich button plus `utils/recalc_property_travel.py` are how travel is
+    # measured now — on request, for the rows the owner actually cares about.
     AUTO_TRAVEL_ENRICHMENT = (
-        os.environ.get("AUTO_TRAVEL_ENRICHMENT", "true").lower() == "true"
+        os.environ.get("AUTO_TRAVEL_ENRICHMENT", "false").lower() == "true"
     )
+    # Geocoding at ingestion, on the other hand, stays on. It is the one paid
+    # call the free pass cannot do without: `ensure_coordinates` is what puts
+    # a coordinate on a new row, and with no coordinate the sea distance, the
+    # sea-view verdict, the OSM amenities and the quality-of-life block all
+    # record an honest "no coordinates" and the score is computed from almost
+    # nothing. It is also 1.4% of the bill above — $0.005 a listing, about $1
+    # a month at the ~7 listings a day this mailbox delivers, against ~$75 for
+    # the travel step it used to ride in on.
+    #
+    # It is a separate flag rather than a branch of the one above because the
+    # two now answer different questions: "may ingestion spend money on
+    # routing" (no) and "may ingestion spend a cent on placing the listing at
+    # all" (yes). Setting this to false makes ingestion reach no Google API
+    # whatsoever.
+    AUTO_GEOCODING = os.environ.get("AUTO_GEOCODING", "true").lower() == "true"
     AUTO_PROPERTY_SCORING = (
         os.environ.get("AUTO_PROPERTY_SCORING", "true").lower() == "true"
     )
-    # Distance to the sea is measured against OSM coastline geometry via Overpass,
-    # which is free -- unlike the Google APIs, whose billing is off (issue #98).
-    # The flag exists so offline runs and tests never reach for the network.
+    # Distance to the sea is measured against OSM coastline geometry via
+    # Overpass, which is free -- unlike the Google APIs above, which are
+    # billed and are the reason those two flags exist. The flag exists so
+    # offline runs and tests never reach for the network.
     SEA_DISTANCE_ENABLED = (
         os.environ.get("SEA_DISTANCE_ENABLED", "true").lower() == "true"
     )
