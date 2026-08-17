@@ -318,6 +318,14 @@ def create_app(testing: bool = False):
 
     app.jinja_env.globals["listing_verdict_for"] = listing_verdict_for
 
+    # Which site a listing is on, derived from its URL. The templates get the
+    # same two functions the filter clause is built from, so a badge cannot
+    # say one thing while the dropdown beside it counts another.
+    from utils.listing_source import source_label, source_of
+
+    app.jinja_env.globals["listing_source_for"] = source_of
+    app.jinja_env.globals["listing_source_label"] = source_label
+
     # #379: how much of the enabled weight a score rests on, read off the
     # stored payload (derived for rows scored before it was recorded). The
     # list and the detail page show it; the score itself never contains it.

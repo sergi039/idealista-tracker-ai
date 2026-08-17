@@ -56,8 +56,8 @@ from utils.cache import cache as flask_cache
 def pytest_runtest_setup(item) -> None:
     """Close the listing-status refusal breaker before every test.
 
-    `ListingStatusService.breaker` is process-global on purpose: it counts
-    idealista's refusals across calls so the next press of the check button
+    `ListingStatusService.breakers` is process-global on purpose: it counts
+    each host's refusals across calls so the next press of the check button
     does not walk into the same wall (services/listing_status_service.py). That
     is exactly the state this file exists to keep out of other tests. Three
     refusal tests in a row open it, and every later test in the process then
@@ -66,13 +66,18 @@ def pytest_runtest_setup(item) -> None:
     Measured: 21 such failures across three modules, all from the first module
     that exercised a captcha.
 
+    `reset()` drops **every** host's breaker, not just idealista's. It became a
+    per-host registry when fotocasa listings arrived, and a reset that cleared
+    one host would leak exactly the state this hook was written to stop, minus
+    the one case anybody would think to check.
+
     A hook rather than an autouse fixture, for the ordering reason in the
     teardown wrapper below. Before rather than after, so a test that arms it
     deliberately can still read it in its own teardown.
     """
     from services.listing_status_service import ListingStatusService
 
-    ListingStatusService.breaker.reset()
+    ListingStatusService.breakers.reset()
 
     # Ingestion may not reach a billed Google API unless a test says so.
     #

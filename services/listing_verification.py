@@ -65,10 +65,27 @@ _SOURCE_NOTES = {
     "ingest": "The default this listing was ingested with — never verified.",
 }
 _UNRECORDED_NOTE = "Source not recorded."
-_UNCHECKED_NOTE = (
-    "Never verified against Idealista — this is the default a new listing "
-    "carries, not a status anybody confirmed."
-)
+
+
+def _unchecked_note(record=None) -> str:
+    """ "Never verified" — against the site the listing is actually on.
+
+    This sentence used to name Idealista unconditionally. For the 56 fotocasa
+    rows in this table that was wrong twice over: nobody had checked them, and
+    the site it promised to have checked them against does not carry them at
+    all. Naming the row's own source costs one function call and removes a
+    claim the reader has no way to see through.
+    """
+    from utils.listing_source import UNKNOWN, source_label, source_of
+
+    source = source_of(record) if record is not None else UNKNOWN
+    where = (
+        "against the source site" if source == UNKNOWN else f"on {source_label(source)}"
+    )
+    return (
+        f"Never verified {where} — this is the default a new listing "
+        "carries, not a status anybody confirmed."
+    )
 
 
 def _utcnow() -> datetime:
@@ -126,7 +143,7 @@ def read_verdict(record, now: Optional[datetime] = None) -> dict:
         note = _SOURCE_NOTES[source]
     else:
         state, verified = "unchecked", False
-        note = _UNCHECKED_NOTE
+        note = _unchecked_note(record)
 
     stale = bool(
         verified

@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t('import_listings') }}{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <h1 class="h4 mb-0">{{ t('import_listings') }}</h1>
+    <a href="{{ url_for('main.properties') }}" class="btn btn-outline-secondary btn-sm">
+      <i class="fas fa-arrow-left me-1"></i>{{ t('back_to_listings') }}
+    </a>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-body">
+      <form method="POST" action="{{ url_for('main.import_listings_read') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+
+        <div class="mb-3">
+          <label for="urls" class="form-label">{{ t('import_paste_links') }}</label>
+          <textarea class="form-control font-monospace" id="urls" name="urls" rows="6"
+                    placeholder="https://www.fotocasa.es/en/buy/land/aviles/llaranes/190280914/d"></textarea>
+          <div class="form-text">{{ t('import_links_help') }}</div>
+        </div>
+
+        {# No destination here. Reading does not use one, and the choice
+           belongs next to the button that actually writes -- one control,
+           asked at the moment it applies. #}
+        <button type="submit" class="btn btn-primary">
+          <i class="fas fa-magnifying-glass me-1"></i>{{ t('import_read_pages') }}
+        </button>
+      </form>
+    </div>
+  </div>
+
+  {% if job_id and job_state in ('queued', 'running') %}
+    <div class="alert alert-info d-flex align-items-center" role="status">
+      <div class="spinner-border spinner-border-sm me-2" aria-hidden="true"></div>
+      <div>{{ t('import_reading') }}</div>
+    </div>
+    <script>
+      // The page reloads itself when the read finishes. A poll rather than a
+      // stream because the result is rendered server-side: there is one place
+      // that turns a parsed page into a row of this table, and it is Jinja.
+      (function () {
+        var jobId = {{ job_id|tojson }};
+        var timer = setInterval(function () {
+          fetch('/api/jobs/' + encodeURIComponent(jobId))
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+              var status = data && (data.status || (data.job && data.job.status));
+              if (status && status !== 'queued' && status !== 'running') {
+                clearInterval(timer);
+                window.location.reload();
+              }
+            })
+            .catch(function () { /* keep polling; a blip is not an answer */ });
+        }, 2000);
+      })();
+    </script>
+  {% endif %}
+
+  {% if job_state and job_state not in ('queued', 'running') and not rows %}
+    <div class="alert alert-warning">{{ t('import_nothing_read') }}</div>
+  {% endif %}
+
+  {% if rows %}
+    {% set new_rows = rows | selectattr('status', 'equalto', 'new') | list %}
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>{{ t('import_preview') }}</span>
+        <span class="text-muted small">{{ t('import_preview_counts')|format(new_rows|length, rows|length) }}</span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th>{{ t('status') }}</th>
+              <th>{{ t('title') }}</th>
+              <th class="text-end">{{ t('price') }}</th>
+              <th class="text-end">{{ t('area') }}</th>
+              <th>{{ t('municipality') }}</th>
+              <th>{{ t('coordinates') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+              <tr class="{% if row.status != 'new' %}table-secondary{% endif %}">
+                <td>
+                  {% if row.status == 'new' %}
+                    <span class="badge bg-success">{{ t('import_row_new') }}</span>
+                  {% elif row.status == 'duplicate' %}
+                    <span class="badge bg-secondary">{{ t('import_row_duplicate') }}</span>
+                    {% if row.existing_id %}
+                      <a href="{{ url_for('main.property_detail', property_id=row.existing_id) }}"
+                         class="small ms-1">#{{ row.existing_id }}</a>
+                    {% endif %}
+                  {% else %}
+                    <span class="badge bg-warning text-dark">{{ t('import_row_failed') }}</span>
+                    <div class="small text-muted">{{ row.reason }}</div>
+                  {% endif %}
+                </td>
+                <td>
+                  <div>{{ row.title or '—' }}</div>
+                  <a href="{{ row.url }}" target="_blank" rel="noopener noreferrer"
+                     class="small text-muted text-break">{{ row.url }}</a>
+                </td>
+                {# An em dash, never a zero: a field the page did not carry is
+                   absent, and printing 0 would make it a measurement. #}
+                <td class="text-end">{% if row.price is not none %}{{ '{:,.0f}'.format(row.price)|replace(',', ' ') }} €{% else %}—{% endif %}</td>
+                <td class="text-end">{% if row.area is not none %}{{ '{:,.0f}'.format(row.area)|replace(',', ' ') }} m²{% else %}—{% endif %}</td>
+                <td>{{ row.municipality or '—' }}</td>
+                <td class="small text-muted">
+                  {% if row.latitude is not none and row.longitude is not none %}
+                    {{ '%.5f'|format(row.latitude) }}, {{ '%.5f'|format(row.longitude) }}
+                    <span class="badge bg-light text-dark border ms-1"
+                          title="{{ t('import_approximate_help') }}">{{ t('approximate') }}</span>
+                  {% else %}—{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if new_rows %}
+        <div class="card-footer">
+          <form method="POST" action="{{ url_for('main.import_listings_confirm') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <input type="hidden" name="job_id" value="{{ job_id }}"/>
+            <div class="row g-3 align-items-end">
+              <div class="col-md-6">
+                <label for="confirm_profile_id" class="form-label">{{ t('import_destination') }}</label>
+                <div class="form-text mb-1">{{ t('import_destination_help') }}</div>
+                <select class="form-select" id="confirm_profile_id" name="profile_id" required>
+                  <option value="">{{ t('import_choose_destination') }}</option>
+                  {% for profile in profiles %}
+                    <option value="{{ profile.id }}"
+                            {% if selected_profile_id and profile.id == selected_profile_id %}selected{% endif %}>
+                      {{ profile.name }}{% if not profile.is_active %} — {{ t('archive') }}{% endif %}
+                    </option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-md-6">
+                <button type="submit" class="btn btn-success">
+                  <i class="fas fa-plus me-1"></i>{{ t('import_add_n')|format(new_rows|length) }}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      {% endif %}
+    </div>
+  {% endif %}
+
+</div>
+{% endblock %}

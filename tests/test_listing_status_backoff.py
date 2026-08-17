@@ -258,7 +258,9 @@ class TestTheServiceStopsDialling:
                 for _ in range(6):
                     assert service.observe(LISTING_URL).status == "active"
                 assert transport.call_count == 6
-                assert ListingStatusService.breaker.state()["open"] is False
+                # Per host since fotocasa arrived: ask the one this URL is on.
+                breaker = ListingStatusService.breakers.for_url(LISTING_URL)
+                assert breaker.state()["open"] is False
 
 
 class TestTheRefusalSaysWhichKind:
