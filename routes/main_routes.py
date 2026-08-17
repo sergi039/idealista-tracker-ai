@@ -40,6 +40,7 @@ from services.profile_selection import (
     parse_profile_selection,
     resolve_profile_selection,
 )
+from utils.listing_search import listing_search_clause
 from utils.municipality_grouping import (
     group_key,
     group_municipalities,
@@ -997,15 +998,11 @@ def properties():
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
             query = query.filter(municipality_filter_clause(municipality_filter))
-        if search_query:
-            pattern = f"%{search_query}%"
-            query = query.filter(
-                or_(
-                    Property.title.ilike(pattern),
-                    Property.description.ilike(pattern),
-                    Property.municipality.ilike(pattern),
-                )
-            )
+        # A pasted listing URL, or a bare listing id, is a search too --
+        # utils/listing_search.py owns what the box accepts.
+        search_clause = listing_search_clause(Property, search_query)
+        if search_clause is not None:
+            query = query.filter(search_clause)
 
         if investment_metrics_filter:
             query = _filter_by_investment_rating(
@@ -2559,15 +2556,11 @@ def map_view():
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
             query = query.filter(municipality_filter_clause(municipality_filter))
-        if search_query:
-            pattern = f"%{search_query}%"
-            query = query.filter(
-                or_(
-                    Property.title.ilike(pattern),
-                    Property.description.ilike(pattern),
-                    Property.municipality.ilike(pattern),
-                )
-            )
+        # A pasted listing URL, or a bare listing id, is a search too --
+        # utils/listing_search.py owns what the box accepts.
+        search_clause = listing_search_clause(Property, search_query)
+        if search_clause is not None:
+            query = query.filter(search_clause)
         if investment_metrics_filter:
             query = _filter_by_investment_rating(
                 query, Property, investment_metrics_filter
@@ -3659,15 +3652,11 @@ def export_properties_csv():
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
             query = query.filter(municipality_filter_clause(municipality_filter))
-        if search_query:
-            pattern = f"%{search_query}%"
-            query = query.filter(
-                or_(
-                    Property.title.ilike(pattern),
-                    Property.description.ilike(pattern),
-                    Property.municipality.ilike(pattern),
-                )
-            )
+        # A pasted listing URL, or a bare listing id, is a search too --
+        # utils/listing_search.py owns what the box accepts.
+        search_clause = listing_search_clause(Property, search_query)
+        if search_clause is not None:
+            query = query.filter(search_clause)
 
         if investment_metrics_filter:
             query = _filter_by_investment_rating(
