@@ -604,6 +604,28 @@ is `"ovi"`, and folding it into `oviedo` by prefix is exactly the wrong-pick
 hazard `resolve_truncated_municipality` refuses. It stays out of the dropdown,
 out of `/municipalities` and out of every group's rows.
 
+**The search box also takes a listing URL, and one clause says what it
+accepts** (`utils/listing_search.py`). It read `title`, `description` and
+`municipality` only, so the most natural way to look one listing up — paste the
+link from the alert email — answered "0 properties found" for a row the table
+was holding: measured 2026-08-17, `idealista.com/en/inmueble/91523456/` found
+nothing while property 351 carried that very id. Two ways in, because two
+kinds of URL are stored. The **listing id** (`/inmueble/<id>/`, or typed on its
+own) matches `idealista_property_id`, which survives both the `?utm_…` tail the
+stored link carries and a language segment that differs from the pasted one.
+The **URL itself** matches `url` for the 57 rows of 730 that are fotocasa or an
+agency's own site and have no Idealista id at all — after the tracking
+parameters are dropped, and only for a query really shaped like a link, since
+matching every search against `url` would quietly widen ordinary ones ("terreno"
+would pull in every fotocasa link by its path). The four listing surfaces share
+the clause the way they already share `municipality_filter_clause`; do not give
+one of them its own. Two details are measured rather than assumed: a pasted URL
+is matched with `ESCAPE`, because `_` is a LIKE wildcard and slugs are full of
+them, and a query of 25 digits names no listing — against this deployment's
+PostgreSQL the untyped literal psycopg2 sends returns no rows while the same
+value bound to a `bigint` parameter fails with `ERROR: bigint out of range`, so
+the guard is what makes the two agree.
+
 **Three reference files are committed on purpose, and `.gitignore` re-includes
 them one at a time.** `data/*` excludes the runtime artifacts — backfill
 snapshots, ledgers, logs — and `!data/ine_municipal.json`,
