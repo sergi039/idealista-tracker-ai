@@ -114,6 +114,12 @@ def subscriptions(app):
                 search_profile_id=profile_id,
                 listing_status="active",
                 municipality="Cudillero",
+                # A measured row has the coordinate it was measured from; a row
+                # without one renders as "Not located" rather than showing
+                # durations taken from a point it does not have (#331/#350).
+                location_lat=43.5629,
+                location_lon=-6.1453,
+                location_accuracy="precise",
                 travel={
                     "targets": {
                         "airport": {

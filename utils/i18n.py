@@ -175,6 +175,21 @@ TRANSLATIONS = {
             "address, so the times below are routes from that point rather "
             "than from this property. They do not count towards its score."
         ),
+        # No coordinate at all: nothing was asked of any API, so the empty
+        # travel column is an absence of measurement and not a measured
+        # absence (#98). The tooltip names the way out, because the row can
+        # be fixed -- the Enrich button geocodes before it measures.
+        "not_located_short": "Not located",
+        "not_located_tooltip": (
+            "This listing has no coordinate, so nothing has been measured "
+            "for it -- no travel times, and no beaches. Press Enrich to "
+            "geocode it first."
+        ),
+        "not_located_notice": (
+            "This listing has no coordinate yet, so nothing below has been "
+            "measured: travel times, beaches and distance to the sea all "
+            "start from a point this row does not have. Enrich geocodes it."
+        ),
         "from_the_geocoded_point": "from the geocoded point",
         "shared_coordinate_with": "same coordinate as",
         "shared_coordinate_tooltip": (
@@ -485,6 +500,18 @@ TRANSLATIONS = {
             "La coordenada de este anuncio es el centro de la localidad, no su "
             "dirección: los tiempos de abajo son rutas desde ese punto, no "
             "desde esta propiedad. No cuentan para su puntuación."
+        ),
+        "not_located_short": "Sin ubicar",
+        "not_located_tooltip": (
+            "Este anuncio no tiene coordenada, así que no se ha medido nada: "
+            "ni tiempos de viaje ni playas. Pulsa Enriquecer para "
+            "geocodificarlo primero."
+        ),
+        "not_located_notice": (
+            "Este anuncio todavía no tiene coordenada, así que nada de lo de "
+            "abajo se ha medido: los tiempos de viaje, las playas y la "
+            "distancia al mar parten de un punto que esta fila no tiene. "
+            "Enriquecer lo geocodifica."
         ),
         "from_the_geocoded_point": "desde el punto geocodificado",
         "shared_coordinate_with": "misma coordenada que",

@@ -55,6 +55,13 @@ TRAVEL_STATE_UNAVAILABLE = "unavailable"
 # (`utils/refresh_property_accuracy.py`), which is billed and therefore the
 # owner's call, not this service's.
 TRAVEL_STATE_APPROXIMATE_ORIGIN = "approximate_origin"
+# The row has no coordinate at all, so no request was ever made -- not to
+# Places, not to Distance Matrix, and not for the beaches that ride in that
+# same batch. Distinct from both of the above: `unavailable` means Google was
+# asked and refused, `approximate_origin` means there is a point and it is the
+# wrong one, and this means there is no point to route from. It is fixed by a
+# geocode, which is what the Enrich button does first.
+TRAVEL_STATE_NOT_LOCATED = "not_located"
 
 # Bumped from v1 with #98: v1 entries can hold an all-None distance list
 # produced by a refused request, which would keep serving an empty result for
@@ -313,6 +320,13 @@ def effective_travel_state(prop: Property) -> Optional[str]:
     the point they were measured from; they are just not about the property,
     and no amount of re-reading the stored block reveals that. The column does.
 
+    A row with no coordinate is `not_located` whatever the block says, for the
+    same reason and one step further along: those durations are not merely
+    about the wrong point, they are about a point the row can no longer name.
+    Before this the answer was the stored state, which for the rows that have
+    never been located is `None` -- indistinguishable, everywhere it is read,
+    from a listing whose targets were measured and came back empty.
+
     `travel_api_state` stays what it always was -- what the last run wrote --
     because "did Google answer" and "is this the parcel" are two questions and
     the ledger of the first is worth keeping intact.
@@ -320,7 +334,7 @@ def effective_travel_state(prop: Property) -> Optional[str]:
     if prop is None:
         return None
     if prop.location_lat is None or prop.location_lon is None:
-        return travel_api_state(prop)
+        return TRAVEL_STATE_NOT_LOCATED
     if not is_precise(getattr(prop, "location_accuracy", None)):
         return TRAVEL_STATE_APPROXIMATE_ORIGIN
     return travel_api_state(prop)

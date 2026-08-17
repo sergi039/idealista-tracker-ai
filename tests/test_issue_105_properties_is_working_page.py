@@ -215,6 +215,14 @@ class TestViewTypeToggle:
                     title="TravelledPropertyUniqueTitle",
                     search_profile_id=profile.id,
                     listing_status="active",
+                    # The coordinate is load bearing, not decoration: every
+                    # number below is measured *from* it, so a row without one
+                    # holds durations from a point it does not have
+                    # (`orphaned_travel_rows`, #331/#350) and the Travel cell
+                    # now says "Not located" instead of rendering them.
+                    location_lat=43.65,
+                    location_lon=-7.84,
+                    location_accuracy="precise",
                     travel={
                         "origin": {"lat": 43.65, "lon": -7.84},
                         "targets": {
