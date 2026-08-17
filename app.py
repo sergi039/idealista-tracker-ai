@@ -325,6 +325,14 @@ def create_app(testing: bool = False):
 
     app.jinja_env.globals["score_coverage_for"] = score_coverage
 
+    # #376 follow-up: the Manual Sync button is offered only on the machine that
+    # ingests. The endpoint refuses on its own (routes/api_routes.py) — this is
+    # the second reader of the same rule so the navbar does not present a control
+    # that always answers 409.
+    from services.ingest_policy import machine_is_ingester
+
+    app.jinja_env.globals["machine_is_ingester"] = machine_is_ingester
+
     # One Maps URL builder for every surface: list travel cells, detail rows,
     # beach lines. Templates used to concatenate free-text place names into
     # /maps/dir/ paths — unencoded, and resolvable to the wrong town.

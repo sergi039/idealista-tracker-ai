@@ -114,6 +114,16 @@ class TestAPIHealthCheck:
 class TestManualIngestion:
     """Test manual ingestion endpoint"""
 
+    @pytest.fixture(autouse=True)
+    def _this_machine_ingests(self, monkeypatch):
+        # These tests are about what ingestion DOES, so they have to say out loud
+        # that this machine may ingest at all. Without it every one of them gets
+        # the 409 from services/ingest_policy.py -- the test environment sets no
+        # AUTO_START_SCHEDULER, so the fail-closed default applies (#376).
+        from config import Config
+
+        monkeypatch.setattr(Config, "AUTO_START_SCHEDULER", True)
+
     @patch("services.property_imap_service.PropertyIMAPService")
     def test_manual_ingestion_success(self, mock_imap_service, client):
         """Test successful manual ingestion"""
