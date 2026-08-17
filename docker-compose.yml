@@ -41,7 +41,12 @@ services:
       # re-pays Overpass for coastline cells the last one already fetched.
       # Overridable so an external Redis can be pointed at instead.
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - AUTO_START_SCHEDULER=${AUTO_START_SCHEDULER:-true}
+      # Fail-closed on purpose. config.py already defaults this to false outside
+      # DEV_MODE; a `:-true` here overrode that for every container built from
+      # this file, which is how a dev checkout came to poll the same mailbox as
+      # the deployment - two divergent databases and a second Google bill per
+      # listing (#376). The machine that IS the deployment says so in its .env.
+      - AUTO_START_SCHEDULER=${AUTO_START_SCHEDULER:-false}
       # AI runs on the owner's subscriptions via the host bridge, never on API keys.
       - AI_BRIDGE_URL=${AI_BRIDGE_URL:-http://host.docker.internal:5061}
     extra_hosts:
