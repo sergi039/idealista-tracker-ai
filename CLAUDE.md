@@ -855,6 +855,24 @@ and TODO.md; respect it if you ever run both side by side.
   Infrastructure card at all — an absence that reads as "nothing nearby". Do
   not add a second amenity client, and do not let a refusal become empty
   counts.
+- **What counts as a comparable listing is decided in one place**
+  (`services/property_comparables.py`, #386). Price per m² collapses as a plot
+  grows — measured 2026-08-17 over 459 production plots, Spearman −0.842, with
+  band medians running €120.5/m² under 800 m² down to €4.4/m² above 6,000 —
+  so a peer set that ignores size answers a different question and the answer
+  reads like this one's. #378 measured that and #383 fixed the *scorer*; the AI
+  prompt built its own pool and was still unbanded, which is how property 351
+  (1,300 m², €46/m²) came to be judged `OVERPRICED` against a "local peer
+  average" of €26/m² carried by two four-thousand-square-metre parcels, on the
+  same page where its own Value component put it below the median at 52.6/100.
+  Its listed comparables were worse: `ORDER BY score_total DESC`, and
+  `size_score` is a component of that score, so the three shown were always the
+  largest and therefore the cheapest per m². Import the ladder, do not copy it,
+  and pick comparables by size proximity. `band=False` exists for the size
+  component alone, where a window around the listing's own area would be
+  circular. A prompt whose pool spans mixed sizes **says so** — a bare average
+  is read as "what the neighbours ask", which is #98's defect with a number in
+  place of a blank. Two consumers already drifted; the third will too.
 - **An enrichment run reports how complete it was, not just pass or fail**
   (#153, owner decision 2026-08-09). `EnrichmentService.enrich_land` reduces
   its three sources to `ok` / `degraded` / `unavailable`, stamps that on the

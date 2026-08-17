@@ -9,6 +9,7 @@ from app import db
 from config import Config
 from models import Property, SearchProfile
 from services.coordinate_quality import coordinate_slack_m, normalize_accuracy
+from services.property_comparables import collect_comparables
 from services.sea_distance_service import (
     STATUS_APPROXIMATE_ORIGIN,
     STATUS_NO_COASTLINE,
@@ -19,11 +20,10 @@ from services.search_profile_service import SearchProfileService
 
 logger = logging.getLogger(__name__)
 
-# How far from a listing's own area a peer may be and still be a comparable,
-# as a factor either way: 1.25 means 800-1,250 m² for a 1,000 m² plot. Measured
-# on production 2026-08-17; the table and the reasoning are in
-# `_collect_peer_ppm2`, which is the only place that reads this (#378).
-PEER_AREA_BAND_FACTOR = 1.25
+# What counts as a comparable -- the scope ladder, `PEER_AREA_BAND_FACTOR` and
+# #377's municipality key -- lives in `services/property_comparables.py`, with
+# the measurements behind it. This scorer and the AI prompt are both consumers
+# of that one answer (#386); neither owns it.
 
 
 def _safe_float(value: Any) -> Optional[float]:
@@ -350,29 +350,6 @@ class BasePropertyScorer:
         self, prop: Property, profile: Optional[SearchProfile]
     ) -> PropertyScoreResult:
         raise NotImplementedError
-
-
-def _same_municipality(name: str):
-    """Peers of a municipality however the row spells it (#377).
-
-    `properties.municipality` is the free text the alert email carried, and
-    the same place arrives as `Gijón` and `Gijon`, `Soto del Barco` and `Soto
-    Del Barco`. Comparing the raw string made a listing in `Carreño` no peer of
-    one in `Carreno`, so the municipality tier silently thinned or fell through
-    to the whole region: measured 2026-08-17, 8 rows lost the tier outright
-    (property 462 in Castrillón: 1 raw peer against 20) and 56 more compared
-    against a fraction of it. The key is `utils.municipality_grouping.group_key`
-    -- the same one the /properties dropdown and /municipalities use -- so the
-    scorer's idea of "same municipality" cannot drift from the pages'. A value
-    with no key (a truncated `Ovi...`) keeps the exact match: folding it into
-    Oviedo by prefix is the wrong-pick hazard the grouping module refuses.
-    """
-    from utils.municipality_grouping import stored_spellings_of
-
-    spellings = stored_spellings_of(name)
-    if not spellings:
-        return Property.municipality == name
-    return Property.municipality.in_(spellings)
 
 
 class HousingPropertyScorer(BasePropertyScorer):
@@ -750,119 +727,57 @@ class HousingPropertyScorer(BasePropertyScorer):
         comparing it with 40,000 m² parcels next door. Only when no scope finds
         `min_peers` at a comparable size does the old unbanded ladder run, and
         the scope name records which happened.
+
+        The ladder itself now lives in `services/property_comparables.py`: the
+        AI prompt asks the same question of the same table and was still
+        answering it unbanded (#386), which is what a rule written down twice
+        does. This method is the price/m² reading of that one pool.
         """
-        scopes: list[tuple[str, Dict[str, bool]]] = []
-        # Strict -> relaxed: municipality+subtype -> subtype -> category-only.
-        if prop.municipality and prop.property_subtype:
-            scopes.append(
-                ("municipality+subtype", {"municipality": True, "subtype": True})
-            )
-        if prop.property_subtype:
-            scopes.append(("subtype", {"municipality": False, "subtype": True}))
-        scopes.append(("category", {"municipality": False, "subtype": False}))
+        rows, meta = collect_comparables(
+            prop,
+            category=self.category,
+            min_peers=min_peers,
+            limit=limit,
+        )
+        values: list[float] = []
+        for p in rows:
+            p_price = _safe_float(p.price)
+            p_area = _safe_float(p.area)
+            if p_price is None or p_area is None or p_area <= 0:
+                continue
+            values.append(p_price / p_area)
 
-        area = _safe_float(prop.area)
-        band: Optional[Tuple[float, float]] = None
-        if area is not None and area > 0:
-            band = (area / PEER_AREA_BAND_FACTOR, area * PEER_AREA_BAND_FACTOR)
-
-        passes: list[Tuple[Optional[Tuple[float, float]], str]] = []
-        if band is not None:
-            passes.append((band, "+area_band"))
-        passes.append((None, ""))
-
-        best_values: list[float] = []
-        best_meta: Dict[str, Any] = {"comparable_scope": None}
-
-        for bounds, suffix in passes:
-            for scope_name, cfg in scopes:
-                q = Property.query
-                if prop.search_profile_id is not None:
-                    q = q.filter(Property.search_profile_id == prop.search_profile_id)
-                q = q.filter(Property.id != prop.id)
-                q = q.filter(Property.property_category == self.category)
-                if cfg.get("subtype") and prop.property_subtype:
-                    q = q.filter(Property.property_subtype == prop.property_subtype)
-                if cfg.get("municipality") and prop.municipality:
-                    # #377's normalised key, inside *both* passes: the banded
-                    # municipality scope is the one most listings land in, so
-                    # leaving the raw string here would keep #377's worst case
-                    # alive in the strictest tier while looking closed.
-                    q = q.filter(_same_municipality(prop.municipality))
-                q = q.filter(
-                    Property.price.isnot(None),
-                    Property.area.isnot(None),
-                    Property.area > 0,
-                )
-                if bounds is not None:
-                    q = q.filter(Property.area >= bounds[0], Property.area <= bounds[1])
-
-                peers = q.limit(limit).all()
-                values: list[float] = []
-                for p in peers:
-                    p_price = _safe_float(p.price)
-                    p_area = _safe_float(p.area)
-                    if p_price is None or p_area is None or p_area <= 0:
-                        continue
-                    values.append(p_price / p_area)
-
-                meta = {"comparable_scope": f"{scope_name}{suffix}"}
-                if bounds is not None:
-                    meta["area_band_m2"] = [round(bounds[0], 1), round(bounds[1], 1)]
-
-                # A banded scope with too few peers must not win on count alone:
-                # the fallback exists to produce a score, not to be preferred.
-                if len(values) >= min_peers:
-                    return values, meta
-                if len(values) > len(best_values):
-                    best_values = values
-                    best_meta = meta
-
-        return best_values, best_meta
+        # `size_comparable` restates the `+area_band` suffix already in
+        # `comparable_scope`; the AI prompt needs it as a flag because it has to
+        # *say* whether it compared like with like, the scoring payload does not
+        # and would only gain a second copy of one fact.
+        meta = {k: v for k, v in meta.items() if k != "size_comparable"}
+        return values, meta
 
     def _collect_peer_areas(
         self, prop: Property, *, min_peers: int, limit: int
     ) -> Tuple[list[float], Dict[str, Any]]:
-        scopes: list[tuple[str, Dict[str, bool]]] = []
-        if prop.municipality and prop.property_subtype:
-            scopes.append(
-                ("municipality+subtype", {"municipality": True, "subtype": True})
-            )
-        if prop.property_subtype:
-            scopes.append(("subtype", {"municipality": False, "subtype": True}))
-        scopes.append(("category", {"municipality": False, "subtype": False}))
+        """Peer areas for the size component — the same ladder, unbanded.
 
-        best_values: list[float] = []
-        best_meta: Dict[str, Any] = {"comparable_scope": None}
-
-        for scope_name, cfg in scopes:
-            q = Property.query
-            if prop.search_profile_id is not None:
-                q = q.filter(Property.search_profile_id == prop.search_profile_id)
-            q = q.filter(Property.id != prop.id)
-            q = q.filter(Property.property_category == self.category)
-            if cfg.get("subtype") and prop.property_subtype:
-                q = q.filter(Property.property_subtype == prop.property_subtype)
-            if cfg.get("municipality") and prop.municipality:
-                q = q.filter(_same_municipality(prop.municipality))
-            q = q.filter(Property.area.isnot(None), Property.area > 0)
-
-            peers = q.limit(limit).all()
-            values: list[float] = []
-            for p in peers:
-                p_area = _safe_float(p.area)
-                if p_area is None or p_area <= 0:
-                    continue
-                values.append(p_area)
-
-            if len(values) > len(best_values):
-                best_values = values
-                best_meta = {"comparable_scope": scope_name}
-
-            if len(values) >= min_peers:
-                return values, {"comparable_scope": scope_name}
-
-        return best_values, best_meta
+        A band around the listing's own area would be circular here: the
+        question is how big this plot is against the others, which a window
+        centred on its own size cannot answer.
+        """
+        rows, meta = collect_comparables(
+            prop,
+            category=self.category,
+            min_peers=min_peers,
+            limit=limit,
+            require_price=False,
+            band=False,
+        )
+        values: list[float] = []
+        for p in rows:
+            p_area = _safe_float(p.area)
+            if p_area is None or p_area <= 0:
+                continue
+            values.append(p_area)
+        return values, {"comparable_scope": meta.get("comparable_scope")}
 
     def _sea_score(
         self, prop: Property, near_m: float, far_m: float
