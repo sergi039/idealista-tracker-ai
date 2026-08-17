@@ -56,6 +56,61 @@ def coordinate_slack_m(value: Any) -> float:
     return 0.0 if is_precise(value) else float(APPROXIMATE_COORD_SLACK_M)
 
 
+def improves_on(new_accuracy: Any, old_accuracy: Any) -> bool:
+    """Is `new_accuracy` worth replacing `old_accuracy` with?
+
+    Only `precise` improves on anything, because `precise` is the only label
+    this module treats as different: it is the one that grants zero slack and
+    unlocks a paid travel run. `approximate` replacing `approximate` buys
+    nothing at all -- every consumer already reads both the same way -- so a
+    swap between them is not an upgrade, it is a coin toss with the row's
+    location.
+    """
+    if is_precise(new_accuracy):
+        return not is_precise(old_accuracy)
+    return False
+
+
+def portal_coordinate(record: Any) -> Optional[Tuple[float, float, str]]:
+    """The coordinate the source portal published for this listing, if any.
+
+    Written by an importer into `enrichment["import"]["coordinate"]` and read
+    here, because this is where "which of two coordinates should a row keep"
+    already lives.
+
+    It matters because the two coordinates a row can carry are not the same
+    kind of thing. A portal pin is placed for *this advert*; a geocode is
+    derived from whatever the title says, and
+    `PropertyLocationService._build_geocoding_queries` reads the text after
+    "in" -- which for a plot is usually a district or a village and not a
+    street. Measured on property 733 (2026-08-17): re-geocoding
+    "Land for sale in Llaranes, Avilés" answered with the Llaranes district
+    centroid, 2447 m from fotocasa's own pin, still `approximate`, and the
+    advert text places the plot in Valliniello rather than Llaranes at all --
+    so the query named the wrong neighbourhood as well. See issue #393.
+
+    Returns `(lat, lon, source)` or None. A block that does not parse is None
+    rather than an exception: it is provenance, and a row with a malformed one
+    should still geocode.
+    """
+    enrichment = getattr(record, "enrichment", None)
+    if not isinstance(enrichment, dict):
+        return None
+    block = enrichment.get("import")
+    if not isinstance(block, dict):
+        return None
+    coordinate = block.get("coordinate")
+    if not isinstance(coordinate, dict):
+        return None
+    try:
+        lat = float(coordinate["lat"])
+        lon = float(coordinate["lon"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    source = str(coordinate.get("source") or "portal")
+    return lat, lon, source
+
+
 def distance_bounds_m(
     measured_m: Optional[float], slack_m: float
 ) -> Tuple[Optional[float], Optional[float]]:
