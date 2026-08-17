@@ -74,6 +74,31 @@ def pytest_runtest_setup(item) -> None:
 
     ListingStatusService.breaker.reset()
 
+    # Ingestion may not reach a billed Google API unless a test says so.
+    #
+    # `AUTO_GEOCODING` defaults to *true* in production (config.py, 2026-08-17):
+    # it is the one paid call the free enrichers cannot do without, and at
+    # $0.005 a listing it is 1.4% of what the travel step it replaced cost. In
+    # this suite that default is wrong twice over. Nine modules drive
+    # `run_ingestion()` to assert something else entirely -- the UID cursor,
+    # profile dedup, municipality truncation, sale-only filtering -- and none
+    # of them mocks a geocoder, because until this flag existed "paid
+    # enrichment off" was one switch and turning travel off turned geocoding
+    # off with it. Left on, all nine reached live Nominatim (the fallback in
+    # `utils/geocoding.py`) and tests/network_guard.py failed the run, which is
+    # exactly what it is for.
+    #
+    # Mocking the geocoder in each of them is the answer that does not hold:
+    # the tenth ingestion test would not know it had to, and would reach the
+    # network again. So the default here is off, and the two tests that are
+    # *about* this flag turn it on for themselves
+    # (tests/test_paid_google_is_on_request.py). That file also reads the real
+    # production defaults out of a clean interpreter, so switching them off
+    # here cannot make a wrong default look right.
+    from config import Config
+
+    Config.AUTO_GEOCODING = False
+
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_teardown(item, nextitem):

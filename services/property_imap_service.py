@@ -810,6 +810,27 @@ class PropertyIMAPService:
                     db.session.commit()
                     processed_count += 1
 
+                    # The paid step, and the cheap one that has to survive it.
+                    #
+                    # `AUTO_TRAVEL_ENRICHMENT` is off by default since
+                    # 2026-08-17 (see config.py for what the old default cost).
+                    # It used to be the only thing here, and it geocoded the row
+                    # on its way to Google — `calculate_for_property` opens with
+                    # `ensure_coordinates`. So switching it off would silently
+                    # take the coordinate with it, and with the coordinate go
+                    # the sea distance, the sea-view verdict, the OSM amenities
+                    # and the quality-of-life block below: four free
+                    # measurements lost to a flag about a paid one, and a row
+                    # that reads "nothing nearby" when the truth is "nobody
+                    # looked". That is #98's defect arriving through the back
+                    # door of a cost control.
+                    #
+                    # Hence the `elif`, and not a second unconditional call:
+                    # when travel runs it has already geocoded the row, and
+                    # `ensure_coordinates` returns early on a row that has
+                    # coordinates, so a second call would be free and
+                    # pointless — but the two branches state the intent, which
+                    # is that exactly one geocode happens per new listing.
                     if getattr(Config, "AUTO_TRAVEL_ENRICHMENT", False):
                         try:
                             from services.property_travel_service import (
@@ -823,6 +844,28 @@ class PropertyIMAPService:
                                 "Property travel enrichment failed for %s: %s",
                                 prop.id,
                                 enrich_error,
+                            )
+                            db.session.rollback()
+                    elif getattr(Config, "AUTO_GEOCODING", True):
+                        try:
+                            from services.property_location_service import (
+                                PropertyLocationService,
+                            )
+
+                            PropertyLocationService().ensure_coordinates(prop)
+                            # `ensure_coordinates` writes to the instance and
+                            # leaves the commit to its caller, exactly as
+                            # `utils/refresh_property_accuracy.py` does. It
+                            # commits either way: a refusal is recorded on the
+                            # row as a refusal (`enrichment["geocoding"]
+                            # ["refused"]`), and that record is what stops the
+                            # next run paying to re-ask the same question.
+                            db.session.commit()
+                        except Exception as geocode_error:
+                            logger.warning(
+                                "Geocoding failed for %s: %s",
+                                prop.id,
+                                geocode_error,
                             )
                             db.session.rollback()
 
