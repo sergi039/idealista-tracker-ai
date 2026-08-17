@@ -120,6 +120,8 @@ TRANSLATIONS = {
         "advertiser_source_alert_campaign": "From the Idealista alert email that delivered this listing.",
         "advertiser_source_portal_payload": "Read from the listing page.",
         "advertiser_source_manual": "Set by hand.",
+        "advertiser_set_header": "Record who is selling",
+        "advertiser_clear": "Clear — use the computed reading",
         # Quick scope switches on the properties toolbar
         "favorites": "Favorites",
         "hide_removed": "Hide removed",
@@ -432,6 +434,8 @@ TRANSLATIONS = {
         "advertiser_source_alert_campaign": "Del correo de alerta de Idealista que trajo este anuncio.",
         "advertiser_source_portal_payload": "Leído de la página del anuncio.",
         "advertiser_source_manual": "Establecido a mano.",
+        "advertiser_set_header": "Registrar quién vende",
+        "advertiser_clear": "Borrar — usar la lectura calculada",
         "favorites": "Favoritos",
         "hide_removed": "Ocultar retirados",
         "price": "Precio",

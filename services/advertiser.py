@@ -62,7 +62,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import and_, case, func, literal
+from sqlalchemy import case, func, literal
 from sqlalchemy.orm.attributes import flag_modified
 
 logger = logging.getLogger(__name__)
@@ -214,6 +214,77 @@ def portal_verdict(
     }
 
 
+# What a hand-set block keeps of the reading it displaced. Clearing the
+# hand-set verdict puts that reading back, which is the whole reason it is
+# kept: on a fotocasa row the computed verdict lives under the same key, so a
+# clear that simply deleted the key would throw away a page reading nobody can
+# cheaply retake -- 268 rows in this table cannot be re-read at all, and the
+# fotocasa ones cost a fetch and a 30 s wait each.
+REPLACED_KEY = "replaced"
+
+# The states a person may record. `unknown` is deliberately absent: somebody
+# who looked and cannot tell leaves the row alone, and `unchecked` already says
+# "nobody established this". Offering a third button would only let the owner
+# overwrite a computed answer with a hand-set silence.
+HAND_SET_STATES: Tuple[str, ...] = (OWNER, AGENCY)
+
+
+def set_by_hand(
+    prop: Any, state: Optional[str], *, commit: bool = True
+) -> Dict[str, Any]:
+    """Record the owner's own reading of who is selling, or clear it.
+
+    `state` of `owner`/`agency` writes a hand-set verdict, which outranks every
+    computed one and which no recompute may overwrite (`enrich` refuses such a
+    row outright). `None` clears it and puts the row back on the computed path,
+    restoring the reading the hand-set verdict displaced if there was one.
+
+    This is the only writer of `SOURCE_MANUAL` here, and it exists because for
+    268 rows there is no other way: they are idealista links this machine is
+    refused by, so a person with the page open in their own browser is the only
+    reader left. What it must not become is a bulk path -- one row, one press.
+    """
+    from services.enrichment_write import check_writable, locked_write
+
+    wanted = (state or "").strip().lower() or None
+    if wanted is not None and wanted not in HAND_SET_STATES:
+        raise ValueError(f"not a hand-settable advertiser state: {state!r}")
+
+    locked = check_writable(prop, commit)
+    with locked_write(prop, locked=locked, commit=commit):
+        enrichment = dict(getattr(prop, "enrichment", None) or {})
+        previous = enrichment.get(ENRICHMENT_KEY)
+        previous = previous if isinstance(previous, dict) else {}
+        was_hand_set = previous.get("source") == SOURCE_MANUAL
+
+        if wanted is None:
+            restored = previous.get(REPLACED_KEY) if was_hand_set else None
+            if isinstance(restored, dict):
+                enrichment[ENRICHMENT_KEY] = restored
+            else:
+                enrichment.pop(ENRICHMENT_KEY, None)
+            outcome = {"state": None, "restored": isinstance(restored, dict)}
+        else:
+            block: Dict[str, Any] = {
+                "state": wanted,
+                "source": SOURCE_MANUAL,
+                "checked_at": _utcnow().isoformat(),
+                "evidence": {},
+            }
+            # Chained hand-sets must not bury the computed reading: the second
+            # press keeps what the first one displaced, not the first press.
+            displaced = previous.get(REPLACED_KEY) if was_hand_set else previous
+            if isinstance(displaced, dict) and displaced:
+                block[REPLACED_KEY] = displaced
+            enrichment[ENRICHMENT_KEY] = block
+            outcome = {"state": wanted, "restored": False}
+
+        prop.enrichment = enrichment
+        flag_modified(prop, "enrichment")
+
+    return outcome
+
+
 def stored_block(record: Any) -> Optional[Dict[str, Any]]:
     """The verdict a reading left on the row, or None."""
     enrichment = getattr(record, "enrichment", None)
@@ -250,26 +321,26 @@ def read_verdict(record: Any) -> Dict[str, Any]:
     * `evidence`   -- what the source actually said, for the detail page
     * `note`       -- one sentence a tooltip can carry verbatim
 
-    Precedence is strength, not recency. A hand-set verdict outranks
-    everything; a page that was read outranks a campaign token; both outrank
-    silence; and a stored `unknown` -- a page that was read and said nothing
-    recognisable -- is taken only after the campaign token has been given its
-    chance, because "the source did not say" must not bury an answer the row is
-    already holding.
+    Precedence is strength, not recency. A stored reading outranks a campaign
+    token; both outrank silence; and a stored `unknown` -- a page that was read
+    and said nothing recognisable -- is taken only after the campaign token has
+    been given its chance, because "the source did not say" must not bury an
+    answer the row is already holding.
+
+    A hand-set verdict needs no branch of its own here, and there deliberately
+    is not one. It is stored under the same key as a computed reading, so the
+    first branch already returns it, `source` already says `manual`, and there
+    is no such thing as a hand-set `unknown` for the second branch to reach --
+    `set_by_hand` refuses every state but the two a person can actually see.
+    An earlier version did carry that branch; removing the fix left the tests
+    green, which is how a dead branch announces itself. Where a hand-set
+    verdict really does outrank something is on the *write* side, and that has
+    its own guard and its own test: `enrich` refuses such a row before it
+    fetches anything.
     """
     block = stored_block(record)
     stored_state = (block or {}).get("state")
     stored_state = stored_state if stored_state in ESTABLISHED_STATES else None
-
-    if stored_state and is_hand_set(record):
-        return {
-            "state": stored_state,
-            "established": True,
-            "source": SOURCE_MANUAL,
-            "checked_at": (block or {}).get("checked_at"),
-            "evidence": (block or {}).get("evidence") or {},
-            "note": _note(stored_state, SOURCE_MANUAL),
-        }
 
     if stored_state in MEASURED_STATES:
         source = (block or {}).get("source") or SOURCE_PORTAL
@@ -354,16 +425,11 @@ def state_expression(model: Any):
     both.
     """
     stored = model.enrichment[ENRICHMENT_KEY]["state"].as_string()
-    stored_source = model.enrichment[ENRICHMENT_KEY]["source"].as_string()
     url = func.lower(func.coalesce(model.url, ""))
 
-    branches: List[Any] = [
-        (
-            and_(stored_source == SOURCE_MANUAL, stored.in_(ESTABLISHED_STATES)),
-            stored,
-        ),
-        (stored.in_(MEASURED_STATES), stored),
-    ]
+    # No branch for a hand-set verdict, for the reason `read_verdict` gives:
+    # it is stored under the same key and the first branch already returns it.
+    branches: List[Any] = [(stored.in_(MEASURED_STATES), stored)]
     for token, state in _ALERT_TOKENS.items():
         pattern = "%" + token.replace("_", _LIKE_ESCAPE + "_") + "%"
         branches.append((url.like(pattern, escape=_LIKE_ESCAPE), literal(state)))
