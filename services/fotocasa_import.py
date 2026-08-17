@@ -45,6 +45,8 @@ import requests
 from sqlalchemy import null
 from sqlalchemy.exc import IntegrityError
 
+from services.coordinate_quality import record_portal_coordinate
+
 from services import advertiser
 from services.fotocasa_source import (
     SOURCE_NAME,
@@ -323,24 +325,6 @@ def insert_rows(
                 # exact coordinate, the evidence for revisiting the label above
                 # is already in the row rather than needing a re-fetch.
                 "portal_accuracy": row.get("portal_accuracy") or {},
-                # The pin the portal placed for *this advert*, kept so a
-                # re-geocode cannot silently replace it with something derived
-                # from the title. `services/coordinate_quality.py` reads this
-                # and decides; the row is where the evidence has to live,
-                # because a listing may be gone by the time anyone asks.
-                # Issue #393: on property 733 a refresh answered with a
-                # district centroid 2447 m away, and the pin was recoverable
-                # only because a session happened to still hold it.
-                "coordinate": (
-                    {
-                        "source": SOURCE_NAME,
-                        "lat": str(row["latitude"]),
-                        "lon": str(row["longitude"]),
-                    }
-                    if row.get("latitude") is not None
-                    and row.get("longitude") is not None
-                    else None
-                ),
             },
         }
 
@@ -358,6 +342,16 @@ def insert_rows(
         # valid, was discarded while the page said "Import failed". The
         # docstring promised exactly this could not happen; it was true only
         # of the sequential case the test exercised.
+        # The portal's own pin, through the writer that lives beside the reader
+        # in `services/coordinate_quality.py`, so a re-geocode cannot silently
+        # replace it with something derived from the title (#393).
+        prop.enrichment = record_portal_coordinate(
+            prop.enrichment,
+            source=SOURCE_NAME,
+            lat=row.get("latitude"),
+            lon=row.get("longitude"),
+        )
+
         try:
             with db.session.begin_nested():
                 db.session.add(prop)
