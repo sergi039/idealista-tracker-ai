@@ -214,6 +214,39 @@ rows carry a subscription badge, and the travel columns fall back to the
 preset targets — a *custom* target id belongs to one profile, so it would
 label a column with a destination most rows were never measured against.
 
+**Retiring a subscription and hiding one are different questions** (owner
+request, 2026-08-17). `is_active = false` *archives*: the subscription leaves
+the chips and is offered under *Archive*, one tick away, because a saved
+search that stopped still holds listings worth reaching. That is the wrong
+answer for a search that is still running and that the owner does not want on
+screen — production carries fourteen subscriptions, eleven of them active,
+three of those created by the ingester and holding one listing each, and every
+one takes a chip on the one working page. So `search_profiles.is_hidden`
+(migration 020) takes a subscription off the screens: no chip, no menu entry,
+not under *Archive*, and its listings are out of `profile_id=all`, which is
+what /properties, /map and `properties/export.csv` all define "all
+subscriptions" against. The control is on `/profiles` and only there — the
+page that lists every subscription side by side, including the hidden ones,
+because a page that hid them from their own control would leave no way back.
+
+Four things about it are deliberate. The rule has one home,
+`SearchProfileService.visible_clause()` / `list_visible_profiles()`, and
+`list_profiles()` still returns **everything** by default: ingestion reads that
+list to match an email against each profile's `email_matchers`, and a hidden
+subscription that stopped matching its own mail would send those listings to
+the catch-all — a data change wearing a UI change's clothes. A hidden id named
+explicitly in `profile_id=<id>` still renders, under its own heading in the
+menu with its own checkbox, because a selected id with no checkbox reads as
+"nothing ticked" to the page's own script and the next Apply would silently
+widen the view (the same reason an unknown id keeps one, #104). The menu
+carries a line saying how many subscriptions and how many listings it is not
+showing — the owner chose this, so it is a disclosure and not a warning, but
+without it "all subscriptions" reads as the whole table. And the **catch-all
+cannot be hidden at all**: it receives every email that matches nothing else,
+so hiding it would take listings off the page as they arrive, which is why
+`edit_profile` already forces the default profile active.
+`tests/test_hidden_subscriptions.py` pins all of it.
+
 `/properties` carries the controls the owner actually used on `/lands`: the
 cards/list toggle
 (`view_type`), the combined/investment/lifestyle modes (`mode`, with
