@@ -260,6 +260,14 @@ class TestThePortalReading:
     def test_professional_is_an_agency(self):
         assert advertiser.from_portal_type("professional") == "agency"
 
+    def test_particular_is_an_owner(self):
+        """Measured, not assumed. The first production run read all 56 stored
+        fotocasa listings on 2026-08-17: the portal served `professional` 46
+        times and `particular` 10, and every `particular` carried a person's
+        name as its client (`Carlos`, `Ángeles`, `Maria Eugenia`) against a
+        company on every `professional`."""
+        assert advertiser.from_portal_type("particular") == "owner"
+
     def test_an_unmeasured_spelling_is_unknown_and_never_owner(self):
         """The failure mode of a wrong guess must be "not established"."""
         for value in ("franchise", "", None, "PROFESIONAL"):
