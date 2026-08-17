@@ -202,6 +202,31 @@ class TestTheSubscriptionControls:
         assert "liveUniqueTitle" in body
         assert "hiddenUniqueTitle" not in body
 
+    def test_the_map_says_what_it_is_not_plotting(self, client, subscriptions):
+        """It drops the markers, so it owes the same disclosure as the list.
+
+        Without it a map missing several subscriptions looks like a map of
+        everything there is.
+        """
+        body = client.get("/map?profile_id=all").get_data(as_text=True)
+
+        note = re.search(r'id="hidden-subscriptions-note".*?</div>', body, re.S)
+        assert note, "the map dropped two subscriptions and said nothing"
+        text = re.sub(r"\s+", " ", note.group(0))
+        assert "2 hidden subscriptions" in text
+        assert "2 listings" in text
+
+    def test_the_map_withholds_nothing_it_is_showing(self, client, subscriptions):
+        body = client.get(
+            "/map?profile_id={}".format(subscriptions["hidden"])
+        ).get_data(as_text=True)
+
+        assert "hiddenUniqueTitle" in body, "a named hidden id still plots"
+        note = re.search(r'id="hidden-subscriptions-note".*?</div>', body, re.S)
+        assert note and "1 hidden subscription" in re.sub(r"\s+", " ", note.group(0)), (
+            "only the other one is being withheld"
+        )
+
     def test_the_export_matches_the_page_it_was_taken_from(self, client, subscriptions):
         body = client.get("/properties/export.csv?profile_id=all").get_data(
             as_text=True
@@ -331,6 +356,34 @@ class TestIngestionDoesNotSeeTheFlag:
             )
             assert subscriptions["hidden"] not in offered
             assert subscriptions["live"] in offered
+
+
+class TestTheCountsAreTakenOnce:
+    def test_the_menu_and_its_note_share_one_group_by(self, app, client, subscriptions):
+        """One query, not two, for numbers that must agree anyway.
+
+        Asserted on the count rather than on which function ran: the menu's
+        per-subscription counts and the "not shown" line are the same
+        group-by, and taking it twice was how they could have disagreed
+        between the two statements.
+        """
+        from routes import main_routes
+
+        calls = []
+        original = main_routes._listing_counts_by_profile
+
+        def counted():
+            calls.append(1)
+            return original()
+
+        main_routes._listing_counts_by_profile = counted
+        try:
+            body = client.get("/properties").get_data(as_text=True)
+        finally:
+            main_routes._listing_counts_by_profile = original
+
+        assert "hidden-subscriptions-note" in body, "the page really rendered it"
+        assert len(calls) == 1, f"the listing counts were taken {len(calls)} times"
 
 
 class TestTheColumnIsFalseNotNull:

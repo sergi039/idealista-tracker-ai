@@ -578,7 +578,22 @@ def _map_focus_notice(focus_id, focus_property, props, query_without_profile):
     }
 
 
-def _profile_dropdown_options(profiles, resolved):
+def _listing_counts_by_profile():
+    """How many listings each subscription holds, `None` keyed for the rest.
+
+    One group-by shared by the menu and by the hidden-subscription note, which
+    used to ask the same table twice per render of /properties -- once for the
+    options and once, through a join, for the disclosure line.
+    """
+    return {
+        profile_id: count
+        for profile_id, count in db.session.query(
+            Property.search_profile_id, func.count(Property.id)
+        ).group_by(Property.search_profile_id)
+    }
+
+
+def _profile_dropdown_options(profiles, resolved, counts=None):
     """Rows for the subscription filter: the live subscriptions first, the
     retired ones after them, each with how many listings it holds.
 
@@ -606,12 +621,7 @@ def _profile_dropdown_options(profiles, resolved):
     the checkboxes, so a selected id with no checkbox reads as "nothing
     ticked", and the next Apply would silently widen the view.
     """
-    counts = {
-        profile_id: count
-        for profile_id, count in db.session.query(
-            Property.search_profile_id, func.count(Property.id)
-        ).group_by(Property.search_profile_id)
-    }
+    counts = _listing_counts_by_profile() if counts is None else counts
 
     active_ids = {profile.id for profile in profiles}
     selected = set(resolved.checked_ids)
@@ -674,7 +684,7 @@ def _profile_dropdown_options(profiles, resolved):
     return options
 
 
-def _hidden_subscription_note(resolved):
+def _hidden_subscription_note(resolved, counts=None):
     """What the subscription controls are not showing, or None.
 
     Hiding is the owner's own choice, so this is a disclosure and not a
@@ -684,24 +694,25 @@ def _hidden_subscription_note(resolved):
     actually moved is the row count, not the subscription count.
 
     A hidden subscription the selection names is on screen already, so it is
-    not part of what is being withheld.
+    not part of what is being withheld. `counts` is the shared group-by when
+    the caller already has one -- /properties builds the menu from it.
     """
     from services.search_profile_service import SearchProfileService
 
-    rows = (
-        db.session.query(SearchProfile.id, func.count(Property.id))
-        .outerjoin(Property, Property.search_profile_id == SearchProfile.id)
-        .filter(SearchProfileService.hidden_clause())
-        .group_by(SearchProfile.id)
-        .all()
-    )
+    counts = _listing_counts_by_profile() if counts is None else counts
+    hidden_ids = [
+        profile_id
+        for (profile_id,) in db.session.query(SearchProfile.id).filter(
+            SearchProfileService.hidden_clause()
+        )
+    ]
     shown = set(resolved.checked_ids)
-    withheld = [(pid, count) for pid, count in rows if pid not in shown]
+    withheld = [profile_id for profile_id in hidden_ids if profile_id not in shown]
     if not withheld:
         return None
     return {
         "profiles": len(withheld),
-        "listings": sum(count for _, count in withheld),
+        "listings": sum(counts.get(profile_id, 0) for profile_id in withheld),
     }
 
 
@@ -1274,6 +1285,10 @@ def properties():
             shown_profile_ids, include_custom=selected_profile_id is not None
         )
 
+        # One group-by for the menu's per-subscription counts and for the
+        # hidden-subscription note under it.
+        listing_counts = _listing_counts_by_profile()
+
         # Which subscription a row belongs to, for the badge the list grows
         # when it is showing more than one of them.
         profile_names = {
@@ -1299,8 +1314,12 @@ def properties():
             properties=pagination.items,
             pagination=pagination,
             profiles=profiles,
-            profile_options=_profile_dropdown_options(profiles, profile_selection),
-            hidden_subscription_note=_hidden_subscription_note(profile_selection),
+            profile_options=_profile_dropdown_options(
+                profiles, profile_selection, counts=listing_counts
+            ),
+            hidden_subscription_note=_hidden_subscription_note(
+                profile_selection, counts=listing_counts
+            ),
             profile_names=profile_names,
             unassigned_count=unassigned_count,
             max_selected_profiles=MAX_SELECTED_PROFILE_IDS,
@@ -2958,6 +2977,11 @@ def map_view():
             list_view_profile_id=list(profile_selection.link_values),
             travel_display_targets=travel_display_targets,
             focus_notice=focus_notice,
+            # The map drops a hidden subscription's markers exactly as the
+            # list drops its rows, so it owes the same disclosure -- a map
+            # that silently stopped plotting several subscriptions reads as
+            # one showing everything there is.
+            hidden_subscription_note=_hidden_subscription_note(profile_selection),
         )
 
     except Exception:
@@ -2972,6 +2996,8 @@ def map_view():
             list_view_profile_id=None,
             travel_display_targets=[],
             focus_notice=None,
+            # It failed before it could ask; "0 hidden" would be a claim.
+            hidden_subscription_note=None,
         )
 
 
