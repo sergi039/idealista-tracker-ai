@@ -63,10 +63,11 @@
 {%- endmacro %}
 
 {# How much of the enabled weight the combined score rests on (#379). The
-   number is the measured mix shrunk towards a neutral prior by the unmeasured
-   share, so a listing with two of five criteria answered no longer leads the
-   list on ignorance -- and the reader can see the share it rests on. Silent
-   when the payload predates coverage or everything was measured. #}
+   number itself is untouched -- owner decision: an unmeasured criterion is
+   shown, never given a value -- so this is the disclosure beside it:
+   measured/enabled, with the share and the missing criteria in the tooltip.
+   Silent when everything was measured; derived for payloads that predate
+   the recorded coverage. #}
 {% macro coverage_hint(p) -%}
     {% set _cov = score_coverage_for(p.scoring) %}
     {% if _cov and _cov.share is not none and _cov.share < 0.999 %}

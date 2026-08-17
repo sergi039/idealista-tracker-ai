@@ -361,16 +361,9 @@ def _same_municipality(name: str):
     with no key (a truncated `Ovi...`) keeps the exact match: folding it into
     Oviedo by prefix is the wrong-pick hazard the grouping module refuses.
     """
-    from utils.municipality_grouping import group_key
+    from utils.municipality_grouping import stored_spellings_of
 
-    key = group_key(name)
-    if key is None:
-        return Property.municipality == name
-    spellings = [
-        stored
-        for (stored,) in db.session.query(Property.municipality).distinct()
-        if stored and group_key(stored) == key
-    ]
+    spellings = stored_spellings_of(name)
     if not spellings:
         return Property.municipality == name
     return Property.municipality.in_(spellings)
@@ -578,12 +571,28 @@ class HousingPropertyScorer(BasePropertyScorer):
             # a branch with nothing measured contributes zero coverage, not a
             # renormalised absence. The score itself is untouched by it (owner
             # decision 2026-08-17: show the coverage, do not invent a prior).
-            mix_total = sum(w for _, w in mix_inputs.values() if w > 0)
+            # A branch with no enabled criterion at all (a profile that zeroed
+            # one side) has no coverage to contribute and no weight in the
+            # denominator -- the same gate `score_coverage()` applies when it
+            # derives the share, so the recorded and the derived value agree.
+            branch_share = {
+                "investment": (inv_coverage, inv_enabled),
+                "lifestyle": (life_coverage, life_enabled),
+            }
+            mix_total = sum(
+                w
+                for name, (_, w) in mix_inputs.items()
+                if w > 0 and branch_share[name][1] > 0
+            )
             if mix_total > 0:
                 coverage = (
-                    inv_coverage * max(mix_inputs["investment"][1], 0.0)
-                    + life_coverage * max(mix_inputs["lifestyle"][1], 0.0)
-                ) / mix_total
+                    sum(
+                        branch_share[name][0] * w
+                        for name, (_, w) in mix_inputs.items()
+                        if w > 0 and branch_share[name][1] > 0
+                    )
+                    / mix_total
+                )
 
         payload: Dict[str, Any] = {
             "version": 1,
