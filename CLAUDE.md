@@ -1277,12 +1277,31 @@ and TODO.md; respect it if you ever run both side by side.
   lock file, live pid or dead (#319) — because a tool calling a state "safe"
   that the supervisor calls "stop" is how two of them come to disagree about
   one file.
-  It answers; it does not enforce. So sessions sharing this machine still
-  announce a `utils.backfill_*` / `utils.recalc_*` — or any hand-run
-  `docker exec` that writes `enrichment` — before starting it, naming the
-  module, the rows and the cost. That is a protocol, not a guarantee: it holds
-  while every writer is listening, and the next one may not be in the
-  conversation at all.
+  It answers; it does not enforce — the daemon cannot stop you, and that is
+  exactly why **`busy` and `unknown` are a stop, not an input to a judgement**
+  (owner decision 2026-08-17). Wait, and say you are waiting. Do not weigh
+  whether the two jobs touch different `enrichment` keys, whether your own run
+  is cheap, or whether the other one looks stuck on a timeout and "is not doing
+  anything anyway" — you cannot know when it resumes, and the session running
+  it is very likely not in your conversation.
+
+  That sentence exists because the door was walked through the day it was
+  written. A session shipped this feature's two backfills over a running
+  `backfill_quality_of_life`, twice, each time having first checked the thing
+  that made it safe: both writers reach `enrichment` through
+  `services/enrichment_write.locked_write` under `FOR UPDATE`, they write
+  different keys, the lock spans milliseconds rather than the network calls,
+  and the second run made one request and one write. All of that was true, no
+  measurement was lost, and none of it is the point. The rule protects the case
+  nobody thought to check, and "I read the other job's code and it is fine" is
+  the shape of reasoning #339 and #338 were written about. Only an explicit
+  owner command to start anyway overrides it.
+
+  Sessions sharing this machine still announce a `utils.backfill_*` /
+  `utils.recalc_*` — or any hand-run `docker exec` that writes `enrichment` —
+  before starting it, naming the module, the rows and the cost. That is a
+  protocol, not a guarantee: it holds while every writer is listening, and the
+  next one may not be in the conversation at all.
 - **A deploy is healthy when a page renders, not when healthz answers** (#283).
   `/api/healthz` reports database, scheduler and schema and renders no
   template, so it stayed green through the 15 minutes of 2026-08-14 in which a
