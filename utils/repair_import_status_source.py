@@ -20,6 +20,22 @@ Two zeroes corroborate the narrowing rather than merely making it plausible: a
 real check stamps `listing_last_checked`, and measured on production before the
 repair, not one of the 324 rows had one, nor a status other than `active`.
 
+**The obvious objection is that a human really did look, and it does not hold.**
+Six one-off scripts wrote these rows (`seed_shortlist`, `seed_plots`,
+`seed_plots_fotocasa`, `seed_solar`, `seed_solar_full`, `seed100_full`), and
+`seed_shortlist.py` says in its own docstring that "every row is a listing
+verified by hand against the portal card" -- which, taken at face value, would
+make `manual` an honest verdict and this repair a deletion of a real check. Read
+on and it names what was verified: "`plot_m2` and `condition` come from the
+card's own *Parcela de …* / *Estado* fields". Those are **attributes**. This
+column answers whether the *listing* is still live, which reading a plot size
+off a card establishes neither then nor now -- and none of the six writes
+`listing_last_checked`, so nothing here was ever dated as a reading. All six
+build rows through the ORM constructor, which is why the `null()` note in
+`services/fotocasa_import.py` applies to them directly: the fix in those
+scripts is an explicit `sqlalchemy.null()`, since `None` would silently store
+the column's `'ingest'` default instead.
+
 **Production has already been repaired.** It happened on 2026-08-17 at 14:18
 -- 324 rows, all carrying the prefix, so whoever did it used this same narrow
 condition; `data/status_source_manual_snapshot_20260817.json` on the mini is
