@@ -214,3 +214,49 @@ grep -q "docker ps could not be read" "${WORK}/out" \
     || fail "scenario 11 did not say the container list was unreadable"
 unset DOCKER_PS_RC
 printf 'OK: a docker ps that fails is unknown, not an empty machine\n'
+
+# --- scenario 12: docker is not on the PATH at all -------------------------
+# Measured on the mini 2026-08-16: /usr/local/bin is absent from the
+# non-interactive ssh PATH, so `ssh host tools/backfill_status.sh` found no
+# docker, every probe failed identically, and the empty output of a *failed*
+# `docker ps` read as "no such container". The script announced
+# `container idealista-app: not running` about a healthy production stack, in
+# the same voice as a measurement. The verdict was already right - unknown,
+# which blocks - but the line a human reads was a false statement about
+# production, and it sent the reader to look at the wrong machine.
+#
+# The fallbacks are emptied so this scenario cannot resolve this Mac's real
+# /usr/local/bin/docker and pass for the wrong reason.
+set_top; clear_locks; clear_markers
+set +e
+PATH="/usr/bin:/bin" BACKFILL_STATUS_DOCKER_FALLBACKS="" \
+    bash "${WORK}/repo/tools/backfill_status.sh" --container idealista-app >"${WORK}/out" 2>&1
+RC=$?
+set -e
+[ "$RC" = "2" ] || fail "scenario 12: a missing docker did not read as unknown (rc=$RC)"
+grep -q "docker not found on PATH" "${WORK}/out" \
+    || fail "scenario 12 did not name the missing binary as the cause"
+grep -q "container idealista-app: not running" "${WORK}/out" \
+    && fail "scenario 12 blamed the container for a PATH problem"
+printf 'OK: a missing docker is named as such, not reported as a stopped container\n'
+
+# --- scenario 13: docker only at an absolute path (the mini's shape) --------
+# The other half of the same fix: with docker off the PATH but present where
+# Docker Desktop puts it, the tool must work normally rather than degrade. A
+# fix that only learned to say "not found" would leave every remote check
+# permanently unknown, which blocks exactly like busy and would stop every
+# backfill on that machine.
+set_top; clear_locks; clear_markers
+set +e
+PATH="/usr/bin:/bin" \
+BACKFILL_STATUS_DOCKER_FALLBACKS="${WORK}/bin/docker" \
+DOCKER_TOP_FILE="$TOP" \
+DOCKER_TOP_SIBLING_FILE="$SIBLING_TOP" \
+DOCKER_TOP_RC=0 DOCKER_PS_RC=0 DOCKER_PS_OUTPUT="idealista-app" \
+    bash "${WORK}/repo/tools/backfill_status.sh" --container idealista-app >"${WORK}/out" 2>&1
+RC=$?
+set -e
+[ "$RC" = "0" ] || fail "scenario 13: an absolute-path docker did not resolve (rc=$RC)"
+grep -q "VERDICT: idle" "${WORK}/out" \
+    || fail "scenario 13 did not reach a real verdict through the fallback"
+printf 'OK: docker found at its absolute path still measures, it does not degrade\n'

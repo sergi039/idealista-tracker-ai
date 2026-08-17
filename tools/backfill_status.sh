@@ -76,6 +76,36 @@ done
 
 say() { [ "$QUIET" = "1" ] || printf '%s\n' "$*"; }
 
+# The docker binary, resolved once. `/usr/local/bin` is absent from the
+# non-interactive ssh PATH on the mini, and Docker Desktop installs there, so
+# `ssh host 'tools/backfill_status.sh'` found no `docker` at all while an
+# interactive login shell found it immediately -- which is why this was
+# invisible to anyone who tested by ssh-ing in and typing (measured
+# 2026-08-16). Every probe below then failed identically, and the empty output
+# of a *failed* `docker ps` read as "there is no such container": the script
+# printed `container idealista-app: not running` about a healthy production
+# stack, with the same confidence as a measurement.
+#
+# Resolving it once means the failure is diagnosed once, in the one place that
+# can tell "docker is missing" from "the container is gone".
+#
+# The two absolute candidates live in a variable so a test can empty it. Left
+# hardcoded, a "docker is missing" scenario would find this Mac's real
+# /usr/local/bin/docker and pass for the wrong reason here while proving the
+# opposite on a Linux runner - the machine-dependent-scenario trap that
+# CLAUDE.md records from the bash-version gate.
+DOCKER_FALLBACKS="${BACKFILL_STATUS_DOCKER_FALLBACKS-/usr/local/bin/docker /Applications/Docker.app/Contents/Resources/bin/docker}"
+DOCKER=""
+for candidate in \
+    "${BACKFILL_STATUS_DOCKER:-}" \
+    "$(command -v docker 2>/dev/null || true)" \
+    $DOCKER_FALLBACKS; do
+    [ -n "$candidate" ] || continue
+    [ -x "$candidate" ] || continue
+    DOCKER="$candidate"
+    break
+done
+
 # The module as python would accept it, in every spelling: `-m mod`, `-mmod`
 # and the `-um mod` cluster. This is the supervisor's own expression, reused
 # rather than re-derived - two tools disagreeing about which process is which
@@ -96,14 +126,27 @@ note_unknown() { [ "$verdict" = "busy" ] || verdict=unknown; reasons+=("$1"); }
 # --- 1. what is running now -------------------------------------------------
 # `docker top` needs nothing installed in the image and reads the host's view,
 # so it also sees a job someone started by hand with `docker exec`.
-if ! raw="$(docker top "$CONTAINER" 2>/dev/null)"; then
-    if [ -z "$(docker ps --filter "name=^/${CONTAINER}$" --format '{{.Names}}' 2>/dev/null)" ]; then
-        # No container at all is a real state, and during a deploy it is the
-        # normal one - but it is also the moment a supervisor is waiting to
-        # refill it, so the lock below still decides.
-        say "container ${CONTAINER}: not running"
+if [ -z "$DOCKER" ]; then
+    # Not a fact about the container: nothing was asked about it. Naming the
+    # cause here is the whole point - `container X: not running` sent a reader
+    # to look at production when the defect was this script's PATH.
+    note_unknown "docker not found on PATH (non-interactive ssh?) - nothing about the container was measured"
+elif ! raw="$("$DOCKER" top "$CONTAINER" 2>/dev/null)"; then
+    # `docker ps` failing and `docker ps` answering "none" are different facts,
+    # and the empty string is what both look like. Take the exit status, not
+    # the output: a daemon that is down must not read as a container that is
+    # absent, which is the same conflation one layer in.
+    if names="$("$DOCKER" ps --filter "name=^/${CONTAINER}$" --format '{{.Names}}' 2>/dev/null)"; then
+        if [ -z "$names" ]; then
+            # No container at all is a real state, and during a deploy it is the
+            # normal one - but it is also the moment a supervisor is waiting to
+            # refill it, so the lock below still decides.
+            say "container ${CONTAINER}: not running"
+        else
+            note_unknown "docker top ${CONTAINER} could not be read - a job may be running right now"
+        fi
     else
-        note_unknown "docker top ${CONTAINER} could not be read - a job may be running right now"
+        note_unknown "docker ps could not be read (is the daemon running?) - the container was not measured"
     fi
 else
     # A table that is only a header is a failed probe, not an idle container:
@@ -146,11 +189,15 @@ fi
 # one-off is named for the compose *project* (`idealistarank-app-run-...`), so
 # they do not share a prefix, and reading .env to learn the second is both
 # forbidden here and unnecessary.
-if ! run_containers="$(docker ps --format '{{.Names}}' 2>/dev/null)"; then
+if [ -z "$DOCKER" ]; then
+    # Already reported by section 1 with its cause; not repeated here. The
+    # verdict is `unknown` either way, and `unknown` blocks like `busy`.
+    :
+elif ! run_containers="$("$DOCKER" ps --format '{{.Names}}' 2>/dev/null)"; then
     note_unknown "docker ps could not be read - a one-off run container may be writing right now"
 else
     for sibling in $(printf '%s\n' "$run_containers" | grep -E -- "$RUN_CONTAINER_PATTERN" || true); do
-        if ! sibling_rows="$(docker top "$sibling" 2>/dev/null | awk 'NR > 1')"; then
+        if ! sibling_rows="$("$DOCKER" top "$sibling" 2>/dev/null | awk 'NR > 1')"; then
             note_unknown "docker top ${sibling} could not be read - a one-off run container may be writing right now"
             continue
         fi
