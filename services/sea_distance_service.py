@@ -134,14 +134,25 @@ class SeaDistanceService:
     """Straight-line distance to the OSM coastline, per property."""
 
     def measure(
-        self, lat: float, lon: float, accuracy: Optional[str] = None
+        self, lat: float, lon: float, accuracy: Optional[str]
     ) -> Dict[str, Any]:
         """Measure distance to the coastline for one point.
 
         `accuracy` is the row's `location_accuracy`, and it decides what the
-        measurement is allowed to claim. There is no default of "precise": a
-        caller that does not say gets the honest reading of silence, which is
-        that the point may be a centroid.
+        measurement is allowed to claim.
+
+        **Required, with no default**, and that is the lesson of the defect
+        this signature shipped with. #358 wrote it `accuracy: Optional[str] =
+        None`, reasoning that a caller who does not say gets the honest reading
+        of silence — a point that may be a centroid. But silence is not
+        something a caller *says*; it is what an argument looks like when
+        somebody forgets it. The `--dry-run` arm of
+        `utils/recalc_sea_distance.py` forgot it, and every row it previewed
+        came back `approximate_origin`, precise ones included — in the report
+        an operator reads before authorising a rewrite of every located row. A
+        default that is safe for the data and wrong for the report is still
+        wrong; a required argument cannot be forgotten quietly. Every caller
+        has the value to hand: there are two, and both read it off the row.
 
         `searched_m` is what the answer is guaranteed for *around the parcel*,
         so an approximate origin shrinks it by the slack -- the radius was
