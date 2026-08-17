@@ -109,6 +109,14 @@ _ALERT_TOKENS: Dict[str, str] = {
 
 # Backslash, because every token above contains `_`, which LIKE otherwise
 # treats as "any character" -- the lesson `utils/listing_search.py` records.
+#
+# Compiling this against a *connection-less* PostgreSQL dialect renders
+# `ESCAPE '\\'`, which the server rejects ("escape string must be empty or one
+# character"). That is not a defect and must not be "fixed": SQLAlchemy asks a
+# live connection whether backslashes need doubling (`standard_conforming_
+# strings`) and only assumes they do when it has nobody to ask. Verified
+# read-only against the deployment's own database on 2026-08-17 -- through the
+# real engine it renders `ESCAPE '\'`, runs, and matches no lookalike row.
 _LIKE_ESCAPE = "\\"
 
 # `publisher.type` / `agency.type` on a fotocasa listing page. Only
