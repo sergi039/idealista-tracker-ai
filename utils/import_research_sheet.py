@@ -40,12 +40,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import logging
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import null
+from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
 
@@ -159,22 +161,31 @@ def _description(research: Dict[str, Any], sheet: str) -> Optional[str]:
     return f"Research notes from {sheet} — not the advert text. " + " · ".join(parts)
 
 
-def _existing(url: Optional[str]):
-    """The row already holding this listing, via the shared search clause.
+def _existing(row: Dict[str, Any]):
+    """The row already holding this listing, or None.
 
-    `utils/listing_search.py` is the module that answers this for the four
-    listing surfaces, and it is what knows that a stored Idealista link carries
-    a `?utm_...` tail the sheet's copy does not.
+    Two identities, and deliberately not a third. `source_email_id` recognises
+    a row this importer wrote before, so re-running the same sheet is a no-op.
+    An Idealista listing id recognises one that arrived by alert email --
+    measured against production, 14 of the sheet's 50 were already here that
+    way, and only 2 of them would have been found by comparing URLs exactly,
+    because the stored links carry a `?utm_...` tail the sheet's copy does not.
+
+    What is *not* used is a bare URL match. A category link is not an identity:
+    four different Ribadesella plots share one in this sheet, and matching on
+    it would fold them into a single listing.
     """
     from models import Property
-    from utils.listing_search import listing_search_clause
+    from utils.listing_search import extract_listing_id
 
-    if not url:
-        return None
-    clause = listing_search_clause(Property, url)
-    if clause is None:
-        return None
-    return Property.query.filter(clause).first()
+    found = Property.query.filter_by(source_email_id=source_email_id_for(row)).first()
+    if found is not None:
+        return found
+
+    listing_id = extract_listing_id(row.get("url"))
+    if listing_id is not None:
+        return Property.query.filter_by(idealista_property_id=listing_id).first()
+    return None
 
 
 def read_rows(path: str, sheet: str) -> List[Dict[str, Any]]:
@@ -227,7 +238,7 @@ def mark_duplicates(rows: List[Dict[str, Any]]) -> None:
     for row in rows:
         if row["status"] != STATUS_NEW:
             continue
-        found = _existing(row["url"])
+        found = _existing(row)
         if found is not None:
             row["status"] = STATUS_DUPLICATE
             row["existing_id"] = found.id
@@ -248,17 +259,39 @@ def _profile(name: str, create: bool):
     return profile
 
 
-def source_email_id_for(url: str) -> str:
-    """Unique per link, and legible about where the row came from.
+def _stable_key(row: Dict[str, Any]) -> str:
+    """What identifies one listing in this sheet.
 
-    `source_email_id` is the only NOT NULL + UNIQUE column on `Property`, so it
-    is both the bookkeeping fact and, for free, the constraint that one link
-    cannot be imported twice. Not the word `manual`: that is the mistake
-    STATUS-002 (#265) is about, and this row was neither ingested nor checked.
+    Not the URL. Six of the 50 rows in the sheet this was written for share two
+    links, because no direct listing URL existed for them and the owner
+    recorded the category page instead -- four different plots in Ribadesella
+    behind `.../terrenos/ribadesella/e-baratos`, two in Folgueras behind a
+    `/geo/` page. Keying on the URL made the second insert violate the unique
+    constraint and, worse, would have meant discarding four real listings as
+    duplicates of the first.
+
+    So the key is the link plus what tells those rows apart: the location, the
+    price and the plot size. Deterministic, so importing the same sheet twice
+    recognises its own rows instead of creating them again.
     """
     from utils.listing_search import url_fragment
 
-    return f"{SOURCE_NAME}:{url_fragment(url) or url}"[:255]
+    parts = [
+        url_fragment(row.get("url") or "") or (row.get("url") or ""),
+        (row.get("title") or "").casefold(),
+        "" if row.get("price") is None else f"{row['price']:.2f}",
+        "" if row.get("area") is None else f"{row['area']:.2f}",
+    ]
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:24]
+
+
+def source_email_id_for(row: Dict[str, Any]) -> str:
+    """Unique per listing, and legible about where the row came from.
+
+    Not the word `manual`: that is the mistake STATUS-002 (#265) is about, and
+    this row was neither ingested nor checked.
+    """
+    return f"{SOURCE_NAME}:{_stable_key(row)}"
 
 
 def insert_rows(rows: List[Dict[str, Any]], *, profile_id: int, sheet: str) -> Dict:
@@ -271,9 +304,23 @@ def insert_rows(rows: List[Dict[str, Any]], *, profile_id: int, sheet: str) -> D
     rules = SearchProfileService.get_classification_rules(profile)
 
     created: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    # Two rows the sheet records identically are one listing, and this batch
+    # is the only thing that knows it: `mark_duplicates` asked the database
+    # before any of these existed. Asking the database again per row would
+    # work and is the wrong shape -- a batch should not need a round trip to
+    # learn about itself, and the savepoint below is for the *other* writer.
+    seen: set = set()
+
     for row in rows:
         if row["status"] != STATUS_NEW:
             continue
+
+        key = source_email_id_for(row)
+        if key in seen:
+            skipped.append({"url": row.get("url"), "title": row.get("title")})
+            continue
+        seen.add(key)
 
         category, subtype = PropertyClassificationService.classify_sources(
             row.get("title"),
@@ -283,7 +330,7 @@ def insert_rows(rows: List[Dict[str, Any]], *, profile_id: int, sheet: str) -> D
         )
 
         prop = Property()
-        prop.source_email_id = source_email_id_for(row["url"])
+        prop.source_email_id = key
         prop.url = row["url"]
         prop.title = row["title"]
         prop.municipality = row["municipality"]
@@ -314,12 +361,25 @@ def insert_rows(rows: List[Dict[str, Any]], *, profile_id: int, sheet: str) -> D
             }
         }
 
-        db.session.add(prop)
-        db.session.flush()
+        # Each row in its own SAVEPOINT, the lesson `services/fotocasa_import.py`
+        # already carries: without it a single collision aborts the whole batch
+        # at the one commit below, and every other row -- all of them valid --
+        # is discarded. That is exactly how this import failed the first time
+        # it was run for real.
+        try:
+            with db.session.begin_nested():
+                db.session.add(prop)
+                db.session.flush()
+        except IntegrityError:
+            db.session.expunge(prop)
+            skipped.append({"url": row.get("url"), "title": row.get("title")})
+            logger.warning("Refused by the database, skipped: %s", row.get("title"))
+            continue
+
         created.append({"id": prop.id, "url": prop.url, "title": prop.title})
 
     db.session.commit()
-    return {"created": created}
+    return {"created": created, "skipped": skipped}
 
 
 def score(created: List[Dict[str, Any]]) -> int:

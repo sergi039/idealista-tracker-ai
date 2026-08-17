@@ -230,3 +230,84 @@ class TestAmbiguity:
         assert rows[0]["status"] == sheet_import.STATUS_REJECTED
         assert "ambiguous" in rows[0]["reason"]
         assert "45.000" in rows[0]["reason"]
+
+
+class TestRowsThatShareALink:
+    """Six of the sheet's 50 rows share two links, and they are not duplicates.
+
+    No direct listing URL existed for them, so the owner recorded the category
+    page: four different Ribadesella plots behind
+    `.../terrenos/ribadesella/e-baratos`, two in Folgueras behind a `/geo/`
+    page. Keying identity on the URL made the second insert violate the unique
+    constraint -- which is how the first real run of this importer failed --
+    and folding them together would have discarded four real listings.
+    """
+
+    SHARED = "https://www.yaencontre.com/venta/terrenos/ribadesella/e-baratos"
+
+    def _line(self, location, price, area):
+        return (
+            f'1,A,"{location}",Ribadesella,{price},{area},20,Land,'
+            f"Edificable,300,Not confirmed,Positive,Risk,Yaencontre,"
+            f"{self.SHARED},,,Unknown"
+        )
+
+    def test_four_plots_behind_one_link_are_four_listings(self, app, tmp_path):
+        lines = [
+            self._line("Soto, Ribadesella", 45000, 1906),
+            self._line("Ribadesella (claimed license)", 58000, 1370),
+            self._line("~3 km from Ribadesella beaches", 60000, 2046),
+            self._line("Soto, Ribadesella", 60000, 2373),
+        ]
+        with app.app_context():
+            rows = sheet_import.read_rows(_csv(tmp_path, *lines), SHEET)
+            sheet_import.mark_duplicates(rows)
+
+            assert all(r["status"] == sheet_import.STATUS_NEW for r in rows)
+            keys = {sheet_import.source_email_id_for(r) for r in rows}
+            assert len(keys) == 4
+
+            profile = SearchProfile(name="Manus AI", is_active=True)
+            db.session.add(profile)
+            db.session.commit()
+            outcome = sheet_import.insert_rows(rows, profile_id=profile.id, sheet=SHEET)
+
+            assert len(outcome["created"]) == 4
+            assert Property.query.count() == 4
+
+    def test_two_rows_alike_in_every_recorded_way_are_one_listing(self, app, tmp_path):
+        """The key is what the sheet records; rows it cannot tell apart are
+        one row, and the second is skipped rather than aborting the batch."""
+        same = self._line("Soto, Ribadesella", 45000, 1906)
+        with app.app_context():
+            rows = sheet_import.read_rows(_csv(tmp_path, same, same), SHEET)
+            sheet_import.mark_duplicates(rows)
+
+            profile = SearchProfile(name="Manus AI", is_active=True)
+            db.session.add(profile)
+            db.session.commit()
+            outcome = sheet_import.insert_rows(rows, profile_id=profile.id, sheet=SHEET)
+
+            assert len(outcome["created"]) == 1
+            assert len(outcome["skipped"]) == 1
+            assert Property.query.count() == 1
+
+    def test_importing_the_same_sheet_twice_adds_nothing(self, app, tmp_path):
+        lines = [
+            self._line("Soto, Ribadesella", 45000, 1906),
+            self._line("Ribadesella (claimed license)", 58000, 1370),
+        ]
+        with app.app_context():
+            profile = SearchProfile(name="Manus AI", is_active=True)
+            db.session.add(profile)
+            db.session.commit()
+
+            rows = sheet_import.read_rows(_csv(tmp_path, *lines), SHEET)
+            sheet_import.mark_duplicates(rows)
+            sheet_import.insert_rows(rows, profile_id=profile.id, sheet=SHEET)
+
+            again = sheet_import.read_rows(_csv(tmp_path, *lines), SHEET)
+            sheet_import.mark_duplicates(again)
+
+            assert all(r["status"] == sheet_import.STATUS_DUPLICATE for r in again)
+            assert Property.query.count() == 2
