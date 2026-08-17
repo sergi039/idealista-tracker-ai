@@ -2496,6 +2496,49 @@ def land_detail(land_id):
         return redirect(url_for("main.lands"))
 
 
+@main_bp.route("/properties/<int:property_id>/advertiser", methods=["POST"])
+def set_advertiser(property_id):
+    """The owner's own reading of who is selling this listing.
+
+    The last resort, and the only one for most of what it will be used on: 268
+    rows here are idealista links carrying no alert campaign, and idealista
+    answers a captcha to every request from this machine, so nothing automatic
+    can ever establish them. A person with the page open in their own browser
+    can.
+
+    It outranks every computed reading and survives every recompute
+    (`services/advertiser.enrich` refuses a hand-set row outright), which is
+    the sea-view precedent -- "an owner who looked at the listing outranks both
+    models". Clearing puts the row back on the computed path and restores the
+    reading the hand-set verdict displaced, so using this on a fotocasa row and
+    changing your mind does not throw away a page reading that cost a fetch.
+    """
+    from services import advertiser as advertiser_service
+
+    prop = db.get_or_404(Property, property_id)
+    wanted = (request.form.get("advertiser") or "").strip().lower()
+    if wanted not in advertiser_service.HAND_SET_STATES + ("clear",):
+        flash("Unknown advertiser action.", "error")
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    if wanted == "clear":
+        result = advertiser_service.set_by_hand(prop, None, commit=True)
+        message = (
+            "Cleared: the seller follows the listing again."
+            if result["restored"]
+            else "Cleared: the seller is no longer established for this listing."
+        )
+    else:
+        advertiser_service.set_by_hand(prop, wanted, commit=True)
+        message = (
+            "Recorded: sold by its owner."
+            if wanted == advertiser_service.OWNER
+            else "Recorded: sold through an agency."
+        )
+    flash(message, "success")
+    return redirect(url_for("main.property_detail", property_id=property_id))
+
+
 @main_bp.route("/properties/<int:property_id>/pool-absence", methods=["POST"])
 def set_pool_absence(property_id):
     """The owner's hand-set 'no pool here' verdict (proposal D17).
