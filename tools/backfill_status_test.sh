@@ -225,12 +225,30 @@ printf 'OK: a docker ps that fails is unknown, not an empty machine\n'
 # which blocks - but the line a human reads was a false statement about
 # production, and it sent the reader to look at the wrong machine.
 #
-# The fallbacks are emptied so this scenario cannot resolve this Mac's real
-# /usr/local/bin/docker and pass for the wrong reason.
+# "No docker on PATH" has to be *built*, not assumed. A first version of this
+# scenario used PATH=/usr/bin:/bin and emptied the fallbacks, which is a fact
+# about this Mac and not about Linux: the CI runner ships /usr/bin/docker, so
+# the script resolved a real binary, reached a real verdict, and the scenario
+# failed there while passing here. That is the machine-dependent-scenario trap
+# CLAUDE.md records from the bash-version gate, arriving from the other side.
+# So the PATH is a directory built to hold exactly the utilities the script
+# needs and nothing else.
 set_top; clear_locks; clear_markers
+NODOCKER="${WORK}/nodocker"
+mkdir -p "$NODOCKER"
+for util in awk cat dirname find grep ps sed; do
+    util_path="$(command -v "$util" || true)"
+    [ -n "$util_path" ] || fail "scenario 12 cannot run: $util not found to build a docker-free PATH"
+    ln -sf "$util_path" "${NODOCKER}/${util}"
+done
+[ -z "$(PATH="$NODOCKER" command -v docker || true)" ] \
+    || fail "scenario 12 built a PATH that still has docker on it"
+# bash resolved before the PATH is replaced, and invoked absolutely: the
+# constructed PATH deliberately holds no shell either.
+BASH_BIN="$(command -v bash)"
 set +e
-PATH="/usr/bin:/bin" BACKFILL_STATUS_DOCKER_FALLBACKS="" \
-    bash "${WORK}/repo/tools/backfill_status.sh" --container idealista-app >"${WORK}/out" 2>&1
+PATH="$NODOCKER" BACKFILL_STATUS_DOCKER_FALLBACKS="" \
+    "$BASH_BIN" "${WORK}/repo/tools/backfill_status.sh" --container idealista-app >"${WORK}/out" 2>&1
 RC=$?
 set -e
 [ "$RC" = "2" ] || fail "scenario 12: a missing docker did not read as unknown (rc=$RC)"
