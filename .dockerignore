@@ -99,3 +99,9 @@ nr.json
 *.xls
 *.xlsx
 *.docx
+# The GIS exports the same research produces (SITPA, catastro, a council's
+# planos viewer): same shape as the two measured files, same list.
+*.kml
+*.geojson
+*.gpkg
+*.dxf

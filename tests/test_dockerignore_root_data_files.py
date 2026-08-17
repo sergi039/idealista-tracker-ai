@@ -32,6 +32,10 @@ ROOT_DATA_PATTERNS = (
     "*.xls",
     "*.xlsx",
     "*.docx",
+    "*.kml",
+    "*.geojson",
+    "*.gpkg",
+    "*.dxf",
 )
 
 # What the image is built from at the root and in the served directories.
@@ -81,6 +85,8 @@ def test_the_measured_files_are_excluded():
         "export.csv",
         "notes.txt",
         "dump.json",
+        "parcela.kml",
+        "zonas.geojson",
     ):
         assert any(_root_only_match(p, stray) for p in patterns if "**" not in p), (
             f"{stray} would ride into the image"
