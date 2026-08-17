@@ -72,7 +72,8 @@ LANGREO = {
     "accuracy": "approximate",
     "address_components": _components("33934", "Langreo"),
 }
-# A municipality centroid carries no postal code -- nothing to compare.
+# A municipality centroid carries no postal code and no province component
+# -- nothing to compare from either source (#371).
 VILLAVICIOSA = {
     "lat": 43.4817214,
     "lng": -5.4355748,
@@ -231,7 +232,7 @@ class TestWhatMustStillBeAccepted:
                 stored.enrichment["geocoding"]["municipality_check"] == "row_unmatched"
             )
 
-    def test_a_result_without_a_postcode_is_not_agreement(self, app):
+    def test_a_result_naming_no_province_is_not_agreement(self, app):
         with app.app_context():
             prop = _prop(
                 source_email_id="issue_348_nopost",
@@ -243,7 +244,7 @@ class TestWhatMustStillBeAccepted:
 
             assert ok is True
             record = _stored(prop.id).enrichment["geocoding"]
-            assert record["municipality_check"] == "result_has_no_postcode"
+            assert record["municipality_check"] == "result_has_no_province"
 
 
 class TestTheCoarseRuleIsUntouched:

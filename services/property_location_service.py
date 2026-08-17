@@ -8,6 +8,7 @@ from models import Property
 from utils.geocoding import GeocodingService
 from utils.municipality_codes import load_name_index
 from utils.municipality_codes import match as match_municipality
+from utils.municipality_codes import province_code_for_name
 
 logger = logging.getLogger(__name__)
 
@@ -103,13 +104,14 @@ def _is_too_coarse(geo: dict) -> bool:
 # Siero is 33066, province 33 -- a contradiction that needs no knowledge of
 # Val d'Aran.
 #
-# The postal code is read from `address_components`, which
+# Both are read from `address_components`, which
 # `GeocodingService.geocode_address` already returns and nothing read until
-# now. It could not be captured from the live API here (that spends the
-# owner's geocoding quota), so the evidence for the component's presence is
-# the recorded `formatted_address` beginning "25530". Where Google returns no
-# postal code -- "Villaviciosa, Asturias, Spain" does not -- the check reports
-# "cannot tell" rather than agreement.
+# #348. The postal code comes first; where Google returns none -- 104 of 406
+# production rows on 2026-08-17 -- the answer's own
+# `administrative_area_level_2` carries the province name instead, and #371
+# reads that. Where neither is present the check reports "cannot tell" rather
+# than agreement, and a name that is not one of Spain's 52 provinces (the
+# autonomous community "Galicia", one production row) is exactly such a case.
 
 
 def _row_province(prop) -> Optional[str]:
@@ -127,16 +129,44 @@ def _row_province(prop) -> Optional[str]:
 
 
 def _result_province(geo: dict) -> Optional[str]:
-    """Province code of Google's answer, from its postal code, or None."""
-    for component in geo.get("address_components") or ():
-        if not isinstance(component, dict):
-            continue
+    """Province code of Google's answer, or None when it names no province.
+
+    The postal code is read first because it is a code rather than a name and
+    needs no table. Where Google returns none -- 104 of 406 production rows on
+    2026-08-17, every one of them with a resolvable municipality, so the row
+    side of the comparison was ready and only this side was missing -- the
+    answer still names the province, and #371 reads it:
+
+        component: ['administrative_area_level_2', 'political'] | Asturias | O
+
+    verified with one live Geocoding call on "Municipality of Siero, Asturias,
+    Spain", a query production had recorded without a postal code. The long
+    name is the join; `short_name` there is the old vehicle-plate letter, a
+    second vocabulary this does not need.
+
+    Only `administrative_area_level_2` is read. An answer that names an
+    autonomous community instead ("Galicia", one production row) has no level
+    2 at all and lands on None, which is cannot-tell -- the right answer,
+    since a community neither agrees nor disagrees with a province.
+    """
+    components = [
+        c for c in (geo.get("address_components") or ()) if isinstance(c, dict)
+    ]
+
+    for component in components:
         if "postal_code" not in (component.get("types") or ()):
             continue
         raw = component.get("long_name") or component.get("short_name") or ""
         digits = "".join(char for char in str(raw) if char.isdigit())
         if len(digits) >= 2:
             return digits[:2]
+
+    for component in components:
+        if "administrative_area_level_2" not in (component.get("types") or ()):
+            continue
+        code = province_code_for_name(component.get("long_name") or "")
+        if code:
+            return code
     return None
 
 
@@ -144,7 +174,7 @@ def _municipality_agreement(prop, geo: dict):
     """(state, row_province, result_province).
 
     `state` is one of "agreed", "contradicted", "row_unmatched",
-    "result_has_no_postcode" -- four values rather than a boolean, because
+    "result_has_no_province" -- four values rather than a boolean, because
     "we could not compare" is a third answer and collapsing it into either
     real one is the mistake #98 is about. Only "contradicted" refuses.
     """
@@ -153,7 +183,7 @@ def _municipality_agreement(prop, geo: dict):
     if row is None:
         return "row_unmatched", row, result
     if result is None:
-        return "result_has_no_postcode", row, result
+        return "result_has_no_province", row, result
     return ("agreed" if row == result else "contradicted"), row, result
 
 
