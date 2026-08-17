@@ -741,6 +741,22 @@
         <div class="mb-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
                 <div class="d-flex flex-wrap align-items-center gap-2">
                     <strong>{{ pagination.total if pagination else properties|length }} {{ t('properties_found') }}</strong>
+                    {# What an empty result looked for. "0 properties found" is
+                       the same sentence for a search that genuinely has no
+                       answer and for one the page read differently from how it
+                       was typed -- a pasted link is read as the listing it
+                       names, not as text to match. Only when the count is
+                       really zero: with rows on screen the query explains
+                       itself. Read from utils/listing_search.py, the same
+                       reading the filter was built from, so this cannot claim
+                       a search that did not happen. #}
+                    {% if pagination and pagination.total == 0
+                          and search_interpretation is defined and search_interpretation
+                          and search_interpretation.is_listing_reference %}
+                        <span id="search-read-as" class="text-body-secondary small">
+                            <i class="fas fa-circle-info me-1"></i>{% if search_interpretation.listing_id %}{{ t('search_read_as_listing')|format(search_interpretation.listing_id) }}{% else %}{{ t('search_read_as_link')|format(search_interpretation.url_fragment|truncate(80, True)) }}{% endif %}
+                        </span>
+                    {% endif %}
                     {# Whether that total covers the listings with no subscription
                        at all (issue #111). `all` means every *active* subscription,
                        so those rows are outside every selection but their own --
