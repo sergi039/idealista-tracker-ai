@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 # unknown id stays a 404 (issue #136).
 from werkzeug.exceptions import HTTPException
 from models import Land, LandHistory, SyncHistory, AiAnalysisVariant
+from services.ingest_policy import ingest_verdict
 from services.listing_verification import read_verdict as listing_verdict
 from utils.api_errors import json_http_error
 from utils.listing_search import listing_search_clause
@@ -564,6 +565,34 @@ def reanalyze_environment():
 @limiter.limit("5 per minute")
 def manual_ingestion():
     """Manually trigger email ingestion"""
+    # Before anything reads the request or touches a service: a machine that does
+    # not ingest on a cron tick does not ingest on one click either. The rule and
+    # the reason live in services/ingest_policy.py; this is one of its two
+    # readers, the navbar being the other. First statement in the function on
+    # purpose - a guard that runs after the mailbox is opened guards nothing.
+    verdict = ingest_verdict()
+    if not verdict.allowed:
+        logger.warning(
+            "Manual ingestion refused: this machine is not the ingester (%s)",
+            verdict.reason,
+        )
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "reason": verdict.reason,
+                    "error": (
+                        "This machine is not the ingester. Ingestion runs on the "
+                        "deployment, which sets AUTO_START_SCHEDULER=true in its "
+                        "own .env; a second machine reading the same mailbox "
+                        "produces a divergent database and a second Google bill "
+                        "per listing."
+                    ),
+                }
+            ),
+            409,
+        )
+
     try:
         # Get sync type from request body (support both JSON and form data)
         if request.is_json:

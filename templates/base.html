@@ -117,6 +117,12 @@
 
                 <ul class="navbar-nav">
                     {% block nav_primary_action %}
+                    {# Absent exactly where the endpoint would refuse: a machine
+                       that does not ingest on a cron tick does not ingest on one
+                       click either (services/ingest_policy.py). The refusal on
+                       the endpoint is the rule; this only avoids offering a
+                       control that always answers 409. #}
+                    {% if machine_is_ingester() %}
                     <li class="nav-item me-2">
                         <button class="btn btn-outline-primary btn-sm"
                                 hx-post="{{ url_for('api.manual_ingestion') }}"
@@ -126,6 +132,7 @@
                             {{ t('manual_sync') }}
                         </button>
                     </li>
+                    {% endif %}
                     {% endblock %}
                     <li class="nav-item me-2">
                         <button class="btn btn-outline-secondary btn-sm" id="theme-toggle" type="button" title="Toggle theme">

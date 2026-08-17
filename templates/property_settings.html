@@ -121,6 +121,7 @@
             </div>
         </div>
 
+        {% if machine_is_ingester() %}
         <div class="alert alert-info py-2 mb-2">
             Use this if the database is empty but the ingestion cursor already advanced (no emails imported on incremental sync).
         </div>
@@ -133,6 +134,15 @@
                 hx-swap="none">
             <i class="fas fa-sync-alt me-1"></i>Full Sync (reprocess all emails)
         </button>
+        {% else %}
+        {# Third and last place this control exists. The endpoint refuses anyway
+           (routes/api_routes.py); hiding it here keeps the page from offering a
+           button that answers 409, and says which machine to use instead. #}
+        <div class="alert alert-secondary py-2 mb-2">
+            Ingestion runs on the machine that sets <code>AUTO_START_SCHEDULER=true</code>
+            in its own <code>.env</code>, and this is not it. Full Sync is available there.
+        </div>
+        {% endif %}
 
         <div class="form-text mt-2">
             Full sync resets the last-seen UID to 0 and scans the entire Gmail label configured via <code>IMAP_FOLDER</code>.
