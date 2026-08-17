@@ -80,3 +80,22 @@ htmlcov/
 
 # Scratch API responses agent sessions leave in the root (#292 follow-up).
 nr.json
+
+# Root-level data files a session or a human leaves next to the code (#368).
+# Untracked and not ignored, so git shows `??` and mirroring .gitignore cannot
+# catch them, and `COPY . .` takes them: measured 2026-08-16, `irpf2022.html`
+# (2.4 MB of AEAT statistics) and `planos.html` sat in the root for a day and
+# entered every build made from that tree, including the ones after #327.
+# Nothing the image needs at the root has these extensions -- app.py, main.py,
+# config.py, models.py, pyproject.toml, uv.lock and the directories are the
+# whole build input -- and a .dockerignore pattern without `**` matches the
+# root only, so templates/*.html and static/*.json are untouched (the `*.md`
+# and `test_*.py` lines above already rely on that).
+*.html
+*.json
+*.csv
+*.txt
+*.pdf
+*.xls
+*.xlsx
+*.docx
