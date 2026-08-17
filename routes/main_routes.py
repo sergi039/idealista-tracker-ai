@@ -326,6 +326,25 @@ def _sea_view_state_expr(model):
     )
 
 
+def _score_coverage_share_expr(model):
+    """`scoring.coverage.share` as a float; NULL where it was never recorded.
+
+    #379. Recorded by `PropertyScoringService` from this change on; a row
+    scored before it has no value here and therefore does not pass a
+    "fully measured" filter until it is rescored -- the honest reading, since
+    the SQL cannot re-derive the share the way `score_coverage()` does in
+    Python, and "unknown coverage" must not pass as "full".
+    """
+    return model.scoring["coverage"]["share"].as_float()
+
+
+def _filter_by_measured(query, model, raw_value):
+    """`measured=full` keeps rows whose every enabled criterion answered."""
+    if (raw_value or "").strip().lower() != "full":
+        return query
+    return query.filter(_score_coverage_share_expr(model) >= 0.999)
+
+
 def _filter_by_sea_view(query, model, raw_value):
     """Keep only rows whose sea-view verdict is in the requested bucket."""
     wanted = SEA_VIEW_FILTER_VALUES.get((raw_value or "").strip().lower())
@@ -912,6 +931,7 @@ def properties():
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
         sea_view_filter = request.args.get("sea_view", "")
+        measured_filter = request.args.get("measured", "")
 
         # Hide removed: ON by default (similar to /lands)
         hide_removed_param = request.args.get("hide_removed", None)
@@ -925,6 +945,7 @@ def properties():
                 "search",
                 "inv_metr",
                 "sea_view",
+                "measured",
                 "sort",
                 "order",
                 "favorites",
@@ -993,6 +1014,8 @@ def properties():
 
         if sea_view_filter:
             query = _filter_by_sea_view(query, Property, sea_view_filter)
+        if measured_filter:
+            query = _filter_by_measured(query, Property, measured_filter)
 
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
@@ -1139,6 +1162,7 @@ def properties():
                 "search": search_query,
                 "inv_metr": investment_metrics_filter,
                 "sea_view": sea_view_filter,
+                "measured": measured_filter,
                 "favorites": favorites_filter,
                 "hide_removed": hide_removed_filter,
                 "sort_by": sort_by,
