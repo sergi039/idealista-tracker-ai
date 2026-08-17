@@ -28,6 +28,7 @@ HOOK = REPO_ROOT / ".githooks" / "post-merge"
 LIB_DIR = REPO_ROOT / "tools" / "autopilot" / "lib"
 LOCK_LIB = LIB_DIR / "lock.sh"
 RENDER_LIB = LIB_DIR / "render_check.sh"
+CLEANUP_LIB = LIB_DIR / "docker_cleanup.sh"
 
 # Answers only for the stack it was told to expect, and records every call.
 DOCKER_STUB = """#!/bin/sh
@@ -56,11 +57,24 @@ case "$1" in
         exit 0
         ;;
     inspect)
-        [ -n "${DOCKER_IMAGE_NAME:-}" ] || exit 1
-        printf '%s\\n' "$DOCKER_IMAGE_NAME"
-        exit 0
+        case "$*" in
+            *com.docker.compose.project*)
+                printf '%s\\n' "${DOCKER_PROJECT:-idealistarank}"
+                exit 0
+                ;;
+            *.Config.Image*)
+                [ -n "${DOCKER_IMAGE_NAME:-}" ] || exit 1
+                printf '%s\\n' "$DOCKER_IMAGE_NAME"
+                exit 0
+                ;;
+        esac
+        printf 'docker stub: unexpected inspect: %s\\n' "$*" >&2
+        exit 90
         ;;
     tag) exit "${DOCKER_TAG_RC:-0}" ;;
+    ps) exit 0 ;;
+    image) printf 'Total reclaimed space: 0B\\n'; exit 0 ;;
+    buildx) printf 'Total:\\t0B\\n'; exit 0 ;;
 esac
 exit 0
 """
@@ -123,6 +137,9 @@ def repo(tmp_path: Path) -> Path:
     # The page check is not the hook's own: it reads the same contract the
     # deploy watcher reads (#292), so a clone without it cannot check a page.
     shutil.copy(RENDER_LIB, work / "tools" / "autopilot" / "lib" / "render_check.sh")
+    # Same contract-in-one-place reason, weaker terms: a clone without it still
+    # builds, it just sweeps nothing.
+    shutil.copy(CLEANUP_LIB, work / "tools" / "autopilot" / "lib" / "docker_cleanup.sh")
     (work / "templates" / "page.html").write_text(GOOD_TEMPLATE)
     (work / "app.py").write_text("x = 1\n")
     (work / "docker-compose.yml").write_text("services: {}\n")
@@ -519,6 +536,26 @@ def test_rolls_the_image_back_when_the_rebuild_is_unhealthy(
     assert any(line.endswith("up -d --no-build") for line in log.splitlines())
     assert "ROLLBACK IS ALSO UNHEALTHY" in proc.stdout
     assert "health OK" not in proc.stdout
+
+
+def test_sweeps_what_the_rebuild_left_behind(repo, stub_bin, home, tmp_path):
+    """Housekeeping runs on the success path, scoped to this compose project."""
+    _, log = run_hook(repo, stub_bin, home, tmp_path)
+
+    lines = log.splitlines()
+    build = next(i for i, line in enumerate(lines) if line.endswith("up -d --build"))
+    prune = next(i for i, line in enumerate(lines) if line.startswith("image prune"))
+    assert build < prune, f"the sweep must follow the build:\n{log}"
+    assert "--filter label=com.docker.compose.project=idealistarank" in lines[prune]
+    assert " -a" not in lines[prune], "-a would delete the rollback image"
+
+
+def test_a_rollback_never_sweeps(repo, stub_bin, home, tmp_path):
+    """There the previous image is what is being restored, not collected."""
+    _, log = run_hook(repo, stub_bin, home, tmp_path, CURL_BODY='{"ok":false}')
+
+    assert "up -d --no-build" in log, f"expected a rollback, docker saw:\n{log}"
+    assert "prune" not in log, f"a rollback must not prune:\n{log}"
 
 
 def test_rolls_back_a_failed_build_too(repo, stub_bin, home, tmp_path):

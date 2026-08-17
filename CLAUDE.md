@@ -1063,6 +1063,29 @@ and TODO.md; respect it if you ever run both side by side.
   `DEPLOY_RENDER_PATH` is empty and no page was rendered, on the rollback path
   as well as the forward one. `tests/test_deploy_page_check_shared.py` fails if
   either consumer grows its own copy.
+- **A deployer sweeps only what it can prove is dead, and only in its own
+  lane.** `tools/autopilot/lib/docker_cleanup.sh` is the second shared contract,
+  read by both deployers after a build is *serving* — never on the rollback
+  path, where the old image is the thing being restored. Measured 2026-08-17,
+  the two machines litter differently and the obvious one-liner fixes neither
+  well: the mini held 27 images at 1% reclaimable and no build cache at all
+  (with the containerd snapshotter an untagged image is collected as soon as
+  nothing holds it, which is why ~21 deploys a day leave no pile), while its
+  real leak was three exited `docker compose run` corpses pinning the images
+  behind them; the laptop held 20.24 GB of build cache, which
+  `docker image prune` does not touch at all. Three things the sweep must never
+  become, each a real deletion: **`-a`** removes every image no *container*
+  uses, and `${IMAGE}:autopilot-rollback` is exactly that — it is the rollback;
+  **`docker system prune`** collects vsdb, virto-property and inbox-zero off the
+  shared daemon, which is why the scope is the compose project label, read off
+  the running container rather than guessed from a directory name; and
+  **`--remove-orphans`** kills a *running* one-off, which is where long
+  backfills deliberately live (#338). Only `exited` containers carrying
+  `com.docker.compose.oneoff` go, and not for a day — a job the deploy just
+  killed leaves its container log as the only record of how far it got, and a
+  finish time that will not parse keeps the container rather than deleting it.
+  Nothing here may fail a deploy that is already serving.
+  `tests/test_docker_cleanup_shared.py` pins the refusals.
 - **A tick that deploys the watcher hands over to it first** (#293).
   `deploy_watcher.sh` is in the tree it deploys, and a running tick cannot
   pick up its own update: `git merge` renames a new file over the old one, so
