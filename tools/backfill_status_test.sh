@@ -214,3 +214,67 @@ grep -q "docker ps could not be read" "${WORK}/out" \
     || fail "scenario 11 did not say the container list was unreadable"
 unset DOCKER_PS_RC
 printf 'OK: a docker ps that fails is unknown, not an empty machine\n'
+
+# --- scenario 12: docker is not on the PATH at all -------------------------
+# Measured on the mini 2026-08-16: /usr/local/bin is absent from the
+# non-interactive ssh PATH, so `ssh host tools/backfill_status.sh` found no
+# docker, every probe failed identically, and the empty output of a *failed*
+# `docker ps` read as "no such container". The script announced
+# `container idealista-app: not running` about a healthy production stack, in
+# the same voice as a measurement. The verdict was already right - unknown,
+# which blocks - but the line a human reads was a false statement about
+# production, and it sent the reader to look at the wrong machine.
+#
+# "No docker on PATH" has to be *built*, not assumed. A first version of this
+# scenario used PATH=/usr/bin:/bin and emptied the fallbacks, which is a fact
+# about this Mac and not about Linux: the CI runner ships /usr/bin/docker, so
+# the script resolved a real binary, reached a real verdict, and the scenario
+# failed there while passing here. That is the machine-dependent-scenario trap
+# CLAUDE.md records from the bash-version gate, arriving from the other side.
+# So the PATH is a directory built to hold exactly the utilities the script
+# needs and nothing else.
+set_top; clear_locks; clear_markers
+NODOCKER="${WORK}/nodocker"
+mkdir -p "$NODOCKER"
+for util in awk cat dirname find grep ps sed; do
+    util_path="$(command -v "$util" || true)"
+    [ -n "$util_path" ] || fail "scenario 12 cannot run: $util not found to build a docker-free PATH"
+    ln -sf "$util_path" "${NODOCKER}/${util}"
+done
+[ -z "$(PATH="$NODOCKER" command -v docker || true)" ] \
+    || fail "scenario 12 built a PATH that still has docker on it"
+# bash resolved before the PATH is replaced, and invoked absolutely: the
+# constructed PATH deliberately holds no shell either.
+BASH_BIN="$(command -v bash)"
+set +e
+PATH="$NODOCKER" BACKFILL_STATUS_DOCKER_FALLBACKS="" \
+    "$BASH_BIN" "${WORK}/repo/tools/backfill_status.sh" --container idealista-app >"${WORK}/out" 2>&1
+RC=$?
+set -e
+[ "$RC" = "2" ] || fail "scenario 12: a missing docker did not read as unknown (rc=$RC)"
+grep -q "docker not found on PATH" "${WORK}/out" \
+    || fail "scenario 12 did not name the missing binary as the cause"
+grep -q "container idealista-app: not running" "${WORK}/out" \
+    && fail "scenario 12 blamed the container for a PATH problem"
+printf 'OK: a missing docker is named as such, not reported as a stopped container\n'
+
+# --- scenario 13: docker only at an absolute path (the mini's shape) --------
+# The other half of the same fix: with docker off the PATH but present where
+# Docker Desktop puts it, the tool must work normally rather than degrade. A
+# fix that only learned to say "not found" would leave every remote check
+# permanently unknown, which blocks exactly like busy and would stop every
+# backfill on that machine.
+set_top; clear_locks; clear_markers
+set +e
+PATH="/usr/bin:/bin" \
+BACKFILL_STATUS_DOCKER_FALLBACKS="${WORK}/bin/docker" \
+DOCKER_TOP_FILE="$TOP" \
+DOCKER_TOP_SIBLING_FILE="$SIBLING_TOP" \
+DOCKER_TOP_RC=0 DOCKER_PS_RC=0 DOCKER_PS_OUTPUT="idealista-app" \
+    bash "${WORK}/repo/tools/backfill_status.sh" --container idealista-app >"${WORK}/out" 2>&1
+RC=$?
+set -e
+[ "$RC" = "0" ] || fail "scenario 13: an absolute-path docker did not resolve (rc=$RC)"
+grep -q "VERDICT: idle" "${WORK}/out" \
+    || fail "scenario 13 did not reach a real verdict through the fallback"
+printf 'OK: docker found at its absolute path still measures, it does not degrade\n'
