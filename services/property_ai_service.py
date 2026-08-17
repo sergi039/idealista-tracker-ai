@@ -5,10 +5,19 @@ from typing import Any, Dict, List, Optional, Tuple
 from config import Config
 from models import Property
 from services import subscription_transport
+from services.property_comparables import collect_comparables
 from services.search_profile_service import SearchProfileService
 from utils.analysis_compare import GENERIC_TOP_KEYS, HOUSING_TOP_KEYS, LAND_TOP_KEYS
 
 logger = logging.getLogger(__name__)
+
+# The prompt's peer pool. `AI_PEER_MIN` is `_value_score`'s own threshold, so
+# the two agree on when a comparable-size pool is too thin to keep; the limit
+# is its own too, because a snapshot the page's Value bar disagrees with is
+# worse than either number alone (#386).
+AI_PEER_MIN = 3
+AI_PEER_LIMIT = 600
+AI_SIMILAR_COUNT = 3
 
 
 # --- Real JSON Schemas (issue #218) ---------------------------------------
@@ -260,23 +269,59 @@ class PropertyAIService:
             return HOUSING_STRUCTURED_JSON_SCHEMA
         return GENERIC_STRUCTURED_JSON_SCHEMA
 
-    def _build_similar_properties(self, prop: Property) -> List[Dict[str, Any]]:
-        q = Property.query.filter(Property.id != prop.id)
-        if prop.search_profile_id is not None:
-            q = q.filter(Property.search_profile_id == prop.search_profile_id)
-        if prop.property_category:
-            q = q.filter(Property.property_category == prop.property_category)
-        if prop.property_subtype:
-            q = q.filter(Property.property_subtype == prop.property_subtype)
-        if prop.municipality:
-            q = q.filter(Property.municipality == prop.municipality)
+    def _collect_peers(self, prop: Property) -> Tuple[List[Property], Dict[str, Any]]:
+        """The one peer pool the prompt is built from (#386).
 
-        q = q.filter(Property.score_total.isnot(None)).order_by(
-            Property.score_total.desc().nullslast()
+        Both halves of the prompt's market context -- the price/m² average and
+        the listed comparables -- used to build their own set, neither of them
+        aware of plot size. Price per m² collapses as a plot grows (Spearman
+        -0.842 over 459 production plots), so an average taken across every
+        size is the price of the biggest parcels in the set, and both providers
+        read it as the price of the neighbourhood: property 351, 1,300 m² at
+        €46/m², was called OVERPRICED against a "local peer average" of €26/m²
+        that two four-thousand-square-metre parcels carried.
+
+        `services/property_comparables.py` is the same ladder `_value_score`
+        ranks against, so the number the page shows as Value and the number the
+        model is handed now describe one pool.
+        """
+        return collect_comparables(
+            prop,
+            category=prop.property_category,
+            min_peers=AI_PEER_MIN,
+            limit=AI_PEER_LIMIT,
         )
-        peers = q.limit(3).all()
+
+    def _build_similar_properties(
+        self, prop: Property, peers: List[Property]
+    ) -> List[Dict[str, Any]]:
+        """The listed comparables: the peers nearest in size, not the best ones.
+
+        This used to be `ORDER BY score_total DESC LIMIT 3`, and `size_score` is
+        a component of that score -- so the three "comparables" were
+        structurally the largest plots available, which is to say the cheapest
+        per m². On property 351 they were 4,217 m², 4,107 m² and 1,697 m², and
+        Claude duly reported the 1,697 m² one as "the smallest comparable
+        (similar size)" while a 1,271 m² peer sat unshown in the same table
+        because it scored lowest. That sentence was true about its input and
+        false about the database.
+
+        The pool is already banded, so this only orders within it; when no
+        comparable-size peers existed and the band was given up, the nearest
+        available sizes are still the honest three to show, and the prompt says
+        the band was given up rather than letting the list imply otherwise.
+        """
+        subject_area = _safe_float(prop.area)
+        if subject_area is not None and subject_area > 0:
+            peers = sorted(
+                peers,
+                key=lambda p: (
+                    abs((_safe_float(p.area) or 0.0) - subject_area),
+                    p.id,
+                ),
+            )
         result: List[Dict[str, Any]] = []
-        for p in peers:
+        for p in peers[:AI_SIMILAR_COUNT]:
             result.append(
                 {
                     "id": p.id,
@@ -285,30 +330,19 @@ class PropertyAIService:
                     "price": _safe_float(p.price) or 0,
                     "area": _safe_float(p.area) or 0,
                     "municipality": p.municipality or "",
-                    "score_total": _safe_float(p.score_total) or 0,
+                    # A row nobody has scored is `None`, never 0: a zero here
+                    # renders as "Score: 0.0/100" and reads as a judgement.
+                    "score_total": _safe_float(p.score_total),
                     "url": p.url,
                 }
             )
         return result
 
-    def _build_market_snapshot(self, prop: Property) -> Dict[str, Any]:
+    def _build_market_snapshot(
+        self, prop: Property, peers: List[Property], peer_meta: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Best-effort market snapshot from local DB peers (no external scraping)."""
         ppm2 = _price_per_m2(prop)
-        q = Property.query
-        if prop.search_profile_id is not None:
-            q = q.filter(Property.search_profile_id == prop.search_profile_id)
-        q = q.filter(Property.id != prop.id)
-        if prop.property_category:
-            q = q.filter(Property.property_category == prop.property_category)
-        if prop.property_subtype:
-            q = q.filter(Property.property_subtype == prop.property_subtype)
-        if prop.municipality:
-            q = q.filter(Property.municipality == prop.municipality)
-
-        q = q.filter(
-            Property.price.isnot(None), Property.area.isnot(None), Property.area > 0
-        )
-        peers = q.limit(250).all()
         ppm2_values: List[float] = []
         for p in peers:
             v = _price_per_m2(p)
@@ -318,7 +352,11 @@ class PropertyAIService:
         snapshot: Dict[str, Any] = {
             "price_per_m2_subject": ppm2,
             "sample_size": len(ppm2_values),
+            "comparable_scope": peer_meta.get("comparable_scope"),
+            "size_comparable": bool(peer_meta.get("size_comparable")),
         }
+        if peer_meta.get("area_band_m2"):
+            snapshot["area_band_m2"] = peer_meta["area_band_m2"]
         if not ppm2_values:
             snapshot["status"] = "no_peers"
             return snapshot
@@ -368,6 +406,35 @@ class PropertyAIService:
 
         return lines
 
+    @staticmethod
+    def _market_basis_lines(market: Dict[str, Any]) -> List[str]:
+        """Say what the average is an average *of* (#386).
+
+        A number with no basis attached is read as the basis the reader assumes,
+        and the assumption here is "what the neighbours ask". When the band had
+        to be given up the pool spans every plot size, and price per m² varies
+        by a factor of 27 across that range on this database -- so the model is
+        told, rather than left to infer a comparison that was not made. Silence
+        would be the #98 defect in a prompt: an unmeasured thing presented with
+        the same face as a measured one.
+        """
+        lines: List[str] = []
+        scope = market.get("comparable_scope")
+        band = market.get("area_band_m2")
+        if market.get("size_comparable") and band:
+            lines.append(
+                f"Basis: peers of a comparable size ({float(band[0]):,.0f}-"
+                f"{float(band[1]):,.0f} m²), scope {scope}."
+            )
+        else:
+            lines.append(
+                f"Basis: scope {scope} — MIXED SIZES, no comparable-size peers were "
+                "found. Price per m² falls steeply as area grows, so this average "
+                "is not the price of a listing of this size; do not treat a gap "
+                "against it as evidence of over- or under-pricing."
+            )
+        return lines
+
     def _build_prompt(self, prop: Property) -> Tuple[str, Dict[str, Any]]:
         try:
             profile = prop.search_profile
@@ -379,8 +446,9 @@ class PropertyAIService:
 
         ppm2 = _price_per_m2(prop)
         travel_lines = self._format_travel(prop)
-        similar = self._build_similar_properties(prop)
-        market = self._build_market_snapshot(prop)
+        peers, peer_meta = self._collect_peers(prop)
+        similar = self._build_similar_properties(prop, peers)
+        market = self._build_market_snapshot(prop, peers, peer_meta)
 
         parts: List[str] = [
             market_context,
@@ -421,6 +489,7 @@ class PropertyAIService:
             parts += [
                 "",
                 f"MARKET SNAPSHOT (local DB peers, n={market.get('sample_size')}):",
+                *self._market_basis_lines(market),
                 f"Avg price/m²: €{float(market.get('avg_price_per_m2')):,.0f}",
                 f"Range price/m²: €{float(market.get('min_price_per_m2')):,.0f} - €{float(market.get('max_price_per_m2')):,.0f}",
             ]
@@ -439,10 +508,19 @@ class PropertyAIService:
             ]
 
         if similar:
-            parts += ["", "Similar properties in our database:"]
+            parts += ["", "Similar properties in our database (nearest in size):"]
             for idx, s in enumerate(similar, start=1):
+                score = s.get("score_total")
+                # "Score: 0.0/100" for a row nobody has scored is a judgement
+                # invented out of a missing value -- the same defect as a
+                # refused measurement rendered as zero.
+                score_text = (
+                    f"Score: {float(score):.1f}/100"
+                    if score is not None
+                    else "not scored"
+                )
                 parts.append(
-                    f"{idx}. ID:{s.get('id')} - {s.get('title', '')} - €{s.get('price', 0):,.0f} - {s.get('area', 0)}m² - {s.get('municipality', '')} - Score: {s.get('score_total', 0):.1f}/100"
+                    f"{idx}. ID:{s.get('id')} - {s.get('title', '')} - €{s.get('price', 0):,.0f} - {s.get('area', 0)}m² - {s.get('municipality', '')} - {score_text}"
                 )
 
         # The schema is what the CLI enforces (tools/ai_bridge.py hands it to

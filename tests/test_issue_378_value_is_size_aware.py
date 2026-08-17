@@ -26,10 +26,8 @@ import pytest
 
 from app import create_app, db
 from models import Property, SearchProfile
-from services.property_scoring_service import (
-    PEER_AREA_BAND_FACTOR,
-    LandPropertyScorer,
-)
+from services.property_comparables import PEER_AREA_BAND_FACTOR
+from services.property_scoring_service import LandPropertyScorer
 from tests import setup_test_environment
 
 
