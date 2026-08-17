@@ -205,6 +205,88 @@ class TestInsert:
             assert len(second["skipped"]) == 1
             assert Property.query.filter_by(url=URL).count() == 1
 
+    def test_a_collision_costs_its_own_row_and_not_the_batch(
+        self, app, previewed, monkeypatch
+    ):
+        """The race the sequential test could not see.
+
+        `_existing_by_listing_id` is a plain SELECT, so under READ COMMITTED it
+        cannot see a row another transaction has inserted and not yet
+        committed. Two confirms overlapping on one listing therefore both pass
+        the check -- a double click is enough -- and the loser's flush hits the
+        unique constraint on `source_email_id`. Before the savepoint that
+        exception left the loop before the single `commit()` was reached, so
+        every other row in the batch, all of them valid, was discarded while
+        the page said "Import failed".
+
+        The check is made blind for the colliding id and left alone for the
+        rest, which is exactly the losing request's view: its SELECT answered
+        "not here" and the database then said otherwise. Simulating it with two
+        real threads would need two connections and a scheduler; making the
+        one SELECT lie reproduces the same state and cannot pass by accident --
+        remove the savepoint and this test fails.
+        """
+        second = dict(previewed)
+        second["listing_id"] = 190210058
+        second["url"] = "https://www.fotocasa.es/en/buy/land/gozon/x/190210058/d"
+        second["title"] = "A second, unrelated listing"
+
+        real_lookup = fotocasa_import._existing_by_listing_id
+        blinded = {"count": 0}
+
+        def blind_to_the_other_tabs_row(listing_id):
+            # Blind on the *check*, honest afterwards: the except handler asks
+            # again, and by then the other transaction has committed.
+            if listing_id == 190280914 and blinded["count"] == 0:
+                blinded["count"] += 1
+                return None
+            return real_lookup(listing_id)
+
+        monkeypatch.setattr(
+            fotocasa_import, "_existing_by_listing_id", blind_to_the_other_tabs_row
+        )
+
+        with app.app_context():
+            db.session.add(
+                Property(
+                    source_email_id=fotocasa_import.source_email_id_for(190280914),
+                    title="Committed by the other tab",
+                    url=URL,
+                )
+            )
+            db.session.commit()
+
+            outcome = fotocasa_import.insert_rows(
+                [previewed, second], profile_id=app.config["TEST_PROFILE_ID"]
+            )
+
+            # The check really was blinded, so the flush is what refused it.
+            assert blinded["count"] == 1
+
+            assert len(outcome["created"]) == 1
+            assert outcome["created"][0]["title"] == "A second, unrelated listing"
+            assert len(outcome["skipped"]) == 1
+            assert outcome["skipped"][0]["existing_id"] is not None
+
+            # The unrelated listing survived: the batch was not thrown away.
+            assert (
+                Property.query.filter_by(
+                    source_email_id=fotocasa_import.source_email_id_for(190210058)
+                ).count()
+                == 1
+            )
+            assert Property.query.count() == 2
+
+    def test_a_collision_the_check_does_see_is_still_skipped(self, app, previewed):
+        """The ordinary path stays ordinary: no savepoint needed to skip it."""
+        with app.app_context():
+            profile_id = app.config["TEST_PROFILE_ID"]
+            fotocasa_import.insert_rows([previewed], profile_id=profile_id)
+            second = fotocasa_import.insert_rows([previewed], profile_id=profile_id)
+
+            assert second["created"] == []
+            assert second["skipped"][0]["existing_id"] is not None
+
     def test_only_new_rows_are_written(self, app, previewed):
         refused = fotocasa_import.preview_row(parse_listing("", URL))
         with app.app_context():

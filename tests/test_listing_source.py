@@ -208,3 +208,100 @@ class TestSurfaces:
 
             assert "Plot in Cudillero" in body
             assert body.count("fas fa-link me-1") == 0
+
+
+# Every shape a stored URL can take that has ever mattered here, plus the ones
+# an adversarial review found. The point of the list is that it is fed to
+# *both* readings below and they must agree on every entry: the badge on the
+# row comes from `source_of_url` and the filter under it comes from
+# `source_filter_clause`, and this file exists because those two disagreeing is
+# the defect the module was written to remove.
+AGREEMENT_CORPUS = [
+    "https://www.idealista.com/en/inmueble/91523456/",
+    "https://www.idealista.com/en/inmueble/91523456/?utm_source=alerts-id",
+    "http://idealista.com/es/inmueble/1/",
+    "https://www.fotocasa.es/en/buy/land/aviles/llaranes/190280914/d",
+    "https://m.fotocasa.es/es/comprar/terreno/a/b/1/d",
+    "https://inmobiliaria-example.es/detalle-inmuebles.php?id=2546",
+    # A host with no path at all. urlsplit reads the hostname; a LIKE pattern
+    # requiring a trailing slash does not.
+    "https://www.fotocasa.es",
+    "https://www.idealista.com",
+    # A query glued straight to the host, and a fragment.
+    "https://www.fotocasa.es?ref=1",
+    "https://www.fotocasa.es#top",
+    # Another site's URL carried inside a query parameter. The unanchored
+    # clause matched these; `source_of_url` never did.
+    "https://example.com/x?ref=www.idealista.com/foo",
+    "https://redirect.example.com/away?to=http://idealista.com/foo",
+    "https://example.com/x?to=https://www.fotocasa.es/en/buy/land/a/b/1/d",
+    # A lookalike host that must not be read as the real one.
+    "https://www.idealista.com.evil.example/x",
+    "https://notfotocasa.es/x",
+    "https://fotocasa.es.evil.example/y",
+]
+
+
+class TestTheTwoReadingsAgree:
+    """The SQL clause and the Python classifier, on the same corpus.
+
+    Written after an adversarial review found them diverging two ways at once:
+    the clause searched for `//idealista.com/` anywhere in the column, so a
+    query parameter carrying another site's link matched it; and it required a
+    slash after the host, so a path-less URL did not match the clause its own
+    badge claimed. The single test that had guarded this used
+    `?utm_campaign=vs-fotocasa.es/x`, whose hyphen -- not a dot -- meant it
+    passed while the defect was live. A corpus, fed to both, cannot dodge it
+    that way.
+    """
+
+    def test_every_url_lands_in_the_same_bucket_both_ways(self, app):
+        with app.app_context():
+            for index, url in enumerate(AGREEMENT_CORPUS):
+                db.session.add(
+                    Property(source_email_id=f"corpus-{index}", url=url, title=url)
+                )
+            db.session.commit()
+
+            expected = {url: source_of_url(url) for url in AGREEMENT_CORPUS}
+
+            for source in (IDEALISTA, FOTOCASA, OTHER, UNKNOWN):
+                clause = source_filter_clause(Property, source)
+                selected = {
+                    row.url
+                    for row in Property.query.filter(clause).all()
+                    if row.source_email_id.startswith("corpus-")
+                }
+                should_be = {u for u, s in expected.items() if s == source}
+                assert selected == should_be, (
+                    f"source={source}: SQL and Python disagree on "
+                    f"{selected ^ should_be}"
+                )
+
+    def test_a_host_named_in_a_query_is_not_the_source(self, app):
+        """The exact false positive the unanchored clause had."""
+        assert source_of_url("https://example.com/x?to=http://idealista.com/y") == OTHER
+        with app.app_context():
+            db.session.add(
+                Property(
+                    source_email_id="query-carrier",
+                    url="https://example.com/x?to=http://idealista.com/y",
+                )
+            )
+            db.session.commit()
+
+            idealista_rows = {
+                row.source_email_id
+                for row in Property.query.filter(
+                    source_filter_clause(Property, IDEALISTA)
+                ).all()
+            }
+            assert "query-carrier" not in idealista_rows
+
+    def test_a_lookalike_host_is_not_the_source(self, app):
+        for url in (
+            "https://www.idealista.com.evil.example/x",
+            "https://fotocasa.es.evil.example/y",
+            "https://notfotocasa.es/x",
+        ):
+            assert source_of_url(url) == OTHER

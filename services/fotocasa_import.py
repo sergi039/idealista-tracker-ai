@@ -43,6 +43,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from sqlalchemy import null
+from sqlalchemy.exc import IntegrityError
 
 from services.fotocasa_source import (
     SOURCE_NAME,
@@ -309,8 +310,36 @@ def insert_rows(
             }
         }
 
-        db.session.add(prop)
-        db.session.flush()
+        # Each row lands inside its own SAVEPOINT, so a collision costs that
+        # row and not the batch.
+        #
+        # The `_existing_by_listing_id` check above is a plain SELECT and
+        # cannot see a row another transaction has inserted but not committed,
+        # so two confirms overlapping on one listing both pass it -- a double
+        # click on the Add button is enough, and two tabs certainly are. The
+        # second one's flush then raises IntegrityError from the unique
+        # constraint on `source_email_id`, and without this it propagated out
+        # of the loop before the single `commit()` below was ever reached: the
+        # caller rolled back, and every other row in that batch, all of them
+        # valid, was discarded while the page said "Import failed". The
+        # docstring promised exactly this could not happen; it was true only
+        # of the sequential case the test exercised.
+        try:
+            with db.session.begin_nested():
+                db.session.add(prop)
+                db.session.flush()
+        except IntegrityError:
+            # The other transaction has committed it by now, so this is the
+            # ordinary duplicate outcome arriving a moment late.
+            existing = _existing_by_listing_id(int(listing_id))
+            skipped.append(
+                {
+                    "url": row.get("url"),
+                    "existing_id": existing.id if existing is not None else None,
+                }
+            )
+            continue
+
         created.append({"id": prop.id, "url": prop.url, "title": prop.title})
 
     db.session.commit()

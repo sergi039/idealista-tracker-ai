@@ -143,7 +143,13 @@
                 </select>
               </div>
               <div class="col-md-6">
-                <button type="submit" class="btn btn-success">
+                {# Disabled on submit so the ordinary double click does not
+                   send two confirms. It is the cheap half of the fix -- the
+                   savepoint in services/fotocasa_import.py is what actually
+                   keeps a collision from costing the batch, since two tabs
+                   defeat this and JavaScript may not run at all. #}
+                <button type="submit" class="btn btn-success"
+                        onclick="this.disabled=true; this.form.submit();">
                   <i class="fas fa-plus me-1"></i>{{ t('import_add_n')|format(new_rows|length) }}
                 </button>
               </div>
