@@ -182,6 +182,42 @@ your own, the cheap way out is a `git worktree` with its own
 `COMPOSE_CONTAINER_PREFIX` and `APP_HOST_PORT` (docs/DEV_RULES.md), not a
 build of the shared tree.
 
+**`git add -A` takes the same snapshot the build does, and commits it.**
+Everything above is about `COPY . .`; this is the same hazard through git, and
+it is easier to walk into because a commit feels like a smaller act than a
+deploy. Measured 2026-08-17: a commit whose own content was two files carried
+eight more — `migrations/020_add_search_profile_is_hidden.sql`, `models.py`,
+`routes/main_routes.py`, `services/search_profile_service.py`, three templates
+and `utils/i18n.py` — another session's half-finished feature, swept up by one
+`git add -A` and pushed to a PR.
+
+**What caught it was CI, and not for the reason you would hope.** No reviewer
+read the diff and noticed foreign files; `tests/test_postgres_migrations.py`
+compares the exact list of migration files and refused a `020` that is not on
+`main`. A test about migrations found a commit-hygiene defect, which means the
+same mistake in files that migration test does not see would have merged. So
+the check has to be yours and it has to happen before the commit: **read `git
+status` before `git add`, and add by path.** `git commit -a` is the same trap
+with fewer characters.
+
+The repair, if it has already happened, keeps the other session's work: `git
+reset --soft HEAD~1` then `git reset` leaves every change in the working tree
+exactly as it was, and you re-add your own files by name. Force-push is fine on
+your own branch and is what removes the foreign files from the remote; check
+afterwards that they are still in the tree, because the point is that nobody
+loses anything.
+
+Two more things this costs that are not obvious. **A `git merge` of `main` can
+be impossible while another session holds uncommitted edits to the same
+files** — git refuses rather than overwrite them, which is correct and leaves
+you unable to update a branch that protected `main` requires to be current. Do
+the merge in a `git worktree`, the same escape the paragraph above offers for
+builds. And **a squash-merged branch conflicts with its own follow-up**: a
+branch cut before the squash landed carries the same file as an unrelated
+`add/add`, and the resolution is your version, since it is the squashed one
+plus whatever you fixed since — verify that by diffing the two rather than
+assuming it.
+
 **There is exactly one listing surface: `/properties`** (owner decision,
 2026-08-09, superseding the 2026-08-08 one that kept `/lands` as a second,
 archived page). `/`, the navbar and `/lands` itself all lead there, and that
