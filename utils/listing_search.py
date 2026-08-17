@@ -44,6 +44,7 @@ answers to "find me this listing".
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any, List, Optional
 from urllib.parse import parse_qsl, urlencode
 
@@ -160,6 +161,39 @@ def url_fragment(text: Optional[str]) -> Optional[str]:
     return path or None
 
 
+@dataclass(frozen=True)
+class SearchInterpretation:
+    """How one search box entry was read.
+
+    The page needs this because "0 properties found" is the same sentence for
+    a query that genuinely has no answer and for one that was understood
+    differently from how it was typed. It is derived here, next to the clause
+    and from the same two functions, so what the page says it searched for
+    cannot drift from what was actually searched.
+    """
+
+    query: str
+    listing_id: Optional[int]
+    url_fragment: Optional[str]
+
+    @property
+    def is_listing_reference(self) -> bool:
+        """True when the query named a listing rather than described one."""
+        return self.listing_id is not None or self.url_fragment is not None
+
+
+def interpret_search(search_query: Optional[str]) -> Optional[SearchInterpretation]:
+    """Read a search box entry, or None when there is nothing to read."""
+    query = (search_query or "").strip()
+    if not query:
+        return None
+    return SearchInterpretation(
+        query=query,
+        listing_id=extract_listing_id(query),
+        url_fragment=url_fragment(query),
+    )
+
+
 def listing_search_clause(model: Any, search_query: Optional[str]):
     """The listing search box, as one SQLAlchemy clause (None when empty).
 
@@ -168,28 +202,26 @@ def listing_search_clause(model: Any, search_query: Optional[str]):
     query that happens to look like both stays a superset of the text search
     it used to be -- this widens what can be found and narrows nothing.
     """
-    query = (search_query or "").strip()
-    if not query:
+    read = interpret_search(search_query)
+    if read is None:
         return None
 
-    pattern = f"%{query}%"
+    pattern = f"%{read.query}%"
     clauses: List[Any] = [
         model.title.ilike(pattern),
         model.description.ilike(pattern),
         model.municipality.ilike(pattern),
     ]
 
-    listing_id = extract_listing_id(query)
-    if listing_id is not None:
-        clauses.append(model.idealista_property_id == listing_id)
+    if read.listing_id is not None:
+        clauses.append(model.idealista_property_id == read.listing_id)
         # The trailing slash is a boundary: without it `/inmueble/9152345`
         # would also match the different listing `/inmueble/91523456/`.
-        clauses.append(model.url.ilike(f"%/inmueble/{listing_id}/%"))
+        clauses.append(model.url.ilike(f"%/inmueble/{read.listing_id}/%"))
 
-    fragment = url_fragment(query)
-    if fragment:
+    if read.url_fragment:
         clauses.append(
-            model.url.ilike(f"%{_escape_like(fragment)}%", escape=_LIKE_ESCAPE)
+            model.url.ilike(f"%{_escape_like(read.url_fragment)}%", escape=_LIKE_ESCAPE)
         )
 
     return or_(*clauses)

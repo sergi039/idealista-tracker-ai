@@ -626,6 +626,21 @@ PostgreSQL the untyped literal psycopg2 sends returns no rows while the same
 value bound to a `bigint` parameter fails with `ERROR: bigint out of range`, so
 the guard is what makes the two agree.
 
+**And an empty result says what it looked for.** "0 properties found" was one
+sentence for two different facts: no such listing here, and *the query was read
+differently from how you typed it* — a pasted link is read as the listing it
+names, not as text to match. So when the count is really zero and the query
+named a listing, the line beside it says which id, or which link, was searched
+for. It renders from `interpret_search()`, the same reading
+`listing_search_clause()` is built from, because a page describing a search
+that did not happen would be the defect it exists to remove, relocated. Rows on
+screen say it already, so the line appears only at zero. **Testing that line
+means asserting the page rendered**, not only that the line is absent:
+`routes/main_routes.py` turns a template error into a flash and a second render
+with no rows, which also shows "0 properties found" and no line — the first
+version of `tests/test_listing_search_by_url.py` stayed green through a
+mutation that broke exactly that path.
+
 **Three reference files are committed on purpose, and `.gitignore` re-includes
 them one at a time.** `data/*` excludes the runtime artifacts — backfill
 snapshots, ledgers, logs — and `!data/ine_municipal.json`,

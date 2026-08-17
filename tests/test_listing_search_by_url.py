@@ -265,3 +265,80 @@ class TestTheTextSearchIsUnchanged:
             "/properties", query_string={"profile_id": "all", "search": "9" * 25}
         )
         assert response.status_code == 200
+
+
+class TestAnEmptyResultSaysWhatItLookedFor:
+    """ "0 properties found" must not mean two different things silently.
+
+    A pasted link is read as the listing it names rather than as text to
+    match, so a zero can mean "no such listing here" or "understood
+    differently from how you typed it". The line says which; it is derived
+    from the same reading the filter was built from, so it cannot describe a
+    search that did not happen.
+
+    Every test here asserts the page rendered normally as well as what it
+    said. `routes/main_routes.py` turns a template error into a flashed
+    message and a second render with no rows, and that fallback also shows
+    "0 properties found" with no disclosure line -- so a test that only looks
+    for the line's absence passes just as happily when the page broke. That
+    is not hypothetical: it is what the first version of this class did, and
+    a mutation that made the line render for every query (where the URL is
+    None and `truncate` raises) stayed green through it.
+    """
+
+    @staticmethod
+    def _rendered_body(response):
+        """The page body, once it is established the page really rendered."""
+        assert response.status_code == 200
+        body = response.get_data(as_text=True)
+        assert "An error occurred while loading properties" not in body
+        return body
+
+    def test_a_missing_listing_id_is_named(self, client):
+        response = client.get(
+            "/properties",
+            query_string={
+                "profile_id": "all",
+                "search": "https://www.idealista.com/en/inmueble/12345678/",
+            },
+        )
+        body = self._rendered_body(response)
+        assert 'id="search-read-as"' in body
+        assert "12345678" in body
+
+    def test_a_missing_link_is_named(self, client):
+        response = client.get(
+            "/properties",
+            query_string={
+                "profile_id": "all",
+                "search": "https://www.fotocasa.es/es/comprar/terreno/gozon/gozon/1/d",
+            },
+        )
+        body = self._rendered_body(response)
+        assert 'id="search-read-as"' in body
+        assert "fotocasa.es/es/comprar/terreno/gozon/gozon/1/d" in body
+
+    def test_a_found_listing_says_nothing(self, client):
+        # The rows on screen explain the query; a line about how it was read
+        # would be noise.
+        response = client.get(
+            "/properties",
+            query_string={
+                "profile_id": "all",
+                "search": "https://www.idealista.com/en/inmueble/91523456/",
+            },
+        )
+        body = self._rendered_body(response)
+        assert "Land plot in Salamir" in body
+        assert 'id="search-read-as"' not in body
+
+    def test_an_ordinary_word_with_no_answer_says_nothing(self, client):
+        # Nothing was read differently from how it was typed, so there is
+        # nothing to disclose -- an empty result is the whole answer.
+        response = client.get(
+            "/properties",
+            query_string={"profile_id": "all", "search": "Villaviciosa"},
+        )
+        body = self._rendered_body(response)
+        assert "0 properties found" in body
+        assert 'id="search-read-as"' not in body
