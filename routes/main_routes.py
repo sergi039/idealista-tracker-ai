@@ -40,7 +40,7 @@ from services.profile_selection import (
     parse_profile_selection,
     resolve_profile_selection,
 )
-from utils.listing_search import listing_search_clause
+from utils.listing_search import interpret_search, listing_search_clause
 from utils.municipality_grouping import (
     group_key,
     group_municipalities,
@@ -1148,6 +1148,10 @@ def properties():
             profile_selection=profile_selection,
             travel_display_targets=travel_display_targets,
             listing_verified_count=listing_verified_count,
+            # How the search box entry was read, so an empty result can say
+            # what it looked for instead of leaving "0 properties found" to
+            # mean both "no such listing" and "not understood as you typed it".
+            search_interpretation=interpret_search(search_query),
             **filter_options,
             current_filters={
                 # A list, so `url_for` repeats the parameter instead of
