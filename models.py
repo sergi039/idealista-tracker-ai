@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import json
 
 from app import db
+from services.advertiser import read_verdict as advertiser_verdict
 from services.listing_verification import read_verdict as listing_verdict
 from services.search_subscription_identity import SEARCH_KEY_LENGTH
 from sqlalchemy import CheckConstraint, func
@@ -328,6 +329,12 @@ class Property(db.Model):
             # pages render: 'active' only when a check or the owner established
             # it, 'unchecked' otherwise (services/listing_verification.py).
             "listing_status_verdict": listing_verdict(self)["state"],
+            # Who is selling. Most of the answer is derived from the listing
+            # URL rather than stored, so a consumer reading `enrichment` alone
+            # would see nothing for the 408 rows that answer for free
+            # (services/advertiser.py). 'unchecked' where nobody established
+            # it -- never 'agency' by default.
+            "advertiser_verdict": advertiser_verdict(self)["state"],
             "email_date": self.email_date.isoformat() if self.email_date else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,

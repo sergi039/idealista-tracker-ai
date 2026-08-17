@@ -6,7 +6,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app import db
 from models import Property
-from services import sea_view_service
+from services import advertiser, sea_view_service
 from services.enrichment_service import EnrichmentService
 from services.property_location_service import PropertyLocationService
 from services.property_scoring_service import PropertyScoringService
@@ -163,6 +163,20 @@ class PropertyEnrichmentService:
     ) -> bool:
         if not prop:
             return False
+
+        # Who is selling: the owner, or an agency. First, because it is the one
+        # step here that needs no coordinate -- a listing the geocoder cannot
+        # place returns below, and this answer has nothing to do with where the
+        # plot is. Free: it reads the listing page the row already links to,
+        # and only when the row does not answer for itself already
+        # (`services/advertiser.py` refuses the fetch otherwise). Advisory --
+        # no score reads it, and a refusal must not fail the run.
+        try:
+            advertiser.enrich(prop, commit=False)
+        except Exception as e:
+            logger.warning(
+                "Advertiser lookup failed for %s: %s", getattr(prop, "id", None), e
+            )
 
         # Coordinates first (needed for travel).
         self.location_service.ensure_coordinates(prop, refresh=refresh_coords)
