@@ -582,6 +582,13 @@ def _profile_dropdown_options(profiles, resolved):
     """Rows for the subscription filter: the live subscriptions first, the
     retired ones after them, each with how many listings it holds.
 
+    A *hidden* subscription (owner request, 2026-08-17) is in neither group:
+    it is left out of the menu entirely, archive included, which is what
+    separates hiding from retiring. The one exception is the selection --
+    a hidden id named in the URL still gets its checkbox, for the same reason
+    an unknown id does, and it renders under its own heading rather than
+    under `Archive`, which would say something false about why it is there.
+
     The owner has exactly two saved searches on idealista.com; everything else
     in `search_profiles` is a subscription that stopped (the Alicante ones), a
     mirror of the frozen `lands` table, or the unnamed catch-all. Listing all
@@ -610,10 +617,15 @@ def _profile_dropdown_options(profiles, resolved):
     selected = set(resolved.checked_ids)
 
     # One query for the archive too -- inactive profiles are not in `profiles`,
-    # which `SearchProfileService.list_profiles(active_only=True)` filtered.
+    # which `SearchProfileService.list_visible_profiles()` filtered. Hidden
+    # ones are filtered out of this query as well, and come back below only
+    # when the selection names them.
+    from services.search_profile_service import SearchProfileService
+
     known = {profile.id: profile for profile in profiles}
     for profile in SearchProfile.query.filter(
-        SearchProfile.is_active.isnot(True)
+        SearchProfile.is_active.isnot(True),
+        SearchProfileService.visible_clause(),
     ).all():
         known.setdefault(profile.id, profile)
     for profile in SearchProfile.query.filter(
@@ -631,6 +643,7 @@ def _profile_dropdown_options(profiles, resolved):
                 "id": profile_id,
                 "name": profile.name,
                 "is_active": profile_id in active_ids,
+                "is_hidden": bool(profile.is_hidden),
                 "count": count,
             }
         )
@@ -643,14 +656,53 @@ def _profile_dropdown_options(profiles, resolved):
                 "id": profile_id,
                 "name": f"Unknown profile #{profile_id}",
                 "is_active": False,
+                "is_hidden": False,
                 "count": counts.get(profile_id, 0),
             }
         )
 
-    # Live subscriptions first, then the archive; alphabetical inside each
-    # group so the order does not shuffle when a listing arrives.
-    options.sort(key=lambda option: (not option["is_active"], option["name"].lower()))
+    # Live subscriptions first, then the archive, then whatever hidden ones
+    # the selection dragged back in; alphabetical inside each group so the
+    # order does not shuffle when a listing arrives.
+    options.sort(
+        key=lambda option: (
+            option["is_hidden"],
+            not option["is_active"],
+            option["name"].lower(),
+        )
+    )
     return options
+
+
+def _hidden_subscription_note(resolved):
+    """What the subscription controls are not showing, or None.
+
+    Hiding is the owner's own choice, so this is a disclosure and not a
+    warning: the menu offers no way to reach these, and a page that simply
+    stopped mentioning several subscriptions would leave "5 of 14" looking
+    like the whole table. It counts the listings too, because the number that
+    actually moved is the row count, not the subscription count.
+
+    A hidden subscription the selection names is on screen already, so it is
+    not part of what is being withheld.
+    """
+    from services.search_profile_service import SearchProfileService
+
+    rows = (
+        db.session.query(SearchProfile.id, func.count(Property.id))
+        .outerjoin(Property, Property.search_profile_id == SearchProfile.id)
+        .filter(SearchProfileService.hidden_clause())
+        .group_by(SearchProfile.id)
+        .all()
+    )
+    shown = set(resolved.checked_ids)
+    withheld = [(pid, count) for pid, count in rows if pid not in shown]
+    if not withheld:
+        return None
+    return {
+        "profiles": len(withheld),
+        "listings": sum(count for _, count in withheld),
+    }
 
 
 def _travel_display_targets(profile_ids, include_custom=False):
@@ -993,7 +1045,10 @@ def properties():
         # Default first, so a fresh install's auto-created profile is in the
         # dropdown that "all profiles" is defined against.
         SearchProfileService.get_default_profile(create=True)
-        profiles = SearchProfileService.list_profiles(active_only=True)
+        # Visible, not merely active: hiding a subscription takes its listings
+        # out of `profile_id=all` along with its chip, which is the whole
+        # difference between hiding one and retiring one (2026-08-17).
+        profiles = SearchProfileService.list_visible_profiles(active_only=True)
 
         # `profile_id` is a repeated parameter since #104 -- auto | all |
         # selected(ids); see services/profile_selection.py for what each
@@ -1245,6 +1300,7 @@ def properties():
             pagination=pagination,
             profiles=profiles,
             profile_options=_profile_dropdown_options(profiles, profile_selection),
+            hidden_subscription_note=_hidden_subscription_note(profile_selection),
             profile_names=profile_names,
             unassigned_count=unassigned_count,
             max_selected_profiles=MAX_SELECTED_PROFILE_IDS,
@@ -1290,6 +1346,9 @@ def properties():
             pagination=None,
             profiles=[],
             profile_options=[],
+            # Same reason as the count below: the page failed before it could
+            # ask what is hidden, so it says nothing rather than "0 hidden".
+            hidden_subscription_note=None,
             profile_names={},
             # The page failed before it could count anything; claiming a number
             # here would be worse than the missing disclosure.
@@ -1460,7 +1519,12 @@ def property_detail(property_id):
 
 @main_bp.route("/profiles")
 def profiles():
-    """List search profiles (MVP; editing comes later)."""
+    """List search profiles (MVP; editing comes later).
+
+    Hidden subscriptions are listed here, and only here. This is the page
+    that manages them, so a page that hid them from their own control would
+    leave the owner no way back (2026-08-17).
+    """
     try:
         from services.search_profile_service import SearchProfileService
 
@@ -1493,6 +1557,43 @@ def profiles():
         return render_template(
             "profiles.html", profiles=[], property_counts={}, unassigned_count=0
         )
+
+
+@main_bp.route("/profiles/<int:profile_id>/visibility", methods=["POST"])
+def set_profile_visibility(profile_id):
+    """Take a subscription off the screens, or put it back (2026-08-17).
+
+    Its own control, not a field in the profile editor, for the reason the
+    /properties toolbar records: every control exists exactly once, and this
+    one belongs where the owner is looking at all the subscriptions side by
+    side and deciding which of them are worth a chip.
+
+    The catch-all cannot be hidden. It receives every email that matches
+    nothing else, so hiding it would take listings off the page as they
+    arrive, with nothing on screen saying where they went -- the same reason
+    `edit_profile` forces the default profile active.
+    """
+    profile = db.get_or_404(SearchProfile, profile_id)
+    hidden = request.form.get("hidden") == "on"
+
+    if hidden and profile.is_default:
+        flash(
+            "The default profile receives every email that matches nothing "
+            "else, so it cannot be hidden. Make another profile the default "
+            "first.",
+            "error",
+        )
+        return redirect(url_for("main.profiles"))
+
+    profile.is_hidden = hidden
+    db.session.commit()
+    flash(
+        f'"{profile.name}" is hidden from the property views'
+        if hidden
+        else f'"{profile.name}" is shown again',
+        "success",
+    )
+    return redirect(url_for("main.profiles"))
 
 
 @main_bp.route("/profiles/new", methods=["GET", "POST"])
@@ -2496,6 +2597,49 @@ def land_detail(land_id):
         return redirect(url_for("main.lands"))
 
 
+@main_bp.route("/properties/<int:property_id>/advertiser", methods=["POST"])
+def set_advertiser(property_id):
+    """The owner's own reading of who is selling this listing.
+
+    The last resort, and the only one for most of what it will be used on: 268
+    rows here are idealista links carrying no alert campaign, and idealista
+    answers a captcha to every request from this machine, so nothing automatic
+    can ever establish them. A person with the page open in their own browser
+    can.
+
+    It outranks every computed reading and survives every recompute
+    (`services/advertiser.enrich` refuses a hand-set row outright), which is
+    the sea-view precedent -- "an owner who looked at the listing outranks both
+    models". Clearing puts the row back on the computed path and restores the
+    reading the hand-set verdict displaced, so using this on a fotocasa row and
+    changing your mind does not throw away a page reading that cost a fetch.
+    """
+    from services import advertiser as advertiser_service
+
+    prop = db.get_or_404(Property, property_id)
+    wanted = (request.form.get("advertiser") or "").strip().lower()
+    if wanted not in advertiser_service.HAND_SET_STATES + ("clear",):
+        flash("Unknown advertiser action.", "error")
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    if wanted == "clear":
+        result = advertiser_service.set_by_hand(prop, None, commit=True)
+        message = (
+            "Cleared: the seller follows the listing again."
+            if result["restored"]
+            else "Cleared: the seller is no longer established for this listing."
+        )
+    else:
+        advertiser_service.set_by_hand(prop, wanted, commit=True)
+        message = (
+            "Recorded: sold by its owner."
+            if wanted == advertiser_service.OWNER
+            else "Recorded: sold through an agency."
+        )
+    flash(message, "success")
+    return redirect(url_for("main.property_detail", property_id=property_id))
+
+
 @main_bp.route("/properties/<int:property_id>/pool-absence", methods=["POST"])
 def set_pool_absence(property_id):
     """The owner's hand-set 'no pool here' verdict (proposal D17).
@@ -2616,7 +2760,9 @@ def map_view():
         from services.search_profile_service import SearchProfileService
 
         default_profile = SearchProfileService.get_default_profile(create=True)
-        profiles = SearchProfileService.list_profiles(active_only=True)
+        # Same rule as /properties: a hidden subscription is not on the map
+        # either, unless `profile_id` names it (2026-08-17).
+        profiles = SearchProfileService.list_visible_profiles(active_only=True)
 
         # A `focus=<id>` is read before the subscription is resolved: it is
         # what the auto fallback answers to (#287).
@@ -3701,7 +3847,10 @@ def export_properties_csv():
         from services.search_profile_service import SearchProfileService
 
         default_profile = SearchProfileService.get_default_profile(create=True)
-        profiles = SearchProfileService.list_profiles(active_only=True)
+        # Visible, like /properties -- an export of "all subscriptions" that
+        # carried the hidden ones would disagree with the page it was taken
+        # from (2026-08-17).
+        profiles = SearchProfileService.list_visible_profiles(active_only=True)
 
         # Same profile_id contract as /properties (auto | all | selected(ids))
         # and the same auto-select fallback, so an export matches what that
@@ -4069,10 +4218,19 @@ def _import_profiles():
     would import a listing and not find it. It is also what decides whose
     comparable pool the row joins (`services/property_comparables.py` scopes
     on it), so it is a real choice, not a formality.
+
+    Hidden subscriptions are not offered, for exactly that reason: importing
+    into one would file the listing where the page does not show it, which is
+    the same "imported it and cannot find it" the paragraph above is about.
+    The archived ones stay -- they are offered everywhere else too.
     """
-    return SearchProfile.query.order_by(
-        SearchProfile.is_active.desc(), SearchProfile.name.asc()
-    ).all()
+    from services.search_profile_service import SearchProfileService
+
+    return (
+        SearchProfile.query.filter(SearchProfileService.visible_clause())
+        .order_by(SearchProfile.is_active.desc(), SearchProfile.name.asc())
+        .all()
+    )
 
 
 @main_bp.route("/properties/import", methods=["GET"])

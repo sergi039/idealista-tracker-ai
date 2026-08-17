@@ -25,8 +25,9 @@
                     <th style="width: 120px;">Properties</th>
                     <th style="width: 120px;">Default</th>
                     <th style="width: 120px;">Active</th>
+                    <th style="width: 120px;">Visible</th>
                     <th style="width: 180px;">Updated</th>
-                    <th style="width: 120px;"></th>
+                    <th style="width: 200px;"></th>
                 </tr>
             </thead>
             <tbody>
@@ -59,17 +60,44 @@
                                     <span class="badge bg-secondary">No</span>
                                 {% endif %}
                             </td>
+                            <td>
+                                {% if p.is_hidden %}
+                                    <span class="badge bg-secondary" data-role="visibility-state">Hidden</span>
+                                {% else %}
+                                    <span class="badge bg-success" data-role="visibility-state">Yes</span>
+                                {% endif %}
+                            </td>
                             <td class="small text-body-secondary">
                                 {% if p.updated_at %}{{ p.updated_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}
                             </td>
                             <td class="text-end">
+                                {# The catch-all cannot be hidden: it receives every email that
+                                   matches nothing else, so hiding it would take listings off
+                                   the property views as they arrive. #}
+                                {% if p.is_default %}
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" disabled
+                                            title="The default profile receives unmatched emails, so it cannot be hidden">
+                                        Hide
+                                    </button>
+                                {% else %}
+                                    <form method="POST" class="d-inline"
+                                          action="{{ url_for('main.set_profile_visibility', profile_id=p.id) }}">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                        <input type="hidden" name="hidden" value="{{ 'off' if p.is_hidden else 'on' }}"/>
+                                        <button type="submit"
+                                                class="btn btn-sm {{ 'btn-outline-success' if p.is_hidden else 'btn-outline-secondary' }}"
+                                                title="{{ 'Show this subscription on the property views again' if p.is_hidden else 'Take this subscription off the property views' }}">
+                                            <i class="fas {{ 'fa-eye' if p.is_hidden else 'fa-eye-slash' }} me-1"></i>{{ 'Show' if p.is_hidden else 'Hide' }}
+                                        </button>
+                                    </form>
+                                {% endif %}
                                 <a class="btn btn-outline-primary btn-sm" href="{{ url_for('main.edit_profile', profile_id=p.id) }}">Edit</a>
                             </td>
                         </tr>
                     {% endfor %}
                 {% else %}
                     <tr>
-                        <td colspan="7" class="text-center text-body-secondary py-5">
+                        <td colspan="8" class="text-center text-body-secondary py-5">
                             No profiles yet.
                         </td>
                     </tr>
@@ -94,6 +122,7 @@
                     <td class="text-body-secondary">&mdash;</td>
                     <td class="text-body-secondary">&mdash;</td>
                     <td class="text-body-secondary">&mdash;</td>
+                    <td class="text-body-secondary">&mdash;</td>
                     <td class="text-end text-body-secondary">&mdash;</td>
                 </tr>
             </tbody>
@@ -103,6 +132,17 @@
 
 <div class="alert alert-info mt-3 mb-0">
     <div>
+        <strong>Hidden is about the screen, not about the data.</strong> A hidden subscription
+        keeps every listing it holds and keeps receiving its own alert emails &mdash; it is simply
+        not offered on
+        <a href="{{ url_for('main.properties') }}">the property views</a>: no chip, no entry in
+        the subscription menu, not even under <em>Archive</em>, and its listings are out of
+        &ldquo;all subscriptions&rdquo;, the map and the CSV export. They stay reachable through a
+        direct link (<code>/properties?profile_id=&lt;id&gt;</code>) and through the count in this
+        table, and <em>Show</em> above puts everything back. <em>Active</em> is the other question:
+        an inactive subscription is archived, which still offers it one tick away.
+    </div>
+    <div class="mt-2">
         Idealista emails are routed by the saved-search link they carry (issue #102); an email
         with no recognizable link falls back to the saved-search name, the optional regex
         matchers, and finally the default profile.

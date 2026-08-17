@@ -423,8 +423,14 @@
            Favorites and Hide removed sit on this row for the same reason:
            they are one-click scope switches, not fields you fill in and
            submit. #}
-        {% set live_subscriptions = profile_options|selectattr('is_active')|list %}
-        {% set archived_subscriptions = profile_options|rejectattr('is_active')|list %}
+        {# Hidden subscriptions are in neither group: they are off this page
+           entirely (2026-08-17). One only appears here when `profile_id`
+           names it, and then under its own heading -- calling it archived
+           would say something false about why it is on screen. #}
+        {% set hidden_subscriptions = profile_options|selectattr('is_hidden')|list %}
+        {% set offered_subscriptions = profile_options|rejectattr('is_hidden')|list %}
+        {% set live_subscriptions = offered_subscriptions|selectattr('is_active')|list %}
+        {% set archived_subscriptions = offered_subscriptions|rejectattr('is_active')|list %}
         {% set live_ids = live_subscriptions|map(attribute='id')|list %}
         {% set selected_option = (profile_options|selectattr('id', 'equalto', profile_selection.single_id)|first|default(none)) if profile_selection.single_id is not none else none %}
         {# True when a chip already says what is on screen, so the menu must
@@ -531,6 +537,49 @@
                                     </li>
                                 {% endfor %}
                             </ul>
+                        {% endif %}
+                        {# Only ever the ones this link named. The menu offers
+                           no way to add a hidden subscription -- that is what
+                           hiding it means -- but a selected id has to keep its
+                           checkbox, or the page's own script reads the state
+                           as "nothing ticked" and the next Apply widens it. #}
+                        {% if hidden_subscriptions %}
+                            <hr class="my-2">
+                            <div class="small text-body-secondary mb-1">
+                                <i class="fas fa-eye-slash me-1"></i>Hidden
+                            </div>
+                            <ul class="list-unstyled mb-0" id="hidden-subscriptions">
+                                {% for option in hidden_subscriptions %}
+                                    <li class="form-check">
+                                        <input class="form-check-input profile-select-option"
+                                               type="checkbox"
+                                               name="profile_id"
+                                               value="{{ option.id }}"
+                                               id="profile-option-{{ option.id }}"
+                                               form="filter-form"
+                                               {% if option.id in profile_selection.checked_ids %}checked{% endif %}>
+                                        <label class="form-check-label small" for="profile-option-{{ option.id }}">
+                                            {{ option.name }}
+                                            <span class="text-body-secondary">({{ option.count }})</span>
+                                            <span class="badge badge-neutral">Hidden</span>
+                                        </label>
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        {% endif %}
+                        {# What the controls above are not offering. The owner
+                           chose this, so it is a disclosure and not a warning
+                           -- but without it "all subscriptions" would look
+                           like the whole table. #}
+                        {% if hidden_subscription_note %}
+                            <hr class="my-2">
+                            <div class="small text-body-secondary" id="hidden-subscriptions-note">
+                                {{ hidden_subscription_note.profiles }} hidden
+                                subscription{{ '' if hidden_subscription_note.profiles == 1 else 's' }}
+                                ({{ hidden_subscription_note.listings }} listing{{ '' if hidden_subscription_note.listings == 1 else 's' }})
+                                not shown &middot;
+                                <a href="{{ url_for('main.profiles') }}">manage</a>
+                            </div>
                         {% endif %}
                         {# A peer of the subscription list, not a member of it:
                            these listings have no saved search, so "all" does

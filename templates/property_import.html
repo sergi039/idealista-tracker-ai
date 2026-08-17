@@ -158,6 +158,16 @@
                     </option>
                   {% endfor %}
                 </select>
+                {# Hidden subscriptions are not offered here (importing into
+                   one would file the listing where the page does not show
+                   it), so the list can be empty -- and an empty required
+                   select explains nothing on its own. #}
+                {% if not profiles %}
+                  <div class="form-text text-warning-emphasis" id="import-no-destination">
+                    {{ t('import_no_destination') }}
+                    <a href="{{ url_for('main.profiles') }}">{{ t('import_no_destination_link') }}</a>
+                  </div>
+                {% endif %}
               </div>
               <div class="col-md-6">
                 {# Disabled on submit so the ordinary double click does not
