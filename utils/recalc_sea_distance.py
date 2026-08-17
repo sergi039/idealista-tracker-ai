@@ -123,8 +123,15 @@ def main() -> None:
             for idx, prop in enumerate(properties, start=1):
                 try:
                     if args.dry_run:
+                        # The row's own accuracy, exactly as the real arm reads
+                        # it below. Omitted here since #358, this preview called
+                        # every row a locality centroid, precise ones included —
+                        # the number an operator reads before authorising the
+                        # rewrite this flag exists to hold back.
                         result = sea_service.measure(
-                            float(prop.location_lat), float(prop.location_lon)
+                            float(prop.location_lat),
+                            float(prop.location_lon),
+                            prop.location_accuracy,
                         )
                     else:
                         # `commit=True` so the write happens under FOR UPDATE:
