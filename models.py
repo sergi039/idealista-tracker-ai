@@ -84,6 +84,21 @@ class SearchProfile(db.Model):
     description = db.Column(db.Text)
     is_active = db.Column(db.Boolean, default=True)
     is_default = db.Column(db.Boolean, default=False)
+    # Taken off the screen by the owner (2026-08-17), which is not the same
+    # question as `is_active`. An inactive subscription is *archived*: it is
+    # still offered, under `Archive`, because a saved search that stopped
+    # still holds listings worth reaching. A hidden one is not offered at all
+    # -- not as a chip, not in the menu, not in the archive -- and its
+    # listings are out of `profile_id=all` too, so the page it is hidden from
+    # does not show its rows either.
+    #
+    # It says nothing about ingestion: a hidden subscription keeps receiving
+    # its own alert emails, keeps its `email_matchers`, and keeps every
+    # listing it already holds. See services/search_profile_service.py for
+    # the one clause every surface reads.
+    is_hidden = db.Column(
+        db.Boolean, nullable=False, default=False, server_default=db.text("FALSE")
+    )
 
     # Saved-search identity (#102). The key is the fingerprint of the search
     # URL the alert email carries -- see services/search_subscription_identity

@@ -583,13 +583,60 @@ class SearchProfileService:
             )
 
     @staticmethod
-    def list_profiles(active_only: bool = True) -> List[SearchProfile]:
+    def visible_clause():
+        """SQL for "the owner has not hidden this subscription".
+
+        The one home of the rule (owner request, 2026-08-17), so the surfaces
+        that offer subscriptions and the ones that count them cannot drift
+        apart. `isnot(True)` rather than `is_(False)`: the column is NOT NULL
+        with a FALSE default, and a row that somehow carries NULL is not a
+        subscription anybody chose to hide.
+
+        Deliberately *not* applied by `list_profiles`, whose default keeps
+        returning every profile. Ingestion reads that list to match an email
+        against each profile's `email_matchers`, and hiding a subscription
+        must not re-route its mail into the catch-all -- that would be a data
+        change dressed as a UI one. Pages ask `list_visible_profiles`.
+        """
+        return SearchProfile.is_hidden.isnot(True)
+
+    @staticmethod
+    def hidden_clause():
+        """The negative of `visible_clause`, for counting what is withheld.
+
+        Two clauses rather than one negated at each call site, because the
+        two readings must stay each other's complement: a NULL row is visible
+        by the clause above, and it must not also be counted as hidden by a
+        `not visible` written out by hand somewhere else.
+        """
+        return SearchProfile.is_hidden.is_(True)
+
+    @staticmethod
+    def list_profiles(
+        active_only: bool = True, include_hidden: bool = True
+    ) -> List[SearchProfile]:
         q = SearchProfile.query
         if active_only:
             q = q.filter(SearchProfile.is_active.is_(True))
+        if not include_hidden:
+            q = q.filter(SearchProfileService.visible_clause())
         return q.order_by(
             SearchProfile.is_default.desc(), SearchProfile.name.asc()
         ).all()
+
+    @staticmethod
+    def list_visible_profiles(active_only: bool = True) -> List[SearchProfile]:
+        """The subscriptions a page may offer the owner.
+
+        What every user-facing surface wants: /properties, /map and the CSV
+        export define `profile_id=all` against exactly this list, so hiding a
+        subscription takes its listings out of the default view along with
+        its chip. A hidden id named explicitly in the URL still resolves --
+        that is what keeps those listings reachable.
+        """
+        return SearchProfileService.list_profiles(
+            active_only=active_only, include_hidden=False
+        )
 
     @staticmethod
     def get_or_create_profile_by_name(name: str) -> Optional[SearchProfile]:
@@ -1350,6 +1397,10 @@ class SearchProfileService:
         # 3) Fallback: custom regex matchers.
         text = f"{subject}\n{body}"
 
+        # Hidden subscriptions are candidates here on purpose: `is_hidden` is
+        # a statement about the screen, and a matcher that stopped matching
+        # would move the listings into the catch-all instead of leaving them
+        # where the owner can un-hide them (2026-08-17).
         candidates = SearchProfileService.list_profiles(active_only=True)
         best: Optional[Tuple[int, SearchProfile]] = None
 

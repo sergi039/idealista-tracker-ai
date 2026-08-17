@@ -60,6 +60,7 @@ BACKGROUND_JOBS_STATUS_CHECK = "ck_background_jobs_status_enum"
 PROPERTY_AI_VARIANT_MIGRATION = "017_property_ai_variant_unique"
 LAND_TRAVEL_MIGRATION = "018_add_land_travel_provenance"
 PRICE_AT_ANALYSIS_MIGRATION = "019_add_price_at_analysis"
+HIDDEN_SUBSCRIPTION_MIGRATION = "020_add_search_profile_is_hidden"
 PROPERTY_VARIANT_UNIQUE_CONSTRAINT = (
     "ux_property_ai_analysis_variants_property_provider"
 )
@@ -272,6 +273,7 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
             PROPERTY_AI_VARIANT_MIGRATION,
             LAND_TRAVEL_MIGRATION,
             PRICE_AT_ANALYSIS_MIGRATION,
+            HIDDEN_SUBSCRIPTION_MIGRATION,
         ]
 
         # Two *identified* subscriptions may now share the label...
@@ -586,6 +588,47 @@ def test_015_adds_the_status_source_column_and_guards_its_values(postgres_url):
 
         # Re-running the file must not fail on the constraint it already added.
         sql = (MIGRATIONS_DIR / f"{STATUS_SOURCE_MIGRATION}.sql").read_text(
+            encoding="utf-8"
+        )
+        with engine.begin() as connection:
+            connection.exec_driver_sql(sql)
+    finally:
+        engine.dispose()
+
+
+def test_020_adds_is_hidden_and_leaves_every_existing_row_visible(postgres_url):
+    """Hiding a subscription is a choice, so no row starts out hidden.
+
+    The column is NOT NULL with a FALSE default rather than a nullable flag:
+    every reader treats NULL and FALSE alike, and a three-valued column whose
+    third value means the same as one of the other two is an invitation to
+    write `= false` somewhere and lose the NULL rows.
+    """
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        columns = {
+            column["name"]: column
+            for column in inspect(engine).get_columns("search_profiles")
+        }
+        assert "is_hidden" in columns
+        assert columns["is_hidden"]["nullable"] is False
+
+        with engine.begin() as connection:
+            _insert_profile(connection, name="Arrived before 020")
+            stored = connection.execute(
+                text(
+                    "SELECT is_hidden FROM search_profiles "
+                    "WHERE name = 'Arrived before 020'"
+                )
+            ).scalar_one()
+        assert stored is False
+
+        # Re-running the file is what a redeploy does; it must not fail.
+        sql = (MIGRATIONS_DIR / f"{HIDDEN_SUBSCRIPTION_MIGRATION}.sql").read_text(
             encoding="utf-8"
         )
         with engine.begin() as connection:
@@ -1451,6 +1494,7 @@ def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
             PROPERTY_AI_VARIANT_MIGRATION,
             LAND_TRAVEL_MIGRATION,
             PRICE_AT_ANALYSIS_MIGRATION,
+            HIDDEN_SUBSCRIPTION_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -1635,6 +1679,7 @@ def test_017_deduplicates_existing_land_variants_and_adds_the_unique_constraint(
             PROPERTY_AI_VARIANT_MIGRATION,
             LAND_TRAVEL_MIGRATION,
             PRICE_AT_ANALYSIS_MIGRATION,
+            HIDDEN_SUBSCRIPTION_MIGRATION,
         ]
 
         with engine.begin() as connection:
