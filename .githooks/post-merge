@@ -138,6 +138,18 @@ done <<EOF
 $(deploy_render_legacy_vars)
 EOF
 
+# The other shared contract: what this rebuild leaves behind, swept once it is
+# serving. Loaded on weaker terms than the page check on purpose - a missing
+# page check would read as a passed one, a missing sweep only leaves garbage,
+# so this one never refuses to build.
+cleanup_lib="${repo_root}/tools/autopilot/lib/docker_cleanup.sh"
+cleanup_ready=0
+# shellcheck source=tools/autopilot/lib/docker_cleanup.sh
+if [ -r "$cleanup_lib" ] && . "$cleanup_lib" 2>/dev/null &&
+    command -v deploy_cleanup >/dev/null 2>&1; then
+    cleanup_ready=1
+fi
+
 if ! command -v docker >/dev/null 2>&1; then
     log "docker is not on PATH - cannot rebuild anything"
     exit 0
@@ -379,6 +391,16 @@ health_body=""
 if healthy "$health_timeout"; then
     if renders; then
         log "rebuilt ${sha:0:7}${checked_note}: health ${health_body}${render_note}"
+        # Only here: the new image is serving and the previous one is safe under
+        # ${rollback_tag}. The roll_back path below never reaches this, because
+        # there the old image is what is being restored.
+        if [ "$cleanup_ready" = "1" ]; then
+            deploy_cleanup "$container" 2>/dev/null | while IFS= read -r cleanup_line; do
+                log "  ${cleanup_line}"
+            done
+        else
+            log "  housekeeping skipped: ${cleanup_lib} is missing or defined no deploy_cleanup()"
+        fi
         exit 0
     fi
     log "REBUILT ${sha:0:7}, healthz is green, BUT ${render_url} answered ${DEPLOY_RENDER_STATUS:-nothing}"

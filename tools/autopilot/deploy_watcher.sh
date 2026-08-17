@@ -58,6 +58,10 @@ HEALTH_POLL_SECONDS=5
 # failure to load into the deploy log rather than into launchd's stderr file.
 AUTOPILOT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
 RENDER_LIB="${AUTOPILOT_LIB_DIR}/render_check.sh"
+# What the finished build leaves behind, swept once it is serving. Shared with
+# .githooks/post-merge for the #292 reason, and loaded on weaker terms than the
+# page check above: this one may be missing without stopping a deploy.
+CLEANUP_LIB="${AUTOPILOT_LIB_DIR}/docker_cleanup.sh"
 
 # --- long-running work inside the container (#283) --------------------------
 # `docker compose up -d --build` recreates the app container, which kills
@@ -153,6 +157,19 @@ for contract_fn in deploy_render_origin deploy_render_url deploy_render_ok \
     command -v "$contract_fn" >/dev/null 2>&1 \
         || die "${RENDER_LIB} defined no ${contract_fn}() - the page check cannot run"
 done
+
+# --- the cleanup contract ---------------------------------------------------
+# Deliberately not `die` like the block above. A page check that did not run
+# would read as one that passed, so its absence is fatal; housekeeping that did
+# not run leaves garbage and misreports nothing, and refusing to deploy over
+# uncollected images would be the tail wagging the dog. Half-loaded is checked
+# the same way regardless - the file parsing is not the file defining anything.
+# shellcheck source=lib/docker_cleanup.sh
+CLEANUP_READY=0
+if [ -r "$CLEANUP_LIB" ] && source "$CLEANUP_LIB" 2>/dev/null \
+    && command -v deploy_cleanup >/dev/null 2>&1; then
+    CLEANUP_READY=1
+fi
 PAGE_URL="$(deploy_render_url "$(deploy_render_origin "$HEALTH_URL")")"
 
 # --- single instance -------------------------------------------------------
@@ -1097,4 +1114,19 @@ fi
 sched="$(curl -fsS --max-time 10 "$HEALTH_URL" 2>/dev/null | sed -n 's/.*"scheduler":"\([^"]*\)".*/\1/p')"
 if [ "$sched" != "running" ]; then
     log "WARNING: scheduler reports '${sched:-unknown}' - ingestion will not run"
+fi
+
+# --- housekeeping -----------------------------------------------------------
+# Last, and only here: the build is serving, the page rendered and the previous
+# image is under ${ROLLBACK_TAG}. Every rollback path above returns before this
+# line, because there the old image is the thing being restored rather than the
+# thing to collect. Failures inside are reported, never propagated - a deploy
+# that is already serving does not become a failed deploy over an image that
+# would not delete.
+if [ "$CLEANUP_READY" = "1" ]; then
+    { deploy_cleanup "$APP_CONTAINER" 2>/dev/null || true; } | while IFS= read -r cleanup_line; do
+        log "  ${cleanup_line}"
+    done
+else
+    log "  housekeeping skipped: ${CLEANUP_LIB} is missing or defined no deploy_cleanup()"
 fi
