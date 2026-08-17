@@ -13,7 +13,14 @@ services:
   app:
     environment:
       - DEV_MODE=true
-      - AUTO_START_SCHEDULER=true
+      # AUTO_START_SCHEDULER is deliberately NOT here. It used to be forced to
+      # `true` - not `${AUTO_START_SCHEDULER:-true}` but a flat value, and
+      # Compose lets the later file's key win, so `docker compose -f
+      # docker-compose.dev.yml up` (the workflow CLAUDE.md documents under Run)
+      # started ingestion on a dev checkout whatever that machine's .env said,
+      # against the same mailbox as the deployment (#376). Inherit the base
+      # file's guarded default instead; a machine that really should ingest
+      # sets the variable in its own .env.
     command: >
       sh -c "python -m migrations.runner &&
       exec gunicorn --bind 0.0.0.0:5001 --workers 1 --threads 4 --reload main:app"
