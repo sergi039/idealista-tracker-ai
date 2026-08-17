@@ -670,6 +670,26 @@ and unlocks a ~$0.36 travel run, and no page claiming exactness has ever been
 seen. Both portal flags ride verbatim into `enrichment["import"]` so that
 measurement, when somebody takes it, needs no re-fetch.
 
+**And so does the pin itself**, because a re-geocode used to throw it away
+(#393). `refresh=True` clears the coordinate *before* geocoding, and
+`_build_geocoding_queries` reads the text after "in" in the title -- which for
+a plot is a district, not a street. Measured on property 733: the refresh
+answered with the Llaranes district centroid, 2447 m from fotocasa's pin, still
+`approximate`, so nothing was unlocked and the listing-specific point was gone;
+the advert text places the plot in Valliniello, so the query named the wrong
+neighbourhood as well. `services/coordinate_quality.py` owns the rule now --
+`portal_coordinate` reads the pin off `enrichment["import"]["coordinate"]` and
+`improves_on` says only `precise` is worth a swap, because every consumer reads
+`approximate` and `approximate` identically. A refresh that answers nothing
+puts the pin back too: clearing first meant a refusal left the row with *no*
+coordinate, which is worse than the one it started with. Only a portal pin is
+defended; a coordinate this geocoder wrote last month has no better claim than
+the one it writes today. The 56 rows the out-of-band script imported carry no
+such block and are therefore unprotected -- their coordinates *are* portal
+pins by that script's own docstring, but the row does not say so, and writing
+an inference into a provenance field is the STATUS-002 mistake in a new
+column.
+
 **The import reads, shows, and only then writes, because this app cannot delete
 a property.** There is no delete route and no `db.session.delete` on `Property`
 anywhere in the tree, so a row built from a misread page stays in the table, in

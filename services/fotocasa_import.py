@@ -323,6 +323,24 @@ def insert_rows(
                 # exact coordinate, the evidence for revisiting the label above
                 # is already in the row rather than needing a re-fetch.
                 "portal_accuracy": row.get("portal_accuracy") or {},
+                # The pin the portal placed for *this advert*, kept so a
+                # re-geocode cannot silently replace it with something derived
+                # from the title. `services/coordinate_quality.py` reads this
+                # and decides; the row is where the evidence has to live,
+                # because a listing may be gone by the time anyone asks.
+                # Issue #393: on property 733 a refresh answered with a
+                # district centroid 2447 m away, and the pin was recoverable
+                # only because a session happened to still hold it.
+                "coordinate": (
+                    {
+                        "source": SOURCE_NAME,
+                        "lat": str(row["latitude"]),
+                        "lon": str(row["longitude"]),
+                    }
+                    if row.get("latitude") is not None
+                    and row.get("longitude") is not None
+                    else None
+                ),
             },
         }
 

@@ -4,6 +4,12 @@ from typing import List, Optional
 
 from sqlalchemy.orm.attributes import flag_modified
 
+from services.coordinate_quality import (
+    improves_on,
+    normalize_accuracy,
+    portal_coordinate,
+)
+
 from models import Property
 from utils.geocoding import GeocodingService
 from utils.municipality_codes import load_name_index
@@ -238,6 +244,50 @@ class PropertyLocationService:
     def __init__(self, geocoding_service: Optional[GeocodingService] = None):
         self.geocoding_service = geocoding_service or GeocodingService()
 
+    @staticmethod
+    def _keep_portal_pin(
+        prop: Property,
+        portal_pin,
+        previous_accuracy: str,
+        *,
+        query,
+        answered,
+        answered_accuracy,
+        refused_reason: str = "",
+    ) -> None:
+        """Put the portal's pin back, and say on the row that it was tried.
+
+        The record goes under `geocoding` like any other outcome of this
+        method, because that is where the next reader looks; `kept` is what
+        makes it legible as a decision rather than a failure. Without it the
+        row reads exactly like one that was never refreshed, and the button
+        gets pressed again for the same money.
+        """
+        lat, lon, source = portal_pin
+        prop.location_lat = lat
+        prop.location_lon = lon
+        prop.location_accuracy = previous_accuracy
+
+        enrichment = dict(prop.enrichment or {})
+        record = {
+            "query": query,
+            "formatted_address": answered,
+            "accuracy": previous_accuracy,
+            "kept": f"{source} coordinate",
+            "kept_because": (
+                "the geocode did not improve on it"
+                if answered_accuracy
+                else "the geocode returned nothing"
+            ),
+        }
+        if answered_accuracy:
+            record["answered_accuracy"] = answered_accuracy
+        if refused_reason:
+            record["refused"] = refused_reason
+        enrichment["geocoding"] = record
+        prop.enrichment = enrichment
+        flag_modified(prop, "enrichment")
+
     def ensure_coordinates(self, prop: Property, refresh: bool = False) -> bool:
         """Best-effort: populate property.location_lat/lon from title/municipality.
 
@@ -261,6 +311,25 @@ class PropertyLocationService:
         """
         if not prop:
             return False
+
+        # What the row is being asked to give up, remembered before `refresh`
+        # throws it away. Two separate hazards, and the clearing below creates
+        # both:
+        #
+        # * the geocode answers, no better than what was there. Measured on
+        #   property 733 (2026-08-17): a fotocasa pin placed for that advert
+        #   was replaced by the Llaranes district centroid 2447 m away, still
+        #   `approximate`, so nothing was unlocked and the listing-specific
+        #   point was gone. Issue #393.
+        # * the geocode answers *nothing*. Every candidate query is refused,
+        #   the method returns False, and the row is left with no coordinate at
+        #   all -- worse than the one it started with, and not what anybody
+        #   pressing "refresh" is asking for.
+        #
+        # Only a portal pin is defended. A coordinate this same geocoder wrote
+        # last month has no better claim than the one it writes today.
+        portal_pin = portal_coordinate(prop) if refresh else None
+        previous_accuracy = normalize_accuracy(prop.location_accuracy)
 
         if refresh:
             prop.location_lat = None
@@ -328,14 +397,33 @@ class PropertyLocationService:
                 continue
 
             try:
-                prop.location_lat = float(geo["lat"])
-                prop.location_lon = float(geo["lng"])
+                new_lat = float(geo["lat"])
+                new_lon = float(geo["lng"])
             except Exception:
                 continue
 
             accuracy = str(geo.get("accuracy") or "").strip().lower() or "unknown"
             if accuracy not in {"precise", "approximate", "unknown"}:
                 accuracy = "unknown"
+
+            if portal_pin is not None and not improves_on(accuracy, previous_accuracy):
+                # An even trade is not a trade: see the note at the top of this
+                # method. The attempt is recorded on the row so the next reader
+                # -- or the next press of the button -- knows it was made and
+                # what it answered, rather than trying it again for the same
+                # money and the same result.
+                self._keep_portal_pin(
+                    prop,
+                    portal_pin,
+                    previous_accuracy,
+                    query=query,
+                    answered=geo.get("formatted_address"),
+                    answered_accuracy=accuracy,
+                )
+                return True
+
+            prop.location_lat = new_lat
+            prop.location_lon = new_lon
             prop.location_accuracy = accuracy
 
             enrichment = prop.enrichment or {}
@@ -354,6 +442,22 @@ class PropertyLocationService:
             }
             prop.enrichment = enrichment
             flag_modified(prop, "enrichment")
+            return True
+
+        if portal_pin is not None:
+            # Nothing answered, and the row had a pin before this method threw
+            # it away. Putting it back is not undoing the refresh -- the refusal
+            # is still recorded below, on the row -- it is refusing to make the
+            # row *less* located than it was.
+            self._keep_portal_pin(
+                prop,
+                portal_pin,
+                previous_accuracy,
+                query=(refused or {}).get("query"),
+                answered=(refused or {}).get("formatted_address"),
+                answered_accuracy=None,
+                refused_reason=(refused or {}).get("reason") or "no_result",
+            )
             return True
 
         if refused is not None:
