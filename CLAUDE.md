@@ -641,6 +641,83 @@ with no rows, which also shows "0 properties found" and no line — the first
 version of `tests/test_listing_search_by_url.py` stayed green through a
 mutation that broke exactly that path.
 
+**Listings arrive from fotocasa by link, and the reader is 60 lines because
+the page hands over JSON** (#389). Fotocasa is not Idealista, measured
+2026-08-17 from this machine: it answers **200** to the bare product token in
+`utils/http.HTTP_USER_AGENT` and 403 to `python-requests`, `curl` and a bare
+`Mozilla/5.0`, with no DataDome, no captcha and no JS challenge in either body.
+The filter is on the client name, so identifying ourselves honestly is
+*sufficient* — nothing here spoofs a browser, and if that stops being true the
+answer is to stop fetching, not to dress up as one. `robots.txt` allows the
+listing page for `*` and disallows `/buscar/`, which is why nothing accepts a
+search URL and there is no sweep. The data is in
+`<script type="application/json" id="__initial_props__">`, so `parse_listing`
+is one `json.loads` — no LLM, no HTML parser, and `trafilatura` (declared in
+`pyproject.toml`, imported nowhere) stays unimported.
+
+Three things in that payload are traps and all three are pinned by
+`tests/test_fotocasa_source.py` against the real 40 KB block in `tests/data/`.
+**The two address blocks disagree about `municipality`**: `realEstate.address`
+says `Avilés` (`cityId: 33004`, its INE code) and
+`realEstateAdDetailEntityV2.address` says `Llaranes`, the district — read the
+wrong one and `utils/municipality_grouping.py` groups four surfaces on a
+municipality no INE join can resolve. **`0` is fotocasa's blank**, not a
+measurement: the measured plot carries `rooms: 0, bathrooms: 0, heating: 0`.
+And **the portal declares its own coordinate inexact** (`coordinates.accuracy:
+0`, `address.isExact: false`), so a fotocasa row is stored `approximate` and
+never `precise` — `precise` grants zero slack in `services/coordinate_quality.py`
+and unlocks a ~$0.36 travel run, and no page claiming exactness has ever been
+seen. Both portal flags ride verbatim into `enrichment["import"]` so that
+measurement, when somebody takes it, needs no re-fetch.
+
+**The import reads, shows, and only then writes, because this app cannot delete
+a property.** There is no delete route and no `db.session.delete` on `Property`
+anywhere in the tree, so a row built from a misread page stays in the table, in
+the `/municipalities` medians and in its subscription's comparable pool. The
+preview is the only undo there is; do not collapse the two steps. They are also
+split by time — ninety links at the 3 s courtesy gate is four and a half
+minutes against one gunicorn worker with four threads and the default 30 s
+timeout — so reading is a background job and confirming, which makes no network
+call, runs in the request. A deploy that kills the container mid-fetch (#283)
+therefore costs nothing.
+
+A fotocasa row is created with `listing_status_source` **NULL**, written as
+`null()` and not `None`: the column carries a Python-side default of `"ingest"`,
+which SQLAlchemy applies to any attribute that is None at flush, so the obvious
+assignment reads like the intent and stores the opposite.
+
+**`RefusalBreaker` is per host** (`HostBreakers`). It was process-wide, which
+was right while every listing was on idealista.com and became wrong the moment
+a second site arrived: idealista refuses this machine permanently, so its
+breaker is open essentially always, and a shared one did not degrade a fotocasa
+check — it forbade it for thirty minutes at a time without a request going out.
+`tests/conftest.py` resets **every** host between tests. In the same family,
+`_looks_like_listing_page` knew only `/inmueble/<id>/` and fell through to "any
+200 is the listing" for everything else, so a fotocasa URL redirected to a
+search page would have been recorded as live — #136's false confirmation at a
+second host. All 56 stored fotocasa URLs end in `/<id>/d`, which is what the
+second anchor matches.
+
+**"verified against Idealista" is gone from the UI**, because it was a
+hardcoded string rendered for every row whatever site it was on, and the 56
+fotocasa rows are not on Idealista at all. The per-row note names the row's own
+source (`utils/listing_source.py` decides which, from the URL, and the badge,
+the filter and the counts all read that one function so they cannot disagree);
+the coverage line above the table says "on the source site", because the rows
+it counts may come from several.
+
+And `utils/repair_import_status_source.py` takes back the claim on the rows the
+out-of-band importer left (STATUS-002 in #265). Its condition is **narrower
+than the defect** and that narrowness is its whole safety: `manual` is also
+what the owner's status button writes, so it repairs only rows that *also*
+carry a `source_email_id` beginning `manual:`, the prefix only the importer
+writes. The corroboration is that a real check stamps `listing_last_checked`
+and not one of the 324 rows had one. Production was repaired on 2026-08-17 --
+324 rows, snapshot in `data/status_source_manual_snapshot_20260817.json` -- so
+the script finds nothing there now; it exists because the importer that
+produced those rows is unchanged, and a repair that can recur should have
+tests, a snapshot and a tested `restore` rather than being improvised again.
+
 **Three reference files are committed on purpose, and `.gitignore` re-includes
 them one at a time.** `data/*` excludes the runtime artifacts — backfill
 snapshots, ledgers, logs — and `!data/ine_municipal.json`,

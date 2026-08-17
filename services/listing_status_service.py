@@ -11,6 +11,7 @@ import time
 import random
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple, Optional, Dict, Tuple
+from urllib.parse import urlsplit
 
 from models import Land, LandHistory, Property, SyncHistory
 from app import db
@@ -131,6 +132,75 @@ class RefusalBreaker:
             self._last_refusal_at = None
 
 
+class HostBreakers:
+    """One `RefusalBreaker` per host, because a refusal is about one host.
+
+    There used to be a single process-wide breaker, which was right while
+    every listing was on idealista.com and became wrong the moment a second
+    site arrived. idealista refuses this machine *permanently* -- measured
+    2026-08-15 over 76 consecutive properties, every one a DataDome block --
+    so its breaker is open essentially always. A shared breaker therefore does
+    not degrade fotocasa checks, it forbids them: three idealista refusals,
+    which arrive the moment anybody presses anything, and the next fotocasa
+    check returns `backing_off` for half an hour without a request going out.
+    One host's wall would have become every host's.
+
+    Keyed on the hostname rather than the full URL: the refusal is the site
+    saying no, and per-URL counting would need `threshold` refusals from each
+    listing before it stopped, which is the sweep the breaker exists to stop.
+    An unparseable URL keys on the empty string -- one bucket for the
+    malformed, which cannot be reached by a real fetch anyway.
+    """
+
+    def __init__(self, threshold: int, cooldown_s: int):
+        self.threshold = threshold
+        self.cooldown_s = cooldown_s
+        self._lock = threading.Lock()
+        self._by_host: Dict[str, RefusalBreaker] = {}
+
+    @staticmethod
+    def host_of(url: Optional[str]) -> str:
+        raw = (url or "").strip()
+        if not raw:
+            return ""
+        if "//" not in raw:
+            raw = "https://" + raw
+        try:
+            return (urlsplit(raw).hostname or "").lower()
+        except ValueError:
+            return ""
+
+    def for_url(self, url: Optional[str]) -> RefusalBreaker:
+        host = self.host_of(url)
+        with self._lock:
+            breaker = self._by_host.get(host)
+            if breaker is None:
+                breaker = RefusalBreaker(
+                    threshold=self.threshold, cooldown_s=self.cooldown_s
+                )
+                self._by_host[host] = breaker
+            return breaker
+
+    def state(self) -> Dict:
+        """Every host that has been dialled, and what it is saying.
+
+        A report over hosts rather than one aggregate: "the breaker is open"
+        was a true sentence about idealista and a false one about everything
+        else, and a reader cannot tell those apart from a single flag.
+        """
+        with self._lock:
+            hosts = dict(self._by_host)
+        return {host or "(no host)": breaker.state() for host, breaker in hosts.items()}
+
+    def reset(self) -> None:
+        """Forget every host. `tests/conftest.py` calls this between tests."""
+        with self._lock:
+            breakers = list(self._by_host.values())
+            self._by_host.clear()
+        for breaker in breakers:
+            breaker.reset()
+
+
 class ListingStatusService:
     """Service to check if Idealista listings are still active"""
 
@@ -181,8 +251,10 @@ class ListingStatusService:
     REFUSAL_COOLDOWN_S = 30 * 60
 
     # Shared by every instance: each caller constructs its own service, so an
-    # instance attribute would forget the refusal the moment it answered.
-    breaker = RefusalBreaker(
+    # instance attribute would forget the refusal the moment it answered. One
+    # breaker per host -- see `HostBreakers` for why a single one silently
+    # forbade every non-idealista check.
+    breakers = HostBreakers(
         threshold=REFUSAL_BREAKER_THRESHOLD, cooldown_s=REFUSAL_COOLDOWN_S
     )
 
@@ -223,12 +295,17 @@ class ListingStatusService:
         if not url:
             return Observation("error", None, "no_url")
 
-        if self.breaker.should_skip():
-            state = self.breaker.state()
+        # Resolved once, from this URL: the wall belongs to one host, and the
+        # rest of this method must not reach for a different one.
+        breaker = self.breakers.for_url(url)
+
+        if breaker.should_skip():
+            state = breaker.state()
             logger.info(
-                "Skipping the status check for %s: idealista refused the last %s "
+                "Skipping the status check for %s: %s refused the last %s "
                 "checks (%s); backing off until %s",
                 url,
+                self.breakers.host_of(url) or "the host",
                 state["consecutive_refusals"],
                 state["last_reason"],
                 state["blocked_until"],
@@ -247,7 +324,7 @@ class ListingStatusService:
             # Check for 404
             if response.status_code == 404:
                 # A reached answer, not a refusal: the host talked to us.
-                self.breaker.record_success()
+                breaker.record_success()
                 return Observation("removed", None)
 
             # Check response content
@@ -282,7 +359,7 @@ class ListingStatusService:
             for pattern in self.SOLD_PATTERNS:
                 if pattern.lower() in content:
                     logger.info(f"Listing sold: {url}")
-                    self.breaker.record_success()
+                    breaker.record_success()
                     return Observation("sold", None)
 
             # Check for removed patterns
@@ -291,7 +368,7 @@ class ListingStatusService:
                     logger.info(f"Listing removed: {url}")
                     # Try to extract removal date
                     removed_date = self._extract_removal_date(response.text)
-                    self.breaker.record_success()
+                    breaker.record_success()
                     return Observation("removed", removed_date)
 
             # A 200 only proves the listing is up if what came back *is* the
@@ -308,7 +385,7 @@ class ListingStatusService:
                 # answers 200 with its home page instead of the listing.
                 return self._refused("not_the_listing_page", url)
 
-            self.breaker.record_success()
+            breaker.record_success()
             return Observation("active", None)
 
         except requests.Timeout:
@@ -320,23 +397,53 @@ class ListingStatusService:
 
     def _refused(self, reason: str, url: str) -> Observation:
         """One exit for every path that learned nothing about the listing."""
-        self.breaker.record_refusal(reason)
-        state = self.breaker.state()
+        breaker = self.breakers.for_url(url)
+        breaker.record_refusal(reason)
+        state = breaker.state()
         if state["open"]:
             logger.warning(
-                "idealista has refused %s checks in a row (%s); pausing status "
+                "%s has refused %s checks in a row (%s); pausing status "
                 "checks until %s",
+                self.breakers.host_of(url) or "the host",
                 state["consecutive_refusals"],
                 reason,
                 state["blocked_until"],
             )
         return Observation("error", None, reason)
 
-    @staticmethod
-    def _listing_id_from_url(url: str) -> Optional[str]:
-        """The /inmueble/<id>/ number, which is what identifies a listing page."""
-        match = re.search(r"/inmueble/(\d+)", url or "")
-        return match.group(1) if match else None
+    # How each site names a listing in its own URL, and the pattern that
+    # recognises that same name in the URL finally served. Two entries, one
+    # rule: without the fotocasa one, `_looks_like_listing_page` fell through
+    # to "any 200 is the listing" for all 56 fotocasa rows in this table, so a
+    # redirect to a search page would have been recorded as a live listing --
+    # the false confirmation of #136, at a second host.
+    _LISTING_ID_PATTERNS = (
+        (re.compile(r"/inmueble/(\d+)"), "inmueble/{id}(?!\\d)"),
+        (re.compile(r"/(\d{4,})/d/?(?:[?#]|$)"), "/{id}/d(?![0-9])"),
+    )
+
+    @classmethod
+    def _listing_id_from_url(cls, url: str) -> Optional[str]:
+        """The number that identifies a listing page, in either site's spelling.
+
+        `/inmueble/<id>/` on idealista, `/<id>/d` on fotocasa. Measured
+        2026-08-17: all 56 stored fotocasa URLs end in `/<id>/d`, so the second
+        pattern really covers them rather than covering the one example.
+        """
+        for pattern, _ in cls._LISTING_ID_PATTERNS:
+            match = pattern.search(url or "")
+            if match:
+                return match.group(1)
+        return None
+
+    @classmethod
+    def _served_listing_pattern(cls, url: str) -> Optional[str]:
+        """The regex that recognises this URL's listing in the URL served."""
+        for pattern, template in cls._LISTING_ID_PATTERNS:
+            match = pattern.search(url or "")
+            if match:
+                return template.format(id=re.escape(match.group(1)))
+        return None
 
     def _looks_like_listing_page(self, url: str, response) -> bool:
         """Did a 200 actually hand us the listing we asked for?
@@ -349,14 +456,15 @@ class ListingStatusService:
         The id needs a boundary after it: plain substring matching accepts
         /inmueble/12345/ as an answer for /inmueble/1234/, which is a different
         listing entirely. A URL with no id to anchor on falls back to the status
-        code rather than refusing every non-standard link.
+        code rather than refusing every non-standard link -- one row here is an
+        agency's own site, whose URL grammar this cannot know.
         """
-        listing_id = self._listing_id_from_url(url)
-        if not listing_id:
+        served = self._served_listing_pattern(url)
+        if not served:
             return True
 
         final_url = (getattr(response, "url", "") or "").lower()
-        return bool(re.search(rf"inmueble/{listing_id}(?!\d)", final_url))
+        return bool(re.search(served, final_url))
 
     def _extract_removal_date(self, html_content: str) -> Optional[str]:
         """Try to extract the removal date from the page content"""
@@ -526,7 +634,9 @@ class ListingStatusService:
             # "idealista is refusing this machine" off this rather than
             # reporting every refusal as an unexplained failure.
             "refusal": refusal,
-            "breaker": self.breaker.state(),
+            # This listing's host, not every host: a reader looking at one
+            # fotocasa listing is not helped by idealista's wall.
+            "breaker": self.breakers.for_url(prop.url).state(),
         }
 
     @staticmethod
@@ -634,7 +744,7 @@ class ListingStatusService:
         # What the run met, not just what it did: a sweep that checked nothing
         # because the host is refusing us reads identically to a quiet one
         # without this.
-        results["breaker"] = self.breaker.state()
+        results["breaker"] = self.breakers.state()
         return results
 
     def check_all_active_listings(
@@ -766,5 +876,5 @@ class ListingStatusService:
         # What the run met, not just what it did: a sweep that checked nothing
         # because the host is refusing us reads identically to a quiet one
         # without this.
-        results["breaker"] = self.breaker.state()
+        results["breaker"] = self.breakers.state()
         return results

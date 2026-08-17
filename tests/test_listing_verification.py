@@ -229,7 +229,7 @@ class TestThePropertiesList:
 
         body = client.get("/properties").get_data(as_text=True)
         assert "listing-verification-coverage" in body
-        assert "1 of 3 verified against Idealista" in body
+        assert "1 of 3 verified on the source site" in body
 
     def test_the_count_follows_the_filters(self, app, client):
         """It is counted over the filtered result, like the total beside it."""
@@ -256,7 +256,7 @@ class TestThePropertiesList:
             )
 
         body = client.get("/properties?municipality=Coaña").get_data(as_text=True)
-        assert "1 of 2 verified against Idealista" in body
+        assert "1 of 2 verified on the source site" in body
 
     def test_an_unchecked_row_claims_nothing(self, app, client):
         with app.app_context():

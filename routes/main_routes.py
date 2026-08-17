@@ -4,8 +4,11 @@ import re
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
+import hashlib
+
 from flask import (
     Blueprint,
+    current_app,
     render_template,
     request,
     redirect,
@@ -41,6 +44,7 @@ from services.profile_selection import (
     resolve_profile_selection,
 )
 from utils.listing_search import interpret_search, listing_search_clause
+from utils.listing_source import source_filter_clause
 from utils.municipality_grouping import (
     group_key,
     group_municipalities,
@@ -62,6 +66,13 @@ PROPERTY_VIEW_TYPES = ("cards", "list")
 # The table is what a bare /properties opens on (owner decision, 2026-08-09):
 # it puts price, area, travel and date side by side, which the cards cannot.
 DEFAULT_PROPERTY_VIEW_TYPE = "list"
+
+# How many links one import may carry. Not a database limit -- it bounds how
+# long somebody else's server is asked to serve us in one press: at the three
+# second courtesy pace in `services/fotocasa_source.py`, a hundred links is
+# five minutes of fetching. Past this the answer is two imports, which costs
+# the owner one extra paste and keeps every run reviewable on one screen.
+MAX_IMPORT_URLS = 100
 # A bare /properties must open on the freshest listings, so the mode default
 # only applies once the user actually picks a mode.
 DEFAULT_PROPERTY_SORT = "created_at"
@@ -822,11 +833,51 @@ def _municipality_choices(profile_selection, applied=""):
     return choices
 
 
+def _source_choices(profile_selection, applied=""):
+    """Which sites the subscriptions on screen actually hold listings from.
+
+    Built from the same selection as every other dropdown, for the same
+    reason: a source holding nothing in view is an option that can only ever
+    return an empty page.
+
+    Counted by reading the URLs and applying `source_of_url` to each, rather
+    than by grouping in SQL. Deliberate: the badge on the row, the filter
+    clause and this count then all derive the source from one function, and a
+    second reading written in SQL is how a filter comes to disagree with the
+    badge beside it. The column is short and the selection is at most the
+    whole table -- 730 rows on 2026-08-17.
+    """
+    from utils.listing_source import SOURCES, source_label, source_of_url
+
+    query = apply_profile_filter(
+        db.session.query(Property.url),
+        Property.search_profile_id,
+        profile_selection,
+    )
+    counts = {}
+    for (url,) in query.all():
+        key = source_of_url(url)
+        counts[key] = counts.get(key, 0) + 1
+
+    choices = [
+        {"value": source, "label": source_label(source), "count": counts[source]}
+        for source in SOURCES
+        if counts.get(source)
+    ]
+    # An applied filter stays offered even when it now matches nothing, so the
+    # control that produced the empty page can still be undone -- the rule
+    # `_keep_applied_choice` already follows for the other dropdowns.
+    if applied and applied not in {choice["value"] for choice in choices}:
+        choices.append({"value": applied, "label": source_label(applied), "count": 0})
+    return choices
+
+
 def _property_filter_options(
     profile_selection,
     category_filter="",
     subtype_filter="",
     municipality_filter="",
+    source_filter="",
 ):
     """Type / Subtype / Municipality choices for the subscriptions on screen.
 
@@ -860,6 +911,7 @@ def _property_filter_options(
             subtype_filter,
         ),
         "municipalities": _municipality_choices(profile_selection, municipality_filter),
+        "sources": _source_choices(profile_selection, source_filter),
         "has_unclassified_category": _selection_has_unclassified(
             Property.property_category, profile_selection
         ),
@@ -928,6 +980,7 @@ def properties():
         category_filter = request.args.get("category", "")
         subtype_filter = request.args.get("subtype", "")
         municipality_filter = request.args.get("municipality", "")
+        source_filter = request.args.get("source", "")
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
@@ -998,6 +1051,11 @@ def properties():
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
             query = query.filter(municipality_filter_clause(municipality_filter))
+        # Which site the listing is on. utils/listing_source.py owns the
+        # reading, so the four surfaces cannot drift apart on it.
+        source_clause = source_filter_clause(Property, source_filter)
+        if source_clause is not None:
+            query = query.filter(source_clause)
         # A pasted listing URL, or a bare listing id, is a search too --
         # utils/listing_search.py owns what the box accepts.
         search_clause = listing_search_clause(Property, search_query)
@@ -1133,6 +1191,7 @@ def properties():
             category_filter=category_filter,
             subtype_filter=subtype_filter,
             municipality_filter=municipality_filter,
+            source_filter=source_filter,
         )
 
         return render_template(
@@ -1160,6 +1219,7 @@ def properties():
                 "category": category_filter,
                 "subtype": subtype_filter,
                 "municipality": municipality_filter,
+                "source": source_filter,
                 "search": search_query,
                 "inv_metr": investment_metrics_filter,
                 "sea_view": sea_view_filter,
@@ -2543,6 +2603,7 @@ def map_view():
         category_filter = request.args.get("category", "")
         subtype_filter = request.args.get("subtype", "")
         municipality_filter = request.args.get("municipality", "")
+        source_filter = request.args.get("source", "")
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
@@ -2560,6 +2621,11 @@ def map_view():
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
             query = query.filter(municipality_filter_clause(municipality_filter))
+        # Which site the listing is on. utils/listing_source.py owns the
+        # reading, so the four surfaces cannot drift apart on it.
+        source_clause = source_filter_clause(Property, source_filter)
+        if source_clause is not None:
+            query = query.filter(source_clause)
         # A pasted listing URL, or a bare listing id, is a search too --
         # utils/listing_search.py owns what the box accepts.
         search_clause = listing_search_clause(Property, search_query)
@@ -3604,6 +3670,7 @@ def export_properties_csv():
         category_filter = request.args.get("category", "")
         subtype_filter = request.args.get("subtype", "")
         municipality_filter = request.args.get("municipality", "")
+        source_filter = request.args.get("source", "")
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
@@ -3656,6 +3723,11 @@ def export_properties_csv():
                 query = query.filter(Property.property_subtype == subtype_filter)
         if municipality_filter:
             query = query.filter(municipality_filter_clause(municipality_filter))
+        # Which site the listing is on. utils/listing_source.py owns the
+        # reading, so the four surfaces cannot drift apart on it.
+        source_clause = source_filter_clause(Property, source_filter)
+        if source_clause is not None:
+            query = query.filter(source_clause)
         # A pasted listing URL, or a bare listing id, is a search too --
         # utils/listing_search.py owns what the box accepts.
         search_clause = listing_search_clause(Property, search_query)
@@ -3902,3 +3974,156 @@ def export_properties_csv():
 def health_check():
     """Health check endpoint"""
     return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Importing listings by link (fotocasa)
+# ---------------------------------------------------------------------------
+#
+# Two routes, because this application cannot delete a property: a tree-wide
+# search finds no delete route and no `db.session.delete` on `Property`, so a
+# row created from a misread page stays in the table, in the `/municipalities`
+# medians and in the comparable pool of its subscription. The preview is the
+# only undo there is, and it is therefore not optional.
+#
+# The read runs as a background job and the write runs in the request, which
+# is the opposite of where the work looks like it belongs. It is the right way
+# round: ninety links at the courtesy pace is four and a half minutes against
+# one gunicorn worker with four threads and a thirty-second default timeout,
+# while the write touches nothing but the database.
+
+
+def _import_profiles():
+    """Subscriptions offered as the destination, live ones first.
+
+    Required rather than defaulted to nothing: `search_profile_id` NULL means
+    "unassigned", which a bare /properties does not show at all -- the owner
+    would import a listing and not find it. It is also what decides whose
+    comparable pool the row joins (`services/property_comparables.py` scopes
+    on it), so it is a real choice, not a formality.
+    """
+    return SearchProfile.query.order_by(
+        SearchProfile.is_active.desc(), SearchProfile.name.asc()
+    ).all()
+
+
+@main_bp.route("/properties/import", methods=["GET"])
+def import_listings():
+    """Paste links, then look at what the pages said before anything is written."""
+    from services.background_jobs import get_job
+
+    job_id = (request.args.get("job") or "").strip() or None
+    job = get_job(job_id) if job_id else None
+
+    rows = []
+    job_state = None
+    if job:
+        job_state = job.get("status")
+        result = job.get("result")
+        if isinstance(result, dict):
+            rows = result.get("rows") or []
+
+    return render_template(
+        "property_import.html",
+        profiles=_import_profiles(),
+        job_id=job_id,
+        job_state=job_state,
+        rows=rows,
+        selected_profile_id=request.args.get("profile_id", type=int),
+    )
+
+
+@main_bp.route("/properties/import", methods=["POST"])
+def import_listings_read():
+    """Fetch and read every pasted link. Writes nothing at all."""
+    from services.fotocasa_import import read_urls
+    from services.fotocasa_source import split_urls
+
+    urls = split_urls(request.form.get("urls"))
+
+    # Reading needs no destination: `read_urls` does not take one, and asking
+    # for it here would put the same control on the page twice. It is asked
+    # once, at the moment it is used -- next to the button that writes.
+    if not urls:
+        flash("Paste at least one fotocasa listing link.", "error")
+        return redirect(url_for("main.import_listings"))
+    if len(urls) > MAX_IMPORT_URLS:
+        flash(
+            f"{len(urls)} links pasted; this imports at most {MAX_IMPORT_URLS} "
+            "at a time.",
+            "error",
+        )
+        return redirect(url_for("main.import_listings"))
+
+    app_obj = current_app._get_current_object()
+
+    def _run():
+        with app_obj.app_context():
+            return {"rows": read_urls(urls)}
+
+    from services.background_jobs import enqueue_job
+
+    # Keyed on the links themselves, so a double press -- or a reload of the
+    # POST -- joins the run already fetching instead of asking fotocasa for
+    # the same ninety pages a second time. `enqueue_job` returns the live
+    # job's id for a key already claimed, so the redirect below lands on the
+    # preview either way.
+    dedupe_key = (
+        "fotocasa_import:"
+        + hashlib.sha256("\n".join(sorted(urls)).encode("utf-8")).hexdigest()
+    )
+
+    job_id = enqueue_job(
+        _run,
+        job_type="fotocasa_import_read",
+        meta={"count": len(urls)},
+        app=app_obj,
+        dedupe_key=dedupe_key,
+    )
+    return redirect(url_for("main.import_listings", job=job_id))
+
+
+@main_bp.route("/properties/import/confirm", methods=["POST"])
+def import_listings_confirm():
+    """Create the rows the owner just looked at."""
+    from services.background_jobs import get_job
+    from services.fotocasa_import import insert_rows
+
+    job_id = (request.form.get("job_id") or "").strip()
+    profile_id = request.form.get("profile_id", type=int)
+    job = get_job(job_id) if job_id else None
+
+    if not job or job.get("status") != "success":
+        flash(
+            "That import preview is no longer available. Paste the links again.",
+            "error",
+        )
+        return redirect(url_for("main.import_listings"))
+    if not profile_id:
+        flash("Choose which subscription the listings go into.", "error")
+        return redirect(url_for("main.import_listings", job=job_id))
+
+    result = job.get("result") or {}
+    rows = result.get("rows") or []
+
+    try:
+        outcome = insert_rows(rows, profile_id=profile_id)
+    except Exception:
+        db.session.rollback()
+        logger.error("Importing fotocasa listings failed", exc_info=True)
+        flash("Import failed. Check server logs.", "error")
+        return redirect(url_for("main.import_listings", job=job_id))
+
+    created = outcome["created"]
+    if not created:
+        flash("Nothing new to add — every link was already here.", "success")
+        return redirect(url_for("main.import_listings"))
+
+    flash(
+        f"Added {len(created)} listing(s). Press Enrich on each to measure "
+        "travel, sea and amenities.",
+        "success",
+    )
+    return redirect(
+        url_for("main.properties", profile_id=profile_id, source="fotocasa")
+    )
