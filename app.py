@@ -318,6 +318,13 @@ def create_app(testing: bool = False):
 
     app.jinja_env.globals["listing_verdict_for"] = listing_verdict_for
 
+    # #379: how much of the enabled weight a score rests on, read off the
+    # stored payload (derived for rows scored before it was recorded). The
+    # list and the detail page show it; the score itself never contains it.
+    from services.property_scoring_service import score_coverage
+
+    app.jinja_env.globals["score_coverage_for"] = score_coverage
+
     # One Maps URL builder for every surface: list travel cells, detail rows,
     # beach lines. Templates used to concatenate free-text place names into
     # /maps/dir/ paths — unencoded, and resolvable to the wrong town.

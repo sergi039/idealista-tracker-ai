@@ -762,6 +762,15 @@
                             {{ "%.0f"|format(property.score_investment) }} × {{ "%.2f"|format(_mix.get('investment', 0) / _mix_sum) }}
                             + {{ "%.0f"|format(property.score_lifestyle) }} × {{ "%.2f"|format(_mix.get('lifestyle', 0) / _mix_sum) }}
                         </div>
+                        {% set _cov = score_coverage_for(_scoring) %}
+                        {% if _cov and _cov.share is not none and _cov.share < 0.999 %}
+                            {# #379: the number above rests on the criteria that answered;
+                               nothing is invented for the rest, so say how much and which. #}
+                            <div class="small text-body-secondary mt-1">
+                                {{ t('score_coverage_line') | replace('{share}', "%.0f"|format(_cov.share * 100)) | replace('{measured}', _cov.measured|string) | replace('{enabled}', _cov.enabled|string) }}
+                                {% if _cov.missing %}— {{ t('score_coverage_missing') }}: {{ _cov.missing | map('replace', '_score', '') | join(', ') }}{% endif %}
+                            </div>
+                        {% endif %}
                     {% endif %}
                 </div>
             </div>

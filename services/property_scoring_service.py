@@ -62,6 +62,108 @@ def _weighted_average(
     return weighted_sum / total_weight
 
 
+def _coverage(
+    scores_and_weights: Dict[str, Tuple[Optional[float], float]],
+) -> Tuple[float, int, int]:
+    """(share of enabled weight that answered, measured count, enabled count).
+
+    The same walk `_weighted_average` makes, with one more accumulator: it is
+    the one place that knows both the values and the weights and already
+    decides what to drop (a `None` score, a weight <= 0), so coverage is read
+    off that decision rather than re-derived elsewhere. "Enabled" is weight > 0
+    in the profile actually applied -- the pool criterion ships weightless and
+    is not a hole on every row, and a subscription's own `scoring_config`
+    weights are the ones that count. Weighted, not counted: 2 of 5 criteria can
+    be 10% of the weight or 90%.
+    """
+    enabled_weight = 0.0
+    measured_weight = 0.0
+    enabled = 0
+    measured = 0
+    for _, (score, weight) in scores_and_weights.items():
+        if weight <= 0:
+            continue
+        enabled += 1
+        enabled_weight += weight
+        if score is not None:
+            measured += 1
+            measured_weight += weight
+    if enabled_weight <= 0:
+        return 0.0, measured, enabled
+    return measured_weight / enabled_weight, measured, enabled
+
+
+def score_coverage(scoring: Any) -> Optional[Dict[str, Any]]:
+    """Coverage for a stored `scoring` payload, derived when it was not recorded.
+
+    #379: `/properties` sorts by `score_total`, and the top of the list was the
+    listings the app knew least about -- a criterion nobody could measure scores
+    `None`, the branch average renormalises without it, and a row with two
+    perfect measured criteria out of five scored 100 while not one row with four
+    or five measured criteria reached 90 (measured 2026-08-17). The number stays
+    what it is -- the owner's decision is that an unmeasured criterion is shown,
+    never invented (no neutral prior, no penalty; #98's rule one level up) --
+    and the page says how much of the enabled weight the score rests on and
+    which criteria are missing.
+
+    Payloads written before this field are not rescored to gain it: the
+    branches already store `weights` and `components` with their `None`s, so
+    the same share is derived here. Returns None when there is no scoring at
+    all. Shape: {"share", "measured", "enabled", "missing": [criterion, ...],
+    "derived": bool}.
+    """
+    if not isinstance(scoring, dict):
+        return None
+    recorded = scoring.get("coverage")
+    profiles = scoring.get("profiles")
+    if not isinstance(profiles, dict):
+        return None
+    mix = (
+        scoring.get("combined_mix")
+        if isinstance(scoring.get("combined_mix"), dict)
+        else {}
+    )
+    share_num = 0.0
+    share_den = 0.0
+    measured = 0
+    enabled = 0
+    missing: list = []
+    for branch in ("investment", "lifestyle"):
+        prof = profiles.get(branch)
+        if not isinstance(prof, dict):
+            continue
+        weights = prof.get("weights") if isinstance(prof.get("weights"), dict) else {}
+        components = (
+            prof.get("components") if isinstance(prof.get("components"), dict) else {}
+        )
+        inputs = {
+            key: (components.get(key), _safe_float(weights.get(key)) or 0.0)
+            for key in weights
+        }
+        b_share, b_measured, b_enabled = _coverage(inputs)
+        mix_w = _safe_float(mix.get(branch)) or 0.0
+        if mix_w > 0 and b_enabled:
+            share_num += b_share * mix_w
+            share_den += mix_w
+        measured += b_measured
+        enabled += b_enabled
+        for key, (score, weight) in inputs.items():
+            if weight > 0 and score is None and key not in missing:
+                missing.append(key)
+    if not enabled:
+        return None
+    share = share_num / share_den if share_den > 0 else 0.0
+    if isinstance(recorded, dict) and _safe_float(recorded.get("share")) is not None:
+        share = float(recorded["share"])
+    return {
+        "share": share,
+        "measured": measured,
+        "enabled": enabled,
+        "missing": missing,
+        "derived": not isinstance(recorded, dict),
+    }
+
+
 def _percentile_score_lower_is_better(
     value: float, values: list[float]
 ) -> Optional[float]:
@@ -244,6 +346,29 @@ class BasePropertyScorer:
         raise NotImplementedError
 
 
+def _same_municipality(name: str):
+    """Peers of a municipality however the row spells it (#377).
+
+    `properties.municipality` is the free text the alert email carried, and
+    the same place arrives as `Gijón` and `Gijon`, `Soto del Barco` and `Soto
+    Del Barco`. Comparing the raw string made a listing in `Carreño` no peer of
+    one in `Carreno`, so the municipality tier silently thinned or fell through
+    to the whole region: measured 2026-08-17, 8 rows lost the tier outright
+    (property 462 in Castrillón: 1 raw peer against 20) and 56 more compared
+    against a fraction of it. The key is `utils.municipality_grouping.group_key`
+    -- the same one the /properties dropdown and /municipalities use -- so the
+    scorer's idea of "same municipality" cannot drift from the pages'. A value
+    with no key (a truncated `Ovi...`) keeps the exact match: folding it into
+    Oviedo by prefix is the wrong-pick hazard the grouping module refuses.
+    """
+    from utils.municipality_grouping import stored_spellings_of
+
+    spellings = stored_spellings_of(name)
+    if not spellings:
+        return Property.municipality == name
+    return Property.municipality.in_(spellings)
+
+
 class HousingPropertyScorer(BasePropertyScorer):
     category = "housing"
 
@@ -397,45 +522,77 @@ class HousingPropertyScorer(BasePropertyScorer):
         if pool_cfg_error:
             pool_meta = {**pool_meta, "config_override_ignored": pool_cfg_error}
 
-        investment = _weighted_average(
-            {
-                "value_score": (
-                    value_score,
-                    investment_weights.get("value_score", 0.0),
-                ),
-                "travel_score": (
-                    travel_score,
-                    investment_weights.get("travel_score", 0.0),
-                ),
-                "sea_score": (sea_score, investment_weights.get("sea_score", 0.0)),
-                "size_score": (size_score, investment_weights.get("size_score", 0.0)),
-                "pool_score": (pool_score, investment_weights.get("pool_score", 0.0)),
-            }
-        )
-        lifestyle = _weighted_average(
-            {
-                "travel_score": (
-                    travel_score,
-                    lifestyle_weights.get("travel_score", 0.0),
-                ),
-                "size_score": (size_score, lifestyle_weights.get("size_score", 0.0)),
-                "sea_score": (sea_score, lifestyle_weights.get("sea_score", 0.0)),
-                "value_score": (value_score, lifestyle_weights.get("value_score", 0.0)),
-                "pool_score": (pool_score, lifestyle_weights.get("pool_score", 0.0)),
-            }
-        )
+        investment_inputs = {
+            "value_score": (
+                value_score,
+                investment_weights.get("value_score", 0.0),
+            ),
+            "travel_score": (
+                travel_score,
+                investment_weights.get("travel_score", 0.0),
+            ),
+            "sea_score": (sea_score, investment_weights.get("sea_score", 0.0)),
+            "size_score": (size_score, investment_weights.get("size_score", 0.0)),
+            "pool_score": (pool_score, investment_weights.get("pool_score", 0.0)),
+        }
+        lifestyle_inputs = {
+            "travel_score": (
+                travel_score,
+                lifestyle_weights.get("travel_score", 0.0),
+            ),
+            "size_score": (size_score, lifestyle_weights.get("size_score", 0.0)),
+            "sea_score": (sea_score, lifestyle_weights.get("sea_score", 0.0)),
+            "value_score": (value_score, lifestyle_weights.get("value_score", 0.0)),
+            "pool_score": (pool_score, lifestyle_weights.get("pool_score", 0.0)),
+        }
+        investment = _weighted_average(investment_inputs)
+        lifestyle = _weighted_average(lifestyle_inputs)
+
+        # Coverage per branch: how much of the enabled weight actually answered.
+        # `_weighted_average` above hides this by renormalising -- a branch with
+        # one criterion measured scores exactly that criterion, and nothing in
+        # the number says so. Kept beside the branch scores, and folded into
+        # the combined estimate below (#379).
+        inv_coverage, inv_measured, inv_enabled = _coverage(investment_inputs)
+        life_coverage, life_measured, life_enabled = _coverage(lifestyle_inputs)
 
         combined = None
+        coverage = 0.0
         if investment is not None or lifestyle is not None:
-            combined = _weighted_average(
-                {
-                    "investment": (
-                        investment,
-                        float(mix.get("investment", 0.0) or 0.0),
-                    ),
-                    "lifestyle": (lifestyle, float(mix.get("lifestyle", 0.0) or 0.0)),
-                }
+            mix_inputs = {
+                "investment": (
+                    investment,
+                    float(mix.get("investment", 0.0) or 0.0),
+                ),
+                "lifestyle": (lifestyle, float(mix.get("lifestyle", 0.0) or 0.0)),
+            }
+            combined = _weighted_average(mix_inputs)
+            # Coverage composes with the mix's own weights, over both branches:
+            # a branch with nothing measured contributes zero coverage, not a
+            # renormalised absence. The score itself is untouched by it (owner
+            # decision 2026-08-17: show the coverage, do not invent a prior).
+            # A branch with no enabled criterion at all (a profile that zeroed
+            # one side) has no coverage to contribute and no weight in the
+            # denominator -- the same gate `score_coverage()` applies when it
+            # derives the share, so the recorded and the derived value agree.
+            branch_share = {
+                "investment": (inv_coverage, inv_enabled),
+                "lifestyle": (life_coverage, life_enabled),
+            }
+            mix_total = sum(
+                w
+                for name, (_, w) in mix_inputs.items()
+                if w > 0 and branch_share[name][1] > 0
             )
+            if mix_total > 0:
+                coverage = (
+                    sum(
+                        branch_share[name][0] * w
+                        for name, (_, w) in mix_inputs.items()
+                        if w > 0 and branch_share[name][1] > 0
+                    )
+                    / mix_total
+                )
 
         payload: Dict[str, Any] = {
             "version": 1,
@@ -467,6 +624,22 @@ class HousingPropertyScorer(BasePropertyScorer):
             },
             "combined_mix": mix,
             "combined_score": combined,
+            # #379: how much of the enabled weight the scores rest on. Never
+            # part of the number; `score_coverage()` reads it (and derives it
+            # for payloads written before this field).
+            "coverage": {
+                "share": coverage,
+                "investment": {
+                    "share": inv_coverage,
+                    "measured": inv_measured,
+                    "enabled": inv_enabled,
+                },
+                "lifestyle": {
+                    "share": life_coverage,
+                    "measured": life_measured,
+                    "enabled": life_enabled,
+                },
+            },
             "details": {
                 "value": value_meta,
                 "size": size_meta,
@@ -550,7 +723,7 @@ class HousingPropertyScorer(BasePropertyScorer):
             if cfg.get("subtype") and prop.property_subtype:
                 q = q.filter(Property.property_subtype == prop.property_subtype)
             if cfg.get("municipality") and prop.municipality:
-                q = q.filter(Property.municipality == prop.municipality)
+                q = q.filter(_same_municipality(prop.municipality))
             q = q.filter(
                 Property.price.isnot(None), Property.area.isnot(None), Property.area > 0
             )
@@ -597,7 +770,7 @@ class HousingPropertyScorer(BasePropertyScorer):
             if cfg.get("subtype") and prop.property_subtype:
                 q = q.filter(Property.property_subtype == prop.property_subtype)
             if cfg.get("municipality") and prop.municipality:
-                q = q.filter(Property.municipality == prop.municipality)
+                q = q.filter(_same_municipality(prop.municipality))
             q = q.filter(Property.area.isnot(None), Property.area > 0)
 
             peers = q.limit(limit).all()
