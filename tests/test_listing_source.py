@@ -184,7 +184,7 @@ class TestSurfaces:
             assert not any("Cudillero" in (title or "") for title in titles)
 
     def test_the_badge_marks_the_exception_not_every_row(self, app):
-        """673 of 730 rows are idealista; badging those marks nothing.
+        """675 of 732 rows are idealista; badging those marks nothing.
 
         Counted on the badge's own icon rather than on the word: "Idealista"
         appears thirteen times in a rendered page -- the title, the navbar,

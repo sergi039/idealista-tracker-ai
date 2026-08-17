@@ -12,19 +12,26 @@ bookkeeping fact and stays; the copy of that word into a provenance column is
 the claim about the world, and it goes.
 
 **The condition is narrower than the defect**, deliberately. `manual` is also
-what the owner's own status button writes, and that verdict is real. Measured
-against production on 2026-08-17:
+what the owner's own status button writes, and that verdict is real. So the
+repair is `listing_status_source = 'manual'` **and**
+`source_email_id LIKE 'manual:%'` -- the prefix only the importer writes.
 
-    listing_status_source = 'manual'                                332
-      ... and source_email_id LIKE 'manual:%'  (the importer's)     324
-      ... and source_email_id NOT LIKE 'manual:%'  (the button's)     8
-    of the 324, rows carrying a listing_last_checked                  0
-    of the 324, rows whose status is not 'active'                     0
+Two zeroes corroborate the narrowing rather than merely making it plausible: a
+real check stamps `listing_last_checked`, and measured on production before the
+repair, not one of the 324 rows had one, nor a status other than `active`.
 
-The eight are the owner's, made since the ticket was written, and this must not
-touch them. The two zeroes are the corroboration: a real check stamps
-`listing_last_checked`, and not one of the 324 has one -- so the narrowing is
-not merely plausible, it is confirmed by a column the importer never wrote.
+**Production has already been repaired.** It happened on 2026-08-17 at 14:18
+-- 324 rows, all carrying the prefix, so whoever did it used this same narrow
+condition; `data/status_source_manual_snapshot_20260817.json` on the mini is
+the record of it. Which process wrote it is not established, and naming one
+without evidence is how a repository acquires a confident wrong fact, so this
+says what the snapshot proves and no more. The script finds nothing there
+today (measured after the fact: `listing_status_source = 'manual'`
+is 0 of 732 rows, and the 324 importer rows carry NULL). It is here because the
+out-of-band importer that produced them is unchanged and still writes `manual`
+for the batches this app's own import does not cover, so the defect can recur;
+and because a repair that is going to be run again should be one with tests, a
+snapshot and a `restore`, not one improvised each time.
 
 NULL rather than `ingest`, because the app did not ingest them either. NULL is
 how this schema says nobody knows, and `read_verdict` renders it `unchecked`.

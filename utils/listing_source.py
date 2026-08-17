@@ -1,8 +1,8 @@
 """Which site a listing came from, decided once.
 
 `properties` has no column for it and does not need one. The URL already says:
-673 of the 730 rows on 2026-08-17 are idealista.com, 56 are fotocasa.es, and
-one is an agency's own site. What the table lacked was anywhere that reading
+measured against production on 2026-08-17, 675 of 732 rows are idealista.com,
+56 are fotocasa.es and one is an agency's own site. What the table lacked was anywhere that reading
 lived, so four surfaces would each have grown their own `ILIKE '%fotocasa%'`
 -- and `services/listing_verification.py` grew something worse than that, a
 label naming Idealista for every row regardless of where it came from.

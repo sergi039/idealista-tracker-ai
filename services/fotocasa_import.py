@@ -25,13 +25,13 @@ somebody else's bandwidth and no data.
 
 `listing_status_source` is left NULL on purpose, and this is the one line in
 the file that is a bug fix rather than a feature. The out-of-band script that
-wrote the 324 rows already in this table set it to `manual`, reasoning that
-the row was entered by hand -- but that column answers "who established the
-listing is live", and `services/listing_verification.py` reads it as such, so
-324 listings nobody had ever checked were reported as verified (STATUS-002 in
-issue #265). The row was not ingested either, so `ingest` would be the same
-mistake with a different word. Nobody has checked it, and NULL is how this
-schema says that.
+imported 324 of the rows in this table set it to `manual`, reasoning that the
+row was entered by hand -- but that column answers "who established the listing
+is live", and `services/listing_verification.py` reads it as such, so 324
+listings nobody had ever checked were reported as verified (STATUS-002 in issue
+#265; those rows were repaired on production on 2026-08-17). The row was not
+ingested either, so `ingest` would be the same mistake with a different word.
+Nobody has checked it, and NULL is how this schema says that.
 """
 
 from __future__ import annotations

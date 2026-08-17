@@ -1,16 +1,15 @@
 """Taking back a claim the importer never had the evidence for (STATUS-002).
 
 The repair is narrow on purpose, and the narrowness is the only thing standing
-between it and eight of the owner's real hand-set verdicts. Measured against
-production on 2026-08-17:
+between it and a hand-set verdict the owner really made: `manual` is what the
+status button writes too, and only the importer's rows also carry a
+`source_email_id` beginning `manual:`.
 
-    listing_status_source = 'manual'                                332
-      ... and source_email_id LIKE 'manual:%'  (the importer's)     324
-      ... and source_email_id NOT LIKE 'manual:%'  (the button's)     8
-    of the 324, rows carrying a listing_last_checked                  0
-
-So the fixture below is not a convenient shape: it is that population in
-miniature, including the row that must survive.
+Production was repaired on 2026-08-17 with exactly that condition -- the
+snapshot left behind holds 324 rows, all carrying the prefix, none carrying a
+`listing_last_checked`. So the fixture below is not the shape production has
+today; it is the shape the rule has to survive, and it deliberately includes the
+row that must not be touched, which production happened not to have.
 """
 
 import json
