@@ -119,13 +119,19 @@ _ALERT_TOKENS: Dict[str, str] = {
 # real engine it renders `ESCAPE '\'`, runs, and matches no lookalike row.
 _LIKE_ESCAPE = "\\"
 
-# `publisher.type` / `agency.type` on a fotocasa listing page. Only
-# `professional` has been observed: all 5 pages fotocasa served during the
-# 2026-08-17 probe carry it, alongside `clientTypeId: 3`. The private spellings
-# are accepted on their face rather than measured, and that asymmetry is
-# deliberate -- an unrecognised value can only ever fall to `unknown`, never to
-# `owner`, so the failure mode of a wrong guess here is a row that says "not
-# established" instead of a row that says something false.
+# `publisher.type` / `agency.type` on a fotocasa listing page. Two of these
+# three spellings are measured. The first production run of
+# `utils/backfill_advertiser.py` read all 56 stored fotocasa listings on
+# 2026-08-17 and the portal served exactly two values: `professional` 46 times
+# and `particular` 10. The enum is corroborated by what rides beside it --
+# every `professional` carries a company as its client name (`Astur Select Sl`,
+# `LOVIA HOMES, SL`) and every `particular` a person's (`Carlos`, `Ángeles`,
+# `Maria Eugenia`) -- so this is not one field being trusted on its own.
+#
+# `private` has never been seen and is here on its face. That asymmetry is
+# deliberate and is the rule for the next spelling too: an unrecognised value
+# can only ever fall to `unknown`, never to `owner`, so a wrong guess costs a
+# row that says "not established" rather than a row that says something false.
 _PORTAL_TYPES: Dict[str, str] = {
     "professional": AGENCY,
     "private": OWNER,
