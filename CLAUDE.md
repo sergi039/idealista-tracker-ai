@@ -715,17 +715,75 @@ and TODO.md; respect it if you ever run both side by side.
   `utils/recalc_property_travel.py`.
 
   What made it expensive rather than merely wasteful is that **the scheduler
-  ran on both machines against one mailbox.** `AUTO_START_SCHEDULER` defaults
-  to true whenever `DEV_MODE` is set, so the laptop ingested the same alert
-  emails as the mini and paid Google a second time for every listing — into a
-  database that is thrown away and restored from the mini's dump. Measured
+  ran on both machines against one mailbox.** `AUTO_START_SCHEDULER` used to
+  arrive as `true` in every container whatever the machine intended, so the
+  laptop ingested the same alert emails as the mini and paid Google a second
+  time for every listing — into a database that is thrown away and restored
+  from the mini's dump. Measured
   2026-08-17 from both databases: the mini's ingest is ~7 listings a day, and
   on 2026-08-16 four new saved searches delivered **306 listings to the laptop
   between 07:00 and 10:00** — roughly $110 of Google credit in one morning
   that nobody asked for and nobody read. A dev checkout must not run the
-  scheduler; the laptop's `.env` now says `AUTO_START_SCHEDULER=false`, at the
+  scheduler; the laptop's `.env` says `AUTO_START_SCHEDULER=false`, at the
   cost of `/api/healthz` answering 503 there, which is correct and is what
   `.env.example` already warned about.
+
+  **Every place that decides that default is fail-closed** (#376). `config.py`
+  had defaulted it to false outside `DEV_MODE` all along and it made no
+  difference: `docker-compose.yml` set the variable in the container
+  environment as `${AUTO_START_SCHEDULER:-true}`, so the code never saw an
+  unset variable, and `docker-compose.dev.yml` forced a flat `true` that won
+  the Compose merge over whatever the machine's own `.env` said — through
+  `docker compose -f docker-compose.dev.yml up`, the workflow documented under
+  *Run* above. All three now say false, so an environment that says nothing
+  produces no ingester, and the machine that IS the deployment says so in its
+  own `.env`. Two consequences worth knowing: a fresh clone or worktree
+  copying `.env.example` is silent by default and needs the flag set on
+  purpose to ingest; and `docker inspect` cannot tell you which machine is
+  which, because it shows the variable in the container environment without
+  distinguishing a compose default from a value in `.env` — that mistake was
+  made here and nearly stopped production ingestion on deploy.
+  `tests/test_scheduler_flag_fails_closed.py` pins the three places.
+
+  **A machine that does not ingest on a tick does not ingest on a click
+  either** (#388). The flag governed the *scheduler* and nothing else, while
+  `POST /api/ingest/email/run` — the Manual Sync button, CSRF-exempt and
+  behind no authentication — read the same mailbox on one press regardless of
+  it, with a 5/minute rate limit as the only friction. The rule now has one
+  home, `services/ingest_policy.py`, and two readers: the endpoint refuses
+  with 409 and a reason, and the control is absent exactly where the endpoint
+  would refuse. No second flag was introduced — the configuration already
+  answers "is this the machine that ingests?", and a second flag is a second
+  thing to forget.
+
+  Three things about it are load bearing. The guard is the endpoint's **first
+  statement**, before the request body is parsed and before any service is
+  constructed: a guard that refuses after the mailbox is open has already read
+  the mail. It reads `app.config`, **where the scheduler reads it**
+  (`services/scheduler_service.py`, `should_start_scheduler`) and not the
+  `Config` class — those are two separate readings of the environment taken at
+  different moments, and a guard consulting the other one could refuse a manual
+  run on a machine whose scheduler is running, which is the very disagreement
+  the module exists to prevent; four pre-existing tests set
+  `app.config["AUTO_START_SCHEDULER"]` and none set the class attribute. And
+  the control lived in **three** templates, not one — the navbar, the empty
+  state of `/properties`, and Full Sync in settings — so a test that checked
+  only one surface found the other two; where the button goes the copy goes
+  with it, since the empty state used to read "run a manual sync to fetch new
+  listings" directly above it.
+
+  What this does **not** close, and the module says so in its own docstring: an
+  ad-hoc script run through `docker exec -i idealista-app python -` builds the
+  service directly and never reaches Flask. That is not hypothetical: 326 rows
+  across five hand-made subscriptions were written into the laptop's database
+  that way, entirely outside the email pipeline, and had to be merged into the
+  deployment's database by hand on 2026-08-17. The boundary
+  here is the interface, not the process. Also note there is no CLI path for
+  ingestion at all, so on a non-ingester machine ingestion is unavailable
+  outright — debugging it locally means setting the flag on purpose.
+  `tests/test_manual_ingest_needs_an_ingester.py` pins the refusal, that the
+  mailbox is never touched, the guard's position, both surfaces, and the
+  `app.config` precedence.
 
   **`AUTO_GEOCODING` is a separate flag and stays on**, because the paid step
   was also the *geocoding* step: `calculate_for_property` opens with
