@@ -111,6 +111,38 @@ def portal_coordinate(record: Any) -> Optional[Tuple[float, float, str]]:
     return lat, lon, source
 
 
+def record_portal_coordinate(
+    enrichment: Optional[dict], *, source: str, lat: Any, lon: Any
+) -> dict:
+    """Write the pin `portal_coordinate` reads back, and return the block.
+
+    The writer lives beside the reader for the reason `read_verdict` and
+    `state_expression` live beside each other in
+    `services/listing_verification.py`: two places that have to agree about a
+    shape will eventually disagree about it. Two callers already exist -- the
+    importer, at insert, and the backfill that establishes the pin for rows
+    imported before this field did.
+
+    `lat`/`lon` are stored as strings. `Property.enrichment` is a JSON column,
+    and a float round-trips through it with whatever precision the encoder
+    feels like; the coordinate columns are `Numeric(10, 7)`, so the decimal
+    text is what actually matches them. None for either is a block of None
+    rather than a `(0, 0)` pin, which is a real place in the Gulf of Guinea.
+    """
+    block = dict(enrichment or {})
+    imported = dict(block.get("import") or {})
+    if lat is None or lon is None:
+        imported["coordinate"] = None
+    else:
+        imported["coordinate"] = {
+            "source": source,
+            "lat": str(lat),
+            "lon": str(lon),
+        }
+    block["import"] = imported
+    return block
+
+
 def distance_bounds_m(
     measured_m: Optional[float], slack_m: float
 ) -> Tuple[Optional[float], Optional[float]]:
