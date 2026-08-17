@@ -40,18 +40,18 @@ def client(app):
     return app.test_client()
 
 
+# The role is set through `app.config`, not the `Config` class: that is where
+# the scheduler reads it (services/scheduler_service.py, app.py's
+# should_start_scheduler) and where four pre-existing tests set it. A fixture
+# patching the class instead would test a source nothing else consults.
 @pytest.fixture
-def not_an_ingester(monkeypatch):
-    from config import Config
-
-    monkeypatch.setattr(Config, "AUTO_START_SCHEDULER", False)
+def not_an_ingester(app):
+    app.config["AUTO_START_SCHEDULER"] = False
 
 
 @pytest.fixture
-def an_ingester(monkeypatch):
-    from config import Config
-
-    monkeypatch.setattr(Config, "AUTO_START_SCHEDULER", True)
+def an_ingester(app):
+    app.config["AUTO_START_SCHEDULER"] = True
 
 
 class TestEndpointRefuses:
@@ -130,17 +130,44 @@ class TestButtonIsAbsentWhereTheEndpointRefuses:
 
 
 class TestPolicyModule:
-    def test_verdict_carries_a_reason_either_way(self, app, monkeypatch):
-        from config import Config
+    def test_verdict_carries_a_reason_either_way(self, app):
         from services.ingest_policy import ingest_verdict, machine_is_ingester
 
-        monkeypatch.setattr(Config, "AUTO_START_SCHEDULER", True)
+        app.config["AUTO_START_SCHEDULER"] = True
         assert ingest_verdict() == (True, "ingester")
         assert machine_is_ingester() is True
 
-        monkeypatch.setattr(Config, "AUTO_START_SCHEDULER", False)
+        app.config["AUTO_START_SCHEDULER"] = False
         assert ingest_verdict() == (False, "not_an_ingester")
         assert machine_is_ingester() is False
+
+    def test_reads_the_source_the_scheduler_reads(self, app, monkeypatch):
+        # The two readings of this flag are built from the environment at
+        # different moments -- app.config in create_app(), Config at import --
+        # so they can disagree. When they do, the guard must follow the one the
+        # scheduler obeys, or it refuses a manual run on a machine that is
+        # already ingesting on a cron tick.
+        from config import Config
+        from services.ingest_policy import ingest_verdict
+
+        monkeypatch.setattr(Config, "AUTO_START_SCHEDULER", False)
+        app.config["AUTO_START_SCHEDULER"] = True
+        assert ingest_verdict().allowed is True, "app.config must win"
+
+        monkeypatch.setattr(Config, "AUTO_START_SCHEDULER", True)
+        app.config["AUTO_START_SCHEDULER"] = False
+        assert ingest_verdict().allowed is False, "app.config must win"
+
+    def test_falls_back_to_config_outside_an_app_context(self, monkeypatch):
+        # A `docker compose run` sibling or a CLI import has no app.config to
+        # ask, and must not crash on current_app.
+        from config import Config
+        from services.ingest_policy import ingest_verdict
+
+        monkeypatch.setattr(Config, "AUTO_START_SCHEDULER", True)
+        assert ingest_verdict() == (True, "ingester")
+        monkeypatch.setattr(Config, "AUTO_START_SCHEDULER", False)
+        assert ingest_verdict() == (False, "not_an_ingester")
 
     def test_no_second_flag_was_invented(self):
         # The rule reuses the one fact the configuration already carries. A
