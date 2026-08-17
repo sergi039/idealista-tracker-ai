@@ -204,3 +204,76 @@ class TestDistance:
         assert backfill._metres_apart(
             PORTAL_LAT, PORTAL_LON, PORTAL_LAT, PORTAL_LON
         ) == pytest.approx(0.0, abs=0.001)
+
+
+class TestItDoesNotClobberAnotherWriter:
+    """The #339 shape, in the tool's own shoes.
+
+    `_scope` loads every row up front and the page reads are paced 30 s apart,
+    so by the fortieth row this instance's `enrichment` is twenty minutes old.
+    Assigning it back would restore whatever else was in it twenty minutes ago.
+    What makes it easy to miss is that this tool writes one key: the loss is
+    not of the key it writes but of every other block somebody else wrote while
+    it was reading pages -- a quality-of-life block, a sea distance, a pool.
+    """
+
+    def test_a_block_written_while_the_pages_were_read_survives(self, app, monkeypatch):
+        from sqlalchemy import text
+
+        _patch(monkeypatch, _page())
+        with app.app_context():
+            row = _row()
+            row_id = row.id
+
+            # Another writer commits a block through a separate connection, so
+            # this instance keeps the stale copy it loaded -- exactly the state
+            # the fortieth row of a real run is in.
+            with db.engine.begin() as conn:
+                conn.execute(
+                    text("UPDATE properties SET enrichment = :e WHERE id = :i"),
+                    {
+                        "e": '{"quality_of_life": {"supermarkets": {"status": "ok"}}}',
+                        "i": row_id,
+                    },
+                )
+
+            assert (row.enrichment or {}).get("quality_of_life") is None  # stale
+
+            result = backfill.process(row)
+
+            assert result["outcome"] == backfill.OUTCOME_RECORDED
+            db.session.expire_all()
+            stored = db.session.get(Property, row_id)
+            # Both blocks: the one this tool wrote and the one it did not lose.
+            assert portal_coordinate(stored) == (PORTAL_LAT, PORTAL_LON, "fotocasa")
+            assert (
+                stored.enrichment["quality_of_life"]["supermarkets"]["status"] == "ok"
+            )
+
+    def test_a_pin_recorded_by_another_writer_is_not_written_twice(
+        self, app, monkeypatch
+    ):
+        """Re-checked under the lock, because the scope was decided minutes ago."""
+        from sqlalchemy import text
+
+        _patch(monkeypatch, _page())
+        with app.app_context():
+            row = _row()
+
+            with db.engine.begin() as conn:
+                conn.execute(
+                    text("UPDATE properties SET enrichment = :e WHERE id = :i"),
+                    {
+                        "e": '{"import": {"coordinate": {"source": "fotocasa",'
+                        ' "lat": "1.0", "lon": "2.0"}}}',
+                        "i": row.id,
+                    },
+                )
+
+            result = backfill.process(row)
+
+            assert result["outcome"] == backfill.OUTCOME_ALREADY_RECORDED
+            db.session.expire_all()
+            stored = db.session.get(Property, row.id)
+            # The other writer's value, untouched.
+            assert portal_coordinate(stored) == (1.0, 2.0, "fotocasa")
