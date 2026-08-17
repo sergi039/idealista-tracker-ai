@@ -84,6 +84,21 @@ def test_the_coordinate_is_never_called_precise(page):
     assert listing.portal_accuracy["record_accuracy"] is False
 
 
+def test_who_published_the_advert_is_read_from_the_payload(page):
+    """The portal's own word for the kind of advertiser, in both its blocks.
+
+    `publisher.type` is read first and `agency.type` is the fallback: they say
+    the same thing on this page, and on a private advert there may be no agency
+    block to read at all. `clientTypeId` rides along as evidence and decides
+    nothing -- `services/advertiser.py` owns what these values mean.
+    """
+    listing = parse_listing(page, URL)
+
+    assert listing.publisher_type == "professional"
+    assert listing.client_type_id == 3
+    assert listing.agency == "ALDAMA INMOBILIARIA"
+
+
 def test_title_carries_the_place_so_the_geocoder_has_something_to_read(page):
     """`propertyTitle` is the bare "Land for sale"; `seoTitle` names the place.
 

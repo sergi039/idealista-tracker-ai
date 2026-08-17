@@ -29,6 +29,7 @@ from models import Land, Property, SearchProfile
 from app import db
 from services import sea_view_service
 from services.coordinate_quality import shared_coordinate_peers
+from services import advertiser
 from services.listing_verification import (
     read_verdict as listing_verdict,
     verified_expression,
@@ -872,12 +873,47 @@ def _source_choices(profile_selection, applied=""):
     return choices
 
 
+def _advertiser_choices(profile_selection, applied=""):
+    """How many of the listings on screen are sold by whom.
+
+    Counted in SQL, unlike `_source_choices` above, and the difference is
+    `enrichment`: the source reading needs `url`, which is short, while this
+    one also needs a JSON column holding every measurement a row carries.
+    Pulling that into Python for a count would be the most expensive query on
+    the page. `services/advertiser.state_expression` is the SQL half of the
+    same reading the badge uses, and `tests/test_advertiser.py` runs one matrix
+    through both halves precisely because they are two pieces of code that must
+    not drift.
+
+    Every state that exists in the selection is offered, `unchecked`
+    included -- the list badges only `owner`, so this dropdown is where the
+    number of rows nobody could answer for is disclosed.
+    """
+    state = advertiser.state_expression(Property)
+    rows = apply_profile_filter(
+        db.session.query(state, func.count()),
+        Property.search_profile_id,
+        profile_selection,
+    ).group_by(state)
+    counts = {key: total for key, total in rows.all() if key}
+
+    choices = advertiser.options(counts)
+    # An applied filter stays offered even when it now matches nothing, so the
+    # control that produced the empty page can still be undone.
+    if applied and applied not in {choice["value"] for choice in choices}:
+        choices.append(
+            {"value": applied, "label": advertiser.label(applied), "count": 0}
+        )
+    return choices
+
+
 def _property_filter_options(
     profile_selection,
     category_filter="",
     subtype_filter="",
     municipality_filter="",
     source_filter="",
+    advertiser_filter="",
 ):
     """Type / Subtype / Municipality choices for the subscriptions on screen.
 
@@ -912,6 +948,7 @@ def _property_filter_options(
         ),
         "municipalities": _municipality_choices(profile_selection, municipality_filter),
         "sources": _source_choices(profile_selection, source_filter),
+        "advertisers": _advertiser_choices(profile_selection, advertiser_filter),
         "has_unclassified_category": _selection_has_unclassified(
             Property.property_category, profile_selection
         ),
@@ -981,6 +1018,7 @@ def properties():
         subtype_filter = request.args.get("subtype", "")
         municipality_filter = request.args.get("municipality", "")
         source_filter = request.args.get("source", "")
+        advertiser_filter = request.args.get("advertiser", "")
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
@@ -1056,6 +1094,12 @@ def properties():
         source_clause = source_filter_clause(Property, source_filter)
         if source_clause is not None:
             query = query.filter(source_clause)
+        # Who is selling. services/advertiser.py owns the reading, so the
+        # badge, this filter and the count printed beside its option are one
+        # answer rather than three.
+        advertiser_clause = advertiser.filter_clause(Property, advertiser_filter)
+        if advertiser_clause is not None:
+            query = query.filter(advertiser_clause)
         # A pasted listing URL, or a bare listing id, is a search too --
         # utils/listing_search.py owns what the box accepts.
         search_clause = listing_search_clause(Property, search_query)
@@ -1192,6 +1236,7 @@ def properties():
             subtype_filter=subtype_filter,
             municipality_filter=municipality_filter,
             source_filter=source_filter,
+            advertiser_filter=advertiser_filter,
         )
 
         return render_template(
@@ -1220,6 +1265,7 @@ def properties():
                 "subtype": subtype_filter,
                 "municipality": municipality_filter,
                 "source": source_filter,
+                "advertiser": advertiser_filter,
                 "search": search_query,
                 "inv_metr": investment_metrics_filter,
                 "sea_view": sea_view_filter,
@@ -2604,6 +2650,7 @@ def map_view():
         subtype_filter = request.args.get("subtype", "")
         municipality_filter = request.args.get("municipality", "")
         source_filter = request.args.get("source", "")
+        advertiser_filter = request.args.get("advertiser", "")
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
@@ -2626,6 +2673,12 @@ def map_view():
         source_clause = source_filter_clause(Property, source_filter)
         if source_clause is not None:
             query = query.filter(source_clause)
+        # Who is selling. services/advertiser.py owns the reading, so the
+        # badge, this filter and the count printed beside its option are one
+        # answer rather than three.
+        advertiser_clause = advertiser.filter_clause(Property, advertiser_filter)
+        if advertiser_clause is not None:
+            query = query.filter(advertiser_clause)
         # A pasted listing URL, or a bare listing id, is a search too --
         # utils/listing_search.py owns what the box accepts.
         search_clause = listing_search_clause(Property, search_query)
@@ -3671,6 +3724,7 @@ def export_properties_csv():
         subtype_filter = request.args.get("subtype", "")
         municipality_filter = request.args.get("municipality", "")
         source_filter = request.args.get("source", "")
+        advertiser_filter = request.args.get("advertiser", "")
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
@@ -3728,6 +3782,12 @@ def export_properties_csv():
         source_clause = source_filter_clause(Property, source_filter)
         if source_clause is not None:
             query = query.filter(source_clause)
+        # Who is selling. services/advertiser.py owns the reading, so the
+        # badge, this filter and the count printed beside its option are one
+        # answer rather than three.
+        advertiser_clause = advertiser.filter_clause(Property, advertiser_filter)
+        if advertiser_clause is not None:
+            query = query.filter(advertiser_clause)
         # A pasted listing URL, or a bare listing id, is a search too --
         # utils/listing_search.py owns what the box accepts.
         search_clause = listing_search_clause(Property, search_query)
@@ -3857,6 +3917,11 @@ def export_properties_csv():
             "Status",
             "Status Source",
             "Status Checked At",
+            # Who is selling, and what established it. `unchecked` is exported
+            # as itself: a report that read a blank as "agency" would be the
+            # same defect as the status column's, one column over.
+            "Advertiser",
+            "Advertiser Source",
             "Favorite",
             "Sea View",
             "Sea View Source",
@@ -3904,6 +3969,7 @@ def export_properties_csv():
             sea_view_verdict = sea_view_service.read_verdict(prop)
             sea_view_target = sea_view_verdict["target"]
             listing_verdict_row = listing_verdict(prop)
+            advertiser_verdict = advertiser.read_verdict(prop)
 
             row = [
                 prop.id,
@@ -3924,6 +3990,8 @@ def export_properties_csv():
                 listing_verdict_row["checked_at"].isoformat()
                 if listing_verdict_row["checked_at"]
                 else "",
+                advertiser_verdict["state"],
+                advertiser_verdict["source"] or "",
                 bool(prop.is_favorite),
                 sea_view_verdict["state"],
                 sea_view_verdict["source"],

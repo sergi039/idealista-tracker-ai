@@ -81,6 +81,7 @@
               <th class="text-end">{{ t('price') }}</th>
               <th class="text-end">{{ t('area') }}</th>
               <th>{{ t('municipality') }}</th>
+              <th>{{ t('advertiser') }}</th>
               <th>{{ t('coordinates') }}</th>
             </tr>
           </thead>
@@ -111,6 +112,22 @@
                 <td class="text-end">{% if row.price is not none %}{{ '{:,.0f}'.format(row.price)|replace(',', ' ') }} €{% else %}—{% endif %}</td>
                 <td class="text-end">{% if row.area is not none %}{{ '{:,.0f}'.format(row.area)|replace(',', ' ') }} m²{% else %}—{% endif %}</td>
                 <td>{{ row.municipality or '—' }}</td>
+                {# What the page said about who is selling. Shown here because
+                   the preview is the only undo this import has: a row created
+                   from a misread page cannot be deleted afterwards. #}
+                <td class="small">
+                  {% set seller = advertiser_state_from_portal(row.publisher_type, row.client_type_id) %}
+                  {% if row.status != 'new' %}—
+                  {% elif seller == 'owner' %}
+                    <span class="badge bg-primary fw-normal">
+                      <i class="fas fa-user me-1"></i>{{ t('advertiser_owner') }}
+                    </span>
+                  {% elif seller == 'agency' %}
+                    <span class="text-muted">{{ t('advertiser_agency') }}{% if row.agency %} — {{ row.agency }}{% endif %}</span>
+                  {% else %}
+                    <span class="text-muted">{{ t('advertiser_unknown') }}</span>
+                  {% endif %}
+                </td>
                 <td class="small text-muted">
                   {% if row.latitude is not none and row.longitude is not none %}
                     {{ '%.5f'|format(row.latitude) }}, {{ '%.5f'|format(row.longitude) }}

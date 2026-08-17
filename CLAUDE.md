@@ -698,6 +698,48 @@ search page would have been recorded as live — #136's false confirmation at a
 second host. All 56 stored fotocasa URLs end in `/<id>/d`, which is what the
 second anchor matches.
 
+**Who is selling is a four-state verdict too, and most of it was already in
+the table** (`services/advertiser.py`). The owner asked to see the listings
+sold by their owners rather than through an agency, from the list. Idealista
+answers that for free: the alert email's link carries its own word for the kind
+of advert -- `utm_campaign=express_newAd_sale_particular` against
+`..._sale_professional` -- and nothing strips the query string, so 408 of the
+730 rows answer with no request, no key and no cost. That is why the reading is
+*derived* rather than stored, the same decision `utils/listing_source.py` and
+`utils/municipality_grouping.py` record: a derived value cannot drift out of
+agreement with the URL it came from, and a stored one would have to be written
+by every future ingest path. A fotocasa import records what the page said
+(`publisher.type`, with `agency.type` as the fallback and `clientTypeId` kept
+as evidence) on the way past, since it has the page open anyway.
+
+The remaining 322 rows are the hand-imported batches, and **169 of them cannot
+be answered from this machine at all**: they are idealista.com links with no
+campaign token, and idealista answers `403` with a DataDome captcha to every
+request from here (re-measured 2026-08-17). So the fourth state is
+`unchecked` -- nobody looked -- and it is never folded into `agency` because
+agencies are the common case. The list badges `owner` only, for the reason the
+source and sea-view badges give: a badge on 294 rows marks nothing. The
+disclosure lives in the seller dropdown, which carries a count for all four
+states, and on the property page, which names the evidence row by row.
+
+Two things about it are load bearing. `read_verdict` and `state_expression` are
+one answer in two languages -- the badge reads Python, the dropdown counts read
+SQL, and `tests/test_advertiser.py` runs one matrix through both, because a
+count that disagrees with the badges under it is a third wrong number rather
+than a disclosure. And the campaign token is matched with `ESCAPE`, since every
+token is full of `_`, which LIKE reads as "any character" (the lesson
+`utils/listing_search.py` already records).
+
+`utils/backfill_advertiser.py` reads the pages of the rows nothing else can
+answer. Free, and paced at 30 s rather than the import's courtesy 3: measured
+2026-08-17, fotocasa began serving its "SENTIMOS LA INTERRUPCIÓN" page with a
+`200` status after 5 requests spaced 3 s apart, and kept doing so for several
+minutes. A run that collects three host refusals in a row stops instead of
+walking the rest of the scope into the same wall; nothing is written for a
+refusal, and the scope is "no established seller", so stopping early costs
+nothing and the next run resumes. The per-listing path is the Enrich button,
+which refuses the fetch outright when the row already answers for itself.
+
 **"verified against Idealista" is gone from the UI**, because it was a
 hardcoded string rendered for every row whatever site it was on, and the 56
 fotocasa rows are not on Idealista at all. The per-row note names the row's own

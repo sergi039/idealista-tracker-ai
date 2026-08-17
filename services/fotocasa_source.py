@@ -197,6 +197,8 @@ class FotocasaListing:
     description: Optional[str] = None
     building_type: Optional[str] = None
     agency: Optional[str] = None
+    publisher_type: Optional[str] = None
+    client_type_id: Optional[int] = None
     published_at: Optional[str] = None
     attributes: Dict[str, Any] = field(default_factory=dict)
     portal_accuracy: Dict[str, Any] = field(default_factory=dict)
@@ -368,6 +370,24 @@ def parse_listing(html: str, url: str) -> FotocasaListing:
 
     listing.agency = _text(estate.get("clientName")) or _text(estate.get("clientAlias"))
     listing.published_at = _text(detail.get("creationDate"))
+
+    # Who is advertising, in the portal's own vocabulary. Two blocks carry the
+    # same enum and `publisher` is read first because it describes exactly this
+    # -- `agency` is the same value seen from the agency's side, and on a
+    # private advert there may be no agency block to see it from at all.
+    # `clientTypeId` is the numeric twin (`3` beside `professional` on every
+    # page measured on 2026-08-17); it is recorded and never decides, because
+    # nobody here has seen what the other numbers mean.
+    # `services/advertiser.py` owns what these values are taken to mean.
+    publisher = detail.get("publisher")
+    publisher = publisher if isinstance(publisher, dict) else {}
+    agency_block = detail.get("agency")
+    agency_block = agency_block if isinstance(agency_block, dict) else {}
+    listing.publisher_type = _text(publisher.get("type")) or _text(
+        agency_block.get("type")
+    )
+    client_type_id = _positive_number(estate.get("clientTypeId"))
+    listing.client_type_id = int(client_type_id) if client_type_id is not None else None
 
     rooms = _positive_number(features.get("rooms"))
     bathrooms = _positive_number(features.get("bathrooms"))

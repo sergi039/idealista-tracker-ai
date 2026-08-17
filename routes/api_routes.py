@@ -12,6 +12,7 @@ from services.ingest_policy import ingest_verdict
 from services.listing_verification import read_verdict as listing_verdict
 from utils.api_errors import json_http_error
 from utils.listing_search import listing_search_clause
+from services import advertiser
 from utils.listing_source import source_filter_clause
 from utils.municipality_grouping import municipality_filter_clause
 from app import db
@@ -1698,6 +1699,12 @@ def get_properties():
         source_clause = source_filter_clause(Property, request.args.get("source", ""))
         if source_clause is not None:
             query = query.filter(source_clause)
+        # Who is selling -- the same clause the page and the CSV use.
+        advertiser_clause = advertiser.filter_clause(
+            Property, request.args.get("advertiser", "")
+        )
+        if advertiser_clause is not None:
+            query = query.filter(advertiser_clause)
         # A pasted listing URL, or a bare listing id, is a search too --
         # utils/listing_search.py owns what the box accepts.
         search_clause = listing_search_clause(Property, search_query)

@@ -180,6 +180,28 @@
                                 <i class="fas fa-circle-question me-1"></i>{{ t('listing_state_unchecked') }}
                             </span>
                         {% endif %}
+                        {# Who is selling. All four states are shown here, unlike
+                           the list, which badges only `owner`: this page is
+                           where "nobody established it" has to be legible as
+                           itself rather than as a missing badge, and where the
+                           evidence behind the answer has room to be named. #}
+                        {% set _seller = advertiser_verdict_for(property) %}
+                        {% if _seller.state == 'owner' %}
+                            <span class="badge bg-primary fw-normal" title="{{ _seller.note }}">
+                                <i class="fas fa-user me-1"></i>{{ t('advertiser_owner') }}
+                            </span>
+                        {% elif _seller.state == 'agency' %}
+                            <span class="badge bg-body-tertiary text-body-secondary border fw-normal"
+                                  title="{{ _seller.note }}{% if _seller.evidence.client_name %} — {{ _seller.evidence.client_name }}{% endif %}">
+                                <i class="fas fa-building me-1"></i>{{ t('advertiser_agency') }}
+                            </span>
+                        {% else %}
+                            <span class="badge bg-body-tertiary text-body-secondary border fw-normal"
+                                  id="advertiser-badge"
+                                  title="{{ _seller.note }}">
+                                <i class="fas fa-user-slash me-1"></i>{{ t('advertiser_' ~ _seller.state) }}
+                            </span>
+                        {% endif %}
                         {# The geocoded address, which the enrichment pass has been
                            storing all along and nothing ever read: the header
                            showed a raw coordinate and no place name a person

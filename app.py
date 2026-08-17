@@ -326,6 +326,16 @@ def create_app(testing: bool = False):
     app.jinja_env.globals["listing_source_for"] = source_of
     app.jinja_env.globals["listing_source_label"] = source_label
 
+    # Who is selling: the owner, or an agency. Four states, most of the answers
+    # derived from the alert link the row already carries, and the badge, the
+    # filter and its counts all read this one function for the same reason the
+    # source badge above does.
+    from services.advertiser import from_portal_type as advertiser_state_from_portal
+    from services.advertiser import read_verdict as advertiser_verdict_for
+
+    app.jinja_env.globals["advertiser_verdict_for"] = advertiser_verdict_for
+    app.jinja_env.globals["advertiser_state_from_portal"] = advertiser_state_from_portal
+
     # #379: how much of the enabled weight a score rests on, read off the
     # stored payload (derived for rows scored before it was recorded). The
     # list and the detail page show it; the score itself never contains it.

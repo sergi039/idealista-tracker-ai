@@ -45,6 +45,7 @@ import requests
 from sqlalchemy import null
 from sqlalchemy.exc import IntegrityError
 
+from services import advertiser
 from services.fotocasa_source import (
     SOURCE_NAME,
     fetch_listing,
@@ -138,6 +139,8 @@ def preview_row(listing) -> Dict[str, Any]:
         "description": listing.description,
         "building_type": listing.building_type,
         "agency": listing.agency,
+        "publisher_type": listing.publisher_type,
+        "client_type_id": listing.client_type_id,
         "published_at": listing.published_at,
         "attributes": dict(listing.attributes or {}),
         "portal_accuracy": dict(listing.portal_accuracy or {}),
@@ -293,12 +296,25 @@ def insert_rows(
         prop.listing_status_source = null()
 
         prop.enrichment = {
+            # Who is selling, recorded on the way past. The page has been
+            # fetched already, so this costs nothing and spares the row the one
+            # thing this deployment cannot do later on demand for every site --
+            # go back and read the advert. `services/advertiser.py` owns what
+            # the portal's word is taken to mean.
+            advertiser.ENRICHMENT_KEY: advertiser.portal_verdict(
+                portal_type=row.get("publisher_type"),
+                client_type_id=row.get("client_type_id"),
+                client_name=row.get("agency"),
+                site=SOURCE_NAME,
+            ),
             "import": {
                 "source": SOURCE_NAME,
                 "method": "portal_payload",
                 "listing_id": int(listing_id),
                 "imported_at": datetime.utcnow().isoformat(),
                 "agency": row.get("agency"),
+                "publisher_type": row.get("publisher_type"),
+                "client_type_id": row.get("client_type_id"),
                 "province": row.get("province"),
                 "postal_code": row.get("postal_code"),
                 "district": row.get("district"),
@@ -307,7 +323,7 @@ def insert_rows(
                 # exact coordinate, the evidence for revisiting the label above
                 # is already in the row rather than needing a re-fetch.
                 "portal_accuracy": row.get("portal_accuracy") or {},
-            }
+            },
         }
 
         # Each row lands inside its own SAVEPOINT, so a collision costs that
