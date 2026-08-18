@@ -11,6 +11,7 @@ from config import Config
 from models import Property, SearchProfile
 from services.coordinate_quality import is_precise, normalize_accuracy
 from services.place_rules import PlaceRules as _PlaceRules
+from services import osm_places
 from services.reference_places import nearest_reference_place
 from services.place_rules import place_rules_from as _place_rules
 from services.property_location_service import PropertyLocationService
@@ -630,8 +631,13 @@ class PropertyTravelService:
 
         if tally.unavailable:
             logger.error(
-                "Travel enrichment for property %s could not reach Google: "
-                "%s of %s targets unavailable (%s)",
+                # Not "could not reach Google": since 2026-08-18 the presets
+                # are resolved from Overpass and only the routing is Google's,
+                # so naming one vendor in a line that reports both sends
+                # whoever reads it to the wrong status page. The reasons in
+                # the tail say which source refused.
+                "Travel enrichment for property %s could not reach a lookup "
+                "source: %s of %s targets unavailable (%s)",
                 prop.id,
                 tally.unavailable,
                 tally.total,
@@ -749,6 +755,17 @@ class PropertyTravelService:
                     failure=GoogleApiFailure(reason=str(reference.reason))
                 )
 
+        # OpenStreetMap answers the five remaining presets (step 2 of the cost
+        # plan). Same rule as the register above: what OSM cannot answer is a
+        # refusal, not a reason to buy the answer from Places -- including the
+        # `wide_search_query` fallback below, whose whole purpose was Google's
+        # 50 km cap, which Overpass does not have.
+        spec = osm_places.osm_spec(preset_def)
+        if spec is not None:
+            osm_lookup = self._osm_place(lat, lon, preset_key, preset_def, spec)
+            if osm_lookup is not None:
+                return osm_lookup
+
         place_types = (
             preset_def.get("place_types") if isinstance(preset_def, dict) else None
         )
@@ -804,6 +821,59 @@ class PropertyTravelService:
             failure = wide_lookup.failure
 
         return PlaceLookup(failure=failure)
+
+    def _osm_place(
+        self,
+        lat: float,
+        lon: float,
+        preset_key: str,
+        preset_def: Dict[str, Any],
+        spec: Tuple[str, str, int],
+    ) -> Optional[PlaceLookup]:
+        """This preset's nearest acceptable OSM place, or why there is none.
+
+        Returns `None` only when OSM cannot be consulted at all -- no
+        enrichment service to borrow the Overpass transport from -- which is
+        the one case where falling through to the paid path is right, because
+        nothing was asked of anything.
+
+        Every declared preset rides in one Overpass query: the first one to
+        run fetches them all and caches the candidates, so the four after it
+        cost no round trip. That is why the specs of *every* preset are
+        collected here rather than just this one's.
+        """
+        from services.search_profile_service import TRAVEL_PRESET_DEFS
+
+        service = getattr(self, "enrichment_service", None)
+        if service is None:
+            from services.enrichment_service import EnrichmentService
+
+            service = EnrichmentService()
+            self.enrichment_service = service
+
+        specs = {}
+        for key, definition in TRAVEL_PRESET_DEFS.items():
+            declared = osm_places.osm_spec(definition)
+            if declared is not None:
+                specs[key] = declared
+        specs[preset_key] = spec
+
+        candidates, failure = osm_places.lookup_candidates(service, specs, lat, lon)
+        if failure is not None:
+            # Overpass refused. Not "no airport here", and not a reason to
+            # spend: a refusal is retried by the next run for free (#144).
+            return PlaceLookup(failure=failure)
+
+        chosen = osm_places.pick(preset_def, (candidates or {}).get(preset_key) or [])
+        if chosen is None:
+            # Overpass answered and nothing qualifies. That is a measurement
+            # -- "no airport within 100 km" is true of an inland valley -- and
+            # it scores as absent rather than as a failure (#98).
+            return PlaceLookup(reason=NOT_FOUND_NO_NEARBY_PLACE)
+
+        place = dict(chosen)
+        place["preset_key"] = preset_key
+        return PlaceLookup(place=place)
 
     def _nearest_place(
         self,

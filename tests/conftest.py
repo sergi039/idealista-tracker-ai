@@ -104,6 +104,29 @@ def pytest_runtest_setup(item) -> None:
 
     Config.AUTO_GEOCODING = False
 
+    # Overpass answers "nothing here" unless a test says otherwise, and it is
+    # reset *per test* for the same reason the breaker above is: a test that
+    # points this at a refusal (tests/test_issue_98_...) would otherwise leave
+    # it pointing there for every test that follows, which is how one edit
+    # turned three failures into six.
+    #
+    # The travel presets are answered from OpenStreetMap since 2026-08-18
+    # (services/osm_places.py). Suites written against the Places path mock
+    # Google and nothing else, so the moment a preset started asking Overpass
+    # instead, six of them reached the live internet and
+    # `tests/network_guard.py` failed the run -- which is what it is for.
+    #
+    # The stub answers "Overpass replied and there is nothing of that type
+    # here", never a refusal: a refusal is the state that must not be
+    # invented, and a test that wants one sets it up.
+    # `services/property_travel_service.py` imports the module rather than the
+    # function so that this one patch point reaches it, and this is
+    # deliberately not a stub on `EnrichmentService._overpass_elements`, which
+    # the amenity, pool and quality-of-life suites patch underneath.
+    import services.osm_places as _osm_places
+
+    _osm_places.lookup_candidates = lambda service, specs, lat, lon: ({}, None)
+
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_teardown(item, nextitem):
@@ -326,6 +349,7 @@ def pytest_configure(config: pytest.Config) -> None:
     code: a test module's import time is inside the session and outside every
     fixture.
     """
+
     global _snapshot
     if _snapshot is None:
         _snapshot = {

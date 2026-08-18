@@ -407,6 +407,36 @@ def test_property_travel_service_populates_travel_for_enabled_presets(app):
     with app.app_context():
         cache.clear()
 
+        # The presets are resolved from OpenStreetMap since 2026-08-18
+        # (services/osm_places.py), so the places this run finds are declared
+        # here rather than in the Google mock below, which still serves the
+        # Distance Matrix leg and the beaches.
+        import services.osm_places as osm_places
+
+        osm_places.lookup_candidates = lambda service, specs, lat, lon: (
+            {
+                "airport": [
+                    {
+                        "name": "Airport A",
+                        "lat": 43.56,
+                        "lon": -6.03,
+                        "distance_m": 30000,
+                        "source": "osm",
+                    }
+                ],
+                "supermarket": [
+                    {
+                        "name": "Market",
+                        "lat": 43.55,
+                        "lon": -6.02,
+                        "distance_m": 1200,
+                        "source": "osm",
+                    }
+                ],
+            },
+            None,
+        )
+
         preset_defs = SearchProfileService.get_travel_preset_defs()
         presets = {d["key"]: {"enabled": False, "mode": "driving"} for d in preset_defs}
         presets["airport"]["enabled"] = True

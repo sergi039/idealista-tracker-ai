@@ -39,6 +39,19 @@ from services.property_travel_service import (  # noqa: E402
 from services.search_profile_service import TRAVEL_PRESET_DEFS  # noqa: E402
 
 
+# Since 2026-08-18 the presets are answered from OpenStreetMap
+# (services/osm_places.py, step 2 of the cost plan) and never fall through to
+# a paid Places search. What this class pins is the Google machinery, which is
+# one deleted `osm_tag` away from being live again and cost several tickets to
+# learn, so the tests keep it and name the path they are on.
+def _google_path(preset_key: str) -> dict:
+    spec = dict(TRAVEL_PRESET_DEFS[preset_key])
+    spec.pop("osm_tag", None)
+    spec.pop("osm_radius_m", None)
+    spec.pop("reference_source", None)
+    return spec
+
+
 @pytest.fixture
 def app():
     setup_test_environment()
@@ -271,7 +284,7 @@ class TestTheLookupWalksPastRefusedCandidates:
             return_value=self._payload([GLUEWAY, HOSPITAL_HELIPAD, REAL_AIRPORT]),
         ):
             lookup = service._nearest_place_for_preset(
-                43.5, -5.6, "airport", TRAVEL_PRESET_DEFS["airport"]
+                43.5, -5.6, "airport", _google_path("airport")
             )
 
         assert lookup.place is not None
@@ -285,7 +298,7 @@ class TestTheLookupWalksPastRefusedCandidates:
             return_value=self._payload([GLUEWAY, HOSPITAL_HELIPAD, HOTEL]),
         ):
             lookup = service._nearest_place_for_preset(
-                43.5, -5.6, "airport", TRAVEL_PRESET_DEFS["airport"]
+                43.5, -5.6, "airport", _google_path("airport")
             )
 
         assert lookup.place is None
@@ -301,7 +314,7 @@ class TestTheLookupWalksPastRefusedCandidates:
             return_value=self._payload([school]),
         ):
             lookup = service._nearest_place_for_preset(
-                43.5, -5.6, "school", TRAVEL_PRESET_DEFS["school"]
+                43.5, -5.6, "school", _google_path("school")
             )
 
         assert lookup.place["name"] == "Escuela La Serena"
@@ -324,10 +337,10 @@ class TestTheLookupWalksPastRefusedCandidates:
                 return_value=self._payload([REAL_AIRPORT]),
             ):
                 service._nearest_place_for_preset(
-                    43.5, -5.6, "airport", TRAVEL_PRESET_DEFS["airport"]
+                    43.5, -5.6, "airport", _google_path("airport")
                 )
                 service._nearest_place_for_preset(
-                    43.5, -5.6, "school", TRAVEL_PRESET_DEFS["school"]
+                    43.5, -5.6, "school", _google_path("school")
                 )
 
         airport_key, school_key = seen[0], seen[1]

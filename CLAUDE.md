@@ -1148,6 +1148,49 @@ and TODO.md; respect it if you ever run both side by side.
   of the seven Places calls per listing; the drive time to the hospital is
   still a Distance Matrix element, so a hospital only becomes free when the
   routing does (`tests/test_hospital_from_the_register.py`).
+- **The other five presets are answered from OpenStreetMap** (step 2 of the
+  same plan, 2026-08-18). Five of the seven Places calls a listing costs are
+  `airport`, `train_station`, `supermarket`, `school` and `police`;
+  `services/osm_places.py` resolves them from Overpass, declared on each preset
+  as `osm_tag` / `osm_radius_m`. It is not a cost compromise, and the six
+  production coordinates it was measured against say why: Google answered
+  `police` with **"Traffic radar"** (property 101) and with a private security
+  firm (property 67), and `supermarket` with "La luz de mundo" (property 123),
+  where `amenity=police` gives the Comisaría and the Cuartel and
+  `shop=supermarket` gives Alimerka 0.9 km away. A tag is a claim about what a
+  thing *is*.
+  **The #171 airport rules work on OSM names verbatim**, which is the finding
+  that made this cheap: `aeroway=aerodrome` carries exactly the aeroclubs and
+  light-aircraft fields Google's `airport` type does -- at Oviedo the nearest
+  is *Aeródromo de La Morgal*, 9.2 km -- and the shipped
+  `require_name_patterns` refuse every one while accepting *Aeropuerto de
+  Asturias* and *Aeroporto da Coruña*. On all six coordinates that is the
+  airport Google named. It also retires the reason `wide_search_query` exists:
+  Overpass has no 50 km cap, so Cariño resolves A Coruña at 64.3 km in the same
+  query, with no second paid call.
+  Three things are load bearing. **One query answers every preset** -- the
+  first one to run fetches all declared types and caches the candidates, so
+  five presets cost one round trip at the shared 5 s gate rather than five.
+  **Candidates are cached, not the nearest**, because the rules walk past what
+  they refuse and caching only La Morgal would leave the preset nothing to fall
+  back to. And **a refusal never falls through to the paid search**, including
+  `wide_search_query`: falling through would spend exactly when the free source
+  is down. The transport is `EnrichmentService._overpass_elements`, reached the
+  way `services/pool_service.py` already reaches it -- do not grow a second
+  Overpass client.
+  Two consequences for the suite. `tests/conftest.py` stubs
+  `services.osm_places.lookup_candidates` **per test** to "Overpass replied and
+  there is nothing here", for the same reason it forces `AUTO_GEOCODING` off:
+  six suites written against the Places path mock Google and nothing else, and
+  the moment a preset started asking Overpass they reached the live internet
+  and `tests/network_guard.py` failed the run. It is reset per test rather than
+  once, because a suite that points it at a refusal would otherwise leave it
+  there -- that mistake turned three failures into six. And the suites that pin
+  the Google machinery now build their preset through a local `_google_path()`
+  helper that strips `osm_tag`: what they know cost several tickets, and one
+  deleted line puts that path back. `tests/test_osm_places.py` pins the module
+  *and the wiring*, because a green unit suite over a dead hook is the defect
+  this repository keeps rediscovering (#309).
 - **A town crowds the real hospital off the page, so the preset carries
   `wide_search_query` too** (#325). Nearby Search returns **one page of 20**,
   and #323 shipped without the fallback on the strength of one *rural*
