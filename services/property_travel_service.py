@@ -11,7 +11,7 @@ from config import Config
 from models import Property, SearchProfile
 from services.coordinate_quality import is_precise, normalize_accuracy
 from services.place_rules import PlaceRules as _PlaceRules
-from services import osm_places
+from services import osm_places, osrm_routing
 from services.reference_places import nearest_reference_place
 from services.place_rules import place_rules_from as _place_rules
 from services.property_location_service import PropertyLocationService
@@ -145,6 +145,19 @@ _BEACH_REJECT_TYPES = (
     "store",
     "real_estate_agency",
 )
+
+
+def _parse_destinations(destinations: List[str]) -> List[Tuple[float, float]]:
+    """`"lat,lon"` strings back into pairs, for an engine that wants numbers.
+
+    Distance Matrix takes them as text and OSRM does not, so the conversion
+    happens once, here, rather than at each of the callers that built them.
+    """
+    points: List[Tuple[float, float]] = []
+    for item in destinations:
+        lat_text, _, lon_text = str(item).partition(",")
+        points.append((float(lat_text), float(lon_text)))
+    return points
 
 
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -1416,6 +1429,24 @@ class PropertyTravelService:
     ) -> List[DistanceResult]:
         if not destinations:
             return []
+
+        if osrm_routing.is_enabled():
+            # The routing engine on this machine answers first, and a refusal
+            # from it is a refusal: falling through to Distance Matrix would
+            # spend exactly when the free path is down, which is the decision
+            # the places lookups already made.
+            legs, failure = osrm_routing.table(
+                (lat, lon), _parse_destinations(destinations), mode=mode
+            )
+            if failure is not None:
+                return [DistanceResult(failure=failure) for _ in destinations]
+            return [
+                DistanceResult(
+                    distance_m=leg.distance_m,
+                    duration_s=leg.duration_s,
+                )
+                for leg in (legs or [])
+            ]
 
         url = "https://maps.googleapis.com/maps/api/distancematrix/json"
         params = {
