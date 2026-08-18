@@ -11,6 +11,7 @@ from config import Config
 from models import Property, SearchProfile
 from services.coordinate_quality import is_precise, normalize_accuracy
 from services.place_rules import PlaceRules as _PlaceRules
+from services.reference_places import nearest_reference_place
 from services.place_rules import place_rules_from as _place_rules
 from services.property_location_service import PropertyLocationService
 from services.search_profile_service import SearchProfileService
@@ -727,6 +728,27 @@ class PropertyTravelService:
     def _nearest_place_for_preset(
         self, lat: float, lon: float, preset_key: str, preset_def: Dict[str, Any]
     ) -> PlaceLookup:
+        # A preset answered from a local register never reaches Google -- not
+        # for the search, and not as a fallback when the register cannot
+        # answer. A refusal here is a refusal: falling through would spend
+        # exactly where the register is thinnest, which is the opposite of
+        # what declaring it was for (services/reference_places.py).
+        reference_source = (
+            preset_def.get("reference_source") if isinstance(preset_def, dict) else None
+        )
+        if reference_source:
+            reference = nearest_reference_place(str(reference_source), lat, lon)
+            if reference is not None:
+                if reference.place is not None:
+                    place = dict(reference.place)
+                    place["preset_key"] = preset_key
+                    return PlaceLookup(place=place)
+                # Not "nothing nearby": the register was asked and could not
+                # answer, so this must not score as a measured absence (#98).
+                return PlaceLookup(
+                    failure=GoogleApiFailure(reason=str(reference.reason))
+                )
+
         place_types = (
             preset_def.get("place_types") if isinstance(preset_def, dict) else None
         )

@@ -12,6 +12,7 @@ from services.search_subscription_identity import (
     extract_search_identity,
 )
 from services.settings_service import SettingsService
+from services.reference_places import REFERENCE_CNH_HOSPITALS
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +237,16 @@ TRAVEL_PRESET_DEFS: Dict[str, Dict[str, Any]] = {
     },
     "hospital": {
         "label": "Nearest hospital",
+        # Answered from the Ministry of Health's own register rather than a
+        # billed Places search (2026-08-18, after an EUR 190 invoice). Every
+        # rule below is kept and none of it runs while this is set: they
+        # describe how to survive Google's `hospital` type, and the register
+        # has no wards, no day units, no dentists and no beauty centres to
+        # survive. They stay because removing `reference_source` -- or a
+        # listing outside the register's five provinces, if this ever grows a
+        # paid fallback -- puts that search back, and the knowledge of what it
+        # returns is expensive and hard-won. See services/reference_places.py.
+        "reference_source": REFERENCE_CNH_HOSPITALS,
         "place_types": ["hospital"],
         "require_name_patterns": _HOSPITAL_REQUIRE_NAMES,
         "reject_name_patterns": _HOSPITAL_REJECT_NAMES,
