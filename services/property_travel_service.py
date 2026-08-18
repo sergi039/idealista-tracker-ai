@@ -101,6 +101,8 @@ _BEACH_PLACE_TYPE = "natural_feature"
 _BEACH_KEYWORD = "playa"
 _BEACH_MODE = "driving"
 _BEACH_TARGET_PREFIX = "beach:"
+# The key the beaches occupy in the shared OSM spec set.
+_BEACH_TARGET_KEY = "beach"
 _BEACH_CACHE_PREFIX = "places_beaches_v1"
 
 # How long a drive still counts as "at the beach". The owner asked for 20
@@ -822,6 +824,28 @@ class PropertyTravelService:
 
         return PlaceLookup(failure=failure)
 
+    @staticmethod
+    def _osm_specs() -> Dict[str, Tuple[str, str, int]]:
+        """Every type one Overpass query asks for, for this whole service.
+
+        The presets and the beaches share it deliberately. `lookup_candidates`
+        keys its cache on the *set* of specs, so a beach lookup asking for a
+        different set would miss the entry the presets just filled and pay a
+        second round trip at the 5 s gate for data the first query already
+        returned. One set, one query, one cache entry, six answers.
+        """
+        from services.search_profile_service import TRAVEL_PRESET_DEFS
+
+        specs: Dict[str, Tuple[str, str, int]] = {}
+        for key, definition in TRAVEL_PRESET_DEFS.items():
+            declared = osm_places.osm_spec(definition)
+            if declared is not None:
+                specs[key] = declared
+        # The beaches are not a preset -- they never feed a score and they are
+        # a list rather than a nearest -- but they are the same query.
+        specs[_BEACH_TARGET_KEY] = ("natural", "beach", _BEACH_CANDIDATE_RADIUS_M)
+        return specs
+
     def _osm_place(
         self,
         lat: float,
@@ -842,8 +866,6 @@ class PropertyTravelService:
         cost no round trip. That is why the specs of *every* preset are
         collected here rather than just this one's.
         """
-        from services.search_profile_service import TRAVEL_PRESET_DEFS
-
         service = getattr(self, "enrichment_service", None)
         if service is None:
             from services.enrichment_service import EnrichmentService
@@ -851,11 +873,7 @@ class PropertyTravelService:
             service = EnrichmentService()
             self.enrichment_service = service
 
-        specs = {}
-        for key, definition in TRAVEL_PRESET_DEFS.items():
-            declared = osm_places.osm_spec(definition)
-            if declared is not None:
-                specs[key] = declared
+        specs = dict(self._osm_specs())
         specs[preset_key] = spec
 
         candidates, failure = osm_places.lookup_candidates(service, specs, lat, lon)
@@ -985,53 +1003,61 @@ class PropertyTravelService:
     def _beach_candidates(self, lat: float, lon: float) -> "BeachLookup":
         """Beaches near a property, nearest first, within the drive radius.
 
+        `natural=beach` from OpenStreetMap since 2026-08-19, in the same query
+        that answers the presets -- so the seventh and last Places call a
+        listing cost is gone and the beaches ride a cache entry that is
+        already warm by the time this runs.
+
         Only the candidates worth measuring are returned: the rest could not
         come in under the time limit whatever the roads look like, and each one
-        would be a billed Distance Matrix element.
-        """
-        cache_type = (
-            f"{_BEACH_CACHE_PREFIX}:{_BEACH_PLACE_TYPE}:"
-            f"{_BEACH_KEYWORD}:{_BEACH_RULES.signature}"
-        )
-        cached = get_cached_enrichment_data(lat, lon, cache_type)
-        if isinstance(cached, dict) and isinstance(cached.get("places"), list):
-            return BeachLookup(
-                places=[p for p in cached["places"] if isinstance(p, dict)],
-                total_found=int(cached.get("total_found") or 0),
-            )
+        is still a billed Distance Matrix element until the routing moves too.
 
-        results, failure = self._places_nearby(
-            lat, lon, place_type=_BEACH_PLACE_TYPE, keyword=_BEACH_KEYWORD
+        The Places-era rules stay and mostly idle. They exist because
+        `natural_feature` + "playa" returned campsites, hotels and beach bars
+        named after the beach; `natural=beach` is a claim about the ground, so
+        there is far less to refuse -- but a hotel mapped as a beach polygon
+        would still be refused, and removing the rules to celebrate would be
+        the kind of tidying this repository has paid for before.
+        """
+        service = getattr(self, "enrichment_service", None)
+        if service is None:
+            from services.enrichment_service import EnrichmentService
+
+            service = EnrichmentService()
+            self.enrichment_service = service
+
+        candidates, failure = osm_places.lookup_candidates(
+            service, self._osm_specs(), lat, lon
         )
         if failure is not None:
+            # Not "no beaches here": Overpass did not answer, and the four
+            # statuses in `_beaches_payload` keep those apart (#98).
             return BeachLookup(failure=failure)
 
         places: List[Dict[str, Any]] = []
         total_found = 0
-        for candidate in results:
-            if _BEACH_RULES.rejects(candidate):
-                continue
-            place = _place_from_result(candidate)
-            if place is None:
+        for candidate in (candidates or {}).get(_BEACH_TARGET_KEY) or []:
+            name = candidate.get("name")
+            if _BEACH_RULES.rejects({"name": name, "types": []}):
                 continue
             total_found += 1
-            straight_m = _haversine_m(
-                lat, lon, float(place["lat"]), float(place["lon"])
-            )
+            straight_m = int(candidate.get("distance_m") or 0)
             if straight_m > _BEACH_CANDIDATE_RADIUS_M:
                 continue
-            place["straight_m"] = int(round(straight_m))
-            places.append(place)
+            places.append(
+                {
+                    # OSM leaves many beaches unnamed; the page falls back to
+                    # "nearest beach" rather than inventing one.
+                    "name": name,
+                    "lat": candidate.get("lat"),
+                    "lon": candidate.get("lon"),
+                    "straight_m": straight_m,
+                    "source": "osm",
+                }
+            )
             if len(places) >= _BEACH_MAX_CANDIDATES:
                 break
 
-        cache_enrichment_data(
-            lat,
-            lon,
-            cache_type,
-            {"places": places, "total_found": total_found},
-            timeout=_PLACES_CACHE_TTL,
-        )
         return BeachLookup(places=places, total_found=total_found)
 
     @staticmethod

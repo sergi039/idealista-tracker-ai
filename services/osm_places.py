@@ -57,8 +57,10 @@ _CACHE_TTL_S = 60 * 60 * 24 * 30
 _CACHE_PREFIX = "osm_places_v1"
 
 # Enough for the rules to walk past what they refuse -- eleven aerodromes sit
-# within 100 km of Oviedo and the first two are refused.
-_MAX_CANDIDATES = 12
+# within 100 km of Oviedo and the first two are refused -- and enough for the
+# beaches, which are not a "nearest" lookup at all: every one within the drive
+# limit is shown, and the Places page this replaced returned twenty.
+_MAX_CANDIDATES = 20
 
 
 @dataclass
