@@ -1081,6 +1081,32 @@ and TODO.md; respect it if you ever run both side by side.
   not a rate: keep `OVERPASS_MIN_INTERVAL_S` where the measurement put it, and
   re-measure before lowering it. It costs an interactive Enrich nothing,
   because the gate is idle between presses.
+- **One public Overpass instance is a single point of failure, so there is a
+  fallback list** (2026-08-19). Measured the night the presets moved onto
+  Overpass: **overpass-api.de refused every connection from the Mac mini** --
+  `curl` from the host itself timed out at 25 s, repeatedly, for over an hour
+  -- while answering the laptop in 0.27 s. An IP-level block or throttle,
+  brought on by that evening's own free backfills, which is exactly the traffic
+  this project generates. `overpass.kumi.systems` answered the mini with 200 in
+  3.5 s throughout and `overpass.private.coffee` in 2.1 s, and both are in
+  `Config.OSM_OVERPASS_FALLBACK_URLS` now.
+  It matters more than it would have a day earlier: an Overpass refusal used to
+  cost an amenity count nobody scored, and since the presets left Places there
+  is no paid path behind them, so an instance that will not talk to this
+  machine means a listing measures nothing. Three things keep the list from
+  being worse than none. A **406 does not fall through** -- that is this
+  client's User-Agent being refused and every instance runs the same software,
+  so moving hosts repeats it and doubles the traffic; a network error, an HTTP
+  error and the `remark`-inside-a-200 do fall through, because those are one
+  instance being unreachable or loaded. The failure returned is the **first**
+  one, not the last: it names the instance the deployment is configured
+  against, and "kumi.systems timed out" sends an operator to the wrong place.
+  And the shared gate stays shared rather than becoming per host -- moving to a
+  second instance because the first is loaded is not a reason to be less polite
+  to the second. `tests/test_overpass_fallback_instance.py` pins all three.
+  The lesson underneath is worth more than the list: **this project can get
+  itself blocked by its own backfills**, and the moment a free source becomes
+  load bearing that stops being an inconvenience.
 - **Every Overpass caller reads three refusals, not one** (#144, all measured
   against the live instance): the `406` above, which also fires for a UA
   carrying a parenthetical comment; the `504` above, which needs a backoff in

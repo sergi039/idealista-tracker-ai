@@ -219,6 +219,27 @@ class Config:
 
     # OSM Overpass API
     OSM_OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+    # And where to go when that one will not talk to this machine. Measured
+    # from the Mac mini at 00:52 on 2026-08-19, while overpass-api.de was
+    # timing out on connect for this IP and answering the laptop in 0.27 s:
+    # kumi.systems 200 in 3.5 s, private.coffee 200 in 2.1 s. Every public
+    # instance rate-limits per IP, and the travel presets became a load-bearing
+    # Overpass consumer on 2026-08-18 -- one endpoint is a single point of
+    # failure for a feature that now has no paid path behind it.
+    #
+    # Order matters and is not alphabetical: the primary above stays first
+    # because it is the reference instance, and these are tried only after it
+    # refuses. Comma-separated in the environment to add or reorder without a
+    # deploy.
+    OSM_OVERPASS_FALLBACK_URLS = [
+        url.strip()
+        for url in os.environ.get(
+            "OSM_OVERPASS_FALLBACK_URLS",
+            "https://overpass.kumi.systems/api/interpreter,"
+            "https://overpass.private.coffee/api/interpreter",
+        ).split(",")
+        if url.strip()
+    ]
 
     # Sea-view estimation. Both sources are free and keyless -- Google billing
     # is off (#98) and is not needed here: the coastline comes from

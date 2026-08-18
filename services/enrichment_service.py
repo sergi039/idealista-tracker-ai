@@ -14,6 +14,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from utils.geocoding import GeocodingService
 from utils.google_api import (
     REASON_HTTP_ERROR,
+    REASON_NETWORK_ERROR,
     REASON_MALFORMED_RESPONSE,
     REASON_NO_API_KEY,
     GoogleApiFailure,
@@ -1405,19 +1406,67 @@ class EnrichmentService:
             logger.error("Failed to fetch OSM amenities", exc_info=True)
             return OsmAmenityReading(failure=failure_from_exception(exc))
 
+    # Reasons worth asking a *different* Overpass instance about. A 406 is
+    # not among them: that is this client's User-Agent being refused, and
+    # every instance runs the same software, so moving hosts would repeat it
+    # four more times for nothing (#144). A `remark` inside a 200 -- the
+    # server-side timeout -- *is*, because it means that instance is loaded.
+    _OVERPASS_TRY_ELSEWHERE = frozenset(
+        {
+            REASON_NETWORK_ERROR,
+            REASON_HTTP_ERROR,
+            REASON_MALFORMED_RESPONSE,
+            OSM_REASON_QUERY_ERROR,
+        }
+    )
+
     def _overpass_elements(self, overpass_query: str):
-        """One Overpass round-trip: elements list, or why it refused.
+        """One Overpass answer, from whichever instance gives one.
 
         Extracted from `_fetch_osm_amenities` so the supermarket-reach lookup
         below cannot grow its own transport — the gate, the User-Agent and the
         three measured refusals (#144: 406 for a bad UA, 504 while both per-IP
         slots are busy, and a `remark` inside a 200) live exactly once.
         Returns `(elements, None)` or `(None, failure)`.
+
+        Since 2026-08-19 it also walks a fallback list, because one public
+        instance is a single point of failure for a feature with no paid path
+        behind it any more. Measured that night: overpass-api.de refused every
+        connection from the Mac mini for at least an hour while answering the
+        laptop in 0.27 s, and kumi.systems and private.coffee both answered the
+        mini in seconds. The failure returned is the **first** one, not the
+        last: it describes the instance this deployment is configured to use,
+        and an operator reading "kumi.systems timed out" would go looking in
+        the wrong place.
+
+        The shared gate is not per host on purpose. It paces *our* traffic,
+        and moving to a second instance because the first is loaded is not a
+        reason to become less polite to the second.
         """
+        first_failure = None
+        urls = [self.osm_overpass_url] + [
+            url
+            for url in getattr(Config, "OSM_OVERPASS_FALLBACK_URLS", [])
+            if url and url != self.osm_overpass_url
+        ]
+        for index, url in enumerate(urls):
+            elements, failure = self._overpass_elements_from(url, overpass_query)
+            if failure is None:
+                if index:
+                    logger.info("Overpass answered from the fallback %s", url)
+                return elements, None
+            if first_failure is None:
+                first_failure = failure
+            if failure.reason not in self._OVERPASS_TRY_ELSEWHERE:
+                break
+        return None, first_failure
+
+    def _overpass_elements_from(self, url: str, overpass_query: str):
+        """One round trip to one instance."""
         try:
             response = request_with_retries(
                 requests.post,
-                self.osm_overpass_url,
+                url,
                 data=overpass_query,
                 headers={
                     "Content-Type": "application/x-www-form-urlencoded",
