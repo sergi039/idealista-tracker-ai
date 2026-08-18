@@ -65,6 +65,40 @@ def app():
         cache.clear()
 
 
+def _osm_refuses(reason="overpass_refused"):
+    """Make the OSM preset lookup refuse, the way Overpass really can.
+
+    The presets stopped asking Google on 2026-08-18 (services/osm_places.py),
+    so a scenario about "the place lookup refused" has to refuse where the
+    lookup now happens. What is pinned is unchanged and is the whole point of
+    #98: a refusal is reported as `unavailable`, never as `not_found`, because
+    "nobody answered" and "there is nothing there" are different facts and
+    only the second may be stored as a result.
+    """
+    import services.osm_places as osm_places
+    from utils.google_api import GoogleApiFailure
+
+    osm_places.lookup_candidates = lambda service, specs, lat, lon: (
+        None,
+        GoogleApiFailure(reason=reason),
+    )
+
+
+def _osm_answers(candidates):
+    """Make the OSM preset lookup answer with these candidates per preset.
+
+    The counterpart of `_osm_refuses`: a preset with an empty list is
+    "Overpass replied and there is nothing of that type here", which is the
+    measured absence #98 exists to keep apart from a refusal.
+    """
+    import services.osm_places as osm_places
+
+    osm_places.lookup_candidates = lambda service, specs, lat, lon: (
+        {key: list(candidates.get(key) or []) for key in specs},
+        None,
+    )
+
+
 def _make_profile(enabled_presets, custom=None):
     presets = {
         key: {"enabled": key in enabled_presets, "mode": "driving"}
@@ -168,6 +202,7 @@ class TestTravelRefusalIsNotAResult:
     def test_request_denied_returns_false_and_marks_targets_unavailable(
         self, app, caplog
     ):
+        _osm_refuses()
         profile = _make_profile(
             {"airport", "supermarket"},
             custom=[
@@ -206,8 +241,10 @@ class TestTravelRefusalIsNotAResult:
         assert "not_found" not in statuses.values()
 
         targets = refreshed.travel["targets"]
-        assert targets["airport"]["error"] == REASON_REQUEST_DENIED
-        assert targets["airport"]["stage"] == "places"
+        # The preset lookup left Google on 2026-08-18; what refused it here is
+        # Overpass, and the reason it carries is Overpass's own. What is under
+        # test is unchanged: a refusal is `unavailable`, never `not_found`.
+        assert targets["airport"]["error"] == "overpass_refused"
         assert targets["custom:home"]["error"] == REASON_REQUEST_DENIED
         assert targets["custom:home"]["stage"] == "distance_matrix"
 
@@ -215,11 +252,22 @@ class TestTravelRefusalIsNotAResult:
         assert api_status["state"] == TRAVEL_STATE_UNAVAILABLE
         assert api_status["targets"]["resolved"] == 0
         assert api_status["targets"]["not_found"] == 0
-        assert api_status["errors"] == {REASON_REQUEST_DENIED: 3}
+        # Two presets refused by Overpass, one custom target refused by
+        # Distance Matrix, which is still Google's. The tally counts
+        # reasons, and after 2026-08-18 the run really does have two
+        # sources of refusal -- flattening them to one would hide which
+        # half is down when only one of them is.
+        assert api_status["errors"] == {
+            "overpass_refused": 2,
+            REASON_REQUEST_DENIED: 1,
+        }
 
         errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert len(errors) == 1, "the refusal must be logged exactly once per run"
-        assert "REQUEST_DENIED" in errors[0].getMessage()
+        # The line names the reasons, not a vendor: the presets are
+        # Overpass's now and only the routing is Google's, so "could not reach
+        # Google" would point whoever reads it at the wrong status page.
+        assert "overpass_refused" in errors[0].getMessage()
         assert str(prop.id) in errors[0].getMessage()
 
     def test_refusal_is_not_cached_as_an_empty_result(self, app):
@@ -268,6 +316,7 @@ class TestTravelRefusalIsNotAResult:
 
     def test_places_denied_while_distance_matrix_answers_is_degraded(self, app, caplog):
         """The 2026-08-08 configuration: one key works, the other does not."""
+        _osm_refuses()
         profile = _make_profile(
             {"airport"},
             custom=[
@@ -307,7 +356,14 @@ class TestTravelRefusalIsNotAResult:
         refreshed = db.session.get(Property, prop.id)
         targets = refreshed.travel["targets"]
         assert targets["airport"]["status"] == "unavailable"
-        assert targets["airport"]["error"] == REASON_REQUEST_DENIED
+        # Overpass refused the preset; Distance Matrix answered. The scenario
+        # is the same shape it was on 2026-08-08 -- one source down, one up,
+        # and the run reports `degraded` rather than success or failure --
+        # only the down half is Overpass now.
+        assert targets["airport"]["error"] == "overpass_refused"
+        # `stage` names the step that failed, not the vendor that ran it:
+        # the place-resolution stage is still "places" now that OSM does
+        # the resolving, and renaming it would break every stored row.
         assert targets["airport"].get("stage") == "places"
         assert targets["custom:home"]["status"] == "ok"
         assert targets["custom:home"]["duration_min"] == 10
@@ -324,10 +380,29 @@ class TestTravelRefusalIsNotAResult:
 
         errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert len(errors) == 1
-        assert "REQUEST_DENIED" in errors[0].getMessage()
+        # The line names the reasons, not a vendor: the presets are
+        # Overpass's now and only the routing is Google's, so "could not reach
+        # Google" would point whoever reads it at the wrong status page.
+        assert "overpass_refused" in errors[0].getMessage()
 
     def test_answered_but_nothing_nearby_is_still_a_success(self, app, caplog):
         """Control: a real "nothing there" must keep working exactly as before."""
+        # Both presets come from OpenStreetMap since 2026-08-18, so the control
+        # is expressed there: an airport within reach, and no station.
+        _osm_answers(
+            {
+                "airport": [
+                    {
+                        "name": "Aeropuerto de Asturias",
+                        "lat": 43.56,
+                        "lon": -6.03,
+                        "distance_m": 30000,
+                        "source": "osm",
+                    }
+                ],
+                "train_station": [],
+            }
+        )
         profile = _make_profile({"airport", "train_station"})
         prop = _make_property(profile, "issue98_zero_results")
 
@@ -370,6 +445,9 @@ class TestTravelRefusalIsNotAResult:
         assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
     def test_http_error_is_unavailable_not_not_found(self, app):
+        # Overpass answers 504 whenever both of its per-IP slots are busy, so
+        # an HTTP error is if anything more likely here than it was at Google.
+        _osm_refuses(REASON_HTTP_ERROR)
         profile = _make_profile({"airport"})
         prop = _make_property(profile, "issue98_http_500")
 
@@ -391,6 +469,10 @@ class TestTravelRefusalIsNotAResult:
         assert refreshed.travel["targets"]["airport"]["error"] == REASON_HTTP_ERROR
 
     def test_network_error_is_unavailable_not_not_found(self, app):
+        # Overpass can fail exactly this way, so the scenario survives the
+        # move off Places unchanged -- only the host that drops the connection
+        # is different.
+        _osm_refuses(REASON_NETWORK_ERROR)
         profile = _make_profile({"airport"})
         prop = _make_property(profile, "issue98_network")
 
@@ -409,6 +491,13 @@ class TestTravelRefusalIsNotAResult:
         assert refreshed.travel["targets"]["airport"]["error"] == REASON_NETWORK_ERROR
 
     def test_missing_places_key_is_unavailable_not_not_found(self, app):
+        # The presets stopped needing a Places key on 2026-08-18: they are
+        # answered from OpenStreetMap, which has none. What the key still
+        # governs is the beach lookup, which is Google's until step 2 finishes.
+        # The #98 guarantee under test is unchanged -- a lookup that could not
+        # be made is `unavailable`, never `not_found` -- so the scenario keeps
+        # its shape and refuses where the preset lookup now happens.
+        _osm_refuses(REASON_NO_API_KEY)
         profile = _make_profile({"airport"})
         prop = _make_property(profile, "issue98_no_key")
 
@@ -426,6 +515,7 @@ class TestTravelRefusalIsNotAResult:
         assert refreshed.travel["targets"]["airport"]["error"] == REASON_NO_API_KEY
 
     def test_refused_run_does_not_discard_previous_travel_times(self, app):
+        _osm_refuses()
         profile = _make_profile({"airport"})
         prop = _make_property(profile, "issue98_preserve")
         prop.travel = {

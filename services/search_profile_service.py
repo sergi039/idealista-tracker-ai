@@ -207,6 +207,16 @@ _SUPERMARKET_REJECT_NAMES = [
 TRAVEL_PRESET_DEFS: Dict[str, Dict[str, Any]] = {
     "airport": {
         "label": "Nearest airport",
+        # OSM answers this preset now (services/osm_places.py). 100 km is
+        # deliberate and only possible here: Overpass has no radius cap, so
+        # Cariño resolves A Coruña at 64.3 km in the same query the local
+        # aerodromes arrive in -- which is exactly what `wide_search_query`
+        # below had to buy a second *paid* Places call for (#254). The name
+        # rules do the rest: measured on six production coordinates they
+        # refuse every `aeroway=aerodrome` aeroclub and light-aircraft field
+        # (La Morgal, Tineo, Arnao) and accept the two real airports.
+        "osm_tag": "aeroway=aerodrome",
+        "osm_radius_m": 100_000,
         "place_types": ["airport"],
         "require_name_patterns": _AIRPORT_REQUIRE_NAMES,
         "reject_name_patterns": _AIRPORT_REJECT_NAMES,
@@ -233,6 +243,8 @@ TRAVEL_PRESET_DEFS: Dict[str, Dict[str, Any]] = {
     },
     "train_station": {
         "label": "Nearest train station",
+        "osm_tag": "railway=station",
+        "osm_radius_m": 30_000,
         "place_types": ["train_station"],
     },
     "hospital": {
@@ -274,14 +286,29 @@ TRAVEL_PRESET_DEFS: Dict[str, Dict[str, Any]] = {
         # others.
         "wide_search_query": "hospital",
     },
-    "police": {"label": "Nearest police station", "place_types": ["police"]},
+    "police": {
+        "label": "Nearest police station",
+        # Google answered this one with "Traffic radar" (property 101) and
+        # with a private security firm (property 67). `amenity=police` is a
+        # claim about what the building is.
+        "osm_tag": "amenity=police",
+        "osm_radius_m": 30_000,
+        "place_types": ["police"],
+    },
     "supermarket": {
         "label": "Nearest supermarket",
+        "osm_tag": "shop=supermarket",
+        "osm_radius_m": 15_000,
         "place_types": ["supermarket"],
         "reject_name_patterns": _SUPERMARKET_REJECT_NAMES,
         "reject_types": _SUPERMARKET_REJECT_TYPES,
     },
-    "school": {"label": "Nearest school", "place_types": ["school"]},
+    "school": {
+        "label": "Nearest school",
+        "osm_tag": "amenity=school",
+        "osm_radius_m": 15_000,
+        "place_types": ["school"],
+    },
 }
 
 

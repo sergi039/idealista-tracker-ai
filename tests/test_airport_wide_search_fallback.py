@@ -38,6 +38,22 @@ from app import create_app, db  # noqa: E402
 from models import Property, SearchProfile  # noqa: E402
 from services.property_travel_service import PropertyTravelService  # noqa: E402
 from services.search_profile_service import TRAVEL_PRESET_DEFS  # noqa: E402
+
+
+# Since 2026-08-18 these presets are answered from OpenStreetMap
+# (services/osm_places.py, step 2 of the cost plan), so the Google path this
+# file pins is not what production runs any more. It is one deleted `osm_tag`
+# away from being live again, and what it knows -- the refusal semantics, the
+# rules walk, the wide fallback -- cost several tickets, so the tests keep it
+# and say which path they are on rather than being deleted with the bill.
+def _google_path(preset_key: str) -> dict:
+    spec = dict(TRAVEL_PRESET_DEFS[preset_key])
+    spec.pop("osm_tag", None)
+    spec.pop("osm_radius_m", None)
+    spec.pop("reference_source", None)
+    return spec
+
+
 from utils.google_api import REASON_REQUEST_DENIED  # noqa: E402
 
 
@@ -147,7 +163,7 @@ class TestTheWideSearchFallback:
             side_effect=_capture,
         ):
             lookup = service._nearest_place_for_preset(
-                43.551663, -6.831426, "airport", TRAVEL_PRESET_DEFS["airport"]
+                43.551663, -6.831426, "airport", _google_path("airport")
             )
 
         assert lookup.place is not None
@@ -183,7 +199,7 @@ class TestTheWideSearchFallback:
             side_effect=_mixed,
         ):
             lookup = service._nearest_place_for_preset(
-                43.551663, -6.831426, "airport", TRAVEL_PRESET_DEFS["airport"]
+                43.551663, -6.831426, "airport", _google_path("airport")
             )
 
         assert lookup.place["name"] == "Asturias Airport"
@@ -208,7 +224,7 @@ class TestTheWideSearchFallback:
             side_effect=_count,
         ):
             lookup = service._nearest_place_for_preset(
-                43.551663, -6.831426, "airport", TRAVEL_PRESET_DEFS["airport"]
+                43.551663, -6.831426, "airport", _google_path("airport")
             )
 
         assert lookup.place["name"] == "Ribadeo Airport"
@@ -229,7 +245,7 @@ class TestTheWideSearchFallback:
             side_effect=_denied,
         ):
             lookup = service._nearest_place_for_preset(
-                43.551663, -6.831426, "airport", TRAVEL_PRESET_DEFS["airport"]
+                43.551663, -6.831426, "airport", _google_path("airport")
             )
 
         assert lookup.place is None
@@ -249,7 +265,8 @@ class TestTheWideSearchFallback:
         reason "airport" does, and `tests/test_hospital_wide_search_fallback.py`
         holds that measurement."""
         service = _service()
-        place_type = TRAVEL_PRESET_DEFS[preset]["place_types"][0]
+        preset_def = _google_path(preset)
+        place_type = preset_def["place_types"][0]
         call_count = {"n": 0}
 
         def _count(_fn, url, **_kwargs):
@@ -263,7 +280,7 @@ class TestTheWideSearchFallback:
             side_effect=_count,
         ):
             lookup = service._nearest_place_for_preset(
-                43.551663, -6.831426, preset, TRAVEL_PRESET_DEFS[preset]
+                43.551663, -6.831426, preset, preset_def
             )
 
         assert lookup.place is None
@@ -277,6 +294,42 @@ class TestEndToEndPersistedTravel:
     what the property page actually renders."""
 
     def test_calculate_for_property_persists_the_real_airport(self, app):
+        """End to end, on the path production actually takes.
+
+        Until 2026-08-18 this ran through Nearby Search and the wide Text
+        Search fallback above. It cannot any more: the preset is answered from
+        OpenStreetMap (`services/osm_places.py`), which has no 50 km cap and
+        therefore no fallback to reach past one, and a preset answered from
+        OSM never falls through to a paid search by design. The *unit* tests
+        above still exercise the Google machinery through `_google_path`,
+        because one deleted `osm_tag` puts it back. What this test now proves
+        is that the airport a listing ends up storing is the real airport --
+        Asturias at 64 km rather than the aerodrome at 9 -- which is the
+        measurement #254 was written for, on whichever path delivers it.
+        """
+        import services.osm_places as osm_places
+
+        osm_places.lookup_candidates = lambda service, specs, lat, lon: (
+            {
+                "airport": [
+                    {
+                        "name": "Aeródromo de La Morgal",
+                        "lat": 43.42,
+                        "lon": -5.83,
+                        "distance_m": 9200,
+                        "source": "osm",
+                    },
+                    {
+                        "name": "Aeropuerto de Asturias",
+                        "lat": 43.5636,
+                        "lon": -6.0348,
+                        "distance_m": 64300,
+                        "source": "osm",
+                    },
+                ]
+            },
+            None,
+        )
         profile = SearchProfile(
             name="WideSearchProfile",
             is_active=True,
@@ -341,7 +394,10 @@ class TestEndToEndPersistedTravel:
         assert airport["status"] == "ok", (
             f"must resolve rather than read 'not_found': {airport!r}"
         )
-        assert airport["place"]["name"] == "Asturias Airport"
+        # OSM carries the official Spanish name where Google returned the
+        # English one. Same airport, same coordinate, same 64 km.
+        assert airport["place"]["name"] == "Aeropuerto de Asturias"
+        assert airport["place"]["source"] == "osm"
         assert airport["duration_min"] == 60
 
         api_status = refreshed.travel["api_status"]
