@@ -66,6 +66,17 @@ FAR_AWAY = _place("Playa del Silencio", 43.564, -6.187, "PLACE_SILENCIO")
 ORIGIN = (43.520, -5.400)
 
 
+def _haversine_m(lat1, lon1, lat2, lon2):
+    import math
+
+    r = 6371000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = p2 - p1
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
 class _Recorder:
     """Stands in for both Google calls, and remembers what was asked."""
 
@@ -77,13 +88,50 @@ class _Recorder:
         self.text_searches = []
 
     def places_nearby(self, lat, lon, place_type, keyword=None):
-        if keyword == "playa":
-            if self.failure is not None:
-                return [], self.failure
-            return list(self.beaches), None
-        # Every preset answers "nothing of this type nearby": a real answer, so
-        # the run stays `ok` and only the beaches are under test here.
-        return [], None
+        """Nothing reaches Places any more; kept so a regression is loud.
+
+        Both the presets and the beaches moved to OpenStreetMap (2026-08-18 and
+        2026-08-19). If a call lands here again it is a paid one, and this
+        suite should say so rather than quietly serving it.
+        """
+        raise AssertionError(f"a paid Places call was made: {place_type}/{keyword}")
+
+    def osm_lookup(self, service, specs, lat, lon):
+        """Stands in for `services.osm_places.lookup_candidates`.
+
+        The beaches this suite is about, and "Overpass answered, nothing of
+        that type here" for every preset -- so the run stays `ok` and only the
+        beaches are under test, which is what the Places stub did before.
+        """
+        if self.failure is not None:
+            return None, self.failure
+        found = {key: [] for key in specs}
+        if "beach" not in specs:
+            # The production spec set is what decides whether the beaches ride
+            # this query at all. A recorder that answers with beaches nobody
+            # asked for would keep this suite green while the beaches quietly
+            # went back to a paid Places call -- which is exactly what the
+            # first version of it did.
+            return found, None
+        found["beach"] = [
+            {
+                "name": place["name"],
+                "lat": place["geometry"]["location"]["lat"],
+                "lon": place["geometry"]["location"]["lng"],
+                "distance_m": int(
+                    _haversine_m(
+                        lat,
+                        lon,
+                        place["geometry"]["location"]["lat"],
+                        place["geometry"]["location"]["lng"],
+                    )
+                ),
+                "source": "osm",
+            }
+            for place in self.beaches
+        ]
+        found["beach"].sort(key=lambda item: item["distance_m"])
+        return found, None
 
     def text_search(self, lat, lon, query, place_types, reject=None):
         """The airport preset's wide-search fallback, answering "nothing".
@@ -118,6 +166,10 @@ class _Recorder:
 
 
 def _service(monkeypatch, recorder):
+    import services.osm_places as osm_places
+
+    monkeypatch.setattr(osm_places, "lookup_candidates", recorder.osm_lookup)
+
     service = PropertyTravelService(
         google_maps_key="test-maps-key", google_places_key="test-places-key"
     )
@@ -284,17 +336,46 @@ class TestARefusalIsNeverAnAbsence:
 
 
 class TestBeachesDoNotSwayTheTravelVerdict:
-    def test_a_refused_beach_lookup_leaves_the_run_ok(self, app, monkeypatch):
-        """No score reads a beach, so one must not degrade the run (#153's rule
-        applied the other way round: advisory sources cannot fail a run)."""
+    def test_beaches_add_no_failure_of_their_own(self, app, monkeypatch):
+        """The invariant survives the move to OSM, in the only form it can.
+
+        Until 2026-08-19 the beaches were a separate Places call, so a beach
+        refusal could arrive while the presets were fine -- and the rule was
+        that it must not degrade the run, because no score reads a beach
+        (#153's rule the other way round: an advisory source cannot fail a
+        run).
+
+        The beaches now ride the presets' own Overpass query, and that scenario
+        cannot occur: one query either answers for everything or refuses for
+        everything. So the invariant is asserted where it still has content --
+        the beaches contribute **nothing** to the target tally either way, and
+        the run's verdict is whatever the presets alone make it. A refusal here
+        is reported as `unavailable` and never as "no beach nearby" (#98).
+        """
         recorder = _Recorder(failure=GoogleApiFailure(reason="over_query_limit"))
         prop = _listing("verdict", lat=43.529)
         ok, beaches = _run(app, monkeypatch, recorder, prop)
 
+        assert beaches["status"] == "unavailable"
+        # Six declared types went into that query and five of them are presets;
+        # the sixth, the beaches, is not counted among the targets at all.
+        assert prop.travel["api_status"]["targets"]["unavailable"] == 5
+        assert not any(
+            key.startswith("beach:") for key in (prop.travel.get("targets") or {})
+        )
+        # What the presets make of it is the presets' business; what matters
+        # here is that the beaches did not add to it.
+        assert prop.travel["api_status"]["state"] in ("degraded", "unavailable")
+
+    def test_a_beachless_coast_leaves_the_run_ok(self, app, monkeypatch):
+        """The other half: Overpass answering with no beach is not a failure."""
+        recorder = _Recorder(beaches=[])
+        prop = _listing("beachless", lat=43.529)
+        ok, beaches = _run(app, monkeypatch, recorder, prop)
+
         assert ok is True
         assert prop.travel["api_status"]["state"] == "ok"
-        assert prop.travel["api_status"]["targets"]["unavailable"] == 0
-        assert beaches["status"] == "unavailable"
+        assert beaches["status"] in ("not_found", "none_within_limit")
 
     def test_beaches_stay_out_of_the_scored_targets(self, app, monkeypatch):
         recorder = _Recorder(beaches=[RODILES], durations={"beach:0": (5200, 7)})

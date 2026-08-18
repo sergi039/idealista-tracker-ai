@@ -412,7 +412,19 @@ measured at all (a road is never shorter than that, so the
 rest cannot come in under the limit and paying for them is waste). The four
 statuses — `ok`, `none_within_limit`, `not_found`, `unavailable` — exist for the
 #98 reason: only a *measured* absence hides the block, and a refusal still
-renders, saying it was not measured. `natural_feature` + keyword `playa` is the
+renders, saying it was not measured. **The beaches come from `natural=beach` in OpenStreetMap since 2026-08-19**,
+in the same Overpass query that answers the presets -- so the seventh and last
+Places call a listing cost is gone, and the beaches read a cache entry the
+presets have already filled. One consequence is worth knowing before it
+surprises someone: sharing the query couples the two, so a refusal now refuses
+both. The rule "a beach must never turn a good travel run into a degraded one"
+survives in the only form it still has content in -- the beaches contribute
+nothing to the target tally, and the run's verdict is whatever the presets
+alone make it -- because the old scenario, a beach lookup failing while the
+presets are fine, cannot occur when one query answers for all six. The
+Places-era rules stay and mostly idle: they exist because `natural_feature` +
+"playa" returned campsites and beach bars, and a claim about the ground has far
+less to refuse. `natural_feature` + keyword `playa` was the
 Places pair, measured against the live API on 2026-08-11: it returns real
 beaches in Asturias *and* in Galicia (where they are named "Praia"), while the
 legacy `tourist_attraction` + `playa` pair returned a fountain, a swimming pool
