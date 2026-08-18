@@ -2312,7 +2312,6 @@ def recalculate_profile_travel(profile_id: int):
         properties = query.order_by(Property.created_at.desc()).limit(limit).all()
 
         from services.property_travel_service import (
-            TRAVEL_STATE_APPROXIMATE_ORIGIN,
             TRAVEL_STATE_UNAVAILABLE,
             PropertyTravelService,
             travel_api_state,
@@ -2321,16 +2320,20 @@ def recalculate_profile_travel(profile_id: int):
         service = PropertyTravelService()
         updated = 0
         api_refused = 0
-        approximate_origin = 0
+        not_located = 0
         for prop in properties:
             try:
                 if service.calculate_for_property(prop, commit=True):
                     updated += 1
-                elif travel_api_state(prop) == TRAVEL_STATE_APPROXIMATE_ORIGIN:
-                    # Nothing was asked of Google and nothing failed: the row
-                    # has no coordinate worth routing from. Counting it as a
-                    # refusal would send the operator hunting an outage.
-                    approximate_origin += 1
+                elif prop.location_lat is None or prop.location_lon is None:
+                    # The run stopped before any request: geocoding could not
+                    # place this listing, so there was no point to route from.
+                    # Counting it as a refusal would send the operator hunting
+                    # a Google outage that did not happen. (Until 2026-08-17 a
+                    # *locality centroid* was counted here too; travel measures
+                    # from one now, so the only row left unmeasured is one with
+                    # no coordinate at all.)
+                    not_located += 1
                 elif travel_api_state(prop) == TRAVEL_STATE_UNAVAILABLE:
                     api_refused += 1
             except Exception as inner:
@@ -2343,10 +2346,10 @@ def recalculate_profile_travel(profile_id: int):
         # A run where Google refused everything used to flash the same green
         # count as a real one (#98); the refusals get their own number now.
         summary = f"Recalculated travel for {updated} / {len(properties)} properties"
-        if approximate_origin:
+        if not_located:
             summary += (
-                f"; {approximate_origin} not measured (approximate location — "
-                "re-geocode first)"
+                f"; {not_located} not measured (no coordinate — geocoding could "
+                "not place the listing)"
             )
         if api_refused:
             summary += f"; {api_refused} skipped because Google was unavailable"
@@ -2357,7 +2360,7 @@ def recalculate_profile_travel(profile_id: int):
                 api_refused,
                 len(properties),
             )
-        flash(summary, "warning" if (api_refused or approximate_origin) else "success")
+        flash(summary, "warning" if (api_refused or not_located) else "success")
         return redirect(
             safe_referrer_redirect(url_for("main.properties", profile_id=profile_id))
         )
