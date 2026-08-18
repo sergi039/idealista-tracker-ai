@@ -30,6 +30,20 @@
             </div>
         {% endif %}
 
+        {# The same disclosure /properties makes under its subscription menu:
+           these markers are not on the map, and the owner is the one who
+           asked for that. Without it a map missing several subscriptions
+           looks like a map of everything. #}
+        {% if hidden_subscription_note %}
+            <div class="alert alert-light border py-2 px-3 small text-body-secondary" id="hidden-subscriptions-note">
+                <i class="fas fa-eye-slash me-1"></i>{{ hidden_subscription_note.profiles }} hidden
+                subscription{{ '' if hidden_subscription_note.profiles == 1 else 's' }}
+                ({{ hidden_subscription_note.listings }} listing{{ '' if hidden_subscription_note.listings == 1 else 's' }})
+                not shown &middot;
+                <a href="{{ url_for('main.profiles') }}">manage</a>
+            </div>
+        {% endif %}
+
         {# The caller asked for one listing and the map does not hold it. The
            script below falls back to fitting every marker, which is
            indistinguishable from a map that just did not zoom -- so the page

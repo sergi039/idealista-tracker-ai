@@ -182,6 +182,42 @@ your own, the cheap way out is a `git worktree` with its own
 `COMPOSE_CONTAINER_PREFIX` and `APP_HOST_PORT` (docs/DEV_RULES.md), not a
 build of the shared tree.
 
+**`git add -A` takes the same snapshot the build does, and commits it.**
+Everything above is about `COPY . .`; this is the same hazard through git, and
+it is easier to walk into because a commit feels like a smaller act than a
+deploy. Measured 2026-08-17: a commit whose own content was two files carried
+eight more — `migrations/020_add_search_profile_is_hidden.sql`, `models.py`,
+`routes/main_routes.py`, `services/search_profile_service.py`, three templates
+and `utils/i18n.py` — another session's half-finished feature, swept up by one
+`git add -A` and pushed to a PR.
+
+**What caught it was CI, and not for the reason you would hope.** No reviewer
+read the diff and noticed foreign files; `tests/test_postgres_migrations.py`
+compares the exact list of migration files and refused a `020` that is not on
+`main`. A test about migrations found a commit-hygiene defect, which means the
+same mistake in files that migration test does not see would have merged. So
+the check has to be yours and it has to happen before the commit: **read `git
+status` before `git add`, and add by path.** `git commit -a` is the same trap
+with fewer characters.
+
+The repair, if it has already happened, keeps the other session's work: `git
+reset --soft HEAD~1` then `git reset` leaves every change in the working tree
+exactly as it was, and you re-add your own files by name. Force-push is fine on
+your own branch and is what removes the foreign files from the remote; check
+afterwards that they are still in the tree, because the point is that nobody
+loses anything.
+
+Two more things this costs that are not obvious. **A `git merge` of `main` can
+be impossible while another session holds uncommitted edits to the same
+files** — git refuses rather than overwrite them, which is correct and leaves
+you unable to update a branch that protected `main` requires to be current. Do
+the merge in a `git worktree`, the same escape the paragraph above offers for
+builds. And **a squash-merged branch conflicts with its own follow-up**: a
+branch cut before the squash landed carries the same file as an unrelated
+`add/add`, and the resolution is your version, since it is the squashed one
+plus whatever you fixed since — verify that by diffing the two rather than
+assuming it.
+
 **There is exactly one listing surface: `/properties`** (owner decision,
 2026-08-09, superseding the 2026-08-08 one that kept `/lands` as a second,
 archived page). `/`, the navbar and `/lands` itself all lead there, and that
@@ -1277,12 +1313,31 @@ and TODO.md; respect it if you ever run both side by side.
   lock file, live pid or dead (#319) — because a tool calling a state "safe"
   that the supervisor calls "stop" is how two of them come to disagree about
   one file.
-  It answers; it does not enforce. So sessions sharing this machine still
-  announce a `utils.backfill_*` / `utils.recalc_*` — or any hand-run
-  `docker exec` that writes `enrichment` — before starting it, naming the
-  module, the rows and the cost. That is a protocol, not a guarantee: it holds
-  while every writer is listening, and the next one may not be in the
-  conversation at all.
+  It answers; it does not enforce — the daemon cannot stop you, and that is
+  exactly why **`busy` and `unknown` are a stop, not an input to a judgement**
+  (owner decision 2026-08-17). Wait, and say you are waiting. Do not weigh
+  whether the two jobs touch different `enrichment` keys, whether your own run
+  is cheap, or whether the other one looks stuck on a timeout and "is not doing
+  anything anyway" — you cannot know when it resumes, and the session running
+  it is very likely not in your conversation.
+
+  That sentence exists because the door was walked through the day it was
+  written. A session shipped this feature's two backfills over a running
+  `backfill_quality_of_life`, twice, each time having first checked the thing
+  that made it safe: both writers reach `enrichment` through
+  `services/enrichment_write.locked_write` under `FOR UPDATE`, they write
+  different keys, the lock spans milliseconds rather than the network calls,
+  and the second run made one request and one write. All of that was true, no
+  measurement was lost, and none of it is the point. The rule protects the case
+  nobody thought to check, and "I read the other job's code and it is fine" is
+  the shape of reasoning #339 and #338 were written about. Only an explicit
+  owner command to start anyway overrides it.
+
+  Sessions sharing this machine still announce a `utils.backfill_*` /
+  `utils.recalc_*` — or any hand-run `docker exec` that writes `enrichment` —
+  before starting it, naming the module, the rows and the cost. That is a
+  protocol, not a guarantee: it holds while every writer is listening, and the
+  next one may not be in the conversation at all.
 - **A deploy is healthy when a page renders, not when healthz answers** (#283).
   `/api/healthz` reports database, scheduler and schema and renders no
   template, so it stayed green through the 15 minutes of 2026-08-14 in which a
