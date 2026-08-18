@@ -36,11 +36,10 @@
            looks like a map of everything. #}
         {% if hidden_subscription_note %}
             <div class="alert alert-light border py-2 px-3 small text-body-secondary" id="hidden-subscriptions-note">
-                <i class="fas fa-eye-slash me-1"></i>{{ hidden_subscription_note.profiles }} hidden
-                subscription{{ '' if hidden_subscription_note.profiles == 1 else 's' }}
-                ({{ hidden_subscription_note.listings }} listing{{ '' if hidden_subscription_note.listings == 1 else 's' }})
-                not shown &middot;
-                <a href="{{ url_for('main.profiles') }}">manage</a>
+                <i class="fas fa-eye-slash me-1"></i>{{ t('not_shown_prefix') }}:
+                {{ tn('hidden_subscriptions_count', hidden_subscription_note.profiles) }}
+                ({{ tn('listings_count', hidden_subscription_note.listings) }}) &middot;
+                <a href="{{ url_for('main.profiles') }}">{{ t('manage') }}</a>
             </div>
         {% endif %}
 
