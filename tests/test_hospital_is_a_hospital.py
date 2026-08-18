@@ -37,6 +37,22 @@ from services.property_travel_service import (  # noqa: E402
 )
 from services.search_profile_service import TRAVEL_PRESET_DEFS  # noqa: E402
 
+
+# The shipped hospital preset is answered from the national register since
+# 2026-08-18 (services/reference_places.py), so `_nearest_place_for_preset`
+# never reaches Google for it. Everything this file pins is still shipped and
+# still load bearing -- the name rules, the ward and day-unit refusals, the
+# cache signature, the wide fallback -- because they are what the Google path
+# does, and that path is one deleted `reference_source` away from being live
+# again. So these tests exercise the preset *as it behaves without the
+# register*, and say so, rather than being deleted along with the bill they
+# were written about.
+def _google_path(preset_key: str) -> dict:
+    spec = dict(TRAVEL_PRESET_DEFS[preset_key])
+    spec.pop("reference_source", None)
+    return spec
+
+
 SALAMIR_LAT, SALAMIR_LON = 43.568817, -6.211955
 
 
@@ -53,7 +69,7 @@ def app():
 
 
 def _rules():
-    rules = _place_rules(TRAVEL_PRESET_DEFS["hospital"])
+    rules = _place_rules(_google_path("hospital"))
     assert rules is not None, "the hospital preset must declare place rules"
     return rules
 
@@ -145,7 +161,7 @@ class TestTheSalamirCase:
                     SALAMIR_LAT,
                     SALAMIR_LON,
                     "hospital",
-                    TRAVEL_PRESET_DEFS["hospital"],
+                    _google_path("hospital"),
                 )
 
         assert lookup.place is not None
@@ -279,7 +295,7 @@ class TestNothingQualifyingIsNotFoundAndNotZero:
                     SALAMIR_LAT,
                     SALAMIR_LON,
                     "hospital",
-                    TRAVEL_PRESET_DEFS["hospital"],
+                    _google_path("hospital"),
                 )
 
         assert lookup.place is None, "a refused clinic must not become the hospital"
@@ -310,7 +326,7 @@ class TestNothingQualifyingIsNotFoundAndNotZero:
                         SALAMIR_LAT,
                         SALAMIR_LON,
                         "hospital",
-                        TRAVEL_PRESET_DEFS["hospital"],
+                        _google_path("hospital"),
                     )
 
         assert written == [], "a refusal must not be cached as a measurement"
@@ -344,7 +360,7 @@ class TestTheRulesChangeInvalidatesTheOldCache:
                 return_value=_Response(),
             ):
                 service._nearest_place_for_preset(
-                    SALAMIR_LAT, SALAMIR_LON, "hospital", TRAVEL_PRESET_DEFS["hospital"]
+                    SALAMIR_LAT, SALAMIR_LON, "hospital", _google_path("hospital")
                 )
 
         assert seen and seen[0] != "places_nearest_v1:hospital", (

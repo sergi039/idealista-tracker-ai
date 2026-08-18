@@ -41,6 +41,22 @@ from services.place_rules import place_rules_from  # noqa: E402
 from services.property_travel_service import PropertyTravelService  # noqa: E402
 from services.search_profile_service import TRAVEL_PRESET_DEFS  # noqa: E402
 
+
+# The shipped hospital preset is answered from the national register since
+# 2026-08-18 (services/reference_places.py), so `_nearest_place_for_preset`
+# never reaches Google for it. Everything this file pins is still shipped and
+# still load bearing -- the name rules, the ward and day-unit refusals, the
+# cache signature, the wide fallback -- because they are what the Google path
+# does, and that path is one deleted `reference_source` away from being live
+# again. So these tests exercise the preset *as it behaves without the
+# register*, and say so, rather than being deleted along with the bill they
+# were written about.
+def _google_path(preset_key: str) -> dict:
+    spec = dict(TRAVEL_PRESET_DEFS[preset_key])
+    spec.pop("reference_source", None)
+    return spec
+
+
 OVIEDO_LAT, OVIEDO_LON = 43.3622522, -5.8485461
 
 
@@ -103,7 +119,7 @@ class _Response:
 
 class TestThePresetOptsIntoTheWideSearch:
     def test_the_hospital_preset_declares_a_wide_search_query(self):
-        assert TRAVEL_PRESET_DEFS["hospital"].get("wide_search_query") == "hospital"
+        assert _google_path("hospital").get("wide_search_query") == "hospital"
 
     def test_the_dense_presets_still_do_not(self):
         """The fallback is a paid call; only presets that need it opt in."""
@@ -117,11 +133,11 @@ class TestThePresetOptsIntoTheWideSearch:
         Places cache key is unchanged by this ticket -- which is what let the
         48 failing rows be re-run without re-billing the other 139.
         """
-        with_query = place_rules_from(TRAVEL_PRESET_DEFS["hospital"])
+        with_query = place_rules_from(_google_path("hospital"))
         without_query = place_rules_from(
             {
                 k: v
-                for k, v in TRAVEL_PRESET_DEFS["hospital"].items()
+                for k, v in _google_path("hospital").items()
                 if k != "wide_search_query"
             }
         )
@@ -131,7 +147,7 @@ class TestThePresetOptsIntoTheWideSearch:
 
 class TestTheOviedoPage:
     def test_every_result_on_the_real_page_is_refused(self):
-        rules = place_rules_from(TRAVEL_PRESET_DEFS["hospital"])
+        rules = place_rules_from(_google_path("hospital"))
 
         accepted = [n for n in OVIEDO_PAGE if not rules.rejects(_place(n))]
 
@@ -159,7 +175,7 @@ class TestTheOviedoPage:
                 side_effect=_dispatch,
             ):
                 lookup = service._nearest_place_for_preset(
-                    OVIEDO_LAT, OVIEDO_LON, "hospital", TRAVEL_PRESET_DEFS["hospital"]
+                    OVIEDO_LAT, OVIEDO_LON, "hospital", _google_path("hospital")
                 )
 
         assert lookup.place is not None, "the fallback must rescue this coordinate"
@@ -187,7 +203,7 @@ class TestTheSecondCallStaysTheException:
                 side_effect=_dispatch,
             ):
                 lookup = service._nearest_place_for_preset(
-                    OVIEDO_LAT, OVIEDO_LON, "hospital", TRAVEL_PRESET_DEFS["hospital"]
+                    OVIEDO_LAT, OVIEDO_LON, "hospital", _google_path("hospital")
                 )
 
         assert lookup.place["name"] == "Hospital Universitario Central de Asturias"
@@ -220,7 +236,7 @@ class TestTheSecondCallStaysTheException:
                 side_effect=_dispatch,
             ):
                 lookup = service._nearest_place_for_preset(
-                    OVIEDO_LAT, OVIEDO_LON, "hospital", TRAVEL_PRESET_DEFS["hospital"]
+                    OVIEDO_LAT, OVIEDO_LON, "hospital", _google_path("hospital")
                 )
 
         assert lookup.place is None
@@ -248,7 +264,7 @@ class TestTheSecondCallStaysTheException:
                 side_effect=_dispatch,
             ):
                 lookup = service._nearest_place_for_preset(
-                    OVIEDO_LAT, OVIEDO_LON, "hospital", TRAVEL_PRESET_DEFS["hospital"]
+                    OVIEDO_LAT, OVIEDO_LON, "hospital", _google_path("hospital")
                 )
 
         assert lookup.place is None

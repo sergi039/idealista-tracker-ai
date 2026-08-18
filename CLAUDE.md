@@ -1121,6 +1121,33 @@ and TODO.md; respect it if you ever run both side by side.
   to win. The old rows are not fixed by the deploy —
   `utils/recalc_property_travel.py --ids …` rewrites them and **spends money**,
   so it needs the owner to ask.
+- **The hospital preset is answered from the national register, not from
+  Places** (owner decision 2026-08-18, after the invoice read **EUR 190** for
+  1-18 August on a project ingesting ~7 listings a day). The whole of that
+  bill is enrichment, and it is attributable day by day: 320 travel runs on
+  the 16th, 197 on the 15th, 123 on the 10th, against invoice spikes on
+  exactly those days. Two beliefs died with the screenshot and neither should
+  be rebuilt on: Google's per-SKU free tiers did **not** absorb this volume,
+  and the "$0.36 a listing" this file has carried was arithmetic over the
+  price list rather than a reading from billing -- read the bill.
+  `data/hospitals_cnh.json` is already here, already imported, already read by
+  the quality-of-life card: 42 hospitals across the five watched provinces,
+  every one with a coordinate, beds and teaching status. So
+  `services/reference_places.py` answers the preset from it, the read is free,
+  and no request leaves the machine. Measured against 12 random production
+  rows: the register names the same hospital as Google for 8, and where it
+  differs it is better -- two rows had a Google place literally named
+  *"Hospital"* (the register names Covadonga and Jove), and at Ferrol Google
+  had a private clinic where the register names the public complex 1.0 km
+  away. The rules below are **kept and dormant**: they describe how to survive
+  Google's `hospital` type, and one deleted `reference_source` puts that
+  search back. A register that cannot answer -- file missing, or a listing
+  outside its five provinces -- produces a **refusal and never a fallback to
+  the paid search**, because falling through would spend exactly where the
+  register is thinnest, which is the opposite of the point. This removes one
+  of the seven Places calls per listing; the drive time to the hospital is
+  still a Distance Matrix element, so a hospital only becomes free when the
+  routing does (`tests/test_hospital_from_the_register.py`).
 - **A town crowds the real hospital off the page, so the preset carries
   `wide_search_query` too** (#325). Nearby Search returns **one page of 20**,
   and #323 shipped without the fallback on the strength of one *rural*
