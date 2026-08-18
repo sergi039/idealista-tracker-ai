@@ -44,6 +44,7 @@ from services.profile_selection import (
     parse_profile_selection,
     resolve_profile_selection,
 )
+from utils.i18n import t
 from utils.listing_search import interpret_search, listing_search_clause
 from utils.listing_source import source_filter_clause
 from utils.municipality_grouping import (
@@ -384,11 +385,20 @@ def _map_auto_profile_id(default_profile, profiles, focus_property=None):
     most mappable rows wins. When nothing has coordinates yet it falls back to
     the most recently active profile, then the default, then the first one.
 
+    Every candidate is a *visible* subscription. A hidden one is still a valid
+    answer when the link names it -- the `focus` branch above reaches one, and
+    so does `profile_id=<id>` -- but opening a bare /map on the subscription
+    the owner took off the screens is the one thing hiding is supposed to
+    prevent (#403). The two queries below filtered on `is_active` alone, so
+    the busiest hidden subscription won a cold map.
+
     Because the two pages resolve differently, whatever this returns has to
     travel in the link back to the list (`ResolvedProfileSelection.
     link_values`) or the user lands on a different subscription than the map
     just showed -- and the focused listing may not even be loaded there.
     """
+    from services.search_profile_service import SearchProfileService
+
     if focus_property is not None and focus_property.search_profile_id is not None:
         return int(focus_property.search_profile_id)
 
@@ -400,6 +410,7 @@ def _map_auto_profile_id(default_profile, profiles, focus_property=None):
         )
         .join(SearchProfile, SearchProfile.id == Property.search_profile_id)
         .filter(SearchProfile.is_active.is_(True))
+        .filter(SearchProfileService.visible_clause())
         .filter(Property.location_lat.isnot(None), Property.location_lon.isnot(None))
         .filter(Property.listing_status.notin_(DELISTED_LISTING_STATUSES))
         .group_by(Property.search_profile_id)
@@ -416,6 +427,7 @@ def _map_auto_profile_id(default_profile, profiles, focus_property=None):
         )
         .join(SearchProfile, SearchProfile.id == Property.search_profile_id)
         .filter(SearchProfile.is_active.is_(True))
+        .filter(SearchProfileService.visible_clause())
         .group_by(Property.search_profile_id)
         .order_by(func.max(Property.created_at).desc())
         .first()
@@ -664,7 +676,7 @@ def _profile_dropdown_options(profiles, resolved, counts=None):
         options.append(
             {
                 "id": profile_id,
-                "name": f"Unknown profile #{profile_id}",
+                "name": t("unknown_profile") % profile_id,
                 "is_active": False,
                 "is_hidden": False,
                 "count": counts.get(profile_id, 0),
@@ -1596,20 +1608,13 @@ def set_profile_visibility(profile_id):
     hidden = request.form.get("hidden") == "on"
 
     if hidden and profile.is_default:
-        flash(
-            "The default profile receives every email that matches nothing "
-            "else, so it cannot be hidden. Make another profile the default "
-            "first.",
-            "error",
-        )
+        flash(t("profile_default_cannot_hide"), "error")
         return redirect(url_for("main.profiles"))
 
     profile.is_hidden = hidden
     db.session.commit()
     flash(
-        f'"{profile.name}" is hidden from the property views'
-        if hidden
-        else f'"{profile.name}" is shown again',
+        t("profile_hidden_flash" if hidden else "profile_shown_flash") % profile.name,
         "success",
     )
     return redirect(url_for("main.profiles"))

@@ -1511,6 +1511,13 @@ class SearchProfileService:
         "Default" profile is often empty and would otherwise render an empty
         list. Falls back to the most recently active profile, then the first
         active profile, then None (no active profiles at all).
+
+        Hidden subscriptions are not candidates (#403): this answers "which
+        one should we open when the caller named none", and the answer must
+        not be one the owner took off the screens. `properties/export.csv`
+        reads it, so a hidden subscription winning here would export exactly
+        the rows the page it mirrors is not showing. The catch-all is exempt
+        by construction -- it cannot be hidden.
         """
         default_has_props = False
         if default_profile:
@@ -1530,6 +1537,7 @@ class SearchProfileService:
             )
             .join(SearchProfile, SearchProfile.id == Property.search_profile_id)
             .filter(SearchProfile.is_active.is_(True))
+            .filter(SearchProfileService.visible_clause())
             .group_by(Property.search_profile_id)
             .order_by(func.max(Property.created_at).desc())
             .first()

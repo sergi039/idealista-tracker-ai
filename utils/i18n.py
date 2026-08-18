@@ -18,6 +18,61 @@ TRANSLATIONS = {
         "subscriptions": "Subscriptions",
         "all_subscriptions": "All subscriptions",
         "archive": "Archive",
+        # Subscription copy shared by /properties, /map and /profiles.
+        #
+        # The counted ones come in `_one`/`_other` pairs read by `tn()`: both
+        # languages here inflect the noun (and, in Spanish, the adjective with
+        # it -- "suscripciÃ³n oculta" against "suscripciones ocultas"), so a
+        # single string with a number dropped into it cannot be written
+        # correctly in either. What is deliberately *not* pluralised is the
+        # sentence around them: "Not shown:" leads the line instead of
+        # trailing it, because a trailing "no se muestra(n)" would have to
+        # agree with a subject that is itself a count.
+        "not_shown_prefix": "Not shown",
+        "manage": "manage",
+        "no_subscription": "No subscription",
+        "no_active_subscriptions": "No active subscriptions yet.",
+        "hidden_badge": "Hidden",
+        "hidden_subscriptions": "Hidden",
+        "hidden_subscriptions_count_one": "%s hidden subscription",
+        "hidden_subscriptions_count_other": "%s hidden subscriptions",
+        "listings_count_one": "%s listing",
+        "listings_count_other": "%s listings",
+        "unassigned_not_shown_one": "%s listing with no subscription not shown",
+        "unassigned_not_shown_other": "%s listings with no subscription not shown",
+        "unassigned_included_one": "includes %s listing with no subscription",
+        "unassigned_included_other": "includes %s listings with no subscription",
+        "show_them": "show them",
+        "selection_truncated_one": "Only the first %s subscription of that selection is being shown.",
+        "selection_truncated_other": "Only the first %s subscriptions of that selection are being shown.",
+        "unknown_profile": "Unknown profile #%s",
+        # /profiles
+        "search_profiles": "Search Profiles",
+        "search_profiles_subtitle": "Separate configuration per saved search (no mixing)",
+        "new_profile": "New profile",
+        "column_id": "ID",
+        "column_name": "Name",
+        "column_properties": "Properties",
+        "column_default": "Default",
+        "column_active": "Active",
+        "column_visible": "Visible",
+        "column_updated": "Updated",
+        "hide": "Hide",
+        "show": "Show",
+        "hide_title": "Take this subscription off the property views",
+        "show_title": "Show this subscription on the property views again",
+        "hide_default_title": "The default profile receives unmatched emails, so it cannot be hidden",
+        "no_profiles_yet": "No profiles yet.",
+        "unassigned_row_help": "Listings stored without a saved search — see the note below.",
+        "hidden_panel_title": "Hidden is about the screen, not about the data.",
+        "hidden_panel_body": "A hidden subscription keeps every listing it holds and keeps receiving its own alert emails — it is simply not offered on the property views: no chip, no entry in the subscription menu, not even under Archive, and its listings are out of “all subscriptions”, the map and the CSV export. They stay reachable through a direct link (/properties?profile_id=<id>) and through the count in this table, and Show above puts everything back. Active is the other question: an inactive subscription is archived, which still offers it one tick away.",
+        "profiles_routing_note": "Idealista emails are routed by the saved-search link they carry (issue #102); an email with no recognizable link falls back to the saved-search name, the optional regex matchers, and finally the default profile.",
+        "profiles_unassigned_title": "A listing can end up with no subscription at all.",
+        "profiles_unassigned_body": "That happens when one email links to several different saved searches (guessing one would be silently wrong), when a link was read but its profile could not be resolved, or when a profile is deleted — its listings are kept and detached rather than removed. They are counted in the No subscription row above and listed under that entry on the properties list. There is no control to file one by hand: ingestion is the only writer of a listing’s subscription (issue #130), so a row sits here precisely because its email named no single saved search.",
+        "profiles_unassigned_link": "that entry on the properties list",
+        "profile_hidden_flash": "“%s” is hidden from the property views",
+        "profile_shown_flash": "“%s” is shown again",
+        "profile_default_cannot_hide": "The default profile receives every email that matches nothing else, so it cannot be hidden. Make another profile the default first.",
         # Property list
         "property_overview": "Property Overview",
         "total_properties": "Total Properties",
@@ -354,6 +409,50 @@ TRANSLATIONS = {
         "subscriptions": "Suscripciones",
         "all_subscriptions": "Todas las suscripciones",
         "archive": "Archivo",
+        "not_shown_prefix": "Sin mostrar",
+        "manage": "gestionar",
+        "no_subscription": "Sin suscripción",
+        "no_active_subscriptions": "Aún no hay suscripciones activas.",
+        "hidden_badge": "Oculta",
+        "hidden_subscriptions": "Ocultas",
+        "hidden_subscriptions_count_one": "%s suscripción oculta",
+        "hidden_subscriptions_count_other": "%s suscripciones ocultas",
+        "listings_count_one": "%s anuncio",
+        "listings_count_other": "%s anuncios",
+        "unassigned_not_shown_one": "%s anuncio sin suscripción sin mostrar",
+        "unassigned_not_shown_other": "%s anuncios sin suscripción sin mostrar",
+        "unassigned_included_one": "incluye %s anuncio sin suscripción",
+        "unassigned_included_other": "incluye %s anuncios sin suscripción",
+        "show_them": "mostrarlos",
+        "selection_truncated_one": "Solo se muestra la primera %s suscripción de esa selección.",
+        "selection_truncated_other": "Solo se muestran las primeras %s suscripciones de esa selección.",
+        "unknown_profile": "Perfil desconocido n.º %s",
+        "search_profiles": "Perfiles de búsqueda",
+        "search_profiles_subtitle": "Configuración propia para cada búsqueda guardada (sin mezclar)",
+        "new_profile": "Nuevo perfil",
+        "column_id": "ID",
+        "column_name": "Nombre",
+        "column_properties": "Anuncios",
+        "column_default": "Predeterminado",
+        "column_active": "Activa",
+        "column_visible": "Visible",
+        "column_updated": "Actualizado",
+        "hide": "Ocultar",
+        "show": "Mostrar",
+        "hide_title": "Quitar esta suscripción de las vistas de anuncios",
+        "show_title": "Volver a mostrar esta suscripción en las vistas de anuncios",
+        "hide_default_title": "El perfil predeterminado recibe los correos sin coincidencia, por eso no se puede ocultar",
+        "no_profiles_yet": "Aún no hay perfiles.",
+        "unassigned_row_help": "Anuncios guardados sin búsqueda asociada — véase la nota de abajo.",
+        "hidden_panel_title": "Ocultar afecta a la pantalla, no a los datos.",
+        "hidden_panel_body": "Una suscripción oculta conserva todos sus anuncios y sigue recibiendo sus propios correos de alerta — simplemente no se ofrece en las vistas de anuncios: sin ficha, sin entrada en el menú de suscripciones, tampoco bajo Archivo, y sus anuncios quedan fuera de «todas las suscripciones», del mapa y de la exportación CSV. Siguen siendo accesibles por enlace directo (/properties?profile_id=<id>) y desde el recuento de esta tabla, y Mostrar lo devuelve todo. Activa es otra cuestión: una suscripción inactiva queda archivada, y así se sigue ofreciendo a un clic.",
+        "profiles_routing_note": "Los correos de Idealista se enrutan por el enlace de búsqueda guardada que llevan (issue #102); un correo sin enlace reconocible recurre al nombre de la búsqueda, a los patrones regex opcionales y, por último, al perfil predeterminado.",
+        "profiles_unassigned_title": "Un anuncio puede acabar sin ninguna suscripción.",
+        "profiles_unassigned_body": "Ocurre cuando un correo enlaza a varias búsquedas guardadas distintas (elegir una sería un error silencioso), cuando se leyó un enlace pero no se pudo resolver su perfil, o cuando se elimina un perfil — sus anuncios se conservan y quedan desligados en vez de borrarse. Se cuentan en la fila Sin suscripción de arriba y se listan en esa entrada de la lista de anuncios. No hay ningún control para asignarlos a mano: la ingesta es la única que escribe la suscripción de un anuncio (issue #130), así que una fila está aquí precisamente porque su correo no nombraba una sola búsqueda guardada.",
+        "profiles_unassigned_link": "esa entrada de la lista de anuncios",
+        "profile_hidden_flash": "«%s» queda oculta en las vistas de anuncios",
+        "profile_shown_flash": "«%s» vuelve a mostrarse",
+        "profile_default_cannot_hide": "El perfil predeterminado recibe todos los correos que no coinciden con nada más, por eso no se puede ocultar. Haz predeterminado otro perfil primero.",
         # Property list
         "property_overview": "Resumen de Propiedades",
         "total_properties": "Total de Propiedades",
@@ -675,6 +774,29 @@ def t(key, lang=None):
         lang = get_current_language()
 
     return TRANSLATIONS.get(lang, {}).get(key, TRANSLATIONS["en"].get(key, key))
+
+
+def tn(key, count, lang=None):
+    """Translate a counted phrase: `<key>_one` for 1, `<key>_other` otherwise.
+
+    The smallest thing that makes a count correct in the two languages this UI
+    speaks. Both put the boundary at exactly one, and Spanish inflects the
+    adjective along with the noun -- "1 suscripcion oculta" against "2
+    suscripciones ocultas" -- so a single string with a number substituted into
+    it cannot be written correctly there at all. That is the whole reason this
+    exists; it is not a general plural library, and a language with more forms
+    (Russian, Polish) would need a real one rather than a third branch here.
+
+    The count is substituted for a single `%s`, so a phrase carrying no
+    placeholder is returned as written. A missing pair falls back through
+    `t()`, which answers with the English form and then with the key itself --
+    a visible key beats a page that raises.
+    """
+    suffix = "_one" if count == 1 else "_other"
+    phrase = t(f"{key}{suffix}", lang)
+    if "%s" not in phrase:
+        return phrase
+    return phrase % count
 
 
 def get_browser_language():
