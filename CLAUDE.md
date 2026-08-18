@@ -549,12 +549,23 @@ the slack, converted at the mode's own assumed speed by
 17 km of the centroid" survives it, which is why `searched_m` on an approximate
 row is 12 km: the radius the answer is guaranteed for *around the parcel*.
 
-Three consequences worth knowing before changing it. Travel refuses **before**
-the Places and Distance Matrix calls, so a recalc over such rows is free rather
-than money spent on numbers that must then be marked unattributable — but it
-does *not* clear what the row already holds, unlike #350's `--clear-orphaned`,
-because that row has a real coordinate and a re-geocode makes those durations
-meaningful again. The scorer and the templates read the row's *current*
+Three consequences worth knowing before changing it. **Travel used to refuse
+before the Places and Distance Matrix calls, and since 2026-08-17 it does not**
+(owner decision). #358 built three things and only the purchase refusal is
+gone: the scorer still applies the slack target by target, and every surface
+still derives `approximate_origin` from the row's accuracy and captions it, so
+what comes back is a measurement and not the claim that it is the parcel's —
+the state 115 rows in `Plots 0–50 km` have carried since before #358 landed.
+The reason it can go is that the rows the owner wants numbers for cannot become
+precise: their adverts give a hamlet or hide the address, so a re-geocode
+returns the same centroid, and the choice was a measured duration that says
+what it is against no answer at any price. What it costs is that a recalc over
+such rows is **no longer free** — ~$0.36 a listing where it used to walk past —
+so read the billing rule above before pointing one at a wide scope. Nothing
+unattended reaches that code (`AUTO_TRAVEL_ENRICHMENT` is false), which is what
+keeps the lift a spending decision rather than a spending default. The run
+records `api_status.origin_accuracy`, and the only refusal left is a row with
+no coordinate at all. The scorer and the templates read the row's *current*
 accuracy through `parcel_measurement` and `effective_travel_state`, not the
 stored block, because 264 sea blocks and 532 travel blocks say `ok` from runs
 that predate the rule and no amount of re-reading them reveals it. The

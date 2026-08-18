@@ -43,9 +43,7 @@ from app import create_app, db
 from models import Property
 from services.property_scoring_service import PropertyScoringService
 from services.property_travel_service import (
-    TRAVEL_STATE_APPROXIMATE_ORIGIN,
     PropertyTravelService,
-    travel_api_state,
 )
 from utils import score_snapshot
 from utils.inflight import inflight
@@ -237,7 +235,7 @@ def main() -> None:
 
         processed = 0
         failed = 0
-        approximate_origin = 0
+        not_located = 0
         changed_places: List[Dict[str, Any]] = []
 
         # Never resumable: the scope is every matching property on each run,
@@ -262,13 +260,14 @@ def main() -> None:
                     # Every target refused or unanswerable.
                     # `calculate_for_property` has already recorded that on the
                     # row; it is not a crash.
-                    if travel_api_state(prop) == TRAVEL_STATE_APPROXIMATE_ORIGIN:
-                        # Not a failure and not a cost: the row's coordinate is
-                        # a locality centroid, so nothing was asked of Google.
-                        # Counted apart so a run over such rows does not read
-                        # as an outage -- and so the operator can see how much
-                        # of the scope a re-geocode would unlock.
-                        approximate_origin += 1
+                    if prop.location_lat is None or prop.location_lon is None:
+                        # Not a failure and not a cost: the run stopped before
+                        # any request because geocoding could not place the
+                        # listing. Counted apart so a run over such rows does
+                        # not read as an outage. Until 2026-08-17 a locality
+                        # centroid was counted here too; travel measures from
+                        # one now, so this is the row that has no point at all.
+                        not_located += 1
                     else:
                         failed += 1
 
@@ -295,7 +294,7 @@ def main() -> None:
         summary = {
             "processed": processed,
             "failed": failed,
-            "approximate_origin": approximate_origin,
+            "not_located": not_located,
             "properties_with_a_changed_place": len(changed_places),
         }
         logger.info("Done: %s", summary)

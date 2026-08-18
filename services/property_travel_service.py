@@ -48,13 +48,21 @@ STAGE_DISTANCE_MATRIX = "distance_matrix"
 TRAVEL_STATE_OK = "ok"
 TRAVEL_STATE_DEGRADED = "degraded"
 TRAVEL_STATE_UNAVAILABLE = "unavailable"
-# The run did not happen, and no retry will help: the row's coordinate is a
-# locality centroid, so every duration would be a route from a point the
-# property is merely near. Distinct from `unavailable` because that one means
-# Google refused and is worth retrying; this one is fixed by a re-geocode
-# (`utils/refresh_property_accuracy.py`), which is billed and therefore the
-# owner's call, not this service's.
+# The row's coordinate is a locality centroid, so its durations are routes from
+# a point the property is merely near. Since 2026-08-17 this is a *reader's*
+# state and nothing writes it to a row: `effective_travel_state` derives it from
+# the row's accuracy on every read, which is the only way that survives a
+# re-geocode. The durations exist -- the run is no longer refused -- and what
+# refuses is the scorer, target by target, inside the 5 km slack. Distinct from
+# `unavailable`, which means Google was asked and would not answer.
 TRAVEL_STATE_APPROXIMATE_ORIGIN = "approximate_origin"
+# The row has no coordinate at all, so no request was ever made -- not to
+# Places, not to Distance Matrix, and not for the beaches that ride in that
+# same batch. Distinct from both of the above: `unavailable` means Google was
+# asked and refused, `approximate_origin` means there is a point and it is the
+# wrong one, and this means there is no point to route from. It is fixed by a
+# geocode, which is what the Enrich button does first.
+TRAVEL_STATE_NOT_LOCATED = "not_located"
 
 # Bumped from v1 with #98: v1 entries can hold an all-None distance list
 # produced by a refused request, which would keep serving an empty result for
@@ -313,6 +321,13 @@ def effective_travel_state(prop: Property) -> Optional[str]:
     the point they were measured from; they are just not about the property,
     and no amount of re-reading the stored block reveals that. The column does.
 
+    A row with no coordinate is `not_located` whatever the block says, for the
+    same reason and one step further along: those durations are not merely
+    about the wrong point, they are about a point the row can no longer name.
+    Before this the answer was the stored state, which for the rows that have
+    never been located is `None` -- indistinguishable, everywhere it is read,
+    from a listing whose targets were measured and came back empty.
+
     `travel_api_state` stays what it always was -- what the last run wrote --
     because "did Google answer" and "is this the parcel" are two questions and
     the ledger of the first is worth keeping intact.
@@ -320,7 +335,7 @@ def effective_travel_state(prop: Property) -> Optional[str]:
     if prop is None:
         return None
     if prop.location_lat is None or prop.location_lon is None:
-        return travel_api_state(prop)
+        return TRAVEL_STATE_NOT_LOCATED
     if not is_precise(getattr(prop, "location_accuracy", None)):
         return TRAVEL_STATE_APPROXIMATE_ORIGIN
     return travel_api_state(prop)
@@ -396,13 +411,23 @@ class PropertyTravelService:
         except Exception:
             return False
 
-        if not is_precise(getattr(prop, "location_accuracy", None)):
-            # Refused *before* the Places and Distance Matrix calls, not after:
-            # a duration from a locality centroid is not this property's, so
-            # buying one is spending Google credit on a number that has to be
-            # marked unattributable the moment it lands.
-            self._record_approximate_origin(prop, commit=commit)
-            return False
+        # #358 refused here, before the Places and Distance Matrix calls, so
+        # that no credit was spent on a duration measured from a locality
+        # centroid. The owner lifted that on 2026-08-17, and the reason it can
+        # be lifted safely is that the refusal was only one of three things
+        # #358 built. The other two stay exactly as they are: the scorer still
+        # applies the 5 km slack target by target and drops a duration it
+        # cannot vouch for, and every surface still reads the row's *current*
+        # accuracy through `effective_travel_state` and captions it. So what
+        # comes back is the measurement, not the claim that it is the parcel's
+        # -- which is the state 115 rows in `Plots 0-50 km` have carried since
+        # before #358 landed, and which the pages already draw correctly.
+        #
+        # What the lift does cost is money: ~$0.36 a listing, on rows that were
+        # free to walk past. Nothing unattended reaches this method -- travel
+        # is a button press, a profile recalc or `utils/recalc_property_travel`
+        # -- so the spender is always someone who asked. Do not add an
+        # automatic caller without reading the billing rule in CLAUDE.md first.
 
         profile = self._resolve_profile(prop)
         config = SearchProfileService.get_travel_targets_config(profile)
@@ -589,7 +614,17 @@ class PropertyTravelService:
             "profile_id": profile.id if profile else None,
             "targets": targets,
             "beaches": self._beaches_payload(beach_lookup, beach_entries),
-            "api_status": tally.summary(),
+            # What the run measured *from*, recorded with the run itself. The
+            # surfaces do not read this -- they read the row's accuracy now,
+            # because a re-geocode changes the answer and no stored value
+            # follows it (#358) -- but a ledger that cannot say what its own
+            # numbers were taken from is the gap this whole family started in.
+            "api_status": {
+                **tally.summary(),
+                "origin_accuracy": normalize_accuracy(
+                    getattr(prop, "location_accuracy", None)
+                ),
+            },
         }
 
         if tally.unavailable:
@@ -617,37 +652,6 @@ class PropertyTravelService:
             db.session.commit()
 
         return tally.state != TRAVEL_STATE_UNAVAILABLE
-
-    def _record_approximate_origin(self, prop: Property, *, commit: bool) -> None:
-        """Stamp the row as unmeasurable and leave whatever it already holds.
-
-        Deliberately not the `--clear-orphaned` treatment of #350. There the
-        row had *no* coordinate, so the block described nowhere and the only
-        truth was an empty one. Here the coordinate is real and the durations
-        are correct about it -- they are simply about the locality, not the
-        parcel -- so a re-geocode that resolves this row to an address makes
-        them meaningful again. Deleting them would spend Google credit twice
-        for one answer. Nothing reads them as the parcel's in the meantime:
-        `effective_travel_state` reports the refusal from the row itself, and
-        the scorer applies the slack before it counts a single minute.
-        """
-        accuracy = normalize_accuracy(getattr(prop, "location_accuracy", None))
-        travel = dict(prop.travel) if isinstance(prop.travel, dict) else {}
-        travel["api_status"] = {
-            "state": TRAVEL_STATE_APPROXIMATE_ORIGIN,
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-            "origin_accuracy": accuracy,
-            "reason": "coordinate is a locality centroid, not this property",
-        }
-        prop.travel = travel
-
-        logger.info(
-            "Property %s has an %s coordinate; travel not measured (no API call)",
-            prop.id,
-            accuracy,
-        )
-        if commit:
-            db.session.commit()
 
     def calculate_for_property_id(self, property_id: int, commit: bool = True) -> bool:
         prop = db.session.get(Property, property_id)

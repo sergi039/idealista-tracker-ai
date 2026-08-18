@@ -515,7 +515,11 @@
                     {% endif %}
                     {# One chip for the whole row of pills, rather than a mark on
                        each: the claim is about the origin they all share. #}
-                    {% if travel_state_for(property) == 'approximate_origin' %}
+                    {% if travel_state_for(property) == 'not_located' %}
+                        <span class="badge bg-secondary" title="{{ t('not_located_tooltip') }}">
+                            <i class="fas fa-question me-1"></i>{{ t('not_located_short') }}
+                        </span>
+                    {% elif travel_state_for(property) == 'approximate_origin' %}
                         <span class="badge bg-warning text-dark" title="{{ t('approximate_origin_tooltip') }}">
                             <i class="fas fa-map-marker-alt me-1"></i>{{ t('approximate_origin_short') }}
                         </span>
@@ -951,7 +955,16 @@
                    about the point they were measured from -- but that point is
                    the locality, so the card says so once, above them all,
                    instead of letting each row read as this parcel's. #}
-                {% if travel_state_for(property) == 'approximate_origin' %}
+                {# And a row with no coordinate at all gets its own notice: the
+                   card below it is empty for a reason no reading of the empty
+                   rows can supply. #}
+                {% if travel_state_for(property) == 'not_located' %}
+                    <div class="alert alert-secondary py-2 px-3 small mb-3" role="note"
+                         id="travel-not-located-notice">
+                        <i class="fas fa-question me-1"></i>
+                        {{ t('not_located_notice') }}
+                    </div>
+                {% elif travel_state_for(property) == 'approximate_origin' %}
                     <div class="alert alert-warning py-2 px-3 small mb-3" role="note">
                         <i class="fas fa-map-marker-alt me-1"></i>
                         {{ t('approximate_origin_notice') }}

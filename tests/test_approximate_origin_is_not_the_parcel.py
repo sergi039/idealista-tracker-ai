@@ -255,7 +255,23 @@ class TestTheSlackStillAllowsAnAnswerItCannotChange:
         assert meta["status"] == "horizon_exceeds_search"
 
 
-class TestTravelSpendsNothingOnACentroid:
+class TestTravelMeasuresFromACentroidWithoutClaimingIt:
+    """The owner lifted #358's *purchase* refusal on 2026-08-17; the rest stands.
+
+    #358 built three things at once, and only the first is gone: travel no
+    longer refuses to buy a duration measured from a locality centroid. The
+    scorer still drops one it cannot vouch for inside the 5 km slack
+    (`TestTravelMinutesFromACentroidDoNotScore` below, untouched), and every
+    surface still derives `approximate_origin` from the row's own accuracy and
+    captions it. So a measurement comes back; the claim that it is the
+    parcel's does not.
+
+    The reason it can be lifted at all is that the centroid rows the owner
+    wants numbers for cannot be re-geocoded into precise ones -- their adverts
+    give a hamlet or hide the address -- so the choice was between a measured
+    duration that says what it is and no answer at any price.
+    """
+
     def _profile(self):
         profile = SearchProfile(
             name="Castrillón",
@@ -270,57 +286,7 @@ class TestTravelSpendsNothingOnACentroid:
         db.session.commit()
         return profile
 
-    def test_no_places_and_no_distance_matrix_call_is_made(self, app, monkeypatch):
-        profile = self._profile()
-        prop = _listing(title="centroid row", search_profile_id=profile.id)
-
-        def explode(*args, **kwargs):
-            raise AssertionError("Google was called for an approximate origin")
-
-        monkeypatch.setattr(travel_module, "request_with_retries", explode)
-
-        ok = PropertyTravelService().calculate_for_property(prop, commit=True)
-
-        assert ok is False
-        assert prop.travel["api_status"]["state"] == TRAVEL_STATE_APPROXIMATE_ORIGIN
-        assert prop.travel["api_status"]["origin_accuracy"] == "approximate"
-
-    def test_durations_already_bought_are_kept_not_deleted(self, app, monkeypatch):
-        """#350 clears a block with no origin; this row has one, just not its own."""
-        profile = self._profile()
-        prop = _listing(title="already measured", search_profile_id=profile.id)
-        prop.travel = {
-            "targets": {"hospital": {"duration_min": 27, "mode": "driving"}},
-            "api_status": {"state": "ok"},
-        }
-        db.session.commit()
-
-        monkeypatch.setattr(
-            travel_module,
-            "request_with_retries",
-            lambda *a, **k: (_ for _ in ()).throw(AssertionError("called Google")),
-        )
-        PropertyTravelService().calculate_for_property(prop, commit=True)
-
-        assert prop.travel["targets"]["hospital"]["duration_min"] == 27
-        assert prop.travel["api_status"]["state"] == TRAVEL_STATE_APPROXIMATE_ORIGIN
-
-    def test_the_state_a_reader_sees_comes_from_the_row_not_the_old_run(self, app):
-        """466 rows carry `state: ok` from a run that predates this rule."""
-        prop = _listing(title="stale ok")
-        prop.travel = {"api_status": {"state": "ok"}, "targets": {}}
-        db.session.commit()
-
-        assert effective_travel_state(prop) == TRAVEL_STATE_APPROXIMATE_ORIGIN
-
-    def test_a_precise_row_is_still_measured(self, app, monkeypatch):
-        profile = self._profile()
-        prop = _listing(
-            title="surveyed row",
-            search_profile_id=profile.id,
-            location_accuracy="precise",
-        )
-
+    def _answer_google(self, monkeypatch):
         monkeypatch.setattr(
             PropertyTravelService,
             "_nearest_place_for_preset",
@@ -346,6 +312,69 @@ class TestTravelSpendsNothingOnACentroid:
                 for _ in destinations
             ],
         )
+
+    def test_an_approximate_origin_is_measured_now(self, app, monkeypatch):
+        profile = self._profile()
+        prop = _listing(title="centroid row", search_profile_id=profile.id)
+        self._answer_google(monkeypatch)
+
+        ok = PropertyTravelService().calculate_for_property(prop, commit=True)
+
+        assert ok is True
+        assert prop.travel["targets"]["hospital"]["duration_min"] == 27
+
+    def test_the_run_records_what_it_measured_from(self, app, monkeypatch):
+        """The ledger has to say `approximate`, or nothing does after a re-geocode."""
+        profile = self._profile()
+        prop = _listing(title="centroid ledger", search_profile_id=profile.id)
+        self._answer_google(monkeypatch)
+
+        PropertyTravelService().calculate_for_property(prop, commit=True)
+
+        assert prop.travel["api_status"]["origin_accuracy"] == "approximate"
+
+    def test_a_row_with_no_coordinate_still_buys_nothing(self, app, monkeypatch):
+        """The one refusal that stays: no point to route from, no request."""
+        profile = self._profile()
+        prop = _listing(
+            title="unlocated row",
+            search_profile_id=profile.id,
+            location_lat=None,
+            location_lon=None,
+            location_accuracy=None,
+        )
+
+        def explode(*args, **kwargs):
+            raise AssertionError("Google was called for a row with no coordinate")
+
+        monkeypatch.setattr(travel_module, "request_with_retries", explode)
+        monkeypatch.setattr(
+            travel_module.PropertyLocationService,
+            "ensure_coordinates",
+            lambda self, prop, **kwargs: False,
+        )
+
+        assert (
+            PropertyTravelService().calculate_for_property(prop, commit=True) is False
+        )
+        assert not prop.travel
+
+    def test_the_state_a_reader_sees_comes_from_the_row_not_the_old_run(self, app):
+        """A measured centroid row still reads as one, whatever its run said."""
+        prop = _listing(title="stale ok")
+        prop.travel = {"api_status": {"state": "ok"}, "targets": {}}
+        db.session.commit()
+
+        assert effective_travel_state(prop) == TRAVEL_STATE_APPROXIMATE_ORIGIN
+
+    def test_a_precise_row_is_still_measured(self, app, monkeypatch):
+        profile = self._profile()
+        prop = _listing(
+            title="surveyed row",
+            search_profile_id=profile.id,
+            location_accuracy="precise",
+        )
+        self._answer_google(monkeypatch)
 
         ok = PropertyTravelService().calculate_for_property(prop, commit=True)
 

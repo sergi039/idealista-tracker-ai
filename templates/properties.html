@@ -283,18 +283,33 @@
        not a mark per duration: they all share the origin, and the map pin in
        the Coords column -- which this table hides in portrait -- is the only
        other place the page admits it. #}
-    {% set _origin_approximate = travel_state_for(p) == 'approximate_origin' %}
+    {# A row with no coordinate is a third case, and it is the one this column
+       used to draw exactly like the second: a dash per preset, which reads as
+       "looked and found nothing" when in fact no request was ever made -- not
+       for the presets, and not for the beaches that ride in the same batch.
+       So it says that once and draws no target rows: there is no origin for
+       them to be about, and a column of dashes is the #98 defect in the cell
+       that is empty for the one reason the page never stated. #}
+    {% set _travel_state = travel_state_for(p) %}
+    {% set _origin_approximate = _travel_state == 'approximate_origin' %}
+    {% set _not_located = _travel_state == 'not_located' %}
     {% if display_targets %}
         {% set visible_travel_targets = display_targets[:3] %}
         <div class="d-flex flex-column small properties-travel-times">
-            {% if _origin_approximate %}
+            {% if _not_located %}
+                <span class="d-inline-flex align-items-center text-body-secondary properties-not-located"
+                      title="{{ t('not_located_tooltip') }}">
+                    <i class="fas fa-question me-1"></i>
+                    <small>{{ t('not_located_short') }}</small>
+                </span>
+            {% elif _origin_approximate %}
                 <span class="d-inline-flex align-items-center text-warning-emphasis"
                       title="{{ t('approximate_origin_tooltip') }}">
                     <i class="fas fa-map-marker-alt me-1"></i>
                     <small>{{ t('approximate_origin_short') }}</small>
                 </span>
             {% endif %}
-            {% for tt in visible_travel_targets %}
+            {% for tt in (visible_travel_targets if not _not_located else []) %}
                 {% set tdata = travel_targets.get(tt.key) if travel_targets else None %}
                 {% set minutes = tdata.duration_min if tdata else None %}
                 {% set distance_km = tdata.distance_km if tdata else None %}
@@ -382,7 +397,10 @@
                     <small class="ms-1">{{ t('beach_short') }}</small>
                 </span>
             {% endif %}
-            {% set hidden_travel_count = (display_targets|length) - (visible_travel_targets|length) %}
+            {# Nothing is hidden when nothing was measured: "+3 more" over a
+               row that had no origin promises three more of what is not
+               there. #}
+            {% set hidden_travel_count = 0 if _not_located else (display_targets|length) - (visible_travel_targets|length) %}
             {% if hidden_travel_count > 0 %}
                 <small class="text-muted" title="{{ hidden_travel_count }} more targets in the details view">
                     +{{ hidden_travel_count }} more
@@ -1112,10 +1130,16 @@
                                                         <small class="text-muted d-block compact-text">{{ p.municipality }}</small>
                                                     {% endif %}
                                                 {% else %}
-                                                    <span class="text-muted" title="Coordinates unavailable">
-                                                        <i class="fas fa-map-marker-alt me-1"></i>
-                                                        {% if p.municipality %}<small>{{ p.municipality }}</small>{% else %}-{% endif %}
+                                                    {# The municipality came from the advert; the point did
+                                                       not, and a marker beside a town name reads as one.
+                                                       The row says which of the two it holds. #}
+                                                    <span class="text-body-secondary" title="{{ t('not_located_tooltip') }}">
+                                                        <i class="fas fa-question me-1"></i>
+                                                        <small>{{ t('not_located_short') }}</small>
                                                     </span>
+                                                    {% if p.municipality %}
+                                                        <small class="text-muted d-block compact-text">{{ p.municipality }}</small>
+                                                    {% endif %}
                                                 {% endif %}
                                             </td>
                                             <td class="col-travel">{{ travel_badges(p, travel_display_targets) }}</td>
@@ -1287,9 +1311,12 @@
                                             <small>{{ p.municipality or 'Unknown location' }}</small>
                                         </a>
                                     {% else %}
-                                        <div class="text-muted d-flex align-items-center">
-                                            <i class="fas fa-map-marker-alt me-2"></i>
-                                            <small>{{ p.municipality or 'Location unknown' }}</small>
+                                        {# Same distinction the table draws: the advert's municipality
+                                           is not a coordinate, and a marker in front of it says it is. #}
+                                        <div class="text-body-secondary d-flex align-items-center"
+                                             title="{{ t('not_located_tooltip') }}">
+                                            <i class="fas fa-question me-2"></i>
+                                            <small>{{ t('not_located_short') }}{% if p.municipality %} &middot; {{ p.municipality }}{% endif %}</small>
                                         </div>
                                     {% endif %}
                                 </div>
