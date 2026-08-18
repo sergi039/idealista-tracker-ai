@@ -282,9 +282,10 @@ def create_app(testing: bool = False):
     init_cache(app)
 
     # Add localization functions to template context
-    from utils.i18n import t, get_current_language
+    from utils.i18n import t, tn, get_current_language
 
     app.jinja_env.globals["t"] = t
+    app.jinja_env.globals["tn"] = tn
     app.jinja_env.globals["get_current_language"] = get_current_language
 
     # Every list row needs the sea-view verdict, and it is four states plus its

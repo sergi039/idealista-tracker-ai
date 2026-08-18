@@ -81,7 +81,7 @@
 {% macro subscription_badge(p, profile_names) -%}
     {% set name = profile_names.get(p.search_profile_id) if p.search_profile_id else None %}
     <span class="badge bg-body-tertiary text-body-secondary border fw-normal property-subscription-badge">
-        <i class="fas fa-envelope-open-text me-1"></i>{{ name or 'No subscription' }}
+        <i class="fas fa-envelope-open-text me-1"></i>{{ name or t('no_subscription') }}
     </span>
 {%- endmacro %}
 
@@ -443,7 +443,7 @@
         {% elif selected_option %}
             {% set menu_label = selected_option.name %}
         {% elif profile_selection.include_unassigned and not profile_selection.checked_ids %}
-            {% set menu_label = 'No subscription' %}
+            {% set menu_label = t('no_subscription') %}
         {% else %}
             {% set menu_label = profile_selection.label %}
         {% endif %}
@@ -512,7 +512,7 @@
                                 </label>
                             </div>
                         {% else %}
-                            <div class="small text-body-secondary">No active subscriptions yet.</div>
+                            <div class="small text-body-secondary">{{ t('no_active_subscriptions') }}</div>
                         {% endfor %}
                         {% if archived_subscriptions %}
                             <hr class="my-2">
@@ -546,7 +546,7 @@
                         {% if hidden_subscriptions %}
                             <hr class="my-2">
                             <div class="small text-body-secondary mb-1">
-                                <i class="fas fa-eye-slash me-1"></i>Hidden
+                                <i class="fas fa-eye-slash me-1"></i>{{ t('hidden_subscriptions') }}
                             </div>
                             <ul class="list-unstyled mb-0" id="hidden-subscriptions">
                                 {% for option in hidden_subscriptions %}
@@ -561,7 +561,7 @@
                                         <label class="form-check-label small" for="profile-option-{{ option.id }}">
                                             {{ option.name }}
                                             <span class="text-body-secondary">({{ option.count }})</span>
-                                            <span class="badge badge-neutral">Hidden</span>
+                                            <span class="badge badge-neutral">{{ t('hidden_badge') }}</span>
                                         </label>
                                     </li>
                                 {% endfor %}
@@ -574,11 +574,10 @@
                         {% if hidden_subscription_note %}
                             <hr class="my-2">
                             <div class="small text-body-secondary" id="hidden-subscriptions-note">
-                                {{ hidden_subscription_note.profiles }} hidden
-                                subscription{{ '' if hidden_subscription_note.profiles == 1 else 's' }}
-                                ({{ hidden_subscription_note.listings }} listing{{ '' if hidden_subscription_note.listings == 1 else 's' }})
-                                not shown &middot;
-                                <a href="{{ url_for('main.profiles') }}">manage</a>
+                                {{ t('not_shown_prefix') }}:
+                                {{ tn('hidden_subscriptions_count', hidden_subscription_note.profiles) }}
+                                ({{ tn('listings_count', hidden_subscription_note.listings) }}) &middot;
+                                <a href="{{ url_for('main.profiles') }}">{{ t('manage') }}</a>
                             </div>
                         {% endif %}
                         {# A peer of the subscription list, not a member of it:
@@ -598,7 +597,7 @@
                                        form="filter-form"
                                        {% if profile_selection.include_unassigned %}checked{% endif %}>
                                 <label class="form-check-label small" for="profile-option-unassigned">
-                                    No subscription
+                                    {{ t('no_subscription') }}
                                     <span class="text-body-secondary">({{ unassigned_count }})</span>
                                 </label>
                             </div>
@@ -608,8 +607,7 @@
             </div>
             {% if profile_selection.truncated %}
                 <span class="small text-warning-emphasis" id="profile-selection-truncated">
-                    Only the first {{ max_selected_profiles }} subscriptions of that
-                    selection are being shown.
+                    {{ tn('selection_truncated', max_selected_profiles) }}
                 </span>
             {% endif %}
 
@@ -888,11 +886,11 @@
                        that page shows. #}
                     {% if unassigned_count %}
                         {% if profile_selection.include_unassigned %}
-                            <span id="unassigned-count-note" class="text-body-secondary small">(includes {{ unassigned_count }} with no subscription)</span>
+                            <span id="unassigned-count-note" class="text-body-secondary small">({{ tn('unassigned_included', unassigned_count) }})</span>
                         {% else %}
-                            <span id="unassigned-count-note" class="text-body-secondary small">&mdash; {{ unassigned_count }} with no subscription not shown
+                            <span id="unassigned-count-note" class="text-body-secondary small">&mdash; {{ tn('unassigned_not_shown', unassigned_count) }}
                                 (<a id="unassigned-count-link"
-                                    href="{{ url_for('main.properties', **dict(base_args, profile_id='unassigned', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">show them</a>)</span>
+                                    href="{{ url_for('main.properties', **dict(base_args, profile_id='unassigned', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">{{ t('show_them') }}</a>)</span>
                         {% endif %}
                     {% endif %}
                     {# How many of those rows carry a status anybody established.

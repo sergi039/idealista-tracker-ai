@@ -1,16 +1,16 @@
 {% extends "base.html" %}
 
-{% block title %}Search Profiles{% endblock %}
+{% block title %}{{ t('search_profiles') }}{% endblock %}
 
 {% block content %}
 <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
     <div>
-        <h2 class="mb-1">Search Profiles</h2>
-        <div class="text-body-secondary small">Separate configuration per saved search (no mixing)</div>
+        <h2 class="mb-1">{{ t('search_profiles') }}</h2>
+        <div class="text-body-secondary small">{{ t('search_profiles_subtitle') }}</div>
     </div>
     <div class="d-flex gap-2">
         <a class="btn btn-outline-primary btn-sm" href="{{ url_for('main.create_profile') }}">
-            <i class="fas fa-plus me-1"></i>New profile
+            <i class="fas fa-plus me-1"></i>{{ t('new_profile') }}
         </a>
     </div>
 </div>
@@ -20,13 +20,13 @@
         <table class="table table-hover align-middle mb-0">
             <thead class="lands-table-head">
                 <tr>
-                    <th style="width: 80px;">ID</th>
-                    <th>Name</th>
-                    <th style="width: 120px;">Properties</th>
-                    <th style="width: 120px;">Default</th>
-                    <th style="width: 120px;">Active</th>
-                    <th style="width: 120px;">Visible</th>
-                    <th style="width: 180px;">Updated</th>
+                    <th style="width: 80px;">{{ t('column_id') }}</th>
+                    <th>{{ t('column_name') }}</th>
+                    <th style="width: 120px;">{{ t('column_properties') }}</th>
+                    <th style="width: 120px;">{{ t('column_default') }}</th>
+                    <th style="width: 120px;">{{ t('column_active') }}</th>
+                    <th style="width: 120px;">{{ t('column_visible') }}</th>
+                    <th style="width: 180px;">{{ t('column_updated') }}</th>
                     <th style="width: 200px;"></th>
                 </tr>
             </thead>
@@ -48,23 +48,23 @@
                             </td>
                             <td>
                                 {% if p.is_default %}
-                                    <span class="badge bg-primary">Yes</span>
+                                    <span class="badge bg-primary">{{ t('yes') }}</span>
                                 {% else %}
                                     <span class="text-body-secondary">—</span>
                                 {% endif %}
                             </td>
                             <td>
                                 {% if p.is_active %}
-                                    <span class="badge bg-success">Yes</span>
+                                    <span class="badge bg-success">{{ t('yes') }}</span>
                                 {% else %}
-                                    <span class="badge bg-secondary">No</span>
+                                    <span class="badge bg-secondary">{{ t('no') }}</span>
                                 {% endif %}
                             </td>
                             <td>
                                 {% if p.is_hidden %}
-                                    <span class="badge bg-secondary" data-role="visibility-state">Hidden</span>
+                                    <span class="badge bg-secondary" data-role="visibility-state">{{ t('hidden_badge') }}</span>
                                 {% else %}
-                                    <span class="badge bg-success" data-role="visibility-state">Yes</span>
+                                    <span class="badge bg-success" data-role="visibility-state">{{ t('yes') }}</span>
                                 {% endif %}
                             </td>
                             <td class="small text-body-secondary">
@@ -76,8 +76,8 @@
                                    the property views as they arrive. #}
                                 {% if p.is_default %}
                                     <button type="button" class="btn btn-outline-secondary btn-sm" disabled
-                                            title="The default profile receives unmatched emails, so it cannot be hidden">
-                                        Hide
+                                            title="{{ t('hide_default_title') }}">
+                                        {{ t('hide') }}
                                     </button>
                                 {% else %}
                                     <form method="POST" class="d-inline"
@@ -86,19 +86,19 @@
                                         <input type="hidden" name="hidden" value="{{ 'off' if p.is_hidden else 'on' }}"/>
                                         <button type="submit"
                                                 class="btn btn-sm {{ 'btn-outline-success' if p.is_hidden else 'btn-outline-secondary' }}"
-                                                title="{{ 'Show this subscription on the property views again' if p.is_hidden else 'Take this subscription off the property views' }}">
-                                            <i class="fas {{ 'fa-eye' if p.is_hidden else 'fa-eye-slash' }} me-1"></i>{{ 'Show' if p.is_hidden else 'Hide' }}
+                                                title="{{ t('show_title') if p.is_hidden else t('hide_title') }}">
+                                            <i class="fas {{ 'fa-eye' if p.is_hidden else 'fa-eye-slash' }} me-1"></i>{{ t('show') if p.is_hidden else t('hide') }}
                                         </button>
                                     </form>
                                 {% endif %}
-                                <a class="btn btn-outline-primary btn-sm" href="{{ url_for('main.edit_profile', profile_id=p.id) }}">Edit</a>
+                                <a class="btn btn-outline-primary btn-sm" href="{{ url_for('main.edit_profile', profile_id=p.id) }}">{{ t('edit') }}</a>
                             </td>
                         </tr>
                     {% endfor %}
                 {% else %}
                     <tr>
                         <td colspan="8" class="text-center text-body-secondary py-5">
-                            No profiles yet.
+                            {{ t('no_profiles_yet') }}
                         </td>
                     </tr>
                 {% endif %}
@@ -108,9 +108,9 @@
                 <tr id="profiles-unassigned-row" class="table-row-muted">
                     <td class="text-body-secondary">&mdash;</td>
                     <td>
-                        <div class="fw-semibold">No subscription</div>
+                        <div class="fw-semibold">{{ t('no_subscription') }}</div>
                         <div class="text-body-secondary small">
-                            Listings stored without a saved search &mdash; see the note below.
+                            {{ t('unassigned_row_help') }}
                         </div>
                     </td>
                     <td>
@@ -132,31 +132,17 @@
 
 <div class="alert alert-info mt-3 mb-0">
     <div>
-        <strong>Hidden is about the screen, not about the data.</strong> A hidden subscription
-        keeps every listing it holds and keeps receiving its own alert emails &mdash; it is simply
-        not offered on
-        <a href="{{ url_for('main.properties') }}">the property views</a>: no chip, no entry in
-        the subscription menu, not even under <em>Archive</em>, and its listings are out of
-        &ldquo;all subscriptions&rdquo;, the map and the CSV export. They stay reachable through a
-        direct link (<code>/properties?profile_id=&lt;id&gt;</code>) and through the count in this
-        table, and <em>Show</em> above puts everything back. <em>Active</em> is the other question:
-        an inactive subscription is archived, which still offers it one tick away.
+        <strong>{{ t('hidden_panel_title') }}</strong>
+        {{ t('hidden_panel_body') }}
+        <a href="{{ url_for('main.properties') }}">{{ t('properties') }}</a>
     </div>
     <div class="mt-2">
-        Idealista emails are routed by the saved-search link they carry (issue #102); an email
-        with no recognizable link falls back to the saved-search name, the optional regex
-        matchers, and finally the default profile.
+        {{ t('profiles_routing_note') }}
     </div>
     <div class="mt-2">
-        <strong>A listing can end up with no subscription at all.</strong> That happens when one
-        email links to several different saved searches (guessing one would be silently wrong),
-        when a link was read but its profile could not be resolved, or when a profile is deleted
-        &mdash; its listings are kept and detached rather than removed. They are counted in the
-        <em>No subscription</em> row above and listed under
-        <a href="{{ url_for('main.properties', profile_id='unassigned') }}">that entry on the properties list</a>.
-        There is no control to file one by hand: ingestion is the only writer of a listing's
-        subscription (issue #130), so a row sits here precisely because its email named no single
-        saved search.
+        <strong>{{ t('profiles_unassigned_title') }}</strong>
+        {{ t('profiles_unassigned_body') }}
+        <a href="{{ url_for('main.properties', profile_id='unassigned') }}">{{ t('profiles_unassigned_link') }}</a>
     </div>
 </div>
 {% endblock %}

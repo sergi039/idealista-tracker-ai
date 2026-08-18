@@ -236,6 +236,57 @@ class TestTheSubscriptionControls:
         assert "hiddenUniqueTitle" not in body
 
 
+class TestTheAutomaticFallbacks:
+    """A page that names no subscription must not open on a hidden one.
+
+    `/properties` never asks -- a bare page is `all` -- but /map and the CSV
+    export both resolve an `auto` selection by picking the busiest
+    subscription, and both queries filtered on `is_active` alone. Found by a
+    Spanish-language test that expected "2 suscripciones ocultas" and got
+    "1": the fallback had opened the map on one of the two hidden ones.
+    """
+
+    def test_the_map_does_not_open_on_a_hidden_subscription(
+        self, app, client, subscriptions
+    ):
+        with app.app_context():
+            # The hidden one is the busiest, so it wins any ranking that does
+            # not exclude it.
+            for extra in range(3):
+                db.session.add(
+                    Property(
+                        source_email_id=f"hidden_bulk_{extra}",
+                        title=f"hiddenBulk{extra}Title",
+                        search_profile_id=subscriptions["hidden"],
+                        listing_status="active",
+                        location_lat=43.56,
+                        location_lon=-6.14,
+                    )
+                )
+            db.session.commit()
+
+        body = client.get("/map").get_data(as_text=True)
+
+        assert "hiddenBulk0Title" not in body, (
+            "a bare /map opened on the subscription the owner hid"
+        )
+        assert "liveUniqueTitle" in body
+
+    def test_the_export_does_not_fall_back_to_a_hidden_subscription(
+        self, app, client, subscriptions
+    ):
+        with app.app_context():
+            profile = db.session.get(SearchProfile, subscriptions["default"])
+            profile.is_active = True
+            db.session.commit()
+
+        body = client.get("/properties/export.csv").get_data(as_text=True)
+
+        assert "hiddenUniqueTitle" not in body, (
+            "an export that named no subscription pulled a hidden one"
+        )
+
+
 class TestTheControlOnProfiles:
     def test_profiles_lists_the_hidden_one_and_offers_the_way_back(
         self, client, subscriptions
