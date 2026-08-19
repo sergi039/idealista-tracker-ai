@@ -237,13 +237,20 @@ _MUNICIPALITY_PREFIX_RE = re.compile(
 def _result_municipality_codes(geo: dict) -> set:
     """INE codes the result's components name as a municipality.
 
-    Two guards, and both exist because a wrong code here is worse than no
-    code. Neither the community nor the province component is read (see
-    `_MUNICIPALITY_COMPONENT_TYPES`), and a candidate resolving into a
-    *different* province from the result's own is dropped as a name
-    collision rather than kept as a contradiction -- the index spans five
-    provinces, so "Mieres" resolves to Asturias whatever province the answer
-    is actually in.
+    Three guards, and every one exists because a wrong code here is worse
+    than no code -- this set is what produces `contradicted`, and nothing
+    downstream re-checks it.
+
+    Neither the community nor the province component is read (see
+    `_MUNICIPALITY_COMPONENT_TYPES`). A candidate is kept only when the
+    answer's own province is known **and** the candidate sits in it: the
+    index spans five provinces, so "Mieres" resolves to Asturias whatever
+    province the answer is really in, and an answer that names no province at
+    all cannot rule that out -- so it resolves nothing rather than guessing.
+    And the portal alias table is not applied (`apply_aliases=False`): it is
+    verified for what Idealista calls a council, and several of its source
+    strings are real places in their own right, so on this side it would turn
+    a correct answer into a code for somewhere else.
 
     An empty set is "this answer names no municipality I can resolve", which
     is a cannot-tell and never a disagreement.
@@ -260,10 +267,17 @@ def _result_municipality_codes(geo: dict) -> set:
         if not any(kind in types for kind in _MUNICIPALITY_COMPONENT_TYPES):
             continue
         raw = str(component.get("long_name") or component.get("short_name") or "")
-        code = match_municipality(_MUNICIPALITY_PREFIX_RE.sub("", raw).strip(), index)
+        code = match_municipality(
+            _MUNICIPALITY_PREFIX_RE.sub("", raw).strip(),
+            index,
+            apply_aliases=False,
+        )
         if code is None:
             continue
-        if result_province is not None and code[:2] != result_province:
+        if result_province is None or code[:2] != result_province:
+            # Either the answer names no province to check against, or the
+            # candidate sits in a different one. Both are the same fact: this
+            # name cannot be shown to belong to this answer.
             continue
         codes.add(code)
     return codes

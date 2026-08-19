@@ -79,9 +79,11 @@ def _geo(components, formatted="somewhere", accuracy="approximate"):
     }
 
 
-# The two production answers this ticket was measured on, in the shape Google
-# returns them. `postal_code` + `administrative_area_level_2` are what the
-# province check reads; the municipality lives in `locality` or level 3.
+# The two production answers this ticket was measured on. What was measured is
+# the `formatted_address` string -- that is all the row stores; the component
+# *types* below are reconstructed from Google's documented vocabulary, because
+# `address_components` is never persisted and re-fetching it costs a billed
+# call. Said plainly rather than left to read as a capture.
 SIERO_UNDER_A_GIJON_ROW = _geo(
     [
         (["postal_code"], "33350"),
@@ -202,6 +204,89 @@ class TestWhatMustNotBecomeADisagreement:
             _prop("Siero"), {"lat": 43.5, "lng": -5.8}
         )
         assert state == "result_names_no_municipality"
+
+    def test_the_portal_alias_table_is_not_applied_to_the_answer(self, app):
+        """`ALIASES` is verified in one direction only.
+
+        "San Esteban" is what Idealista calls the capital of Muros de Nalón
+        (33039) -- and a real parish of Morcín (33038) in its own right. Read
+        off a geocoder's answer through the alias table, a correct result for
+        Morcín becomes a code for a council 40 km away, and this check calls
+        it `contradicted`.
+        """
+        answer = _geo(
+            [
+                (["postal_code"], "33163"),
+                (["locality", "political"], "San Esteban"),
+                (["administrative_area_level_2", "political"], "Asturias"),
+            ]
+        )
+        state, row, results = _municipality_agreement(
+            _prop("Morcín", source_email_id="geo001-alias"), answer
+        )
+        assert row == "33038"
+        assert results == set(), "an alias source string is not the answer's name"
+        assert state == "result_names_no_municipality"
+
+    def test_an_answer_naming_no_province_resolves_nothing(self, app):
+        """The collision guard needs a province to check against.
+
+        Without one it used to pass every candidate through, which is the
+        Mieres collision with the guard switched off.
+        """
+        answer = _geo([(["locality", "political"], "Mieres")])
+        state, _, results = _municipality_agreement(
+            _prop("Carballo", source_email_id="geo001-noprov"), answer
+        )
+        assert results == set()
+        assert state == "result_names_no_municipality"
+
+    def test_an_unindexed_row_is_reported_before_an_unresolvable_answer(self, app):
+        """Both sides fail; the row's own failure is the one reported."""
+        state, row, results = _municipality_agreement(
+            _prop("Sant Joan d'Alacant", source_email_id="geo001-bothfail"),
+            {"lat": 43.5, "lng": -5.8},
+        )
+        assert (state, row, results) == ("row_unmatched", None, set())
+
+
+class TestEveryComponentTypeTheGuardDeclares:
+    """All four are load bearing, so all four are exercised.
+
+    Two of them had no fixture at all: deleting `postal_town` and
+    `administrative_area_level_4` from the tuple left the whole suite green.
+    """
+
+    def _codes(self, kind, name="Siero"):
+        from services.property_location_service import _result_municipality_codes
+
+        return _result_municipality_codes(
+            _geo(
+                [
+                    (["postal_code"], "33510"),
+                    ([kind, "political"], name),
+                    (["administrative_area_level_2", "political"], "Asturias"),
+                ]
+            )
+        )
+
+    @pytest.mark.parametrize(
+        "kind",
+        [
+            "locality",
+            "postal_town",
+            "administrative_area_level_3",
+            "administrative_area_level_4",
+        ],
+    )
+    def test_a_municipality_under_any_declared_type_is_read(self, app, kind):
+        assert self._codes(kind) == {"33066"}
+
+    @pytest.mark.parametrize(
+        "kind", ["administrative_area_level_1", "administrative_area_level_2"]
+    )
+    def test_the_community_and_province_levels_are_never_read(self, app, kind):
+        assert self._codes(kind, name="Lugo") == set()
 
 
 class TestTheRecordOnTheRow:

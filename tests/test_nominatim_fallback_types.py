@@ -23,6 +23,7 @@ from models import Property
 from services.property_location_service import (
     PropertyLocationService,
     _is_too_coarse,
+    _municipality_agreement,
     _result_province,
 )
 from tests import setup_test_environment
@@ -100,9 +101,17 @@ class TestTheFallbackReportsAPostcodeComponent:
     def test_a_postcode_becomes_a_postal_code_component(self):
         result = _fallback(NOMINATIM_TOWN)
         components = result["address_components"]
-        assert components == [
-            {"long_name": "33199", "short_name": "33199", "types": ["postal_code"]}
-        ]
+        # The postcode component itself is asserted whole and asserted first;
+        # what is no longer asserted is that it is the *only* component,
+        # because GEO-001 maps the municipality alongside it. Keeping the
+        # list-equality form would have made this test about the mapper's
+        # length rather than about the postcode.
+        assert components[0] == {
+            "long_name": "33199",
+            "short_name": "33199",
+            "types": ["postal_code"],
+        }
+        assert sum("postal_code" in c["types"] for c in components) == 1
 
     def test_the_existing_province_rule_reads_it(self):
         """No second rule -- the fallback's answer feeds #348's own reader."""
@@ -182,3 +191,55 @@ class TestEndToEndThroughPropertyLocationService:
             assert stored.location_lon is None
             assert stored.enrichment["geocoding"]["refused"] == "result_too_coarse"
             assert stored.enrichment["geocoding"]["result_types"] == ["country"]
+
+
+class TestTheMunicipalityIsMappedToo:
+    """GEO-001's check was structurally blind on this path.
+
+    `_nominatim_address_components` mapped `postcode` and nothing else, so
+    every fallback answer produced `result_names_no_municipality` -- the
+    "nobody could tell" state -- for answers that named a municipality
+    perfectly clearly. That is #98's defect wearing the shape of a missing
+    mapping, and it is invisible on the row: the state is real and reachable
+    for other reasons.
+    """
+
+    def _components(self, address):
+        from utils.geocoding import _nominatim_address_components
+
+        return _nominatim_address_components({"address": address})
+
+    def test_the_municipality_becomes_a_locality_component(self):
+        components = self._components({"postcode": "33510", "town": "Siero"})
+        assert {"postal_code", "locality"} <= {
+            kind for component in components for kind in component["types"]
+        }
+
+    @pytest.mark.parametrize("key", ["city", "town", "village", "municipality"])
+    def test_whichever_level_the_answer_carries_is_read(self, key):
+        components = self._components({"postcode": "33510", key: "Siero"})
+        localities = [c for c in components if "locality" in c["types"]]
+        assert [c["long_name"] for c in localities] == ["Siero"]
+
+    def test_an_answer_with_no_municipality_still_maps_its_postcode(self):
+        components = self._components({"postcode": "33510"})
+        assert [c["types"] for c in components] == [["postal_code"]]
+
+    def test_a_wrong_municipality_from_the_fallback_is_now_contradicted(self, app):
+        """The point of the mapping: this used to read as cannot-tell."""
+        prop = Property(
+            source_email_id="nominatim-muni", title="Plot", municipality="Siero"
+        )
+        db.session.add(prop)
+        db.session.commit()
+
+        geo = {
+            "lat": 43.53,
+            "lng": -5.66,
+            "formatted_address": "Gijón, Asturias, 33200, España",
+            "address_components": self._components(
+                {"postcode": "33200", "city": "Gijón"}
+            ),
+        }
+        state, row, results = _municipality_agreement(prop, geo)
+        assert (state, row, results) == ("contradicted", "33066", {"33024"})

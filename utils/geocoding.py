@@ -83,16 +83,41 @@ def _nominatim_result_types(result: Dict) -> List[str]:
 def _nominatim_address_components(result: Dict) -> List[Dict]:
     """Map Nominatim's `address` dict into Google's `address_components` shape.
 
-    Only `postcode` is mapped -- it is the only field
-    `services.property_location_service._result_province` reads.
+    Two fields, and both exist because
+    `services.property_location_service` reads them: `postcode` for the
+    province check, and the municipality for the check GEO-001 added.
+
+    The municipality is whichever of `city` / `town` / `village` /
+    `municipality` / `hamlet` the answer carries, mapped to `locality` --
+    Nominatim names the level it found rather than a fixed one, and the
+    reader treats them alike. Without it the municipality check was
+    structurally blind on this path: every fallback answer produced
+    `result_names_no_municipality`, which is the "nobody could tell" state,
+    for answers that named a municipality perfectly clearly. That is #98's
+    defect wearing the shape of a missing mapping.
     """
     address = result.get("address")
     if not isinstance(address, dict):
         return []
+
+    components: List[Dict] = []
     postcode = str(address.get("postcode") or "").strip()
-    if not postcode:
-        return []
-    return [{"long_name": postcode, "short_name": postcode, "types": ["postal_code"]}]
+    if postcode:
+        components.append(
+            {"long_name": postcode, "short_name": postcode, "types": ["postal_code"]}
+        )
+    for key in ("city", "town", "village", "municipality", "hamlet"):
+        locality = str(address.get(key) or "").strip()
+        if locality:
+            components.append(
+                {
+                    "long_name": locality,
+                    "short_name": locality,
+                    "types": ["locality", "political"],
+                }
+            )
+            break
+    return components
 
 
 class GeocodingService:
