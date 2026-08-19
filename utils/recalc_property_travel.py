@@ -46,6 +46,7 @@ from services.property_travel_service import (
     PropertyTravelService,
 )
 from utils import score_snapshot
+from utils.enrich_scope import log_scope
 from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
@@ -197,10 +198,20 @@ def main() -> None:
         "--report",
         help="Write a per-property before/after report of resolved places here.",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Report the scope, its subscription composition and the worst-case "
+            "billed work, then exit without calling any API. This is the most "
+            "expensive run in the repository -- ~$0.36 a listing -- and it was "
+            "the only backfill with no way to ask what it was about to spend."
+        ),
+    )
     args = parser.parse_args()
 
-    if not args.restore and not args.snapshot:
-        parser.error("--snapshot is required (or use --restore)")
+    if not args.restore and not args.snapshot and not args.dry_run:
+        parser.error("--snapshot is required (or use --restore / --dry-run)")
 
     app = create_app()
     with app.app_context():
@@ -227,6 +238,26 @@ def main() -> None:
 
         properties = query.all()
         logger.info("Recalculating travel for %s properties", len(properties))
+        # Before the snapshot, before the first billed call: what this run
+        # covers and what it is worth. 307 of production's 769 located rows
+        # sit in retired subscriptions, and a bare count cannot say so
+        # (UNIVERSE-001).
+        log_scope(
+            logger,
+            properties,
+            label="property_travel_recalc_queue",
+            notes=(
+                "every located row unless narrowed by --ids or --limit",
+                "profile-agnostic on purpose (#410)",
+                f"worst case: <={len(properties) * 7} Places calls + "
+                f"<={len(properties) * 26} Distance Matrix elements, about "
+                f"${len(properties) * 0.36:,.2f} at ~$0.36 a listing",
+            ),
+        )
+        if args.dry_run:
+            logger.info("Dry run. No API was called and nothing was written.")
+            print(f"scope={len(properties)}")
+            return
 
         _write_snapshot([_snapshot_row(p) for p in properties], args.snapshot)
 

@@ -65,17 +65,64 @@
             </div>
         </div>
 
-        <div class="alert alert-light border small d-flex flex-wrap gap-3 py-2">
-            <span>
-                <i class="fas fa-landmark me-1 text-primary"></i>
-                <strong>{{ t('municipalities_facts_label') }}</strong>
-                — {{ t('municipalities_facts_note') }}
-            </span>
-            <span>
-                <i class="fas fa-list me-1 text-primary"></i>
-                <strong>{{ t('municipalities_medians_label') }}</strong>
-                — {{ t('municipalities_medians_note') }}
-            </span>
+        {# What the two kinds of column are, what the table is a comparison
+           OF, and what its one derived ratio is a ratio of. The last two are
+           UNIVERSE-001: this page spans every subscription -- 311 of
+           production's 772 listings sit in retired ones -- and said so
+           nowhere, so "87 · 772 listings" read as the owner's live searches.
+           The composition is tallied off the rows the medians were computed
+           from, never from a second query (#417). #}
+        <div class="alert alert-light border small py-2">
+            <div class="d-flex flex-wrap gap-3">
+                <span>
+                    <i class="fas fa-landmark me-1 text-primary"></i>
+                    <strong>{{ t('municipalities_facts_label') }}</strong>
+                    — {{ t('municipalities_facts_note') }}
+                </span>
+                <span>
+                    <i class="fas fa-list me-1 text-primary"></i>
+                    <strong>{{ t('municipalities_medians_label') }}</strong>
+                    — {{ t('municipalities_medians_note') }}
+                </span>
+            </div>
+            {% if population and population.subscriptions %}
+                {% set mix = population.subscriptions %}
+                <div class="mt-1" id="municipalities-scope">
+                    <i class="fas fa-layer-group me-1 text-primary"></i>
+                    <strong>{{ t('municipalities_scope_label') }}</strong>
+                    — {{ t('municipalities_scope_note') }}:
+                    {{ tn('subscriptions_count', mix.subscriptions) }}
+                    {{ t('holding') }} {{ tn('listings_count', mix.listings) }} &mdash;
+                    {# Each kind counts its subscriptions, with its listings in
+                       brackets. Live and retired are always named, zero
+                       included: that is the axis #417 was on, and an omitted
+                       "0 retired" reads as "not told" rather than as "none".
+                       The other three appear only when they hold something --
+                       a permanent "0 hidden" is noise on a deployment that has
+                       never hidden a subscription. The last of them names its
+                       noun (#420's phrase, kept): it is a count of *listings*
+                       standing among counts of subscriptions, and a bare
+                       "1 with no subscription" reads as one subscription
+                       without a subscription. #}
+                    {{ tn('municipalities_scope_live', mix.active) }} ({{ mix.listings_active }})
+                    · {{ tn('municipalities_scope_retired', mix.retired) }} ({{ mix.listings_retired }}){%
+                        if mix.hidden %} · {{ tn('municipalities_scope_hidden', mix.hidden) }} ({{ mix.listings_hidden }}){% endif %}{%
+                        if mix.unknown %} · {{ tn('municipalities_scope_unknown', mix.unknown) }} ({{ mix.listings_unknown }}){% endif %}{%
+                        if mix.listings_unassigned %} · {{ tn('municipalities_unassigned_listings', mix.listings_unassigned) }}{% endif %};
+                    {{ t('municipalities_scope_delisted_included') if include_archived else t('municipalities_scope_delisted_excluded') }}{%
+                        if favorites_only %}; {{ t('municipalities_scope_favorites') }}{% endif %}
+                    {# #419's sentence, kept: it is the fact that the number
+                       and the page behind it are now one scope, and it belongs
+                       beside the composition rather than in a second line
+                       repeating the same counts. #}
+                    · {{ t('municipalities_scope_suffix') }}.
+                </div>
+                <div class="mt-1" id="municipalities-basis">
+                    <i class="fas fa-calculator me-1 text-primary"></i>
+                    <strong>{{ t('municipalities_basis_label') }}</strong>
+                    — {{ t('municipalities_basis_note') }}.
+                </div>
+            {% endif %}
         </div>
 
         <div class="table-responsive">
@@ -204,30 +251,6 @@
         </div>
 
         <div class="small text-body-secondary mt-2">
-            {# What the numbers above cover that the subscription filter on
-               /properties does not offer. The medians are taken over every
-               stored listing on purpose -- this page compares municipalities,
-               not saved searches -- and without this line a count reads as
-               "listings I can reach from the list page". #}
-            {% if offscreen_subscriptions %}
-                <div id="municipalities-scope-note">
-                    <i class="fas fa-circle-info me-1"></i>
-                    {{ t('municipalities_scope_prefix') }}:
-                    {% if offscreen_subscriptions.profiles %}
-                        {{ tn('municipalities_offscreen_subscriptions', offscreen_subscriptions.profiles) }}
-                        ({{ tn('listings_count', offscreen_subscriptions.listings) }})
-                        {%- if offscreen_subscriptions.unassigned %} &middot;{% endif %}
-                    {% endif %}
-                    {# Not a subscription, so not folded into the count above:
-                       `profile_id=all` never covers a listing with no saved
-                       search, which makes it as absent from /properties as a
-                       retired one and a different thing to say. #}
-                    {% if offscreen_subscriptions.unassigned %}
-                        {{ tn('municipalities_unassigned_listings', offscreen_subscriptions.unassigned) }}
-                    {% endif %}
-                    &middot; {{ t('municipalities_scope_suffix') }}
-                </div>
-            {% endif %}
             {% if unnamed_listings %}
                 <div>
                     <i class="fas fa-circle-info me-1"></i>

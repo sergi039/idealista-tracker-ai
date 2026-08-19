@@ -289,7 +289,17 @@
                                           title="{{ t('shared_coordinate_tooltip') }}">
                                         <i class="fas fa-triangle-exclamation"></i>
                                         {{ t('shared_coordinate_with') }}
-                                        {% for peer_id in shared_coordinate_ids %}<a href="{{ url_for('main.property_detail', property_id=peer_id) }}" class="text-decoration-none">#{{ peer_id }}</a>{{ ', ' if not loop.last }}{% endfor %}
+                                        {% for peer_id in shared_coordinate_ids %}<a href="{{ url_for('main.property_detail', property_id=peer_id) }}" class="text-decoration-none">#{{ peer_id }}</a>{{ ', ' if not loop.last }}{% endfor %}{#
+                                           A capped list that does not name its
+                                           own cap reads as the whole cluster
+                                           (UNIVERSE-001). The largest group on
+                                           production is 21 against a cap of
+                                           25, so this renders nothing today --
+                                           which is a measurement, not a
+                                           reason to leave it out. #}{%
+                                           if shared_coordinate_population and shared_coordinate_population.truncated %}
+                                            <span id="shared-coordinate-truncated">{{ t('shared_coordinate_more')|format(shared_coordinate_population.not_shown) }}</span>
+                                        {% endif %}
                                     </span>
                                 {% endif %}
                                 <button type="button" class="btn btn-link p-0 ms-1 align-baseline copy-coords-btn"
