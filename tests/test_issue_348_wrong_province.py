@@ -194,8 +194,7 @@ class TestWhatMustStillBeAccepted:
 
             assert ok is True
             assert (
-                _stored(prop.id).enrichment["geocoding"]["province_check"]
-                == "agreed"
+                _stored(prop.id).enrichment["geocoding"]["province_check"] == "agreed"
             )
 
     def test_an_unresolvable_municipality_is_not_a_contradiction(self, app):
@@ -210,9 +209,7 @@ class TestWhatMustStillBeAccepted:
             assert ok is True
             stored = _stored(prop.id)
             assert stored.location_lat is not None
-            assert (
-                stored.enrichment["geocoding"]["province_check"] == "row_unmatched"
-            )
+            assert stored.enrichment["geocoding"]["province_check"] == "row_unmatched"
 
     def test_alicante_still_geocodes(self, app):
         """Not a province allowlist. These rows are real."""
@@ -228,9 +225,7 @@ class TestWhatMustStillBeAccepted:
             assert ok is True
             stored = _stored(prop.id)
             assert float(stored.location_lat) == pytest.approx(38.401717)
-            assert (
-                stored.enrichment["geocoding"]["province_check"] == "row_unmatched"
-            )
+            assert stored.enrichment["geocoding"]["province_check"] == "row_unmatched"
 
     def test_a_result_naming_no_province_is_not_agreement(self, app):
         with app.app_context():
