@@ -728,6 +728,52 @@ def _hidden_subscription_note(resolved, counts=None):
     }
 
 
+def _municipality_scope_note(rows):
+    """How much of the /municipalities table sits where /properties cannot see it.
+
+    The comparison page has no subscription control at all -- it compares
+    municipalities, not saved searches -- so it counts every stored listing,
+    retired and hidden subscriptions included. That is the right basis for a
+    median and it is invisible from the page: "79" reads as "79 listings I can
+    reach", while a bare /properties offers only the active, non-hidden ones
+    (#410 named this risk; #417 is where it was measured -- 311 of 773
+    production listings sit in retired subscriptions).
+
+    The drill-down links now carry that scope, so the two numbers agree. This
+    line is the other half: it says, once, what the column of numbers above it
+    covers. A disclosure, not a warning -- the owner retired those searches on
+    purpose.
+
+    Counted off the rows the medians were computed from, never from a second
+    query over `properties`; only the *set* of subscriptions /properties would
+    offer is looked up, which is a fact about profiles and not about listings.
+    Returns None when nothing is off screen, so an install whose subscriptions
+    are all live carries no line at all.
+    """
+    from services.search_profile_service import SearchProfileService
+
+    counted = {}
+    for row in rows:
+        scope = row.get("scope") or {}
+        for profile_id, count in (scope.get("profile_counts") or {}).items():
+            counted[profile_id] = counted.get(profile_id, 0) + count
+    if not counted:
+        return None
+
+    offered = {
+        profile.id
+        for profile in SearchProfileService.list_visible_profiles(active_only=True)
+    }
+    offscreen = {
+        profile_id: count
+        for profile_id, count in counted.items()
+        if profile_id not in offered
+    }
+    if not offscreen:
+        return None
+    return {"profiles": len(offscreen), "listings": sum(offscreen.values())}
+
+
 def _travel_display_targets(profile_ids, include_custom=False):
     """Travel columns to render for the profiles currently on screen.
 
@@ -2723,6 +2769,7 @@ def municipalities():
         DEFAULT_SORT,
         SORT_KEYS,
         MunicipalityComparisonService,
+        drilldown_args,
     )
 
     try:
@@ -2748,6 +2795,20 @@ def municipalities():
         rows = service.build_rows(properties)
         rows = service.sort_rows(rows, sort_by, descending=(order == "desc"))
 
+        # The link beside each number opens exactly the listings that number
+        # was taken over -- the subscriptions that carried it, retired and
+        # hidden ones included, the unassigned rows, this page's favorites
+        # mode and its listing-status scope (#417). The scope travels with the
+        # row from `build_rows`; nothing here asks the database a second
+        # question about it, because a second query is how the two numbers
+        # came to disagree in the first place.
+        for row in rows:
+            row["drilldown"] = drilldown_args(
+                row,
+                favorites_only=favorites_only,
+                include_archived=include_archived,
+            )
+
         # Truncated email artifacts ("Ovi...", issue #298) count with the
         # unnamed listings: build_rows skips both, for the same reason -- a
         # value that names no municipality cannot be compared by one. Both
@@ -2763,6 +2824,7 @@ def municipalities():
             favorites_only=favorites_only,
             listing_total=len(properties),
             unnamed_listings=unnamed,
+            offscreen_subscriptions=_municipality_scope_note(rows),
             sources=service.qol_service.reference_sources(),
         )
     except HTTPException:
