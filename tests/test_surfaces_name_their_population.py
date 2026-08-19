@@ -212,6 +212,84 @@ class TestTheMixReadsTheFlagsTheWayTheRestOfTheAppDoes:
         assert mix.is_mixed is True
 
 
+class TestBothRenderersNameTheSameKinds:
+    """A log and a page describing one mix must not disagree about a zero.
+
+    #421 changed the page from "say nothing when nothing is off screen" to
+    "name live and retired even at zero", and left `Population.as_lines()` --
+    the renderer every backfill log goes through, including the ~$0.36-a-
+    listing travel recalc -- on the old rule. Two renderers of one
+    `SubscriptionMix`, disagreeing on the single behaviour that PR went out of
+    its way to fix.
+    """
+
+    def test_a_queue_with_nothing_retired_still_says_zero_retired(self):
+        from services.population import Population, SubscriptionMix
+
+        mix = SubscriptionMix(active=2, listings_active=5)
+        lines = " ".join(
+            Population(label="q", total=5, returned=5, subscriptions=mix).as_lines()
+        )
+
+        assert "2 live (5 listings)" in lines
+        assert "0 retired (0 listings)" in lines
+
+    def test_the_exceptional_kinds_stay_quiet_until_they_hold_something(self):
+        """The other half: a permanent "0 hidden" is noise, not disclosure."""
+        from services.population import SubscriptionMix
+
+        plain = SubscriptionMix(active=1, listings_active=1)
+        assert [kind for kind, _, _ in plain.kinds] == ["live", "retired"]
+
+        full = SubscriptionMix(
+            active=1,
+            retired=1,
+            hidden=1,
+            unknown=1,
+            listings_active=1,
+            listings_retired=1,
+            listings_hidden=1,
+            listings_unknown=1,
+            listings_unassigned=1,
+        )
+        assert [kind for kind, _, _ in full.kinds] == [
+            "live",
+            "retired",
+            "hidden",
+            "unknown",
+            "unassigned",
+        ]
+
+    def test_the_page_names_the_kinds_the_module_does(self, app, client):
+        """One matrix through both renderers, the `tests/test_advertiser.py` way."""
+        from services.population import listings_by_profile, subscription_mix
+
+        live, retired, hidden = _profiles()
+        rows = [
+            _listing("both_live", live.id),
+            _listing("both_retired", retired.id),
+            _listing("both_hidden", hidden.id),
+            _listing("both_orphan", None),
+        ]
+        mix = subscription_mix(listings_by_profile(rows))
+
+        body = client.get("/municipalities").get_data(as_text=True)
+        match = re.search(r'id="municipalities-scope".*?</div>', body, re.S)
+        assert match, "the page did not render its scope line"
+        line = re.sub(r"<[^>]+>", "", match.group(0))
+
+        english = {
+            "live": "live",
+            "retired": "retired",
+            "hidden": "hidden",
+            "unknown": "whose subscription",
+            "unassigned": "with no subscription",
+        }
+        for kind, _, _ in mix.kinds:
+            assert english[kind] in line, f"the page does not name {kind}"
+        assert "whose subscription" not in line, "nothing is unknown in this fixture"
+
+
 class TestTheJsonApiNamesItsPage:
     """`count` is the size of the page, and was the only number in the payload.
 
@@ -268,6 +346,24 @@ class TestTheJsonApiNamesItsPage:
             == "omitted"
         )
         assert client.get("/api/properties").get_json()["scope"]["notes"] == []
+
+    def test_a_number_that_parsed_and_was_still_replaced_says_so(self, client, app):
+        """`profile_id=0` parses, so it is `requested` -- and it is replaced.
+
+        `if not profile_id` is falsy for zero, so it reaches the same fallback
+        `all` does, and used to arrive labelled `requested` with an empty
+        `notes`: indistinguishable in the payload from a request for a
+        subscription that really is the default. `/properties` refuses such an
+        id outright rather than falling back; this endpoint keeps its fallback
+        and names it.
+        """
+        _profiles()
+
+        scope = client.get("/api/properties?profile_id=0").get_json()["scope"]
+
+        assert scope["profile_id_requested"] == "0"
+        assert scope["profile_id_applied"] != 0
+        assert any("names no subscription" in note for note in scope["notes"])
 
     def test_a_real_id_carries_no_note(self, client, app):
         live, _, _ = _profiles()
@@ -551,9 +647,50 @@ class TestABackfillSaysWhatItIsAboutToCover:
         assert population.subscriptions.hidden == 1
         assert population.subscriptions.listings_unassigned == 1
         text = caplog.text
-        assert "1 live, 1 retired, 1 hidden" in text
-        assert "1 with no subscription" in text
+        assert "1 live (1 listing), 1 retired (1 listing), 1 hidden (1 listing)" in text
+        assert "1 listing with no subscription" in text
         assert "note: free" in text
+
+    def test_a_wide_run_does_not_announce_the_window_it_dropped(
+        self, app, monkeypatch, caplog
+    ):
+        """The disclosure describing a population the run did not use.
+
+        `--all` drops the recent-or-favorite window entirely
+        (`utils/enrich_scope.scoped_properties`), and two of the three CLIs
+        went on printing "last 30 days or a favorite" over a queue that
+        covered everything. That is the defect this whole feature exists to
+        remove, reproduced inside its own first consumers -- and it is what a
+        two-branch rule copied per caller eventually does, so the phrase has
+        one home now.
+        """
+        import logging
+        from contextlib import nullcontext
+
+        from utils import backfill_pool as tool
+
+        live, _, _ = _profiles()
+        _listing(
+            "wide_row",
+            live.id,
+            location_lat=Decimal("43.5"),
+            location_lon=Decimal("-5.6"),
+        )
+
+        class _CurrentApp:
+            def app_context(self):
+                return nullcontext()
+
+        monkeypatch.setattr(tool, "create_app", lambda: _CurrentApp())
+        monkeypatch.setattr("sys.argv", ["backfill", "--all", "--dry-run"])
+
+        with caplog.at_level(logging.INFO):
+            tool.main()
+
+        assert "--all" in caplog.text
+        assert "last 30 days" not in caplog.text, (
+            "the run covered every located row and said otherwise"
+        )
 
     def test_the_travel_recalc_can_be_asked_before_it_spends(
         self, app, monkeypatch, caplog
@@ -598,7 +735,7 @@ class TestABackfillSaysWhatItIsAboutToCover:
         with caplog.at_level(logging.INFO):
             tool.main()
 
-        assert "1 live, 1 retired" in caplog.text
+        assert "1 live (1 listing), 1 retired (1 listing)" in caplog.text
         # The arithmetic, not just the label: two located rows at the recorded
         # ~$0.36 a listing, 7 Places calls and 26 Distance Matrix elements each.
         assert "<=14 Places calls" in caplog.text

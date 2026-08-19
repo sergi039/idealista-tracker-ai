@@ -62,6 +62,22 @@ def scoped_properties(
     return [prop for prop in rows if needs(prop)]
 
 
+def window_note(days: int, include_all: bool) -> str:
+    """The phrase describing which rows `scoped_properties` actually selected.
+
+    One home, because the two branches were written out per CLI and one of
+    them was written out wrong: `utils/backfill_pool.py` and
+    `utils/backfill_quality_of_life.py` announced "last N days or a favorite"
+    on an `--all` run, which drops that window entirely. A disclosure
+    describing a population the run did not use is the defect UNIVERSE-001
+    exists to remove, reproduced inside its own first consumers -- and it is
+    what a per-caller copy of a two-branch rule always eventually does.
+    """
+    if include_all:
+        return "every located row (--all: the recent-or-favorite window is off)"
+    return f"auto-enrich window: last {days} days or a favorite, located rows only"
+
+
 def scope_population(
     rows: Sequence[Any], *, label: str, notes: Iterable[str] = ()
 ) -> Population:

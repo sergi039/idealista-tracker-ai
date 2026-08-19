@@ -35,7 +35,7 @@ from app import create_app, db
 from models import Property
 from services.property_scoring_service import PropertyScoringService
 from services.property_travel_service import PropertyTravelService
-from utils.enrich_scope import log_scope, scoped_properties
+from utils.enrich_scope import log_scope, scoped_properties, window_note
 from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
@@ -244,9 +244,7 @@ def main() -> None:
             properties,
             label="beach_travel_backfill_queue",
             notes=(
-                f"auto-enrich window: last {args.days} days or a favorite, located rows only"
-                if not args.all
-                else "every located row (--all)",
+                window_note(args.days, args.all),
                 "profile-agnostic on purpose (#410): a hidden subscription keeps ingesting",
                 f"worst case: <={len(properties) * 7} Places Nearby calls + "
                 f"<={len(properties) * 25} Distance Matrix elements",
