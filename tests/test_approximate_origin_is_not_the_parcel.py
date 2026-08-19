@@ -120,6 +120,7 @@ class TestTheGuardsThatAlreadyExistLetThisThrough:
         from services.property_location_service import (
             _is_too_coarse,
             _municipality_agreement,
+            _province_agreement,
         )
 
         prop = _listing(title="Castrillón listing")
@@ -128,12 +129,22 @@ class TestTheGuardsThatAlreadyExistLetThisThrough:
         assert _is_too_coarse(CLUSTER_GEOCODE) is False
         # #348: 33457 and Castrillón are the same province, so the place rule
         # does not merely abstain -- it actively agrees.
-        state, row_province, result_province = _municipality_agreement(
+        state, row_province, result_province = _province_agreement(
             prop, CLUSTER_GEOCODE
         )
         assert (state, row_province, result_province) == ("agreed", "33", "33")
         # #321: `approximate` is a label the whitelist keeps as it is.
         assert CLUSTER_GEOCODE["accuracy"] == "approximate"
+
+        # GEO-001 adds a fourth guard and it does not catch this one either --
+        # nor should it. The answer's `locality` is "Santa María del Mar", a
+        # village inside the row's own Castrillón, so it names no municipality
+        # to disagree with. Abstaining here is the whole reason the new check
+        # is safe to add: a village inside the right council must never read
+        # as the wrong one.
+        assert _municipality_agreement(prop, CLUSTER_GEOCODE)[0] == (
+            "result_names_no_municipality"
+        )
 
 
 class TestSeaDistanceRefusesTheCentroid:

@@ -176,13 +176,18 @@ def _result_province(geo: dict) -> Optional[str]:
     return None
 
 
-def _municipality_agreement(prop, geo: dict):
+def _province_agreement(prop, geo: dict):
     """(state, row_province, result_province).
 
     `state` is one of "agreed", "contradicted", "row_unmatched",
     "result_has_no_province" -- four values rather than a boolean, because
     "we could not compare" is a third answer and collapsing it into either
     real one is the mistake #98 is about. Only "contradicted" refuses.
+
+    This is the check #348 built and #371 extended, under the name it always
+    measured. It used to be stored as `municipality_check`, which is what
+    GEO-001 is about: inside one province it can only ever answer "agreed",
+    and every row in this database is Asturias.
     """
     row = _row_province(prop)
     result = _result_province(geo)
@@ -191,6 +196,188 @@ def _municipality_agreement(prop, geo: dict):
     if result is None:
         return "result_has_no_province", row, result
     return ("agreed" if row == result else "contradicted"), row, result
+
+
+# Component types that may name a municipality, and the two that may not.
+#
+# The distinction is the whole guard, and it is not available from
+# `formatted_address`: four of the five watched provinces have a capital
+# whose municipality carries the province's own name -- measured
+# 2026-08-19, `match()` answers 15030 for "A Coruña", 27028 for "Lugo",
+# 32054 for "Ourense" and 36038 for "Pontevedra". So a reader that splits
+# the formatted string on commas reads the province as a municipality and
+# invents a contradiction: simulated over the 725 production rows that
+# carry a formatted address, that mistake alone produced 6 of 10
+# "contradictions", every one of them an artifact.
+#
+# Google labels the province `administrative_area_level_2` and the
+# autonomous community `administrative_area_level_1`, so reading components
+# by type -- and never those two -- is what makes the comparison possible
+# at all.
+_MUNICIPALITY_COMPONENT_TYPES = (
+    "locality",
+    "postal_town",
+    "administrative_area_level_3",
+    "administrative_area_level_4",
+)
+
+# Google renders a Spanish municipality with an administrative word in front
+# of it often enough to matter: 25 of those 725 formatted addresses say
+# "Municipality of ...", and `match("Municipality of Siero")` is None while
+# `match("Siero")` is 33066. The Spanish and Galician forms are here because
+# the app's request language is a setting, not a law; each costs one
+# alternation and its absence would cost a silent cannot-tell.
+_MUNICIPALITY_PREFIX_RE = re.compile(
+    r"^(?:municipality\s+of|municipio\s+de|concello\s+de|concejo\s+de"
+    r"|ayuntamiento\s+de)\s+",
+    re.IGNORECASE,
+)
+
+
+def _result_municipality_codes(geo: dict) -> set:
+    """INE codes the result's components name as a municipality.
+
+    Three guards, and every one exists because a wrong code here is worse
+    than no code -- this set is what produces `contradicted`, and nothing
+    downstream re-checks it.
+
+    Neither the community nor the province component is read (see
+    `_MUNICIPALITY_COMPONENT_TYPES`). A candidate is kept only when the
+    answer's own province is known **and** the candidate sits in it: the
+    index spans five provinces, so "Mieres" resolves to Asturias whatever
+    province the answer is really in, and an answer that names no province at
+    all cannot rule that out -- so it resolves nothing rather than guessing.
+    And the portal alias table is not applied (`apply_aliases=False`): it is
+    verified for what Idealista calls a council, and several of its source
+    strings are real places in their own right, so on this side it would turn
+    a correct answer into a code for somewhere else.
+
+    An empty set is "this answer names no municipality I can resolve", which
+    is a cannot-tell and never a disagreement.
+    """
+    components = [
+        c for c in (geo.get("address_components") or ()) if isinstance(c, dict)
+    ]
+    result_province = _result_province(geo)
+    index = load_name_index()
+
+    codes = set()
+    for component in components:
+        types = component.get("types") or ()
+        if not any(kind in types for kind in _MUNICIPALITY_COMPONENT_TYPES):
+            continue
+        raw = str(component.get("long_name") or component.get("short_name") or "")
+        code = match_municipality(
+            _MUNICIPALITY_PREFIX_RE.sub("", raw).strip(),
+            index,
+            apply_aliases=False,
+        )
+        if code is None:
+            continue
+        if result_province is None or code[:2] != result_province:
+            # Either the answer names no province to check against, or the
+            # candidate sits in a different one. Both are the same fact: this
+            # name cannot be shown to belong to this answer.
+            continue
+        codes.add(code)
+    return codes
+
+
+def _municipality_agreement(prop, geo: dict):
+    """(state, row_code, result_codes) -- about municipalities, as it says.
+
+    Five values, for the reason the province check has four: every way of
+    *not* being able to compare stays its own answer rather than borrowing
+    one of the two real ones (#98).
+
+    ``agreed``
+        the row's own municipality is among the ones the answer names;
+    ``contradicted``
+        the answer names exactly one municipality and it is a different one;
+    ``row_unmatched``
+        the row's municipality resolves to no INE code -- a parish list, an
+        email truncation (#298), a title fragment, or a province outside the
+        five this index covers, which is where the archived Alicante
+        subscriptions live;
+    ``result_names_no_municipality``
+        nothing in the answer's components resolves to one;
+    ``result_names_several``
+        two or more do, and disagree. A coin flip between them would be a
+        verdict invented out of an ambiguity.
+
+    Nothing here refuses a coordinate. The province contradiction still
+    does, because a province code is unambiguous and #348 proved the case;
+    a municipality disagreement is far likelier to be a parish sitting
+    across a boundary, and `Property.municipality` is free text off an alert
+    email. Measured on production 2026-08-19, refusing on this would have
+    thrown away a *precise* street-level result (property 80, "Barrio
+    Candín, 11" in Langreo against a row that says Siero). So this is a
+    record, not a gate -- which is exactly the defect GEO-001 reports: the
+    guard that would have caught property 559 was the one reporting success.
+    """
+    row_code = match_municipality(
+        str(getattr(prop, "municipality", "") or ""), load_name_index()
+    )
+    result_codes = _result_municipality_codes(geo)
+    if row_code is None:
+        return "row_unmatched", row_code, result_codes
+    if not result_codes:
+        return "result_names_no_municipality", row_code, result_codes
+    if row_code in result_codes:
+        return "agreed", row_code, result_codes
+    if len(result_codes) > 1:
+        return "result_names_several", row_code, result_codes
+    return "contradicted", row_code, result_codes
+
+
+# What the reader answers when nobody took a check. A fourth presentation
+# state, like `listing_verification`'s `unchecked`: no row is rewritten and
+# the database keeps exactly what it knows.
+CHECK_UNCHECKED = "unchecked"
+
+# `result_has_no_postcode` is what this state was called before #371 taught
+# the province check to read the name as well. 115 production records still
+# carry it (measured 2026-08-19). Same state, earlier name -- folded here, in
+# the one reader, rather than by rewriting rows.
+_LEGACY_PROVINCE_STATES = {"result_has_no_postcode": "result_has_no_province"}
+
+
+def read_geocoding_checks(record) -> dict:
+    """`{"province": state, "municipality": state}` for a stored record.
+
+    Two spellings of one key exist in the table and they mean different
+    things, so this is the one place that knows which is which.
+
+    A record written before GEO-001 carries `municipality_check` alone, and
+    that value is a **province** verdict under a municipality's name -- 201
+    production rows read "agreed" on 2026-08-19 meaning nothing stronger than
+    "Asturias is Asturias". Reading those as municipality agreement is the
+    defect the ticket reports, so this reader answers `province` from them and
+    `municipality` as `unchecked`: nobody looked, which is neither agreement
+    nor disagreement (#98).
+
+    A record written after carries both keys and is read literally. The
+    discriminator is the presence of `province_check`, not a date or a
+    version -- the block is rewritten whole on every geocode, so its own
+    shape is the only fact that travels with it.
+    """
+    if not isinstance(record, dict):
+        return {"province": CHECK_UNCHECKED, "municipality": CHECK_UNCHECKED}
+
+    province = record.get("province_check")
+    if province is not None:
+        return {
+            "province": _LEGACY_PROVINCE_STATES.get(province, province),
+            "municipality": record.get("municipality_check") or CHECK_UNCHECKED,
+        }
+
+    legacy = record.get("municipality_check")
+    if legacy is not None:
+        return {
+            "province": _LEGACY_PROVINCE_STATES.get(legacy, legacy),
+            "municipality": CHECK_UNCHECKED,
+        }
+    return {"province": CHECK_UNCHECKED, "municipality": CHECK_UNCHECKED}
 
 
 def _normalize_query(value: str) -> Optional[str]:
@@ -373,8 +560,9 @@ class PropertyLocationService:
                 }
                 continue
 
-            agreement, row_province, result_province = _municipality_agreement(
-                prop, geo
+            agreement, row_province, result_province = _province_agreement(prop, geo)
+            municipality_state, row_municipality, result_municipalities = (
+                _municipality_agreement(prop, geo)
             )
             if agreement == "contradicted":
                 logger.warning(
@@ -431,15 +619,41 @@ class PropertyLocationService:
                 "query": query,
                 "formatted_address": geo.get("formatted_address"),
                 "accuracy": accuracy,
-                # Whether anyone confirmed this result is about the row's own
-                # municipality. Recorded rather than assumed: three of these
-                # four values mean the coordinate was accepted *unchecked*, and
-                # a row that reads "agreed" is a stronger claim than one that
+                # Two checks, each under the name of what it compares
+                # (GEO-001). Recorded rather than assumed: most of these
+                # values mean the coordinate was accepted *unchecked*, and a
+                # row that reads "agreed" is a stronger claim than one that
                 # reads "row_unmatched". Same reason `sea_view_service` stamps
                 # `origin_unverified` instead of quietly treating unverified
                 # provenance as verified.
-                "municipality_check": agreement,
+                #
+                # `province_check` is the one that refuses, and it is the
+                # comparison this key held under the other name until now.
+                # `municipality_check` now compares municipalities, so a
+                # record carrying both is a stronger statement than one
+                # carrying only the first -- which is how
+                # `read_geocoding_checks` tells them apart.
+                "province_check": agreement,
+                "municipality_check": municipality_state,
             }
+            if municipality_state == "contradicted":
+                # The codes, so a reader can act on the row without
+                # re-geocoding it. Only on the interesting outcome: the
+                # province check already stores its two codes only when it
+                # refuses.
+                enrichment["geocoding"]["row_municipality"] = row_municipality
+                enrichment["geocoding"]["result_municipalities"] = sorted(
+                    result_municipalities
+                )
+                logger.info(
+                    "Municipality check disagrees for %r: row %r is %s, Google "
+                    "matched %r in %s",
+                    query,
+                    prop.municipality,
+                    row_municipality,
+                    geo.get("formatted_address"),
+                    sorted(result_municipalities),
+                )
             prop.enrichment = enrichment
             flag_modified(prop, "enrichment")
             return True

@@ -103,7 +103,9 @@ def build_index(code_to_name: Mapping[str, str]) -> Dict[str, str]:
     return index
 
 
-def match(name: str, index: Mapping[str, str]) -> Optional[str]:
+def match(
+    name: str, index: Mapping[str, str], *, apply_aliases: bool = True
+) -> Optional[str]:
     """Resolve a portal municipality name to a 5-digit INE code.
 
     `index` maps normalized INE names to codes (see `build_index`). Returns
@@ -111,13 +113,25 @@ def match(name: str, index: Mapping[str, str]) -> Optional[str]:
     provinces — the caller records `not_matched`. No fuzzy matching beyond
     the verified alias table: a silent wrong join is the failure mode this
     module exists to prevent.
+
+    `apply_aliases=False` is for a name that did **not** come from the portal
+    or from a reference dataset. `ALIASES` is verified for one direction only
+    — what Idealista calls a council, mapped onto INE's name for it — and
+    several of its source strings are real, independent places in their own
+    right. "San Esteban" is the alias the portal uses for the capital of
+    Muros de Nalón (33039), *and* a genuine parish of Morcín (33038); applied
+    to a geocoder's answer it turns a correct result for Morcín into a code
+    for a council 40 km away. The row side keeps the table, because that is
+    the side it was measured on; a geocoding result is matched without it and
+    an unrecognised name stays an honest miss (GEO-001).
     """
     if not name:
         return None
     key = normalize(name)
     if not key:
         return None
-    key = ALIASES.get(key, key)
+    if apply_aliases:
+        key = ALIASES.get(key, key)
     code = index.get(key)
     if code is None or code[:2] not in PROVINCE_CODES:
         return None
