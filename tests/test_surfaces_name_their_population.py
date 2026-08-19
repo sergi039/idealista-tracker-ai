@@ -688,8 +688,17 @@ class TestABackfillSaysWhatItIsAboutToCover:
             tool.main()
 
         assert "--all" in caplog.text
+        # Both spellings of the same claim. The first version of this test
+        # asserted only the sentence `window_note` writes, and the deployed
+        # image then printed the correct note directly under a surviving
+        # `Scope: 533 properties (days=30)` from before `log_scope` existed --
+        # a second window claim, in a different spelling, that the assertion
+        # walked straight past. Measured on the mini, not reasoned about.
         assert "last 30 days" not in caplog.text, (
             "the run covered every located row and said otherwise"
+        )
+        assert "days=" not in caplog.text, (
+            "a second, older spelling of the window this run does not have"
         )
 
     def test_the_travel_recalc_can_be_asked_before_it_spends(

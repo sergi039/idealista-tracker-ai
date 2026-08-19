@@ -78,6 +78,17 @@ def window_note(days: int, include_all: bool) -> str:
     return f"auto-enrich window: last {days} days or a favorite, located rows only"
 
 
+# Measured on the deployed image, 2026-08-19, immediately after the fix above
+# shipped: `backfill_pool --all --dry-run` printed the correct note under a
+# surviving `Scope: 533 properties (days=30)` from before `log_scope` existed.
+# Both lines described the same run and disagreed, which is the thing this
+# module was extracted to stop -- so the two entry points that carried a
+# *window* in that older line no longer carry it, and `log_scope` is the one
+# reading. The counts kept elsewhere (`--only-missing`, `dry_run`, `ai`) stay:
+# they name flags `log_scope` says nothing about, and deleting a line that is
+# merely redundant is taste, not correctness.
+
+
 def scope_population(
     rows: Sequence[Any], *, label: str, notes: Iterable[str] = ()
 ) -> Population:

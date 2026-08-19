@@ -71,7 +71,6 @@ def main() -> None:
         )
         if args.limit:
             properties = properties[: args.limit]
-        logger.info("Scope: %s properties (days=%s)", len(properties), args.days)
         log_scope(
             logger,
             properties,
