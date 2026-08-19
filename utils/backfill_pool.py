@@ -24,7 +24,7 @@ from app import create_app, db
 from models import Property
 from services.pool_service import PoolService
 from services.property_scoring_service import PropertyScoringService
-from utils.enrich_scope import log_scope, scoped_properties
+from utils.enrich_scope import log_scope, scoped_properties, window_note
 from utils import score_snapshot
 from utils.inflight import inflight
 
@@ -86,7 +86,7 @@ def main() -> None:
             properties,
             label="pool_backfill_queue",
             notes=(
-                f"auto-enrich window: last {args.days} days or a favorite, located rows only",
+                window_note(args.days, args.all),
                 "profile-agnostic on purpose (#410): a hidden subscription keeps ingesting",
                 f"worst case: <={len(properties) * 3} Distance Matrix elements + <={len(properties)} Places Text Search",
             ),

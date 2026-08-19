@@ -1826,6 +1826,23 @@ def get_properties():
                 "endpoint takes one integer id -- there is no spelling here for "
                 "'every subscription'."
             )
+        elif (
+            profile_id_source == "requested"
+            and str(profile_id) != str(raw_profile_id).strip()
+        ):
+            # A number that parsed and was still replaced: `if not profile_id`
+            # is falsy for `0`, so `profile_id=0` reaches the same substitution
+            # as `all` and used to arrive labelled `requested` with no note --
+            # indistinguishable from a request for a subscription that really
+            # is the default. `/properties` refuses such an id outright rather
+            # than falling back, "because falling back would quietly answer a
+            # different question and look like a working filter"
+            # (services/profile_selection.py); this endpoint keeps its
+            # fallback and says so.
+            notes.append(
+                f"profile_id={raw_profile_id!r} names no subscription; the "
+                f"default subscription ({profile_id}) was used instead."
+            )
         population = Population(
             label="one_subscription"
             if profile_id is not None

@@ -97,6 +97,37 @@ class SubscriptionMix:
         )
 
     @property
+    def kinds(self) -> Tuple[Tuple[str, int, int], ...]:
+        """`(kind, subscriptions, listings)`, in the order a disclosure names them.
+
+        The rule's one home, because it has two renderers and they disagreed:
+        `as_lines()` printed a kind only when it held something, while
+        `templates/municipalities.html` names live and retired even at zero.
+        The template is right, and the reasoning is #421's own -- a disclosure
+        that vanishes when the answer is reassuring teaches the reader to read
+        its absence as an absence -- so an operator reading a backfill's log
+        is owed the same "0 retired" the page prints.
+
+        Live and retired are therefore always here. Hidden, unknown and the
+        unassigned listings appear only when they hold something: those three
+        are exceptional rather than axes, and a permanent "0 hidden" on a
+        deployment that has never hidden a subscription is noise. `unassigned`
+        is a count of *listings* and carries no subscription count, which is
+        why its first number is `None` rather than `0`.
+        """
+        kinds: List[Tuple[str, int, int]] = [
+            ("live", self.active, self.listings_active),
+            ("retired", self.retired, self.listings_retired),
+        ]
+        if self.hidden:
+            kinds.append(("hidden", self.hidden, self.listings_hidden))
+        if self.unknown:
+            kinds.append(("unknown", self.unknown, self.listings_unknown))
+        if self.listings_unassigned:
+            kinds.append(("unassigned", None, self.listings_unassigned))
+        return tuple(kinds)
+
+    @property
     def is_mixed(self) -> bool:
         """Whether anything but live subscriptions contributed.
 
@@ -296,26 +327,17 @@ class Population:
                 lines.append(f"  rows: {self.total}")
         mix = self.subscriptions
         if mix is not None:
-            parts = [f"{mix.active} live"]
-            if mix.retired:
-                parts.append(f"{mix.retired} retired")
-            if mix.hidden:
-                parts.append(f"{mix.hidden} hidden")
-            if mix.unknown:
-                parts.append(f"{mix.unknown} unknown")
-            detail = [f"{mix.listings_active} listings from live"]
-            if mix.listings_retired:
-                detail.append(f"{mix.listings_retired} from retired")
-            if mix.listings_hidden:
-                detail.append(f"{mix.listings_hidden} from hidden")
-            if mix.listings_unknown:
-                detail.append(f"{mix.listings_unknown} from unknown")
-            if mix.listings_unassigned:
-                detail.append(f"{mix.listings_unassigned} with no subscription")
-            lines.append(
-                f"  subscriptions: {mix.subscriptions} ({', '.join(parts)}) — "
-                + ", ".join(detail)
-            )
+            # Read from `kinds`, not from the fields: the page renders the same
+            # rule, and the two used to disagree about whether a zero is worth
+            # saying.
+            parts = []
+            for kind, subscriptions, listings in mix.kinds:
+                noun = "listing" if listings == 1 else "listings"
+                if subscriptions is None:
+                    parts.append(f"{listings} {noun} with no subscription")
+                else:
+                    parts.append(f"{subscriptions} {kind} ({listings} {noun})")
+            lines.append(f"  subscriptions: {mix.subscriptions} — " + ", ".join(parts))
         if self.truncated:
             lines.append(f"  not shown: {self.not_shown} (cap {self.cap})")
         if self.basis:

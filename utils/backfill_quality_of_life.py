@@ -22,7 +22,7 @@ from typing import Dict
 from app import create_app, db
 from models import Property
 from services.quality_of_life_service import RETRYABLE_STATUSES, QualityOfLifeService
-from utils.enrich_scope import log_scope, scoped_properties
+from utils.enrich_scope import log_scope, scoped_properties, window_note
 from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ def main() -> None:
             properties,
             label="quality_of_life_backfill_queue",
             notes=(
-                f"auto-enrich window: last {args.days} days or a favorite, located rows only",
+                window_note(args.days, args.all),
                 "free: INE and CNH read local files, supermarkets go through the shared Overpass gate",
             ),
         )
