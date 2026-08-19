@@ -590,10 +590,17 @@ class TestSharedCoordinatesAreSurfaced:
             location_lon=Decimal("-5.8000000"),
         )
 
-        peers = shared_coordinate_peers(rows[0])
+        peers, population = shared_coordinate_peers(rows[0])
 
         assert peers == [row.id for row in rows[1:]]
-        assert shared_coordinate_peers(elsewhere) == []
+        # The cluster's real size travels with the ids, so a capped list can
+        # say so (UNIVERSE-001).
+        assert (population.total, population.returned) == (len(peers), len(peers))
+        assert population.truncated is False
+
+        alone, alone_population = shared_coordinate_peers(elsewhere)
+        assert alone == []
+        assert alone_population.total == 0
 
     def test_the_report_counts_what_a_re_geocode_would_unlock(self, app):
         """`utils/report_coordinate_quality` spends nothing and writes nothing.
@@ -646,5 +653,5 @@ class TestSharedCoordinatesAreSurfaced:
 
         payload = SeaDistanceService().update_property(first)
 
-        assert shared_coordinate_peers(first) == [second.id]
+        assert shared_coordinate_peers(first)[0] == [second.id]
         assert payload["status"] == STATUS_OK

@@ -34,6 +34,7 @@ from services.enrichment_service import (
     OSM_STATUS_KEY,
     EnrichmentService,
 )
+from utils.enrich_scope import log_scope
 from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
@@ -140,6 +141,15 @@ def main() -> None:
             len(properties),
             args.only_missing,
             args.dry_run,
+        )
+        log_scope(
+            logger,
+            properties,
+            label="osm_amenity_backfill_queue",
+            notes=(
+                "every stored row, not the auto-enrich window",
+                "free: OpenStreetMap through the shared Overpass gate",
+            ),
         )
 
         # Free, but paced at OVERPASS_MIN_INTERVAL_S: a restart without

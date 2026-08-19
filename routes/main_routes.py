@@ -728,67 +728,6 @@ def _hidden_subscription_note(resolved, counts=None):
     }
 
 
-def _municipality_scope_note(rows):
-    """How much of the /municipalities table sits where /properties cannot see it.
-
-    The comparison page has no subscription control at all -- it compares
-    municipalities, not saved searches -- so it counts every stored listing,
-    retired and hidden subscriptions included. That is the right basis for a
-    median and it is invisible from the page: "79" reads as "79 listings I can
-    reach", while a bare /properties offers only the active, non-hidden ones
-    (#410 named this risk; #417 is where it was measured -- 311 of 773
-    production listings sit in retired subscriptions).
-
-    The drill-down links now carry that scope, so the two numbers agree. This
-    line is the other half: it says, once, what the column of numbers above it
-    covers. A disclosure, not a warning -- the owner retired those searches on
-    purpose.
-
-    **A listing with no subscription counts here too**, under its own phrase.
-    `profile_id=all` is built with `include_unassigned=False` always
-    (services/profile_selection.py), so `search_profile_id IS NULL` is as
-    absent from a bare /properties as a retired search is -- and it is not a
-    subscription, so folding it into "retired or hidden subscriptions" would
-    be a second wrong number rather than a disclosure. Production holds none
-    today; ingestion can still produce one (#110), and a disclosure that only
-    works on the data that exists is the defect this page is being fixed for.
-
-    Counted off the rows the medians were computed from, never from a second
-    query over `properties`; only the *set* of subscriptions /properties would
-    offer is looked up, which is a fact about profiles and not about listings.
-    Returns None when nothing is off screen, so an install whose subscriptions
-    are all live and all assigned carries no line at all.
-    """
-    from services.search_profile_service import SearchProfileService
-
-    counted = {}
-    unassigned = 0
-    for row in rows:
-        scope = row.get("scope") or {}
-        for profile_id, count in (scope.get("profile_counts") or {}).items():
-            counted[profile_id] = counted.get(profile_id, 0) + count
-        unassigned += int(scope.get("unassigned") or 0)
-
-    offscreen = {}
-    if counted:
-        offered = {
-            profile.id
-            for profile in SearchProfileService.list_visible_profiles(active_only=True)
-        }
-        offscreen = {
-            profile_id: count
-            for profile_id, count in counted.items()
-            if profile_id not in offered
-        }
-    if not offscreen and not unassigned:
-        return None
-    return {
-        "profiles": len(offscreen),
-        "listings": sum(offscreen.values()),
-        "unassigned": unassigned,
-    }
-
-
 def _travel_display_targets(profile_ids, include_custom=False):
     """Travel columns to render for the profiles currently on screen.
 
@@ -1570,6 +1509,10 @@ def property_detail(property_id):
         except Exception:
             travel_display_targets = []
 
+        shared_coordinate_ids, shared_coordinate_population = shared_coordinate_peers(
+            prop
+        )
+
         return render_template(
             "property_detail.html",
             property=prop,
@@ -1593,10 +1536,12 @@ def property_detail(property_id):
             ),
             travel_display_targets=travel_display_targets,
             sea_view_verdict=sea_view_service.read_verdict(prop),
-            # One row, one query, and only on this page: the list would run it
-            # per row. It is evidence about the coordinate, next to the
-            # coordinate, and nothing scores on it.
-            shared_coordinate_ids=shared_coordinate_peers(prop),
+            # One row, and only on this page: the list would run it per row.
+            # It is evidence about the coordinate, next to the coordinate, and
+            # nothing scores on it. The population travels with the ids
+            # because the list is capped -- see UNIVERSE-001.
+            shared_coordinate_ids=shared_coordinate_ids,
+            shared_coordinate_population=shared_coordinate_population,
         )
     except HTTPException:
         raise
@@ -2787,6 +2732,11 @@ def municipalities():
         drilldown_args,
         drilldown_truncates,
     )
+    from services.population import (
+        Population,
+        listings_by_profile,
+        subscription_mix,
+    )
 
     try:
         include_archived = request.args.get("archived") == "on"
@@ -2832,16 +2782,36 @@ def municipalities():
         # sides ask `group_key`, so the footnote cannot drift from the table
         # it is explaining.
         unnamed = sum(1 for p in properties if group_key(p.municipality) is None)
+
+        # What the whole table is a comparison *of* (UNIVERSE-001). This page
+        # spans every subscription -- 311 of production's 772 listings sit in
+        # retired ones -- and said so nowhere, which left "87 municipalities ·
+        # 772 listings" reading as the owner's live searches. The mix is
+        # tallied off the rows the medians were computed from, the same rule
+        # the drill-down link follows (#417).
+        population = Population(
+            label="stored_inventory",
+            total=len(properties),
+            returned=len(properties),
+            # No `basis` here on purpose. This page states its adjustment
+            # basis in the reader's own language, from `municipalities_basis_note`
+            # -- a second, English, machine-readable copy of the same sentence
+            # would be one more thing to keep in agreement and nothing renders
+            # it. `basis` is for the surfaces whose reader is a machine or a
+            # log.
+            subscriptions=subscription_mix(listings_by_profile(properties)),
+        )
+
         return render_template(
             "municipalities.html",
             rows=rows,
+            population=population,
             sort_by=sort_by,
             order=order,
             include_archived=include_archived,
             favorites_only=favorites_only,
             listing_total=len(properties),
             unnamed_listings=unnamed,
-            offscreen_subscriptions=_municipality_scope_note(rows),
             sources=service.qol_service.reference_sources(),
         )
     except HTTPException:

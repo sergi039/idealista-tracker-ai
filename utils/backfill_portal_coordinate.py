@@ -55,6 +55,7 @@ from models import Property
 from services.coordinate_quality import portal_coordinate, record_portal_coordinate
 from services.enrichment_write import check_writable, locked_write
 from services.fotocasa_source import SOURCE_NAME, fetch_listing
+from utils.enrich_scope import log_scope
 from utils.inflight import inflight
 from utils.listing_source import FOTOCASA, source_of
 
@@ -193,6 +194,14 @@ def main() -> None:
     with app.app_context():
         rows = _scope(args.profiles, args.ids, args.limit)
         logger.info("Scope: %s fotocasa row(s) with no pin recorded", len(rows))
+        log_scope(
+            logger,
+            rows,
+            label="portal_coordinate_repair_queue",
+            notes=(
+                'free: the pin is already stored in enrichment["import"], nothing is fetched',
+            ),
+        )
         if not rows:
             return
 

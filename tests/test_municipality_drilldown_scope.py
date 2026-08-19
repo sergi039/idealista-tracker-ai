@@ -340,34 +340,51 @@ class TestMoreSubscriptionsThanOneLinkCanName:
 
 
 class TestThePageSaysWhatItCovers:
-    """One line, because the page has no subscription control of its own."""
+    """One line, because the page has no subscription control of its own.
+
+    #419 shipped this as a conditional footnote counting the subscriptions
+    `/properties` would not offer. UNIVERSE-001 (#265) asks the same page for
+    the whole composition and the adjustment basis, which is a superset of
+    that count — so the two were folded into the single Scope line rather than
+    printed as two lines carrying the same number under two framings. The
+    facts pinned below are #419's, restated against the line that now carries
+    them; the one that changed on purpose is the last.
+    """
 
     def _note(self, body):
-        match = re.search(r'id="municipalities-scope-note".*?</div>', body, re.S)
-        return match.group(0) if match else None
+        match = re.search(r'id="municipalities-scope".*?</div>', body, re.S)
+        if not match:
+            return None
+        return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", match.group(0))).strip()
 
     def test_it_counts_the_subscriptions_properties_does_not_offer(
         self, app, client, world
     ):
         note = self._note(client.get("/municipalities").get_data(as_text=True))
         assert note is not None
-        # The retired one and the hidden one; the live subscription is offered
-        # and is not withheld. Four listings: Gijon 1 + Nava 2 in the retired
-        # search, Gijón 1 in the hidden one.
-        assert "2 retired or hidden subscriptions" in note
-        assert "4 listings" in note
-        # And the unassigned row separately -- `profile_id=all` never covers
-        # it either, but it is not a subscription.
+        # The retired one and the hidden one, each with its own listings --
+        # #420's "2 retired or hidden subscriptions (4 listings)" said in the
+        # terms the merged line uses, and it says which is which. Four
+        # listings are off the list page's filter: Gijon 1 + Nava 2 in the
+        # retired search, Gijón 1 in the hidden one.
+        assert "1 retired (3)" in note
+        assert "1 hidden (1)" in note
+        # The unassigned row, separately and with its noun -- `profile_id=all`
+        # never covers it either, and it is not a subscription (#420).
         assert "1 listing with no subscription" in note
+        # And the sentence #419 added, which is the fact that the link and the
+        # number are now one scope.
+        assert "each row opens exactly the listings behind its number" in note
 
     def test_it_speaks_spanish_on_a_spanish_page(self, app, client, world):
         with client.session_transaction() as session:
             session["language"] = "es"
         note = self._note(client.get("/municipalities").get_data(as_text=True))
         assert note is not None
-        assert "2 suscripciones retiradas u ocultas" in note
-        assert "4 anuncios" in note
+        assert "1 retirada (3)" in note
+        assert "1 oculta (1)" in note
         assert "1 anuncio sin suscripción" in note
+        assert "todos los anuncios almacenados" in note
 
     def test_one_subscription_is_written_in_the_singular(self, app, client):
         retired = SearchProfile(name="Quesada", is_active=False)
@@ -375,23 +392,35 @@ class TestThePageSaysWhatItCovers:
         db.session.commit()
         _listing("Nava", retired)
         note = self._note(client.get("/municipalities").get_data(as_text=True))
-        assert "1 retired or hidden subscription" in note
-        assert "1 listing" in note and "1 listings" not in note
+        assert "1 subscription holding 1 listing" in note
+        assert "1 subscriptions" not in note and "1 listings" not in note
 
-    def test_nothing_is_said_when_every_subscription_is_live(self, app, client):
+    def test_the_line_stays_when_every_subscription_is_live(self, app, client):
+        """The one behaviour that changed, and why.
+
+        #419's footnote was silent when nothing was off screen, which is right
+        for a "what you cannot reach" note. This line answers "what is this a
+        comparison of", and a scope disclosure that disappears when the answer
+        is reassuring teaches the reader to read its absence as its absence.
+        So it renders either way and says `0 retired`.
+        """
         live = SearchProfile(name="Land at Norte", is_active=True)
         db.session.add(live)
         db.session.commit()
         _listing("Navia", live)
-        body = client.get("/municipalities").get_data(as_text=True)
-        assert self._note(body) is None, "a disclosure with nothing to disclose"
+        note = self._note(client.get("/municipalities").get_data(as_text=True))
+        assert note is not None
+        assert "1 live (1)" in note
+        assert "0 retired (0)" in note
 
     def test_a_municipality_of_unassigned_listings_alone_still_says_so(
         self, app, client
     ):
         """The whole row is absent from a bare /properties, and nothing else
         on the page would have mentioned it: there is no subscription to
-        count, so a note keyed on profiles alone rendered nothing at all."""
+        count, so #420's note keyed on profiles alone rendered nothing at all.
+        Restated against the merged line, which counts them under their own
+        noun beside the subscription kinds rather than inside them."""
         live = SearchProfile(name="Land at Norte", is_active=True)
         db.session.add(live)
         db.session.commit()
@@ -401,6 +430,8 @@ class TestThePageSaysWhatItCovers:
         note = self._note(client.get("/municipalities").get_data(as_text=True))
         assert note is not None
         assert "2 listings with no subscription" in note
-        assert "retired or hidden" not in note, (
-            "an unassigned listing is not a subscription"
-        )
+        # Not folded into a subscription kind: there is one live subscription
+        # here and no retired or hidden one, and the line still says so.
+        assert "1 live (1)" in note
+        assert "0 retired (0)" in note
+        assert "hidden" not in note, "an unassigned listing is not a subscription"
