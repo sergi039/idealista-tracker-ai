@@ -143,7 +143,7 @@ class TestTheNameIsReadWhenThereIsNoPostcode:
             db.session.commit()
 
             record = _stored(prop.id).enrichment["geocoding"]
-            assert record["municipality_check"] == "agreed"
+            assert record["province_check"] == "agreed"
             assert _stored(prop.id).location_lat is not None
 
     def test_the_wrong_province_by_name_is_refused(self, app):
@@ -168,7 +168,7 @@ class TestTheThirdStateSurvives:
             db.session.commit()
 
             record = _stored(prop.id).enrichment["geocoding"]
-            assert record["municipality_check"] == "result_has_no_province"
+            assert record["province_check"] == "result_has_no_province"
 
     def test_an_answer_with_no_components_cannot_be_compared(self, app):
         """The Nominatim fallback returns none; that is not agreement."""
@@ -178,7 +178,7 @@ class TestTheThirdStateSurvives:
             db.session.commit()
 
             record = _stored(prop.id).enrichment["geocoding"]
-            assert record["municipality_check"] == "result_has_no_province"
+            assert record["province_check"] == "result_has_no_province"
 
 
 class TestWhatMustNotChange:
@@ -190,7 +190,7 @@ class TestWhatMustNotChange:
             db.session.commit()
 
             record = _stored(prop.id).enrichment["geocoding"]
-            assert record["municipality_check"] == "agreed"
+            assert record["province_check"] == "agreed"
 
     def test_alicante_still_geocodes_by_name(self, app):
         """The archived subscriptions are outside INE scope and must survive."""
