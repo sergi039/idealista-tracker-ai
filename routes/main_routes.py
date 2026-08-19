@@ -2723,6 +2723,7 @@ def municipalities():
         DEFAULT_SORT,
         SORT_KEYS,
         MunicipalityComparisonService,
+        drill_down_args,
     )
 
     try:
@@ -2747,6 +2748,18 @@ def municipalities():
         service = MunicipalityComparisonService()
         rows = service.build_rows(properties)
         rows = service.sort_rows(rows, sort_by, descending=(order == "desc"))
+
+        # The link each row hands the owner has to open the rows that row
+        # counted (#417). Two of the four axes are this page's own state and
+        # the other two came off the listings themselves, so the arguments are
+        # assembled here and rendered as-is -- the template never decides any
+        # part of the scope.
+        for row in rows:
+            row["drill_down"] = drill_down_args(
+                row,
+                favorites_only=favorites_only,
+                hide_removed=not include_archived,
+            )
 
         # Truncated email artifacts ("Ovi...", issue #298) count with the
         # unnamed listings: build_rows skips both, for the same reason -- a

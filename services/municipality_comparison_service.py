@@ -25,6 +25,18 @@ listings is a different claim from a median over 30 of 30, and the page says
 which it is. A municipality whose name the INE join cannot resolve shows its
 listing medians and an explicit "not matched" for the municipality facts —
 never a guessed code (#98's shape, applied to a join).
+
+**The row's link opens the rows the row counted** (#417). A count and a link
+that answer different questions are worse than either alone: until this
+module carried the scope, every row linked to
+`/properties?municipality=<name>&profile_id=all`, and `all` is defined in
+this codebase as *active and not hidden*, while the aggregate counts every
+stored listing. Measured on production 2026-08-19, 49 of 87 drill-downs
+agreed with the row above them; 25 undercounted by 259 listings and 13 opened
+on zero while claiming 52. So each row now carries the scope it was computed
+under — see `drill_down_args` — and the scope is read off *the rows the
+medians came from*, never from a second query, because a second query is how
+the two numbers came to disagree in the first place.
 """
 
 import logging
@@ -172,6 +184,54 @@ def _price_per_m2(prop: Property) -> Optional[float]:
     return price / area
 
 
+def drill_down_args(
+    row: Dict[str, Any], *, favorites_only: bool, hide_removed: bool
+) -> Dict[str, Any]:
+    """Query arguments opening `/properties` on exactly the rows `row` counted.
+
+    Four axes, and all four have to travel or the link answers a different
+    question from the number it sits under (#417):
+
+    * **the contributing subscriptions**, named one by one. `profile_id=all`
+      cannot express this: it means *active and not hidden*, while the
+      aggregate counts every stored listing, so 311 of 773 production rows sat
+      in retired subscriptions the link could not reach. Explicit ids can name
+      a retired or hidden subscription, which is what
+      `services/profile_selection.py` already supports and what the
+      subscription menu already puts a ticked checkbox against.
+    * **the unassigned rows**, as the `unassigned` sentinel, and only when such
+      rows really contributed. Adding it unconditionally would widen the
+      drill-down past its row -- `all` never implies it, and neither does this.
+    * **the favorites mode** the aggregate was computed under.
+    * **the listing-status scope**. `/municipalities?archived=on` and
+      `/properties?hide_removed=on` are the same fact under two names, and the
+      names are opposites, so this is the one axis where a copied parameter
+      would be exactly wrong.
+
+    `hide_removed` is *omitted* rather than sent as `off`, because that is how
+    /properties itself serialises the switch (`base_args` in
+    templates/properties.html) and a link that round-trips through the page's
+    own controls is one fewer spelling of the same state.
+
+    More contributing subscriptions than `MAX_SELECTED_PROFILE_IDS` would be
+    truncated by the parser -- not silently: `ProfileSelection.truncated`
+    reaches the page, which says so. Production's worst municipality is carried
+    by 8 (2026-08-19), and there are 15 subscriptions in total.
+    """
+    from services.profile_selection import PROFILE_UNASSIGNED_SENTINEL
+
+    profile_id: List[Any] = list(row.get("profile_ids") or ())
+    if row.get("unassigned"):
+        profile_id.append(PROFILE_UNASSIGNED_SENTINEL)
+
+    return {
+        "municipality": row["name"],
+        "profile_id": profile_id,
+        "favorites": "on" if favorites_only else None,
+        "hide_removed": "on" if hide_removed else None,
+    }
+
+
 # Column keys the page may sort by, and how to read them off a built row.
 # Kept here so the route's allow-list cannot drift from what the table shows.
 SORT_KEYS = {
@@ -233,6 +293,14 @@ class MunicipalityComparisonService:
                     "spellings": {},
                     "listings": 0,
                     "favorites": 0,
+                    # The subscriptions this municipality's number is made of,
+                    # read off the rows themselves (#417). A second query
+                    # asking "which profiles hold listings here" would be a
+                    # different question the moment either side grew a filter,
+                    # which is exactly how the row and its link came to
+                    # disagree.
+                    "profile_ids": set(),
+                    "unassigned": 0,
                     "metrics": {
                         metric: _Metric()
                         for metric in (
@@ -255,6 +323,10 @@ class MunicipalityComparisonService:
 
             group["spellings"][name] = group["spellings"].get(name, 0) + 1
             group["listings"] += 1
+            if prop.search_profile_id is None:
+                group["unassigned"] += 1
+            else:
+                group["profile_ids"].add(int(prop.search_profile_id))
             if prop.is_favorite:
                 group["favorites"] += 1
             metrics = group["metrics"]
@@ -282,6 +354,14 @@ class MunicipalityComparisonService:
                 "name": preferred_display(group["spellings"]),
                 "listings": group["listings"],
                 "favorites": group["favorites"],
+                # What the number above is made of. `drill_down_args` turns
+                # it into the link, and it is the only reading of "which
+                # subscriptions is this municipality made of" on this page --
+                # UNIVERSE-001 in #265 wants the same fact said out loud, and
+                # it has to come from here rather than from a query of its
+                # own, or the sentence and the link describe different sets.
+                "profile_ids": tuple(sorted(group["profile_ids"])),
+                "unassigned": group["unassigned"],
             }
             for metric, accumulator in group["metrics"].items():
                 row[metric] = accumulator.summary()

@@ -107,7 +107,16 @@
                     {% for row in rows %}
                         <tr>
                             <td>
-                                <a href="{{ url_for('main.properties', municipality=row.name, profile_id='all') }}"
+                                {# Opens exactly the listings this row counted:
+                                   the subscriptions that carry them (retired
+                                   ones included), the unassigned rows when
+                                   there are any, and this page's own favorites
+                                   and archive state. Assembled by
+                                   `drill_down_args` in the comparison service,
+                                   never here -- see #417 for the 38 rows whose
+                                   link used to disagree with the number beside
+                                   it. #}
+                                <a href="{{ url_for('main.properties', **row.drill_down) }}"
                                    class="text-decoration-none fw-semibold">{{ row.name }}</a>
                                 {% if row.favorites %}
                                     <span class="badge bg-warning text-dark ms-1" title="{{ t('favorites') }}">
