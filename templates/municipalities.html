@@ -119,6 +119,17 @@
                                 <a href="{{ url_for('main.properties', **row.drilldown) }}"
                                    data-drilldown="{{ row.key }}"
                                    class="text-decoration-none fw-semibold">{{ row.name }}</a>
+                                {# More subscriptions carry this row than one
+                                   `profile_id` can name, so the link will show
+                                   fewer listings than the count beside it.
+                                   /properties says so once the reader has
+                                   clicked; this ticket is about saying it
+                                   before. #}
+                                {% if row.drilldown_truncated %}
+                                    <i class="fas fa-triangle-exclamation text-warning ms-1"
+                                       data-drilldown-truncated="{{ row.key }}"
+                                       title="{{ t('municipalities_drilldown_truncated') }}"></i>
+                                {% endif %}
                                 {% if row.favorites %}
                                     <span class="badge bg-warning text-dark ms-1" title="{{ t('favorites') }}">
                                         <i class="fas fa-star"></i> {{ row.favorites }}
@@ -202,9 +213,19 @@
                 <div id="municipalities-scope-note">
                     <i class="fas fa-circle-info me-1"></i>
                     {{ t('municipalities_scope_prefix') }}:
-                    {{ tn('municipalities_offscreen_subscriptions', offscreen_subscriptions.profiles) }}
-                    ({{ tn('listings_count', offscreen_subscriptions.listings) }}) &middot;
-                    {{ t('municipalities_scope_suffix') }}
+                    {% if offscreen_subscriptions.profiles %}
+                        {{ tn('municipalities_offscreen_subscriptions', offscreen_subscriptions.profiles) }}
+                        ({{ tn('listings_count', offscreen_subscriptions.listings) }})
+                        {%- if offscreen_subscriptions.unassigned %} &middot;{% endif %}
+                    {% endif %}
+                    {# Not a subscription, so not folded into the count above:
+                       `profile_id=all` never covers a listing with no saved
+                       search, which makes it as absent from /properties as a
+                       retired one and a different thing to say. #}
+                    {% if offscreen_subscriptions.unassigned %}
+                        {{ tn('municipalities_unassigned_listings', offscreen_subscriptions.unassigned) }}
+                    {% endif %}
+                    &middot; {{ t('municipalities_scope_suffix') }}
                 </div>
             {% endif %}
             {% if unnamed_listings %}

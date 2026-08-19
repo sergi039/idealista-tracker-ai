@@ -44,6 +44,7 @@ from typing import Any, Dict, List, Optional
 
 from models import Property
 from services.profile_selection import (
+    MAX_SELECTED_PROFILE_IDS,
     ProfileSelection,
     ProfileSelectionState,
     resolve_profile_selection,
@@ -251,9 +252,9 @@ def drilldown_args(
     The `profile_id` encoding is `services/profile_selection.py`'s, not a
     second spelling of it, so a selection this builds and a selection the URL
     parses back are the same object. A municipality carried by more profiles
-    than that module accepts is truncated *there*, on parse, where
-    `/properties` already discloses it -- dropping ids here would be the
-    silent half of the same act.
+    than that module accepts is truncated *there*, on parse -- dropping ids
+    here would be the silent half of the same act -- and `drilldown_truncates`
+    below is what lets this page say so before the link is followed.
     """
     scope = row.get("scope") or {}
     profile_counts = scope.get("profile_counts") or {}
@@ -271,6 +272,27 @@ def drilldown_args(
         "favorites": "on" if favorites_only else None,
         "hide_removed": "off" if include_archived else "on",
     }
+
+
+def drilldown_truncates(row: Dict[str, Any]) -> bool:
+    """Whether this row's link cannot name every subscription that carried it.
+
+    `profile_id` accepts at most `MAX_SELECTED_PROFILE_IDS` ids, because the
+    parsed list goes straight into a SQL `IN (...)` and a hand-written URL is
+    not obliged to be reasonable. Past that the link *undercounts*: the parser
+    keeps the first 50, `/properties` shows fewer listings than the number
+    beside the name, and it discloses the truncation only once the reader has
+    already clicked.
+
+    That is this ticket's own defect one regime further out, so the page says
+    it here instead. The cap is read from the module that owns it rather than
+    written down a second time -- a rule in two places is one that eventually
+    ships half-changed. Unreachable in production today (15 subscriptions in
+    all, the busiest municipality carried by 8), which is exactly why nothing
+    else would notice it arriving.
+    """
+    scope = row.get("scope") or {}
+    return len(scope.get("profile_counts") or {}) > MAX_SELECTED_PROFILE_IDS
 
 
 class MunicipalityComparisonService:
