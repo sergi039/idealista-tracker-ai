@@ -368,6 +368,21 @@ TRANSLATIONS = {
         "municipalities_archived_tooltip": "Also count removed and sold listings",
         "municipalities_pool_indoor_tooltip": "Median to the nearest pool with indoor evidence",
         "municipalities_unnamed_note": "listings carry no municipality and are not compared",
+        # What the table covers that the /properties subscription filter does
+        # not offer (#417). Counted phrases go through `tn()` for the reason
+        # the subscription copy above gives: Spanish inflects the adjectives
+        # with the noun ("suscripcion retirada u oculta" against
+        # "suscripciones retiradas u ocultas").
+        "municipalities_scope_prefix": "Included in these counts",
+        "municipalities_offscreen_subscriptions_one": (
+            "%s retired or hidden subscription"
+        ),
+        "municipalities_offscreen_subscriptions_other": (
+            "%s retired or hidden subscriptions"
+        ),
+        "municipalities_scope_suffix": (
+            "each row opens exactly the listings behind its number"
+        ),
         "municipalities_empty": "No listings to compare yet.",
         "pool_unroutable": "no road route",
         "pool_unroutable_tooltip": "Google answered: no driving route to this pool",
@@ -735,6 +750,16 @@ TRANSLATIONS = {
         "municipalities_archived_tooltip": "Contar también retirados y vendidos",
         "municipalities_pool_indoor_tooltip": "Mediana a la piscina más cercana con indicios de cubierta",
         "municipalities_unnamed_note": "anuncios no llevan municipio y no se comparan",
+        "municipalities_scope_prefix": "Incluidos en estos recuentos",
+        "municipalities_offscreen_subscriptions_one": (
+            "%s suscripción retirada u oculta"
+        ),
+        "municipalities_offscreen_subscriptions_other": (
+            "%s suscripciones retiradas u ocultas"
+        ),
+        "municipalities_scope_suffix": (
+            "cada fila abre exactamente los anuncios que hay detrás de su número"
+        ),
         "municipalities_empty": "Aún no hay anuncios que comparar.",
         "pool_unroutable": "sin ruta por carretera",
         "pool_unroutable_tooltip": "Google respondió: sin ruta en coche a esta piscina",

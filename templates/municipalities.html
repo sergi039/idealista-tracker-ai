@@ -107,7 +107,17 @@
                     {% for row in rows %}
                         <tr>
                             <td>
-                                <a href="{{ url_for('main.properties', municipality=row.name, profile_id='all') }}"
+                                {# The link opens exactly the listings this row
+                                   counted: the subscriptions that carried it
+                                   (retired and hidden ones by id, since an id
+                                   is the only thing that reaches those), the
+                                   unassigned rows, and this page's favorites
+                                   and listing-status scope. Built by
+                                   `drilldown_args`, so the number and the page
+                                   behind it cannot be taken under two
+                                   different scopes (#417). #}
+                                <a href="{{ url_for('main.properties', **row.drilldown) }}"
+                                   data-drilldown="{{ row.key }}"
                                    class="text-decoration-none fw-semibold">{{ row.name }}</a>
                                 {% if row.favorites %}
                                     <span class="badge bg-warning text-dark ms-1" title="{{ t('favorites') }}">
@@ -183,6 +193,20 @@
         </div>
 
         <div class="small text-body-secondary mt-2">
+            {# What the numbers above cover that the subscription filter on
+               /properties does not offer. The medians are taken over every
+               stored listing on purpose -- this page compares municipalities,
+               not saved searches -- and without this line a count reads as
+               "listings I can reach from the list page". #}
+            {% if offscreen_subscriptions %}
+                <div id="municipalities-scope-note">
+                    <i class="fas fa-circle-info me-1"></i>
+                    {{ t('municipalities_scope_prefix') }}:
+                    {{ tn('municipalities_offscreen_subscriptions', offscreen_subscriptions.profiles) }}
+                    ({{ tn('listings_count', offscreen_subscriptions.listings) }}) &middot;
+                    {{ t('municipalities_scope_suffix') }}
+                </div>
+            {% endif %}
             {% if unnamed_listings %}
                 <div>
                     <i class="fas fa-circle-info me-1"></i>

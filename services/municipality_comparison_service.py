@@ -25,6 +25,17 @@ listings is a different claim from a median over 30 of 30, and the page says
 which it is. A municipality whose name the INE join cannot resolve shows its
 listing medians and an explicit "not matched" for the municipality facts —
 never a guessed code (#98's shape, applied to a join).
+
+Every row also carries the *scope it was counted under* -- which subscriptions
+contributed to it and how many listings each gave -- so the link beside the
+number can open exactly those listings (#417). It has to be collected here,
+off the rows the medians were computed from, and never re-derived by a second
+query: the drill-down used to be `profile_id=all`, which this codebase defines
+as "active and not hidden", while the aggregate counts every stored listing.
+Measured against production on 2026-08-19, that made 38 of 87 rows disagree
+with the page they linked to and opened 13 of them on zero -- 311 of 773
+listings sit in retired subscriptions. Two numbers about one municipality,
+taken by two different queries, is exactly how they came to disagree.
 """
 
 import logging
@@ -32,6 +43,11 @@ from statistics import median
 from typing import Any, Dict, List, Optional
 
 from models import Property
+from services.profile_selection import (
+    ProfileSelection,
+    ProfileSelectionState,
+    resolve_profile_selection,
+)
 from services.quality_of_life_service import QualityOfLifeService
 from services.sea_distance_service import parcel_measurement
 from utils.municipality_grouping import group_key, preferred_display
@@ -201,6 +217,62 @@ SORT_KEYS = {
 DEFAULT_SORT = "listings"
 
 
+def drilldown_args(
+    row: Dict[str, Any],
+    favorites_only: bool = False,
+    include_archived: bool = False,
+) -> Dict[str, Any]:
+    """`/properties` query parameters that open exactly this row's listings.
+
+    The number on a `/municipalities` row and the page its link opens are two
+    statements about one municipality, so they have to be taken under one
+    scope. They were not: the link said `profile_id=all`, which this codebase
+    defines as *active and not hidden*, while the aggregate counts every
+    stored listing. Measured against production on 2026-08-19 that was 38
+    disagreeing rows out of 87 and 13 that opened on zero (#417).
+
+    Making it honest is four independent axes, not one parameter:
+
+    1. **the contributing subscriptions**, named by id -- an explicit id is
+       the only thing that reaches a retired or hidden profile, and it is
+       read off `row["scope"]`, which `build_rows` collected from the very
+       rows the medians came from;
+    2. **`search_profile_id IS NULL`**, which is a peer of the profile list
+       and never part of `all`, so it takes its own `unassigned` token;
+    3. **the favorites mode** the aggregate was computed under;
+    4. **the listing-status scope** -- `archived` here and `hide_removed`
+       there are the same fact under two names, and it is passed even when it
+       agrees with the target's default, because `/properties` decides that
+       default from *whether any filter parameter is present at all*: a link
+       carrying `municipality` and no `hide_removed` reads as a submitted
+       form with the box unticked, and quietly shows the removed listings
+       this page had excluded.
+
+    The `profile_id` encoding is `services/profile_selection.py`'s, not a
+    second spelling of it, so a selection this builds and a selection the URL
+    parses back are the same object. A municipality carried by more profiles
+    than that module accepts is truncated *there*, on parse, where
+    `/properties` already discloses it -- dropping ids here would be the
+    silent half of the same act.
+    """
+    scope = row.get("scope") or {}
+    profile_counts = scope.get("profile_counts") or {}
+    selection = ProfileSelection(
+        ProfileSelectionState.SELECTED,
+        tuple(sorted(int(profile_id) for profile_id in profile_counts)),
+        include_unassigned=bool(scope.get("unassigned")),
+    )
+    resolved = resolve_profile_selection(selection, ())
+    return {
+        "municipality": row["name"],
+        # A list, so `url_for` repeats the parameter rather than stringifying
+        # the tuple -- the same shape /properties builds its own links from.
+        "profile_id": list(resolved.link_values),
+        "favorites": "on" if favorites_only else None,
+        "hide_removed": "off" if include_archived else "on",
+    }
+
+
 class MunicipalityComparisonService:
     """Builds the /municipalities table from listings + reference data."""
 
@@ -233,6 +305,12 @@ class MunicipalityComparisonService:
                     "spellings": {},
                     "listings": 0,
                     "favorites": 0,
+                    # Which subscriptions carried this municipality, and with
+                    # how many listings each. Counted here rather than looked
+                    # up later, because this is the set the medians were taken
+                    # over -- see the module docstring and `drilldown_args`.
+                    "profile_counts": {},
+                    "unassigned": 0,
                     "metrics": {
                         metric: _Metric()
                         for metric in (
@@ -257,6 +335,17 @@ class MunicipalityComparisonService:
             group["listings"] += 1
             if prop.is_favorite:
                 group["favorites"] += 1
+            profile_id = prop.search_profile_id
+            if profile_id is None:
+                # `search_profile_id IS NULL` is a peer of the profile list,
+                # not a member of it: `profile_id=all` never covers such a row
+                # (services/profile_selection.py), so the link has to name it
+                # separately or the drill-down loses it.
+                group["unassigned"] += 1
+            else:
+                group["profile_counts"][profile_id] = (
+                    group["profile_counts"].get(profile_id, 0) + 1
+                )
             metrics = group["metrics"]
             metrics["price"].add(prop.price)
             metrics["price_per_m2"].add(_price_per_m2(prop))
@@ -282,6 +371,16 @@ class MunicipalityComparisonService:
                 "name": preferred_display(group["spellings"]),
                 "listings": group["listings"],
                 "favorites": group["favorites"],
+                # The scope this row was counted under. `profile_counts` is
+                # ordered by id so one municipality always produces the same
+                # URL, and it carries counts rather than a bare set because
+                # the page's own disclosure ("how much of this table is in
+                # subscriptions /properties does not offer") is a sum over it
+                # -- another number that must not come from a second query.
+                "scope": {
+                    "profile_counts": dict(sorted(group["profile_counts"].items())),
+                    "unassigned": group["unassigned"],
+                },
             }
             for metric, accumulator in group["metrics"].items():
                 row[metric] = accumulator.summary()
