@@ -274,6 +274,30 @@ class TestTheDrillDownReturnsWhatWasCounted:
         for key, row in expected.items():
             assert _total(client, links[key]) == row["listings"], key
 
+    def test_the_link_names_only_the_subscriptions_that_carry_rows_here(
+        self, app, client, world
+    ):
+        """Equal totals do not prove equal scope.
+
+        A link built from a second query -- every subscription holding *any*
+        listing in this municipality, rather than the ones this view counted
+        -- returns the same rows under `?favorites=on`, because the favorites
+        filter removes the extras anyway. Measured: every equality test above
+        stays green through exactly that mutation. What changes is the
+        subscription menu on the page it opens: /properties ticks
+        subscriptions the owner never chose, its label reads "3 selected", and
+        the next Apply widens the view to them -- the silent widening #104
+        gave every unticked-but-selected id a checkbox to prevent.
+
+        Raised against the closed #418, which pinned it on its own fixture.
+        """
+        body = client.get("/municipalities?favorites=on").get_data(as_text=True)
+        href = _links(body)["gijon"]
+        named = re.findall(r"profile_id=([^&]+)", href)
+        assert named == [str(world["live"].id)], (
+            f"only the live subscription carries a favorite in Gijón: {href}"
+        )
+
     def test_sorting_does_not_change_what_a_link_opens(self, app, client, world):
         body = client.get("/municipalities?sort=score&order=asc").get_data(as_text=True)
         links = _links(body)
