@@ -271,8 +271,93 @@ class TestTheThingsAnAdversarialReviewFound:
 
         assert code == 0, out
         assert "CAUGHT" in out
-        assert "failed to collect" in out
-        assert "masks every other test" in out
+        assert "could not be collected" in out
+        assert "nothing in those files ran" in out
+
+    def test_a_collection_error_does_not_stop_the_rest_of_the_run(self, repo):
+        """One unimportable file used to take the whole session with it.
+
+        pytest interrupts on a collection error by default: `1 error`, and
+        **no test runs, in any file**. Measured on the first external diff
+        this check saw (#427) -- four test files touched, one of them new and
+        importing symbols the revert removes, so the verdict rested entirely
+        on that import while the other three were never exercised. The note
+        said it masked "every other test in the same file", which understated
+        what actually happened by three files.
+        """
+        (repo / "tests" / "test_other.py").write_text(
+            "def test_unrelated():\n    assert True\n"
+        )
+        _commit(repo, "a second test file")
+
+        (repo / "app.py").write_text(
+            "def greet():\n    return 'hello'\n\n\ndef shout():\n    return 'HELLO'\n"
+        )
+        (repo / "tests" / "test_app.py").write_text(
+            "import sys\n"
+            "sys.path.insert(0, '.')\n"
+            "from app import shout\n\n\n"
+            "def test_shouts():\n"
+            "    assert shout() == 'HELLO'\n"
+        )
+        (repo / "tests" / "test_other.py").write_text(
+            "def test_unrelated():\n    assert True\n\n\ndef test_also_unrelated():\n    assert True\n"
+        )
+        _commit(repo, "add shout, touch both test files")
+
+        code, out = _run(repo)
+
+        assert code == 0, out
+        assert "CAUGHT" in out
+        # The other file ran: without --continue-on-collection-errors the
+        # summary is a bare "1 error" and nothing else executed.
+        assert "passed" in out, out
+        assert "could not be collected" in out
+
+    def test_the_masking_note_rides_on_a_red_verdict_too(self, repo):
+        """The shape #427 actually is, and the one the first fix missed.
+
+        A diff can break one file's import *and* redden a touched test in
+        another. The verdict is then CAUGHT on the red one, and the file that
+        never ran is withheld information all the same -- reported, not
+        dropped because something else already earned the green.
+        """
+        (repo / "helper.py").write_text("VALUE = 1\n")
+        (repo / "tests" / "test_other.py").write_text(
+            "import sys\n\n\ndef test_value():\n"
+            "    sys.path.insert(0, '.')\n"
+            "    from helper import VALUE\n\n"
+            "    assert VALUE == 1\n"
+        )
+        _commit(repo, "a second module and its test")
+
+        (repo / "app.py").write_text(
+            "def greet():\n    return 'hello'\n\n\ndef shout():\n    return 'HELLO'\n"
+        )
+        (repo / "helper.py").write_text("VALUE = 2\n")
+        (repo / "tests" / "test_app.py").write_text(
+            "import sys\n"
+            "sys.path.insert(0, '.')\n"
+            "from app import shout\n\n\n"
+            "def test_shouts():\n"
+            "    assert shout() == 'HELLO'\n"
+        )
+        (repo / "tests" / "test_other.py").write_text(
+            "import sys\n\n\ndef test_value():\n"
+            "    sys.path.insert(0, '.')\n"
+            "    from helper import VALUE\n\n"
+            "    assert VALUE == 2\n"
+        )
+        _commit(repo, "change both, break one import")
+
+        code, out = _run(repo)
+
+        assert code == 0, out
+        assert "CAUGHT" in out
+        assert "test_value" in out, "the red touched test is what earns the green"
+        assert "could not be collected" in out, (
+            "and the file that never ran is still disclosed"
+        )
 
     def test_a_name_that_is_a_prefix_of_another_is_not_confused_with_it(self, repo):
         """`::test_price` is a substring of `::test_price_after_discount`.

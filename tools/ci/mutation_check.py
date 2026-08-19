@@ -31,6 +31,25 @@ anyone. What changes is that it stops being invisible: a diff whose own tests
 all survive its own revert is `ESCAPED` and red, and saying "that is fine here"
 costs a `Mutation-Waiver:` trailer a reviewer reads next to the diff.
 
+There is a second limit, and it is structural rather than statistical: this
+answers "can these tests fail", never "is what they assert correct". Reverting
+cannot redden a test for a bug the revert removes -- and that covers two
+different cases, which look identical here and teach different things:
+
+* the diff **introduces** the defect, so the code without it does not contain
+  the defect at all;
+* the defect already lived in shared code and the diff merely **brought a new
+  consumer to it**. The revert removes the consumer, not the bug. So a new call
+  to an existing shared function has to be read as a change to that function.
+
+Both were demonstrated on #427 the day this shipped: an independent review of
+that diff found three real wrong answers -- a guard that was a no-op whenever
+the geocoder named no province, a fallback the check was structurally blind to,
+and an alias table that had always been wrong in one direction and had simply
+never been asked. Neither that PR's own six mutations nor this check could have
+seen any of the three. Its author put it exactly: "I mutated what I wrote, not
+what I missed." Review is what catches those, and nothing here replaces it.
+
 Verdicts, and the exit code each carries:
 
     NOOP           0   no production hunks -- a docs- or tests-only diff
@@ -392,6 +411,15 @@ def run(base: str, head: str, repo: Path) -> Tuple[str, str, int]:
                     "-q",
                     "--no-header",
                     "--color=no",
+                    # Without this a single file that cannot be imported
+                    # *interrupts the whole session* -- pytest reports
+                    # `1 error` and runs nothing, in any file. Measured
+                    # 2026-08-19 on the first external diff this check saw
+                    # (#427): four test files touched, one of them new and
+                    # importing symbols the revert removes, and the verdict
+                    # rested entirely on that import while the other three
+                    # were never exercised at all.
+                    "--continue-on-collection-errors",
                     "-p",
                     "no:randomly",
                 ],
@@ -416,15 +444,18 @@ def run(base: str, head: str, repo: Path) -> Tuple[str, str, int]:
     summary = _pytest_summary(output)
     failed, collect_errors = _failed_nodeids(output)
 
-    if collect_errors:
-        return (
-            "CAUGHT",
-            f"{summary} -- {', '.join(collect_errors)} failed to collect once "
-            "the diff was removed, which is the strongest kind of dependence "
-            "on it. Note that it masks every other test in the same file: they "
-            "could not run at all.",
-            0,
-        )
+    # A file that cannot be imported is the strongest kind of dependence on the
+    # diff -- and it takes its own contents with it, so the note rides on every
+    # verdict below rather than only on the one where it is the sole signal.
+    masked = (
+        f" {', '.join(collect_errors)} could not be collected once the diff was "
+        "removed, so nothing in those files ran and nothing in them was checked."
+        if collect_errors
+        else ""
+    )
+
+    if collect_errors and not failed:
+        return ("CAUGHT", f"{summary} --{masked}", 0)
 
     if wanted:
         names = set(wanted)
@@ -433,7 +464,7 @@ def run(base: str, head: str, repo: Path) -> Tuple[str, str, int]:
             return (
                 "CAUGHT",
                 f"{summary} -- of the tests this diff touched, "
-                f"{len(red)} went red: {', '.join(sorted(set(red))[:6])}",
+                f"{len(red)} went red: {', '.join(sorted(set(red))[:6])}.{masked}",
                 0,
             )
         if failed:

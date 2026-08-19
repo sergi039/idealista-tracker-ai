@@ -1651,6 +1651,47 @@ and TODO.md; respect it if you ever run both side by side.
   is free text in a commit message, visible in the PR and nowhere afterwards.
   Nothing checks that the reason is a good one.
 
+  **It answers "can these tests fail", never "is what they assert correct."**
+  Reverting cannot redden a test for a bug the revert removes, and that is two
+  cases wearing one face: the diff *introduced* the defect, so the code without
+  it never had one — or the defect already lived in shared code and the diff
+  only *brought a new consumer to it*, in which case the revert removes the
+  consumer and leaves the bug. The second is the one worth carrying: **a new
+  call to an existing shared function is a change to that function**, and has
+  to be read as one. Measured on #427 the day the check shipped — an
+  independent review of that diff found three real wrong answers (a guard that
+  was a no-op whenever the geocoder named no province, a fallback the check was
+  blind to, and an alias table that had always been wrong in one direction and
+  had simply never been asked), and neither that PR's own six mutations nor
+  this check could have seen any of them. Its author: *"I mutated what I wrote,
+  not what I missed."* Review is what catches those.
+
+  **The two find different classes, and neither is the safe one.** Mutation
+  finds defects of the *tests* — measured 2026-08-19, it caught a test that
+  reached its feature by a road the mutated flag never touched, a test that
+  passed when the tool under test was deleted outright, and a missing case;
+  review finds defects of the *code*, and found eleven the same day that no
+  mutation on either side could have seen. Neither substitutes.
+
+  Two things about the review half are worth the words, because both cost
+  something when skipped. It is not "read the diff" — it is **asking the code
+  the specific question you are afraid of the answer to** ("can this emit a
+  false `contradicted`?", "how can this checker itself lie?"). A lens without
+  a question returns nothing: of the four pointed at #427, one came back
+  empty. And review **invents findings at about the rate it finds them** —
+  #426's raised 19 and 8 survived reproduction, #427's raised 7 and 5 did — so
+  a finding is worth acting on after an attempt to refute it, not before. Both
+  of those numbers are a third to a half wrong, and acting on the wrong half
+  means fixing something that is not there.
+
+  **The refuter must not be the finding's author**, and that is the part doing
+  the work — not the count. An author defends their own wording, and the claims
+  that died on both sides were the confidently written ones: coherent, specific,
+  and false only once somebody tried to reproduce them. "Three refuters" is a
+  number, and a number buys nothing when the refuter is the same agent. Give
+  them the opposite instruction as well — default to refuted, reproduce before
+  believing.
+
   **Keep doing it by hand anyway**, because the check cannot see the case that
   cost the most today. A test can execute the mutated line without asserting on
   its effect — measured 2026-08-19, a mutation flipped `include_hidden=True` to
