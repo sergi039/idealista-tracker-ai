@@ -392,6 +392,17 @@ TRANSLATIONS = {
         # · retired 311" needs no plural agreement in either language, while
         # a sentence around the numbers would need four of them.
         "municipalities_scope_label": "Scope",
+        # MUNIC-002. The control's own name is `Subscriptions`, and its two
+        # standing options are worded so that neither reads as the other:
+        # "every" is this page's own population (the archive included) and
+        # "live only" is `profile_id=all`, which means "active and not hidden"
+        # here exactly as it does on /properties, /map, the CSV export and the
+        # JSON API. This is the one surface where `all` is *narrower* than the
+        # bare URL, so the labels carry the distinction the tokens cannot.
+        "municipalities_scope_control": "Subscriptions",
+        "municipalities_scope_every": "every",
+        "municipalities_scope_live_only": "live only",
+        "municipalities_scope_selected": "only the subscriptions selected above",
         "municipalities_scope_note": (
             "every stored listing, whatever subscription it is in"
         ),
@@ -801,6 +812,10 @@ TRANSLATIONS = {
         ),
         "municipalities_empty": "Aún no hay anuncios que comparar.",
         "municipalities_scope_label": "Alcance",
+        "municipalities_scope_control": "Suscripciones",
+        "municipalities_scope_every": "todas",
+        "municipalities_scope_live_only": "solo activas",
+        "municipalities_scope_selected": "solo las suscripciones seleccionadas arriba",
         "municipalities_scope_note": (
             "todos los anuncios almacenados, sea cual sea su suscripción"
         ),
