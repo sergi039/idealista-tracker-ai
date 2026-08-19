@@ -1634,6 +1634,37 @@ and TODO.md; respect it if you ever run both side by side.
   the tail says, and saying so costs one re-run. Where a mutation is expected to
   stay green because another line already covers it, say that too rather than
   presenting the green as evidence.
+
+  **CI now asks the same question and does not rely on you asking it**
+  (MUT-001, `tools/ci/mutation_check.py`). On every pull request it removes the
+  diff's production hunks in a worktree of its own and re-runs only the tests
+  the diff touched: `CAUGHT` when at least one of them goes red, `ESCAPED` and
+  red when none do, `NOOP` for a docs- or tests-only diff, `WARN` when
+  production changed and no test did, and `TOOLING-ERROR` — exit 2, neither
+  pass nor fail — when it could not run. Four to nine seconds on the real PRs
+  of 2026-08-19, against the suite's six minutes. An `ESCAPED` that is right —
+  a refactor, a revert, a test written for behaviour that already existed —
+  is answered with a `Mutation-Waiver: <reason>` trailer on any commit in the
+  branch. That friction is the point, the way `tests/skip_guard.py`'s `ALLOWED`
+  is — but it is weaker than `ALLOWED`, and the difference is worth knowing: a
+  skip exemption is a line in a reviewed file that stays there, while a trailer
+  is free text in a commit message, visible in the PR and nowhere afterwards.
+  Nothing checks that the reason is a good one.
+
+  **Keep doing it by hand anyway**, because the check cannot see the case that
+  cost the most today. A test can execute the mutated line without asserting on
+  its effect — measured 2026-08-19, a mutation flipped `include_hidden=True` to
+  `False` while the test reached the feature through a different argument
+  entirely, and 59 tests passed. That is mutation testing's equivalent-mutant
+  problem and nothing solves it; what the tool removes is the *other* two
+  failure modes, both of which are about the mutation not happening at all: a
+  text substitution that stopped matching after `ruff format` rewrapped the
+  line, and a captured patch that came out empty because zsh does not
+  word-split. Both read as `26 passed` and `59 passed`. **Revert real hunks
+  with git, in a worktree, never a string in a file** — and never
+  `git checkout -- <path>` over an uncommitted fix, which on the same day
+  deleted one and was caught only by reading `git show --stat` afterwards and
+  noticing a file missing from the commit.
 - **UI and timing behaviour is proven by measurement on a built image**, never
   by a unit test or a template's static text. The bar #302 arrived at and #309
   was measured against: repeated *loads* (the race resolves once at init, so

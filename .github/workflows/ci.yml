@@ -48,6 +48,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # `tools/ci/mutation_check.py` diffs the pull request against its
+          # base and checks files out of it. The default shallow clone has
+          # neither commit, and the check would report TOOLING-ERROR on every
+          # PR -- which is honest, and useless.
+          fetch-depth: 0
 
       - name: Install uv + Python
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -59,6 +65,24 @@ jobs:
 
       - name: Run test suite
         run: uv run pytest tests/ -v
+
+      # Can this pull request's own tests fail? (MUT-001 in #265.) The suite
+      # above says they pass; this says they would not pass without the diff
+      # they came with. It removes the production hunks in a worktree of its
+      # own and re-runs only the tests the diff touched -- 4 to 9 seconds on
+      # the real PRs of 2026-08-19, against the ~6 minutes above.
+      #
+      # It runs here rather than in `tools/ci/local_ci.sh` because the local
+      # gate is bypassable with SKIP_LOCAL_CI=1, and a check the author can
+      # skip is the habit this replaces. Pull requests only: on a push to
+      # `main` the diff is a squash whose base is already `main`, so there is
+      # nothing to revert that the PR did not already answer for.
+      - name: Can these tests fail?
+        if: github.event_name == 'pull_request'
+        run: |
+          uv run python tools/ci/mutation_check.py \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head "${{ github.event.pull_request.head.sha }}"
 
   lint:
     # Lint gate that does not depend on anyone's local setup (issue #81).
