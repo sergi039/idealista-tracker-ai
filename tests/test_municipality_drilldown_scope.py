@@ -30,6 +30,11 @@ from models import Property, SearchProfile
 from services.municipality_comparison_service import (
     MunicipalityComparisonService,
     drilldown_args,
+    drilldown_truncates,
+)
+from services.profile_selection import (
+    MAX_SELECTED_PROFILE_IDS,
+    parse_profile_selection,
 )
 from tests import setup_test_environment
 
@@ -148,7 +153,12 @@ class TestTheScopeTravelsWithTheRow:
         assert scope["unassigned"] == 1
 
     def test_the_ids_are_ordered_so_one_municipality_is_one_url(self, app, world):
-        rows = _rows(Property.query.all())
+        # Fed in *reverse* id order on purpose. The fixture builds its profiles
+        # and its listings in ascending order, so `Property.query.all()` hands
+        # `build_rows` a dict that is already sorted -- and this assertion then
+        # passed with the `sorted()` call removed, which is a test that cannot
+        # fail dressed as one that can.
+        rows = _rows(list(reversed(Property.query.order_by(Property.id).all())))
         ids = list(rows["gijon"]["scope"]["profile_counts"])
         assert ids == sorted(ids)
 
@@ -276,6 +286,59 @@ class TestTheDrillDownReturnsWhatWasCounted:
             assert _total(client, links[key]) == row["listings"], key
 
 
+class TestMoreSubscriptionsThanOneLinkCanName:
+    """Past `MAX_SELECTED_PROFILE_IDS` the link undercounts, and says so here.
+
+    `profile_id` accepts 50 ids because the parsed list goes into a SQL
+    `IN (...)` and a hand-written URL is not obliged to be reasonable. The
+    aggregate has no such bound, so a municipality carried by more than 50
+    subscriptions is this ticket's own defect one regime further out --
+    /properties discloses the truncation only after the click.
+
+    Unreachable in production (15 subscriptions in all), which is why it is
+    pinned rather than left to be rediscovered.
+    """
+
+    def _row(self, count):
+        return {
+            "name": "Gijón",
+            "scope": {
+                "profile_counts": {n: 1 for n in range(1, count + 1)},
+                "unassigned": 0,
+            },
+        }
+
+    def test_the_cap_is_read_from_the_module_that_owns_it(self):
+        assert not drilldown_truncates(self._row(MAX_SELECTED_PROFILE_IDS))
+        assert drilldown_truncates(self._row(MAX_SELECTED_PROFILE_IDS + 1))
+
+    def test_the_link_still_names_every_id_rather_than_dropping_some_here(self):
+        """Truncating in the builder would be the silent half of the same act:
+        the parser drops the tail either way, and only it tells the page."""
+        args = drilldown_args(self._row(MAX_SELECTED_PROFILE_IDS + 1))
+        assert len(args["profile_id"]) == MAX_SELECTED_PROFILE_IDS + 1
+        parsed = parse_profile_selection({"profile_id": args["profile_id"]})
+        assert parsed.truncated
+        assert len(parsed.ids) == MAX_SELECTED_PROFILE_IDS
+
+    def test_the_page_warns_before_the_click(self, app, client):
+        profiles = [
+            SearchProfile(name=f"S{n}", is_active=True)
+            for n in range(MAX_SELECTED_PROFILE_IDS + 1)
+        ]
+        db.session.add_all(profiles)
+        db.session.commit()
+        for profile in profiles:
+            _listing("Gijón", profile)
+        body = client.get("/municipalities").get_data(as_text=True)
+        assert 'data-drilldown-truncated="gijon"' in body
+        assert "shows fewer listings than the count here" in body
+
+    def test_a_row_within_the_cap_carries_no_warning(self, app, client, world):
+        body = client.get("/municipalities").get_data(as_text=True)
+        assert "data-drilldown-truncated" not in body
+
+
 class TestThePageSaysWhatItCovers:
     """One line, because the page has no subscription control of its own."""
 
@@ -288,12 +351,14 @@ class TestThePageSaysWhatItCovers:
     ):
         note = self._note(client.get("/municipalities").get_data(as_text=True))
         assert note is not None
-        # The retired one and the hidden one; the live subscription and the
-        # unassigned row are reachable from /properties and are not withheld.
-        # Four listings: Gijon 1 + Nava 2 in the retired search, Gijón 1 in the
-        # hidden one.
+        # The retired one and the hidden one; the live subscription is offered
+        # and is not withheld. Four listings: Gijon 1 + Nava 2 in the retired
+        # search, Gijón 1 in the hidden one.
         assert "2 retired or hidden subscriptions" in note
         assert "4 listings" in note
+        # And the unassigned row separately -- `profile_id=all` never covers
+        # it either, but it is not a subscription.
+        assert "1 listing with no subscription" in note
 
     def test_it_speaks_spanish_on_a_spanish_page(self, app, client, world):
         with client.session_transaction() as session:
@@ -302,6 +367,7 @@ class TestThePageSaysWhatItCovers:
         assert note is not None
         assert "2 suscripciones retiradas u ocultas" in note
         assert "4 anuncios" in note
+        assert "1 anuncio sin suscripción" in note
 
     def test_one_subscription_is_written_in_the_singular(self, app, client):
         retired = SearchProfile(name="Quesada", is_active=False)
@@ -319,3 +385,22 @@ class TestThePageSaysWhatItCovers:
         _listing("Navia", live)
         body = client.get("/municipalities").get_data(as_text=True)
         assert self._note(body) is None, "a disclosure with nothing to disclose"
+
+    def test_a_municipality_of_unassigned_listings_alone_still_says_so(
+        self, app, client
+    ):
+        """The whole row is absent from a bare /properties, and nothing else
+        on the page would have mentioned it: there is no subscription to
+        count, so a note keyed on profiles alone rendered nothing at all."""
+        live = SearchProfile(name="Land at Norte", is_active=True)
+        db.session.add(live)
+        db.session.commit()
+        _listing("Navia", live)
+        _listing("Pravia", None)
+        _listing("Pravia", None)
+        note = self._note(client.get("/municipalities").get_data(as_text=True))
+        assert note is not None
+        assert "2 listings with no subscription" in note
+        assert "retired or hidden" not in note, (
+            "an unassigned listing is not a subscription"
+        )

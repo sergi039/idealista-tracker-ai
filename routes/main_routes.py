@@ -744,34 +744,49 @@ def _municipality_scope_note(rows):
     covers. A disclosure, not a warning -- the owner retired those searches on
     purpose.
 
+    **A listing with no subscription counts here too**, under its own phrase.
+    `profile_id=all` is built with `include_unassigned=False` always
+    (services/profile_selection.py), so `search_profile_id IS NULL` is as
+    absent from a bare /properties as a retired search is -- and it is not a
+    subscription, so folding it into "retired or hidden subscriptions" would
+    be a second wrong number rather than a disclosure. Production holds none
+    today; ingestion can still produce one (#110), and a disclosure that only
+    works on the data that exists is the defect this page is being fixed for.
+
     Counted off the rows the medians were computed from, never from a second
     query over `properties`; only the *set* of subscriptions /properties would
     offer is looked up, which is a fact about profiles and not about listings.
     Returns None when nothing is off screen, so an install whose subscriptions
-    are all live carries no line at all.
+    are all live and all assigned carries no line at all.
     """
     from services.search_profile_service import SearchProfileService
 
     counted = {}
+    unassigned = 0
     for row in rows:
         scope = row.get("scope") or {}
         for profile_id, count in (scope.get("profile_counts") or {}).items():
             counted[profile_id] = counted.get(profile_id, 0) + count
-    if not counted:
-        return None
+        unassigned += int(scope.get("unassigned") or 0)
 
-    offered = {
-        profile.id
-        for profile in SearchProfileService.list_visible_profiles(active_only=True)
-    }
-    offscreen = {
-        profile_id: count
-        for profile_id, count in counted.items()
-        if profile_id not in offered
-    }
-    if not offscreen:
+    offscreen = {}
+    if counted:
+        offered = {
+            profile.id
+            for profile in SearchProfileService.list_visible_profiles(active_only=True)
+        }
+        offscreen = {
+            profile_id: count
+            for profile_id, count in counted.items()
+            if profile_id not in offered
+        }
+    if not offscreen and not unassigned:
         return None
-    return {"profiles": len(offscreen), "listings": sum(offscreen.values())}
+    return {
+        "profiles": len(offscreen),
+        "listings": sum(offscreen.values()),
+        "unassigned": unassigned,
+    }
 
 
 def _travel_display_targets(profile_ids, include_custom=False):
@@ -2770,6 +2785,7 @@ def municipalities():
         SORT_KEYS,
         MunicipalityComparisonService,
         drilldown_args,
+        drilldown_truncates,
     )
 
     try:
@@ -2808,6 +2824,7 @@ def municipalities():
                 favorites_only=favorites_only,
                 include_archived=include_archived,
             )
+            row["drilldown_truncated"] = drilldown_truncates(row)
 
         # Truncated email artifacts ("Ovi...", issue #298) count with the
         # unnamed listings: build_rows skips both, for the same reason -- a

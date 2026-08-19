@@ -380,8 +380,16 @@ TRANSLATIONS = {
         "municipalities_offscreen_subscriptions_other": (
             "%s retired or hidden subscriptions"
         ),
+        "municipalities_unassigned_listings_one": "%s listing with no subscription",
+        "municipalities_unassigned_listings_other": (
+            "%s listings with no subscription"
+        ),
         "municipalities_scope_suffix": (
             "each row opens exactly the listings behind its number"
+        ),
+        "municipalities_drilldown_truncated": (
+            "More subscriptions carry this municipality than one link can name, "
+            "so its list shows fewer listings than the count here"
         ),
         "municipalities_empty": "No listings to compare yet.",
         "pool_unroutable": "no road route",
@@ -757,8 +765,14 @@ TRANSLATIONS = {
         "municipalities_offscreen_subscriptions_other": (
             "%s suscripciones retiradas u ocultas"
         ),
+        "municipalities_unassigned_listings_one": "%s anuncio sin suscripción",
+        "municipalities_unassigned_listings_other": "%s anuncios sin suscripción",
         "municipalities_scope_suffix": (
             "cada fila abre exactamente los anuncios que hay detrás de su número"
+        ),
+        "municipalities_drilldown_truncated": (
+            "Este municipio lo sostienen más suscripciones de las que un enlace "
+            "puede nombrar, así que su lista muestra menos anuncios que este recuento"
         ),
         "municipalities_empty": "Aún no hay anuncios que comparar.",
         "pool_unroutable": "sin ruta por carretera",
