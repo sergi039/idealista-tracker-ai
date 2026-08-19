@@ -80,7 +80,6 @@ def main() -> None:
         properties = scoped_properties(
             days=args.days, include_all=args.all, needs=needs_pool
         )
-        logger.info("Scope: %s properties (days=%s)", len(properties), args.days)
         log_scope(
             logger,
             properties,
