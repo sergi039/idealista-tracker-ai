@@ -99,7 +99,13 @@ def world(app):
     _listing("Nava", retired)
     _listing("Nava", retired)
 
+    # Navia is one subscription's alone, and holds a favorite beside a
+    # non-favorite: without that pair the favorites axis is invisible to the
+    # end-to-end check, because every other municipality's favorite is the
+    # only row its profile scope reaches anyway. (Measured -- dropping
+    # `favorites` from the link left the whole drill-down suite green.)
     _listing("Navia", live)
+    _listing("Navia", live, is_favorite=True)
     return {"live": live, "retired": retired, "hidden": hidden}
 
 
@@ -149,7 +155,7 @@ class TestTheScopeTravelsWithTheRow:
     def test_a_municipality_in_one_subscription_records_only_that_one(self, app, world):
         rows = _rows(Property.query.all())
         assert rows["navia"]["scope"] == {
-            "profile_counts": {world["live"].id: 1},
+            "profile_counts": {world["live"].id: 2},
             "unassigned": 0,
         }
 
