@@ -1,0 +1,165 @@
+"""Record the location a person established for one listing, and defend it.
+
+The geocoder is not the only thing that can locate a listing, and for a plot it
+is frequently the worst of them: `_build_geocoding_queries` reads the text after
+"in", which for a plot is a village or a district, so a re-geocode answers with a
+centroid however many hours somebody spent in the cadastre establishing the
+parcel. `services/property_location_service.ensure_coordinates` now refuses to
+geocode a row whose location a person set -- and this is the way to set one.
+
+**It exists because the alternative is what actually happened.** Measured on
+production 2026-08-20, the only writers of `Property.location_accuracy` in this
+tree are the geocoder, the fotocasa import, the `Land` migration and the restore
+half of `utils/refresh_property_accuracy.py`. Every other coordinate a person
+established was written by an ad-hoc script through `docker exec`, and three
+rows carry the result in three different shapes -- 161 and 792 under
+`enrichment["coordinate_provenance"]` with `method` values that do not match and
+timestamps under two different names, 774 under `enrichment["cadastre"]`. Two of
+the three carry a `precise` their own `enrichment["geocoding"]` record
+contradicts, which is the fingerprint of a write made outside the geocoder.
+Nothing in the repository read any of them, and nothing defended them.
+
+This tool does not touch those three rows and neither does anything else in this
+change. Nothing in the database distinguishes a `precise` a person curated from
+a `precise` Google returned -- 129 of the 130 `precise` rows on production carry
+no portal pin -- so converting them by inference is the STATUS-002 mistake in a
+new column. They are converted by a person running this tool with the note their
+own block already contains, or not at all.
+
+    python -m utils.set_property_location --id 792 \\
+        --lat 43.539637 --lon -5.547554 --accuracy precise \\
+        --note "cadastre_barrio_verified: Barrio del Medio, Quintes; 13 parcels,
+                spread 341 m, row 24 m from centre"
+
+Prints what it would do and exits. `--apply` writes. `--clear` takes the block
+off and puts the row back on the computed path, leaving the coordinate columns
+alone -- see `clear_location_by_hand` for why it does not restore what the block
+displaced.
+"""
+
+import argparse
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _describe(prop) -> str:
+    from services.coordinate_quality import manual_coordinate
+
+    hand = manual_coordinate(prop)
+    lines = [
+        f"  id            {prop.id}",
+        f"  title         {(prop.title or '')[:70]}",
+        f"  coordinate    {prop.location_lat}, {prop.location_lon}",
+        f"  accuracy      {prop.location_accuracy or 'unknown'}",
+    ]
+    enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
+    record = enrichment.get("geocoding")
+    if isinstance(record, dict):
+        lines.append(
+            f"  geocode said  {record.get('accuracy')!r} for {record.get('query')!r}"
+        )
+    if hand is None:
+        lines.append("  hand-set      no -- a refresh may overwrite this row")
+    else:
+        lines.append(
+            f"  hand-set      {hand.source} at {hand.set_at}: {hand.note[:60]}"
+        )
+    return "\n".join(lines)
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--id", type=int, required=True, help="Property id")
+    parser.add_argument("--lat", help="Latitude a person established")
+    parser.add_argument("--lon", help="Longitude a person established")
+    parser.add_argument(
+        "--accuracy",
+        help="precise | approximate | unknown -- what the finding really supports",
+    )
+    parser.add_argument(
+        "--note", help="What was checked. Required: see the module docstring"
+    )
+    parser.add_argument(
+        "--source",
+        default="manual",
+        help="Who established it (default: manual). Name a tool if one did.",
+    )
+    parser.add_argument(
+        "--clear",
+        action="store_true",
+        help="Remove the hand-set block; the coordinate columns are left alone",
+    )
+    parser.add_argument(
+        "--apply", action="store_true", help="Write. Without it, report only."
+    )
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    if not args.clear:
+        missing = [
+            name
+            for name in ("lat", "lon", "accuracy", "note")
+            if not getattr(args, name)
+        ]
+        if missing:
+            parser.error(
+                "--" + ", --".join(missing) + " required unless --clear is given"
+            )
+
+    from app import create_app
+    from models import Property, db
+    from services.property_location_service import (
+        clear_location_by_hand,
+        set_location_by_hand,
+    )
+
+    app = create_app()
+    with app.app_context():
+        prop = db.session.get(Property, args.id)
+        if prop is None:
+            logger.error("No such property: %s", args.id)
+            return 1
+
+        logger.info("Before:\n%s", _describe(prop))
+
+        if not args.apply:
+            if args.clear:
+                logger.info("\nWould clear the hand-set block. Re-run with --apply.")
+            else:
+                logger.info(
+                    "\nWould set %s, %s as %s (%s).\nRe-run with --apply.",
+                    args.lat,
+                    args.lon,
+                    args.accuracy,
+                    args.source,
+                )
+            return 0
+
+        if args.clear:
+            outcome = clear_location_by_hand(prop, commit=True)
+            if not outcome["cleared"]:
+                logger.info("\nNothing to clear: this row carries no hand-set block.")
+                return 0
+            logger.info("\nCleared. It held: %s", outcome["previous"])
+        else:
+            outcome = set_location_by_hand(
+                prop,
+                lat=args.lat,
+                lon=args.lon,
+                accuracy=args.accuracy,
+                note=args.note,
+                source=args.source,
+                commit=True,
+            )
+            if outcome["displaced"]:
+                logger.info("\nDisplaced: %s", outcome["displaced"])
+
+        db.session.refresh(prop)
+        logger.info("After:\n%s", _describe(prop))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
