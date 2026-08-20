@@ -729,6 +729,42 @@ class TestTruncationIsDisclosed:
         )
         assert coal is not None and coal.kind == "coal_yard"
 
+    def test_an_incomplete_answer_is_not_cached(self, app, real_fetch, monkeypatch):
+        """The row is in the backfill's scope *because* the scan came back
+        short, and a cached partial entry would answer the retry for a month
+        (codex review, 2026-08-20)."""
+        written = []
+        monkeypatch.setattr(
+            hazard_service,
+            "cache_enrichment_data",
+            lambda lat, lon, key, payload, timeout: written.append(key),
+        )
+        monkeypatch.setattr(
+            hazard_service, "get_cached_enrichment_data", lambda *a, **k: None
+        )
+        service = HazardService(enrichment_service=_FakeEnrichment(elements=[42]))
+        service.measure(*XIVARES)
+        assert written == [], "an unreadable answer must not be cached"
+
+        capped = [
+            {
+                "type": "node",
+                "id": 95_000 + index,
+                "lat": XIVARES[0] + 0.001,
+                "lon": XIVARES[1],
+                "tags": {"landuse": "industrial"},
+            }
+            for index in range(hazard_rules.ELEMENT_LIMIT)
+        ]
+        HazardService(enrichment_service=_FakeEnrichment(elements=capped)).measure(
+            *XIVARES
+        )
+        assert written == [], "a capped answer must not be cached either"
+
+        # ...and a complete one still is.
+        HazardService(enrichment_service=_FakeEnrichment(elements=[])).measure(*XIVARES)
+        assert written, "a complete answer is what the cache is for"
+
     def test_an_element_nobody_can_read_makes_the_scan_incomplete(
         self, app, real_fetch
     ):
@@ -968,12 +1004,23 @@ class TestHonestAbsence:
         assert payload["origin"]["lat"] == pytest.approx(moved_to[0])
         assert payload["last_attempt_status"] == hazard_service.STATUS_STALE_ORIGIN
 
-    def test_a_row_with_no_coordinate_says_so(self, app, real_fetch):
+    def test_a_row_with_no_coordinate_says_so(self, app, client, real_fetch):
         prop = _prop(title="NoCoordinate", location_lat=None, location_lon=None)
         payload = HazardService(
             enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
         ).enrich(prop, commit=True)
         assert payload["status"] == hazard_service.STATUS_NO_COORDINATES
+
+        # And it reads back as that. The writer's own block cannot carry an
+        # origin, and asking for one first made this branch unreachable: the
+        # card said the listing had been re-located, for a row that has never
+        # had a coordinate (codex review, 2026-08-20).
+        verdict = hazard_service.read_verdict(prop)
+        assert verdict["status"] == hazard_service.STATUS_NO_COORDINATES
+        body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
+        assert response_is_the_card(body)
+        assert "no coordinate" in body
+        assert "re-located" not in body
 
     def test_losing_the_coordinate_does_not_delete_the_measurement(
         self, app, real_fetch
@@ -1073,6 +1120,7 @@ class TestHonestAbsence:
                     "items": [],
                     "item_count": 0,
                     "truncated": True,
+                    "searched_m": 5984.0,
                     "origin": origin,
                 },
             ),
@@ -1091,6 +1139,7 @@ class TestHonestAbsence:
                     "status": hazard_service.STATUS_NONE,
                     "items": [],
                     "item_count": 0,
+                    "searched_m": 5984.0,
                     "origin": {"lat": XIVARES[0] + 0.02, "lon": XIVARES[1]},
                 },
             ),
@@ -1107,6 +1156,7 @@ class TestHonestAbsence:
                 "items": [],
                 "item_count": 0,
                 "truncated": False,
+                "searched_m": 5984.0,
                 "origin": origin,
             }
         }
@@ -1200,6 +1250,15 @@ class TestApproximateOrigin:
         assert response_is_the_card(body)
         assert "re-located since the scan" in body
         assert "1.1 km" not in body
+
+
+_ITEM = {
+    "name": "Algo",
+    "kind": "landfill",
+    "severity": "high",
+    "origin_distance_m": 1200,
+    "bearing_deg": 90.0,
+}
 
 
 class TestOneAnswerInTwoLanguages:
@@ -1355,6 +1414,103 @@ class TestOneAnswerInTwoLanguages:
         )
         assert score is None
 
+    @pytest.mark.parametrize(
+        "block,why",
+        [
+            (
+                {"item_count": 25, "items": [_ITEM]},
+                "a count past the cap with one item",
+            ),
+            ({"item_count": True, "items": [_ITEM]}, "a boolean count"),
+            ({"item_count": 1.0, "items": [_ITEM]}, "a floating-point count"),
+            (
+                {"item_count": 100_000, "items": [_ITEM]},
+                "a count past what a scan can even return",
+            ),
+            (
+                {"item_count": 1, "items": [{**_ITEM, "origin_distance_m": None}]},
+                "an item with no distance",
+            ),
+            (
+                {"item_count": 1, "items": [{**_ITEM, "origin_distance_m": -5}]},
+                "a negative distance",
+            ),
+            (
+                {"item_count": 1, "items": [{**_ITEM, "origin_distance_m": True}]},
+                "a boolean distance",
+            ),
+            (
+                {
+                    "item_count": 1,
+                    "items": [{**_ITEM, "origin_distance_m": "Infinity"}],
+                },
+                "an infinite distance",
+            ),
+            (
+                {"item_count": 1, "items": [{**_ITEM, "severity": "HIGH"}]},
+                "a severity nobody writes",
+            ),
+            (
+                {"item_count": 1, "items": [{**_ITEM, "severity": None}]},
+                "no severity at all",
+            ),
+        ],
+    )
+    def test_a_block_the_writer_cannot_produce_asserts_nothing(self, app, block, why):
+        """Each of these was measured, flagged or scored (codex review,
+        2026-08-20). An unknown severity was the sharpest: at `near_m` a
+        `high` item scores 0 and an unrecognised one scored 50."""
+        prop = _prop(title=f"Impossible{why}")
+        prop.enrichment = {
+            "hazards": {
+                "status": hazard_service.STATUS_OK,
+                "searched_m": 5984.0,
+                "truncated": False,
+                "origin": {"lat": XIVARES[0], "lon": XIVARES[1]},
+                **block,
+            }
+        }
+        db.session.commit()
+        verdict = hazard_service.read_verdict(prop)
+        assert verdict["measured"] is False, why
+        assert verdict["flagged"] is False, why
+        assert hazard_service.needs_hazards(prop) is True, why
+        score, _ = HousingPropertyScorer()._hazard_score(
+            prop, near_m=1000.0, far_m=5000.0, moderate_factor=0.5
+        )
+        assert score is None, why
+
+    def test_a_number_too_wide_to_parse_is_not_a_measurement(self, app):
+        """A JSON integer has no width limit and PostgreSQL stores it: a
+        310-digit one raised out of `float()` and out of every caller (codex
+        review, 2026-08-20)."""
+        huge = int("9" * 310)
+        prop = _prop(title="TooWide")
+        prop.enrichment = {
+            "hazards": {
+                "status": hazard_service.STATUS_NONE,
+                "items": [],
+                "item_count": 0,
+                "truncated": False,
+                "searched_m": huge,
+                "origin": {"lat": huge, "lon": XIVARES[1]},
+            }
+        }
+        db.session.commit()
+        verdict = hazard_service.read_verdict(prop)
+        assert verdict["measured"] is False
+        assert verdict["status"] == hazard_service.STATUS_STALE_ORIGIN
+
+    def test_an_unknown_status_is_normalised_rather_than_echoed(self, app):
+        """The surfaces branch on a fixed set, and a sixth value nobody wrote
+        a branch for renders as silence."""
+        prop = _prop(title="UnknownStatus")
+        prop.enrichment = {"hazards": {"status": "something_new", "items": []}}
+        db.session.commit()
+        verdict = hazard_service.read_verdict(prop)
+        assert verdict["status"] == hazard_service.STATUS_MISSING
+        assert verdict["measured"] is False
+
     def test_an_unreadable_measurement_grants_no_horizon(self, app):
         """`searched_m: "Infinity"` parses, and it cleared every horizon the
         scorer checks (codex review, 2026-08-20)."""
@@ -1371,13 +1527,19 @@ class TestOneAnswerInTwoLanguages:
         }
         db.session.commit()
         verdict = hazard_service.read_verdict(prop)
+        # Not "a measurement with no radius" -- a block claiming a radius it
+        # cannot support is not a measurement at all, so it reads as one
+        # nobody has taken and goes back into the backfill's scope.
+        assert verdict["status"] == hazard_service.STATUS_MISSING
+        assert verdict["measured"] is False
         assert verdict["searched_m"] is None
         assert verdict["guaranteed_m"] is None
+        assert hazard_service.needs_hazards(prop) is True
         score, meta = HousingPropertyScorer()._hazard_score(
             prop, near_m=1000.0, far_m=5000.0, moderate_factor=0.5
         )
         assert score is None
-        assert meta["status"] == "searched_radius_too_small"
+        assert meta["status"] == hazard_service.STATUS_MISSING
 
     def test_a_block_with_no_readable_origin_asserts_nothing(self, app):
         """It cannot be shown to be about this coordinate, and reading that as
@@ -1658,9 +1820,10 @@ class TestTheComponent:
             }
         }
         db.session.commit()
+        assert hazard_service.read_verdict(prop)["measured"] is False
         score, meta = self._score(prop)
         assert score is None
-        assert meta["status"] == "unreadable_item"
+        assert meta["status"] == hazard_service.STATUS_MISSING
 
     def test_a_cut_list_scores_only_while_the_cut_cannot_matter(self, app):
         """Everything dropped is further away than everything kept.
@@ -1673,33 +1836,32 @@ class TestTheComponent:
         block = {
             "status": hazard_service.STATUS_OK,
             "searched_m": 6000,
+            # The only shape a cut list can have: a count past the cap, with
+            # exactly the cap's worth stored.
             "item_count": 25,
             "origin": {"lat": XIVARES[0], "lon": XIVARES[1]},
         }
+
+        def _items(kind, severity, nearest):
+            return [
+                {
+                    "kind": kind,
+                    "severity": severity,
+                    "origin_distance_m": nearest + index,
+                }
+                for index in range(hazard_service.MAX_ITEMS)
+            ]
+
         safe = _prop(title="ComponentCutSafe")
         safe.enrichment = {
-            "hazards": {
-                **block,
-                "items": [
-                    {"kind": "landfill", "severity": "high", "origin_distance_m": 500}
-                ],
-            }
+            "hazards": {**block, "items": _items("landfill", "high", 500)}
         }
         db.session.commit()
         assert self._score(safe)[0] == 0.0
 
         unsafe = _prop(title="ComponentCutUnsafe")
         unsafe.enrichment = {
-            "hazards": {
-                **block,
-                "items": [
-                    {
-                        "kind": "quarry",
-                        "severity": "moderate",
-                        "origin_distance_m": 1000,
-                    }
-                ],
-            }
+            "hazards": {**block, "items": _items("quarry", "moderate", 1000)}
         }
         db.session.commit()
         score, meta = self._score(unsafe)
@@ -2109,7 +2271,7 @@ class TestOneHomePerRule:
         service.enrich_free_sources(prop, commit=True, use_ai=False)
         assert prop.enrichment["hazards"]["status"] == hazard_service.STATUS_OK
 
-    def test_the_enrich_button_scans_before_its_shared_transaction(
+    def test_the_enrich_button_scans_after_its_shared_transaction(
         self, app, real_fetch, monkeypatch
     ):
         """And the scan the Enrich flow does run is the locked one."""
@@ -2151,7 +2313,9 @@ class TestOneHomePerRule:
                 calculate_for_property=lambda prop, commit: True
             ),
             scoring_service=SimpleNamespace(
-                calculate_for_property=lambda prop, commit: True
+                calculate_for_property=lambda prop, commit: (
+                    order.append("scoring") or True
+                )
             ),
             sea_distance_service=SimpleNamespace(
                 update_property=lambda prop, commit: None
@@ -2159,16 +2323,41 @@ class TestOneHomePerRule:
             pool_service=SimpleNamespace(enrich=lambda prop, commit: None),
         )
         monkeypatch.setattr(pes, "travel_api_state", lambda prop: "ok")
-        service.enrich_property(prop, recalc_scoring=False)
+        monkeypatch.setattr(
+            pes.advertiser,
+            "enrich",
+            lambda prop, commit=False: order.append("advertiser"),
+        )
+        real_commit = db.session.commit
+        monkeypatch.setattr(
+            db.session,
+            "commit",
+            lambda: (
+                order.append("shared commit")
+                if order and order[-1] == "scoring"
+                else None,
+                real_commit(),
+            )[1],
+        )
+        service.enrich_property(prop)
 
         assert prop.enrichment["hazards"]["status"] == hazard_service.STATUS_OK
         assert True in locked, "the scan must take the row under FOR UPDATE"
-        # Exactly once, with its own commit, and **before** anything joins the
-        # shared transaction -- moving it after the advertiser step, or
-        # calling it twice, passed this test until it counted (codex review,
-        # 2026-08-20).
+        # Exactly once, with its own commit, and **after** the shared
+        # transaction has been committed -- everything in that phase assigns
+        # the whole `enrichment` column from a copy loaded before its network
+        # calls, so a locked write placed ahead of it is restored to that
+        # older value by its commit (codex review, 2026-08-20). Scoring runs
+        # again afterwards, because the first pass could not see this block.
         assert scans == [True]
-        assert order[:2] == ["coordinates", "hazards"]
+        assert order == [
+            "coordinates",
+            "advertiser",
+            "scoring",
+            "shared commit",
+            "hazards",
+            "scoring",
+        ]
 
     def test_the_default_service_scans_without_being_handed_one(self, app, monkeypatch):
         """A test that injects its own hazard service passes when the default

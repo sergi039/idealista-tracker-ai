@@ -1142,11 +1142,13 @@ class HousingPropertyScorer(BasePropertyScorer):
                 factor=factor,
             )
             if low is None or high is None:
-                # An item whose distance cannot be read is not an item that
-                # can be walked past: the remaining ones would then be
-                # reported as the whole picture, which is #98's shape inside
-                # one listing. Skipping it scored 100 for a block whose
-                # nearest facility was unreadable (codex review, 2026-08-20).
+                # Unreachable through `read_verdict`, which refuses a block
+                # holding an item without a finite distance rather than
+                # handing one on -- an item that cannot be read is not an item
+                # that can be walked past, because the ones beside it would
+                # then be reported as the whole picture (codex review,
+                # 2026-08-20). Kept because this function takes a dict and
+                # somebody will one day hand it one from somewhere else.
                 return None, {
                     **bounds,
                     "status": "unreadable_item",

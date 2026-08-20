@@ -83,6 +83,19 @@ STATUS_NO_COORDINATES = "no_coordinates"
 STATUS_MISSING = "missing_hazards"
 STATUS_STALE_ORIGIN = "stale_origin"
 
+# Every state this reader is allowed to answer with. A stored status outside
+# it is normalised to `missing_hazards`: the surfaces branch on this set, and
+# a sixth value nobody wrote a branch for renders as silence, which is the one
+# thing this feature may not do.
+KNOWN_STATUSES = (
+    STATUS_OK,
+    STATUS_NONE,
+    STATUS_UNAVAILABLE,
+    STATUS_NO_COORDINATES,
+    STATUS_MISSING,
+    STATUS_STALE_ORIGIN,
+)
+
 # A status the data can be trusted for. It survives a later refusal as
 # last-known-good, for the reason `sea_distance_service` keeps its own: a
 # cement works does not move, and replacing a measurement with "the network was
@@ -199,9 +212,15 @@ def _safe_float(value: Any) -> Optional[float]:
     `guaranteed_m` infinite, which cleared every horizon the scorer checks and
     scored a listing 100 (codex review, 2026-08-20).
     """
+    if isinstance(value, bool):
+        # `True` is 1.0 to `float()`, and a distance of one metre is not what
+        # a stored `true` means.
+        return None
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # `OverflowError`: a JSON integer has no width limit, and a 310-digit
+        # one raises rather than parsing (codex review, 2026-08-20).
         return None
     return number if math.isfinite(number) else None
 
@@ -228,6 +247,13 @@ def _is_truncated(value: Any) -> bool:
     # writer produces, and the fail-closed reading of an unrecognised one is
     # that the scan was short.
     return str(value).strip(" ").casefold() not in _NOT_TRUNCATED_TEXT
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    """A plain non-negative integer, or None."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 def _as_list(value: Any) -> Optional[list]:
@@ -320,10 +346,19 @@ def fetch_elements(
         "returned": len(elements or []),
         "unreadable": unreadable,
     }
-    try:
-        cache_enrichment_data(lat, lon, _CACHE_KEY, payload, timeout=_CACHE_TTL_S)
-    except Exception:
-        logger.warning("Could not cache hazard scan for %s,%s", lat, lon, exc_info=True)
+    # An incomplete answer is not cached, for the reason a refusal is not: it
+    # would be handed back for a month, and the retry the block asks for --
+    # the row is in the backfill's scope precisely *because* the scan came
+    # back short -- would read the same partial entry and never reach a
+    # transport that has since recovered (codex review, 2026-08-20).
+    incomplete = payload["returned"] >= hazard_rules.ELEMENT_LIMIT or unreadable
+    if not incomplete:
+        try:
+            cache_enrichment_data(lat, lon, _CACHE_KEY, payload, timeout=_CACHE_TTL_S)
+        except Exception:
+            logger.warning(
+                "Could not cache hazard scan for %s,%s", lat, lon, exc_info=True
+            )
     return payload, None
 
 
@@ -750,38 +785,61 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
     # a kept measurement of a place the listing may no longer be near is worth
     # storing and not worth *asserting* (codex review, 2026-08-20). An
     # unreadable stored origin is the only "cannot tell", and it restates.
-    # And it has to be **there**. A block with no readable origin cannot be
-    # shown to be about this coordinate, and treating that as "cannot tell"
-    # let a moved precise row keep asserting its old distances (codex review,
-    # 2026-08-20). Every block this writer produces records one, so requiring
-    # it costs nothing and closes the case that does not.
+    base["updated_at"] = stored.get("updated_at")
+    base["last_attempt_status"] = stored.get("last_attempt_status")
+
+    # A status that is not a measurement is answered *first*, before anything
+    # asks about an origin -- the writer's own `no_coordinates` block cannot
+    # carry one, and asking made its intended branch unreachable: the card
+    # said "the listing has been re-located since the scan" for a row that has
+    # never had a coordinate at all (codex review, 2026-08-20). An unknown
+    # status is normalised rather than echoed: this reader answers a fixed set
+    # of states and inventing a sixth for whatever a future writer stored is
+    # how one reaches a template that has no branch for it.
+    if status not in MEASURED_STATUSES:
+        known = status if status in KNOWN_STATUSES else STATUS_MISSING
+        return {**base, "status": known}
+
+    # And a measured block has to say where it was measured from. Treating an
+    # unreadable origin as "cannot tell" let a moved precise row keep
+    # asserting its old distances (codex review, 2026-08-20).
     if origins_agree(stored.get("origin"), origin_of(prop)) is not True:
         return {**base, "status": STATUS_STALE_ORIGIN}
 
-    base["updated_at"] = stored.get("updated_at")
-    base["last_attempt_status"] = stored.get("last_attempt_status")
-    searched = _safe_float(stored.get("searched_m"))
-    base["searched_m"] = searched
     # What the scan guarantees about the *parcel*: the radius it covered
     # around the stored point, less the distance the parcel may sit from it.
     # For an approximate row that is 1 km, and saying so is the difference
     # between "nothing near this plot" and "nothing near a village centre".
-    base["guaranteed_m"] = None if searched is None else max(0.0, searched - slack)
-    if status not in MEASURED_STATUSES:
-        return {**base, "status": status or STATUS_MISSING}
+    # A measurement nobody can read is not a radius, and a block claiming one
+    # it cannot support is not a measurement at all.
+    searched = _safe_float(stored.get("searched_m"))
+    if searched is None or searched <= 0:
+        return {**base, "status": STATUS_MISSING}
+    base["searched_m"] = searched
+    base["guaranteed_m"] = max(0.0, searched - slack)
 
     items = []
     high = 0
     stored_items = _as_list(stored.get("items"))
     counted = stored.get("item_count")
-    if stored_items is None or not isinstance(counted, int) or counted < 0:
+    if (
+        stored_items is None
+        or not isinstance(counted, int)
+        or isinstance(counted, bool)
+        or counted < 0
+        or counted > hazard_rules.ELEMENT_LIMIT
+    ):
         return {**base, "status": STATUS_MISSING}
-    # A count that does not match what is stored is a block nobody can read
-    # either: `status=ok, items=[], item_count=1` rendered "Nothing
-    # recognised" and scored 100 (codex review, 2026-08-20). Fewer stored than
-    # counted is the ordinary `MAX_ITEMS` cap and is handled by the scorer's
-    # own bound, so only an *undercount* is impossible.
-    if counted < len(stored_items):
+    # The writer stores every facility it found, up to `MAX_ITEMS`. So there
+    # are exactly two shapes it can produce, and anything else is a block
+    # nobody can read: `item_count == len(items)`, or a count past the cap
+    # with the cap's worth stored. `item_count=25` beside a single item is
+    # neither, and it scored 100 while 24 facilities -- any of which could
+    # have been a high-severity one next door -- were unaccounted for (codex
+    # review, 2026-08-20).
+    if counted != len(stored_items) and not (
+        counted > MAX_ITEMS and len(stored_items) == MAX_ITEMS
+    ):
         return {**base, "status": STATUS_MISSING}
     if status == STATUS_NONE and (counted or stored_items):
         return {**base, "status": STATUS_MISSING}
@@ -802,7 +860,19 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
             # that nobody has read it. `complete` is left as stored, because
             # it is what SQL counts and SQL cannot see this.
             return {**base, "status": STATUS_MISSING}
+        # An `ok` block's items are measurements, and each one has to be a
+        # finite distance and one of the two severities. A missing distance
+        # rendered a facility with no distance beside it and left the row out
+        # of the backfill's reach; an unknown severity scored 50 where `high`
+        # scores 0 (codex review, 2026-08-20).
         measured = _safe_float(stored_item.get("origin_distance_m"))
+        if measured is None or measured < 0:
+            return {**base, "status": STATUS_MISSING}
+        if stored_item.get("severity") not in (
+            hazard_rules.SEVERITY_HIGH,
+            hazard_rules.SEVERITY_MODERATE,
+        ):
+            return {**base, "status": STATUS_MISSING}
         lower, upper = distance_bounds_m(measured, slack)
         item = {
             **stored_item,
@@ -812,9 +882,21 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
             # page rather than an error anyone sees (codex review,
             # 2026-08-20). Normalised here, once, for all three surfaces.
             "kinds": _as_list(stored_item.get("kinds")) or [],
-            "elements": _as_list(stored_item.get("elements")) or [],
+            # Only elements a template can turn into a link: a `type` that is
+            # not a string, or an id that is not an int, raised in the loop
+            # and became a hidden redirect (codex review, 2026-08-20).
+            "elements": [
+                element
+                for element in _as_list(stored_item.get("elements")) or []
+                if isinstance(element, dict)
+                and isinstance(element.get("type"), str)
+                and isinstance(element.get("id"), int)
+                and not isinstance(element.get("id"), bool)
+            ],
             "evidence": _as_list(stored_item.get("evidence")) or [],
             "names": _as_list(stored_item.get("names")) or [],
+            # A count the page compares against a number. `{"x": 1}` raised.
+            "element_count": _safe_int(stored_item.get("element_count")),
             "origin_distance_m": measured,
             "distance_m": measured if not slack else None,
             "min_distance_m": lower,

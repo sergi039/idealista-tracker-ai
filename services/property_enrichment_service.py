@@ -221,19 +221,6 @@ class PropertyEnrichmentService:
             prop, refresh=refresh_coords, commit=True
         )
 
-        # The hazard scan takes the row under `FOR UPDATE` and commits it, so
-        # it runs while the session is still clean -- `ensure_coordinates`
-        # above owns its own transaction and everything below shares one.
-        # Doing it here rather than inside the free pass is what keeps a
-        # concurrent measurement from being written away (#437, codex review).
-        try:
-            self.hazard_service.enrich(prop, commit=True)
-        except Exception as e:
-            logger.warning(
-                "Hazard scan failed for %s: %s", getattr(prop, "id", None), e
-            )
-            db.session.rollback()
-
         # Who is selling: the owner, or an agency. Free: it reads the listing
         # page the row already links to, and only when the row does not answer
         # for itself already (`services/advertiser.py` refuses the fetch
@@ -336,6 +323,47 @@ class PropertyEnrichmentService:
         flag_modified(prop, "enrichment")
 
         db.session.commit()
+
+        # **Last**, and that position is the whole point (#437, codex review
+        # round 4). Everything above shares one transaction and ends by
+        # assigning the *whole* `enrichment` column from a copy this session
+        # loaded before its network calls -- so a hazard block committed under
+        # a lock earlier in this same request is restored to that older value
+        # by the commit above, and a measurement another session made in the
+        # meantime disappears with it. Reproduced with two sessions: A's early
+        # `none_within_radius` came back over B's `ok`.
+        #
+        # Running the scan after that commit makes the sequence impossible:
+        # the session is clean, the row is taken `FOR UPDATE`, the stored
+        # block is read inside the lock and nothing writes the column
+        # afterwards. What it does not fix is the same hazard for every
+        # *other* block in this column -- `sea`, `quality_of_life`,
+        # `environment`, `pool` all ride that shared assignment, and closing
+        # that is a change to how this method orchestrates all of them.
+        scanned = False
+        try:
+            self.hazard_service.enrich(prop, commit=True)
+            scanned = True
+        except Exception as e:
+            logger.warning(
+                "Hazard scan failed for %s: %s", getattr(prop, "id", None), e
+            )
+            db.session.rollback()
+
+        # The scoring above ran before that block existed. At the shipped
+        # weight of 0 that changes nothing, and the day the owner raises it,
+        # a press that measured a cement works would otherwise leave the score
+        # it had before anybody looked.
+        if scanned and recalc_scoring:
+            try:
+                self.scoring_service.calculate_for_property(prop, commit=True)
+            except Exception as e:
+                logger.warning(
+                    "Property scoring after the hazard scan failed for %s: %s",
+                    getattr(prop, "id", None),
+                    e,
+                )
+                db.session.rollback()
         return ok
 
     def enrich_property_id(

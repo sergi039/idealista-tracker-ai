@@ -4374,7 +4374,12 @@ def export_properties_csv():
                 float(prop.location_lon) if prop.location_lon else None,
                 prop.location_accuracy or "unknown",
                 hazards["status"],
-                (not hazards["truncated"]) if hazards["measured"] else None,
+                # `complete`, the same fact the coverage line counts, and
+                # deliberately not gated on `measured`: a block taken before
+                # the listing moved is still a complete scan, and blanking the
+                # cell there made the export disagree with the count above it
+                # (codex review, 2026-08-20).
+                hazards["complete"],
                 hazards["item_count"] if hazards["measured"] else None,
                 hazard_nearest.get("name") if hazard_nearest else None,
                 hazard_nearest.get("kind") if hazard_nearest else None,
