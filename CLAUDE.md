@@ -750,6 +750,45 @@ urbanisation), and a plant approved but not yet built. `utils/backfill_hazards.p
 fills the Phase-2 scope, free and resumable per row; announce it before running
 it on the mini, and read `tools/backfill_status.sh` first.
 
+**And what OSM says is not what a `product` tag says.** Three review rounds
+against live objects settled the shape of that table, and the settled rule is
+narrower than the one it started with. `product=X` names what comes *out*, not
+the process that made it: `way/1068457365` is *Balumco*, `man_made=works` +
+`product=aluminum`, and the Catalan environmental register describes extrusion
+and anodising. Nothing structural separates it from `relation/11519713`,
+*Asturiana de Zinc*, which really is a smelter — so no bare metal is evidence,
+and AZSA classifies as **nothing** until somebody tags it with a process. That
+is the price, and it is written into the table rather than left to be
+discovered. In the same family: a lifecycle prefix refuses only the *name*
+(`was:name=Ensidesa` on the acería is renaming history, `disused:power=plant`
+on a live chemical works is one dead plant on its site), `end_date` refuses on
+every documented range form, an operator may absorb a name and is never
+absorbed itself, and a *central térmica solar* burns nothing while a nuclear
+station is not harmless for burning nothing either.
+
+**Two facts, not one: `complete` and `measured`.** "Carries a complete scan" is
+answerable in SQL; "is about this coordinate" is not, and conflating them is
+what put a cast over stored JSON in the coverage predicate — where on
+PostgreSQL a hand-edited value raises and takes the whole `/properties` count,
+and the page, down with it. Nothing in that predicate casts now: the truncation
+flag is read as text against one list both languages share, which is also what
+makes them agree across a JSON boolean PostgreSQL renders `false` and SQLite
+renders `0`. `read_verdict` is the other side and it is **total and
+fail-closed** — a readable matching origin, `items` a list, `item_count` an
+integer that agrees with it, every measurement finite — because six malformed
+shapes each scored a clean 100 or raised into the redirect
+`routes/main_routes.py` turns a template error into. A block nobody can read
+reads as a block nobody has read.
+
+The same rule governs the scan itself: an element cap reached, a hazard OSM
+could not place, an element nobody can parse — each makes the scan *incomplete*
+rather than empty, the list badges *Scan incomplete* even with nothing to name,
+the CSV carries `Hazard Scan Complete`, the scorer abstains, and
+`needs_hazards` puts the row back in the backfill's scope. And the badge on an
+approximate row says *near the locality*: 532 of 725 rows share a centroid, so
+one scan claiming "Industry nearby" would claim it for every listing in the
+village.
+
 **`/municipalities` keeps municipality facts and listing medians apart, and says
 which is which on the page** (proposal D22, #281). Facts are the municipality's
 own values — INE renta and población, SEPE registered unemployment — with no
