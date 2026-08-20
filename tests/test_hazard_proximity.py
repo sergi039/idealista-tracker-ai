@@ -229,6 +229,21 @@ class TestTheRulesTable:
         assert verdict.kind == "lpg_storage"
         assert verdict.severity == hazard_rules.SEVERITY_HIGH
 
+    def test_the_ambiguous_coal_name_is_gone(self):
+        """`carbonera` matches *Carboneras*, an Almerían municipality whose
+        name is on every industrial estate in it -- and it caught nothing the
+        plural entry misses (found in review, 2026-08-20)."""
+        assert (
+            hazard_rules.classify(
+                {"landuse": "industrial", "name": "Poligono Industrial de Carboneras"}
+            )
+            is None
+        )
+        coal = hazard_rules.classify(
+            {"landuse": "quarry", "name": "Parque de carbones"}
+        )
+        assert coal is not None and coal.kind == "coal_yard"
+
     def test_the_ambiguous_quarry_name_is_gone(self):
         """`cantera` is also the word for a club's youth academy.
 
@@ -446,6 +461,19 @@ class TestTheRulesTable:
             }
         )
         assert coal is not None and coal.kind == "coal_yard"
+
+        # A retired thing silences the name only when it is the kind of thing
+        # the name is about. `disused:amenity=fuel` is a closed petrol
+        # station, and on a refinery whose only evidence is its name it
+        # dropped the refinery (found in review, 2026-08-20).
+        refinery = hazard_rules.classify(
+            {
+                "landuse": "industrial",
+                "name": "Refineria de Puertollano",
+                "disused:amenity": "fuel",
+            }
+        )
+        assert refinery is not None and refinery.kind == "refinery"
 
         # And the case the rule exists for still refuses: the name is all the
         # evidence there is, and the process behind it is under `disused:`.
