@@ -4284,6 +4284,10 @@ def export_properties_csv():
             # band instead, for the same reason the page never prints a point
             # distance from a locality centroid.
             "Hazards",
+            # An `ok` from a scan that hit Overpass's element cap is a short
+            # list, not a complete one. The card says so; a spreadsheet
+            # sorting on the columns below could not tell without this.
+            "Hazard Scan Complete",
             "Hazard Facilities",
             "Nearest Hazard",
             "Nearest Hazard Kind",
@@ -4359,6 +4363,7 @@ def export_properties_csv():
                 float(prop.location_lon) if prop.location_lon else None,
                 prop.location_accuracy or "unknown",
                 hazards["status"],
+                (not hazards["truncated"]) if hazards["measured"] else None,
                 hazards["item_count"] if hazards["measured"] else None,
                 hazard_nearest.get("name") if hazard_nearest else None,
                 hazard_nearest.get("kind") if hazard_nearest else None,

@@ -105,6 +105,17 @@ _CACHE_TTL_S = 60 * 60 * 24 * 30
 # does not need a bump here -- only changing the query does.
 _CACHE_KEY = "hazard_scan_v1"
 
+# `utils/cache.py` keys an enrichment entry on the coordinate rounded to four
+# decimals, so an answer fetched for one point can serve any point in an
+# ~11 m cell. Everything inside that cell is within the cell's diagonal of the
+# point the query was centred on, so the radius this scan is guaranteed for
+# *here* is the query radius less that diagonal. It is 16 m against 6 km and
+# it changes no verdict -- and saying `searched_m: 6000` when the query was
+# centred somewhere else is still a claim nobody measured, which is the
+# `sea_view_service` cell rule (its own radius already carries the same
+# subtraction) arriving one module over.
+_CACHE_CELL_SLACK_M = 16.0
+
 # How many facilities the block carries, and how many OSM elements it names
 # per facility. Both are disclosed rather than silently applied: the counts
 # beside them say how many there really were.
@@ -347,7 +358,7 @@ class HazardService:
                 unplaced += 1
                 continue
             distance = haversine_m(lat, lon, element["lat"], element["lon"])
-            if distance > hazard_rules.SEARCH_RADIUS_M:
+            if distance > hazard_rules.SEARCH_RADIUS_M - _CACHE_CELL_SLACK_M:
                 # A cached answer taken for a neighbouring point inside the
                 # same 11 m cache cell can reach a metre or two further; a
                 # candidate past the radius this block claims to have searched
@@ -370,7 +381,7 @@ class HazardService:
         items = self._group(qualifying, lat, lon)
         return {
             "status": STATUS_OK if items else STATUS_NONE,
-            "searched_m": hazard_rules.SEARCH_RADIUS_M,
+            "searched_m": hazard_rules.SEARCH_RADIUS_M - _CACHE_CELL_SLACK_M,
             "truncated": truncated or bool(unplaced),
             "unplaced": unplaced,
             "item_count": len(items),
@@ -680,6 +691,15 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
         lower, upper = distance_bounds_m(measured, slack)
         item = {
             **stored_item,
+            # A stored `null` where a list belongs is not the same as a
+            # missing key: Jinja iterates an undefined and raises on a None,
+            # and `routes/main_routes.py` turns that into a flash and an empty
+            # page rather than an error anyone sees (codex review,
+            # 2026-08-20). Normalised here, once, for all three surfaces.
+            "kinds": stored_item.get("kinds") or [],
+            "elements": stored_item.get("elements") or [],
+            "evidence": stored_item.get("evidence") or [],
+            "names": stored_item.get("names") or [],
             "origin_distance_m": measured,
             "distance_m": measured if not slack else None,
             "min_distance_m": lower,

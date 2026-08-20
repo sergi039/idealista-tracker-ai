@@ -139,7 +139,7 @@
     {% set verdict = hazard_verdict_for(p) %}
     {% if verdict.flagged and verdict.nearest %}
         <span class="badge {{ 'bg-danger' if verdict.high_count else 'bg-secondary' }} fw-normal"
-              title="{{ t('hazards_badge_tooltip') }} — {{ verdict.nearest.name or t('hazard_kind_' ~ verdict.nearest.kind) }}">
+              title="{{ t('hazards_badge_tooltip') }} — {{ verdict.nearest.name or t('hazard_kind_' ~ verdict.nearest.kind) }}{% if verdict.truncated %} — {{ t('hazards_truncated') }}{% endif %}">
             <i class="fas fa-industry me-1"></i>{{ t('hazards_badge') }}
         </span>
     {% endif %}

@@ -294,8 +294,10 @@ _PRODUCT_EVIDENCE: Dict[str, Tuple[str, str]] = {
     "cement": ("cement_works", SEVERITY_HIGH),
     "concrete": ("concrete_plant", SEVERITY_MODERATE),
     "lime": ("cement_works", SEVERITY_HIGH),
-    "steel": ("steelworks", SEVERITY_HIGH),
-    "iron": ("steelworks", SEVERITY_HIGH),
+    # `steel` and `iron` are as broad as `metal` was: a fabricator that cuts
+    # and welds steel sections tags `product=steel` exactly as a mill does,
+    # and a real steelworks says so in `industrial=steelmaking` or in its own
+    # name. Out for the same reason and by the same measurement.
     "zinc": ("smelter", SEVERITY_HIGH),
     "aluminium": ("smelter", SEVERITY_HIGH),
     "aluminum": ("smelter", SEVERITY_HIGH),
@@ -737,9 +739,7 @@ def _contains(haystack: List[str], needle: List[str]) -> bool:
     )
 
 
-def merge_keys(
-    keys: Iterable[str], absorbing: Optional[Iterable[str]] = None
-) -> Dict[str, str]:
+def merge_keys(keys: Iterable[str], absorbing: Iterable[str]) -> Dict[str, str]:
     """`{key: canonical key}`, folding a facility name into its operator.
 
     OSM does not tag one facility consistently. At property 793 the steelworks
@@ -765,7 +765,10 @@ def merge_keys(
     over-reports, one row for two plants hides one.
     """
     unique = sorted({key for key in keys if key}, key=lambda k: (len(k), k))
-    may_absorb = set(unique) if absorbing is None else {k for k in absorbing if k}
+    # Required rather than defaulted, and deliberately so: the default used to
+    # be "anything may absorb", which is the defect this argument exists to
+    # remove, sitting one forgotten keyword away from coming back.
+    may_absorb = {key for key in absorbing if key}
     canonical: Dict[str, str] = {key: key for key in unique}
     token_cache = {key: _tokens(key) for key in unique}
     for index, longer in enumerate(unique):

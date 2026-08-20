@@ -372,8 +372,20 @@ class TestTheRulesTable:
             )
             is None
         )
-        # The specific ones stay: nobody smelts zinc by accident.
+        # `steel` and `iron` went the same way: a fabricator that cuts and
+        # welds sections tags `product=steel` exactly as a mill does.
+        assert (
+            hazard_rules.classify(
+                {"man_made": "works", "name": "Talleres Metalicos", "product": "steel"}
+            )
+            is None
+        )
+        # The specific ones stay: nobody smelts zinc by accident, and a real
+        # steelworks says so on a tag about what it does.
         assert hazard_rules.classify({"man_made": "works", "product": "zinc"})
+        assert hazard_rules.classify(
+            {"landuse": "industrial", "industrial": "steelmaking"}
+        )
 
     def test_a_retired_process_does_not_retire_the_rest_of_the_element(self):
         """A lifecycle prefix refuses the *name*, never a live bare tag.
@@ -575,6 +587,42 @@ class TestTruncationIsDisclosed:
         assert response_is_the_card(body)
         assert "element limit" in body
 
+    def test_a_stored_null_where_a_list_belongs_still_renders(self, app, client):
+        """Jinja iterates an undefined and raises on a None.
+
+        `routes/main_routes.py` turns that into a flash and an empty page, so
+        it would be invisible to a test that only checked the status code
+        (codex review, 2026-08-20).
+        """
+        prop = _prop(title="NullLists")
+        prop.enrichment = {
+            "hazards": {
+                "status": hazard_service.STATUS_OK,
+                "searched_m": 6000,
+                "item_count": 1,
+                "origin": {"lat": XIVARES[0], "lon": XIVARES[1]},
+                "items": [
+                    {
+                        "name": "Algo",
+                        "kind": "landfill",
+                        "severity": "high",
+                        "origin_distance_m": 1200,
+                        "bearing_deg": 90.0,
+                        "kinds": None,
+                        "elements": None,
+                        "evidence": None,
+                        "names": None,
+                    }
+                ],
+            }
+        }
+        db.session.commit()
+        response = client.get(f"/properties/{prop.id}")
+        assert response.status_code == 200
+        body = response.get_data(as_text=True)
+        assert response_is_the_card(body)
+        assert "Algo" in body
+
     def test_a_hazard_osm_could_not_place_makes_the_scan_incomplete(
         self, app, real_fetch
     ):
@@ -669,6 +717,12 @@ class TestGroupingBounds:
         ).measure(*XIVARES)
         assert len(measurement["items"]) == 2
         assert [item["element_count"] for item in measurement["items"]] == [1, 1]
+
+    def test_merge_keys_will_not_absorb_without_being_told_who_may(self):
+        """The default used to be "anything may absorb" -- the defect itself,
+        one forgotten keyword away from coming back."""
+        with pytest.raises(TypeError):
+            hazard_rules.merge_keys(["cantera", "cantera blokdegal s a"])
 
     def test_a_generic_name_never_absorbs_a_specific_one(self, app, real_fetch):
         """`way/231335217` is a quarry named *Cantera*; `way/169318445` is a
@@ -853,8 +907,11 @@ class TestApproximateOrigin:
         assert nearest["max_distance_m"] == pytest.approx(
             nearest["origin_distance_m"] + 5000.0
         )
-        # The scan covered 6 km around a point the parcel may be 5 km from.
-        assert verdict["guaranteed_m"] == pytest.approx(1000.0)
+        # The scan covered 6 km (less the cache cell) around a point the
+        # parcel may be 5 km from.
+        assert verdict["guaranteed_m"] == pytest.approx(
+            hazard_rules.SEARCH_RADIUS_M - hazard_service._CACHE_CELL_SLACK_M - 5000.0
+        )
 
     def test_a_precise_row_gets_one_number_twice(self, app, real_fetch):
         prop = _prop(title="Precise")
@@ -870,7 +927,7 @@ class TestApproximateOrigin:
             == nearest["max_distance_m"]
         )
         assert verdict["guaranteed_m"] == pytest.approx(
-            float(hazard_rules.SEARCH_RADIUS_M)
+            hazard_rules.SEARCH_RADIUS_M - hazard_service._CACHE_CELL_SLACK_M
         )
 
     def test_a_relabelled_coordinate_is_restated_without_a_rescan(
@@ -1321,6 +1378,7 @@ class TestTheSurfaces:
         values = rows[0].split(",")
         by_name = dict(zip(columns, values))
         assert by_name["Hazards"] == "ok"
+        assert by_name["Hazard Scan Complete"] == "True"
         # Blank on an approximate row, exactly as the page refuses to print it.
         assert by_name["Nearest Hazard Distance (m)"] == ""
         assert by_name["Nearest Hazard Distance Max (m)"]
