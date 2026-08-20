@@ -51,7 +51,7 @@ def _answers(service, monkeypatch, outcomes):
     """`outcomes` maps a URL to (elements, failure). Records the order tried."""
     tried = []
 
-    def _one(url, query):
+    def _one(url, query, deadline=None):
         tried.append(url)
         return outcomes.get(url, ([], None))
 

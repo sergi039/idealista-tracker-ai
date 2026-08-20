@@ -2332,16 +2332,26 @@ async function runGoogleEnrichment(propertyId) {
 
     try {
         const resp = await fetch(url, {
+            /* `analyze: true` says, once and up front, that the AI analyses
+               are part of this press. The server queues them itself when the
+               enrichment job finishes, so the sequel no longer depends on this
+               tab staying open -- the POSTs below join those jobs by their
+               dedupe key rather than starting second, paid ones (#434). */
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: '{}'
+            body: JSON.stringify({ analyze: true })
         });
         const data = await resp.json().catch(() => null);
 
         if (resp.status === 202 && data && data.job_id) {
             _notify(data.message || 'Enrichment queued', 'info');
+            /* The server states its own ceiling (`services/enrich_budget.py`);
+               the constant is only the fallback for a response that does not
+               carry one. A client-side guess is what went stale when the
+               Overpass fallback list raised the server's worst case (#178). */
             const outcome = await _pollJobPromise(
-                data.job_id, IdealistaApp.JOB_POLL_TIMEOUTS.enrichment);
+                data.job_id,
+                data.poll_timeout_ms || IdealistaApp.JOB_POLL_TIMEOUTS.enrichment);
             const result = outcome.result || {};
             return {
                 ok: outcome.ok,

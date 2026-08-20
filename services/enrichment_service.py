@@ -21,7 +21,13 @@ from utils.google_api import (
     failure_from_exception,
     read_api_payload,
 )
-from utils.http import HTTP_USER_AGENT, OVERPASS_GATE, request_with_retries
+from utils.http import (
+    HTTP_USER_AGENT,
+    OVERPASS_GATE,
+    earliest_deadline,
+    lookup_deadline,
+    request_with_retries,
+)
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 from config import Config
 from services.sea_view_service import haversine_m
@@ -1411,6 +1417,9 @@ class EnrichmentService:
     # every instance runs the same software, so moving hosts would repeat it
     # four more times for nothing (#144). A `remark` inside a 200 -- the
     # server-side timeout -- *is*, because it means that instance is loaded.
+    # Neither is REASON_BUDGET_EXHAUSTED (#434): a spent clock says nothing
+    # about the instance, and the next one would answer the same one gate wait
+    # later. Do not add it here.
     _OVERPASS_TRY_ELSEWHERE = frozenset(
         {
             REASON_NETWORK_ERROR,
@@ -1442,7 +1451,21 @@ class EnrichmentService:
         The shared gate is not per host on purpose. It paces *our* traffic,
         and moving to a second instance because the first is loaded is not a
         reason to become less polite to the second.
+
+        Since #434 the walk is also **bounded in wall-clock time**. Three
+        unreachable instances used to cost 888 s -- four attempts each at a
+        60 s scalar timeout plus 8+16+32 s of backoff, per host, with not one
+        request completing -- and the pool step that spent them scores at
+        weight 0. The ceiling is `Config.OSM_OVERPASS_WALK_BUDGET_S`, or
+        whatever is left of the caller's own `lookup_budget(...)` if that is
+        sooner, and a walk that reaches it stops rather than paying a gate
+        wait to ask the next instance the same question.
         """
+        deadline = earliest_deadline(
+            lookup_deadline(),
+            time.monotonic()
+            + float(getattr(Config, "OSM_OVERPASS_WALK_BUDGET_S", 120.0)),
+        )
         first_failure = None
         urls = [self.osm_overpass_url] + [
             url
@@ -1450,7 +1473,9 @@ class EnrichmentService:
             if url and url != self.osm_overpass_url
         ]
         for index, url in enumerate(urls):
-            elements, failure = self._overpass_elements_from(url, overpass_query)
+            elements, failure = self._overpass_elements_from(
+                url, overpass_query, deadline=deadline
+            )
             if failure is None:
                 if index:
                     logger.info("Overpass answered from the fallback %s", url)
@@ -1461,8 +1486,10 @@ class EnrichmentService:
                 break
         return None, first_failure
 
-    def _overpass_elements_from(self, url: str, overpass_query: str):
-        """One round trip to one instance."""
+    def _overpass_elements_from(
+        self, url: str, overpass_query: str, deadline: Optional[float] = None
+    ):
+        """One round trip to one instance, inside `deadline` if given."""
         try:
             response = request_with_retries(
                 requests.post,
@@ -1482,7 +1509,22 @@ class EnrichmentService:
                 max_attempts=4,
                 backoff_base=8.0,
                 backoff_max=90.0,
-                timeout=60,
+                # `(connect, read)`, not a scalar: `requests` expands a scalar
+                # to both legs, so the 60 s an Overpass query needs to compute
+                # was also being spent learning that a host does not answer at
+                # all. See OSM_OVERPASS_CONNECT_TIMEOUT_S for the handshake
+                # measurements behind the connect leg.
+                timeout=(
+                    float(getattr(Config, "OSM_OVERPASS_CONNECT_TIMEOUT_S", 5.0)),
+                    float(getattr(Config, "OSM_OVERPASS_READ_TIMEOUT_S", 60.0)),
+                ),
+                # The patient budget above was measured against a `504` --
+                # this instance is alive and its two per-IP slots are busy, so
+                # waiting is the right move (#144). Silence is the opposite
+                # fact, and this caller has two more instances to ask: one
+                # attempt, then move on.
+                silence_max_attempts=1,
+                deadline=deadline,
                 logger=logger,
                 # Every Overpass caller in this process shares one gate, and
                 # it covers every attempt: the retries are what a bulk run

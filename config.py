@@ -241,6 +241,57 @@ class Config:
         if url.strip()
     ]
 
+    # How long one Overpass lookup may wait, and on what.
+    #
+    # Measured 2026-08-20 from this laptop, three samples per host: TCP connect
+    # 0.057 s and the TLS handshake complete at 0.128-0.132 s to both reachable
+    # instances, while overpass-api.de answered `No route to host` immediately.
+    # Five seconds is a fortyfold margin over a healthy handshake and still
+    # leaves a slow mobile or VPN path room; it is separate from the read
+    # allowance because `requests` expands a scalar timeout to
+    # `connect=read=value`, so the 60 s an Overpass query genuinely needs to
+    # *compute* was also being granted to learn that a host does not answer its
+    # SYN -- twelve times per call site (#434).
+    OSM_OVERPASS_CONNECT_TIMEOUT_S = float(
+        os.environ.get("OSM_OVERPASS_CONNECT_TIMEOUT_S") or "5"
+    )
+    # Unchanged, and deliberately: this is Overpass's own query-computation
+    # time, and shortening it would turn a slow answer into a manufactured
+    # absence.
+    OSM_OVERPASS_READ_TIMEOUT_S = float(
+        os.environ.get("OSM_OVERPASS_READ_TIMEOUT_S") or "60"
+    )
+    # The ceiling on one lookup's walk across every instance above.
+    #
+    # Derived, not chosen. The walk must still be able to spend #144's patient
+    # budget on the first instance -- a `504` means both per-IP slots are busy
+    # and one frees up in about a minute, so 8+16+32 s of backoff plus four
+    # 5 s gate waits, about 76 s, has to fit or a busy-but-alive instance would
+    # be abandoned for a fallback it did not need. 120 s fits that and leaves
+    # room to try one more instance, while capping the three-dead-instance case
+    # that cost 888 s on the mini on 2026-08-20 (#434).
+    OSM_OVERPASS_WALK_BUDGET_S = float(
+        os.environ.get("OSM_OVERPASS_WALK_BUDGET_S") or "120"
+    )
+    # The ceiling on *all* the free lookups one Enrich press may wait for --
+    # every Overpass walk and every elevation query in the run, together.
+    #
+    # The walk budget alone bounds one lookup; an enrichment run makes up to
+    # eleven, so without this the press is still bounded only by their sum. The
+    # decisive steps run first (services/property_enrichment_service.py), so
+    # what an outage costs the advisory ones is whatever is left -- which is
+    # the point: an advisory, score-neutral step must not hold a paid one
+    # hostage, and when the clock is gone it records `unavailable` and the run
+    # goes on.
+    ENRICH_LOOKUP_BUDGET_S = float(os.environ.get("ENRICH_LOOKUP_BUDGET_S") or "240")
+    # What the paid Google steps of one run may take: geocoding, the Places
+    # wide-search fallback and one Distance Matrix request, each with its own
+    # retries. Not a deadline -- nothing enforces it, and nothing should, since
+    # abandoning a billed request is how a press pays for a measurement nobody
+    # receives (#178). It exists so `services/enrich_budget.py` can state the
+    # run's worst case instead of a client guessing at it.
+    ENRICH_PAID_ALLOWANCE_S = float(os.environ.get("ENRICH_PAID_ALLOWANCE_S") or "120")
+
     # Sea-view estimation. Both sources are free and keyless -- Google billing
     # is off (#98) and is not needed here: the coastline comes from
     # OpenStreetMap and the terrain from Copernicus EU-DEM (25 m).

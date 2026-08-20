@@ -50,6 +50,7 @@ from utils.http import (
     HTTP_USER_AGENT,
     OVERPASS_GATE,
     RateGate,
+    lookup_deadline,
     request_with_retries,
 )
 
@@ -339,7 +340,23 @@ def fetch_coastline_points(
             max_attempts=5,
             backoff_base=8.0,
             backoff_max=90.0,
-            timeout=120,
+            # Split into `(connect, read)` for the reason
+            # `services/enrichment_service.py` gives; this one keeps the longer
+            # read allowance, which a coastline query over a 25 km box needs.
+            timeout=(
+                float(getattr(Config, "OSM_OVERPASS_CONNECT_TIMEOUT_S", 5.0)),
+                120,
+            ),
+            # A `504` is worth all five attempts -- the instance is alive and
+            # busy. Silence is not: this query has no fallback instance to move
+            # to, so the only thing a second attempt buys is another 120 s of
+            # the caller's clock (#434).
+            silence_max_attempts=1,
+            # Bounded by whatever budget the run that asked opened, if any.
+            # A refusal here already raises SeaViewSourceError and the verdict
+            # already degrades to `unknown`, so a spent clock reads as "nobody
+            # looked" rather than as "no sea".
+            deadline=lookup_deadline(),
             # Streamed so the size ceiling is enforced as the body arrives,
             # not after it is already in memory.
             stream=True,
@@ -539,7 +556,12 @@ def fetch_elevations(
             Config.SEA_VIEW_ELEVATION_URL,
             params={"locations": locations},
             headers={"User-Agent": HTTP_USER_AGENT},
-            timeout=60,
+            timeout=(
+                float(getattr(Config, "OSM_OVERPASS_CONNECT_TIMEOUT_S", 5.0)),
+                60,
+            ),
+            silence_max_attempts=1,
+            deadline=lookup_deadline(),
             logger=logger,
             # OpenTopoData's public instance asks for one call a second, and
             # the retries count towards that as much as the first attempt.

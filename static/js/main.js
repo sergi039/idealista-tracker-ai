@@ -213,7 +213,8 @@ window.IdealistaApp = {
                         if (response && response.status === 'queued' && response.job_id && IdealistaApp.pollJob) {
                             IdealistaApp.showNotification(response.message || 'Enrichment queued', 'info');
                             IdealistaApp.pollJob(response.job_id, {
-                                timeoutMs: IdealistaApp.JOB_POLL_TIMEOUTS.enrichment,
+                                timeoutMs: response.poll_timeout_ms
+                                    || IdealistaApp.JOB_POLL_TIMEOUTS.enrichment,
                                 onSuccess: (job) => {
                                     const result = job && job.result ? job.result : {};
                                     const ok = result.success !== false;
@@ -959,7 +960,13 @@ window.IdealistaApp = {
         // isolation already fixed -- see AI_ANALYSIS_TIMEOUT_SECONDS's own
         // comment in config.py for the measurements behind 180 s.)
         aiAnalysis: 265000,
-        // Several Google calls plus Overpass behind the 5 s gate in utils/http.py.
+        // Fallback only, for a response that carries no `poll_timeout_ms`.
+        // The enrich endpoint states its own ceiling now, derived in
+        // services/enrich_budget.py from the budgets the server actually
+        // enforces -- because this number went stale the moment the Overpass
+        // fallback list was added (2026-08-19) and nobody re-derived it,
+        // which is #178's defect: a job still running, announced as failed,
+        // and the obvious next move pays for it again (#434).
         enrichment: 300000,
         // One listing fetch (15 s) plus the deliberate 1-4 s scraping pause.
         listingStatus: 180000,
