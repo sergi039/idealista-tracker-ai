@@ -26,7 +26,11 @@ import, so a test can move one and see the total move:
 * `ENRICH_PAID_ALLOWANCE_S` -- geocoding, the Places wide search and one
   Distance Matrix request. An allowance and not a deadline, deliberately:
   abandoning a billed request mid-flight is how a press comes to pay for a
-  measurement nobody receives.
+  measurement nobody receives. It also carries the one free HTTP fetch that
+  is neither Google nor an OSM lookup: `services/advertiser.py` reads a
+  fotocasa listing page at `FETCH_TIMEOUT_S = 20` behind a 3 s gate, up to
+  three attempts, so about a minute in the worst case. Named here because a
+  term nobody wrote down is how this sum comes to be shorter than the run.
 
 Plus `QUEUE_ALLOWANCE_S` for the time a queued job waits before one of the
 four `BACKGROUND_WORKERS` picks it up -- the same allowance the AI analysis

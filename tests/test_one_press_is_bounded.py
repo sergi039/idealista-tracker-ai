@@ -947,6 +947,23 @@ class TestTheClientIsToldTheCeilingRatherThanGuessingIt:
         monkeypatch.setattr(Config, "AI_ANALYSIS_TIMEOUT_SECONDS", 300)
         assert enrich_budget.worst_case_seconds() > before + 160.0
 
+    def test_it_is_never_shorter_than_the_run_it_describes(self):
+        """The harmful direction is *short*.
+
+        A client that stops polling while the server is still working reports
+        a running job as failed, and the obvious next move pays for it again
+        (#178). So the sum has to cover every server-side wait a legitimate
+        run can contain, not the typical one.
+        """
+        from services import enrich_budget
+
+        lookups = float(Config.ENRICH_LOOKUP_BUDGET_S)
+        ai = float(Config.AI_ANALYSIS_TIMEOUT_SECONDS) + float(
+            Config.AI_BRIDGE_SOCKET_MARGIN_SECONDS
+        )
+        paid = float(Config.ENRICH_PAID_ALLOWANCE_S)
+        assert enrich_budget.worst_case_seconds() >= lookups + ai + paid
+
     def test_it_covers_the_budget_the_server_actually_enforces(self):
         from services import enrich_budget
 

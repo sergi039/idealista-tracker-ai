@@ -300,13 +300,27 @@ class Config:
     # before it opens a socket. Measured on the mini 2026-08-20, one lookup
     # alone cost 888 s and the run made eleven.
     ENRICH_LOOKUP_BUDGET_S = float(os.environ.get("ENRICH_LOOKUP_BUDGET_S") or "240")
-    # What the paid Google steps of one run may take: geocoding, the Places
-    # wide-search fallback and one Distance Matrix request, each with its own
-    # retries. Not a deadline -- nothing enforces it, and nothing should, since
-    # abandoning a billed request is how a press pays for a measurement nobody
-    # receives (#178). It exists so `services/enrich_budget.py` can state the
-    # run's worst case instead of a client guessing at it.
-    ENRICH_PAID_ALLOWANCE_S = float(os.environ.get("ENRICH_PAID_ALLOWANCE_S") or "120")
+    # What the rest of one run may take: the paid Google steps plus the one
+    # free HTTP fetch that is neither Google nor an OSM lookup. Not a deadline
+    # -- nothing enforces it, and nothing should, since abandoning a billed
+    # request is how a press pays for a measurement nobody receives (#178). It
+    # exists so `services/enrich_budget.py` can state the run's worst case
+    # instead of a client guessing at it.
+    #
+    # Added up from the transports rather than picked, and rounded up because
+    # the harmful direction is being *short*: a client that stops polling
+    # while the server is still working reports a running job as failed, and
+    # the obvious next move pays for it again.
+    #
+    #   geocoding      2 queries x 3 attempts x 10 s + backoff   ~70 s
+    #   Places         wide search, 3 attempts x 12 s + backoff  ~40 s
+    #   DistanceMatrix 3 attempts x 15 s + backoff                ~50 s
+    #   advertiser     3 attempts x 20 s behind a 3 s gate       ~70 s
+    #
+    # Those worst cases do not co-occur in any run anyone has observed; 240 s
+    # is roughly the sum of the two largest plus room, and being generous here
+    # costs a spinner that waits, not money.
+    ENRICH_PAID_ALLOWANCE_S = float(os.environ.get("ENRICH_PAID_ALLOWANCE_S") or "240")
 
     # Sea-view estimation. Both sources are free and keyless -- Google billing
     # is off (#98) and is not needed here: the coastline comes from
