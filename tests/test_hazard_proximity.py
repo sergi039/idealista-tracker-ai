@@ -2115,11 +2115,13 @@ class TestTheComponent:
         assert lifestyle["score"] == pytest.approx(component)
 
         body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
-        # Twice: the card's own header, and the line in the score breakdown
-        # that explains where the number came from. The breakdown never listed
-        # the criterion at all (codex review, 2026-08-20), and asserting the
-        # phrase once cannot tell the two apart.
-        assert body.count("Industrial neighbours") >= 2
+        # The breakdown row, and not merely the card's header. Two occurrences
+        # remain on the page without it (the card header and the coverage
+        # tooltip), so the count is measured rather than guessed -- the
+        # breakdown never listed the criterion at all, and asserting the
+        # phrase once could not tell the two apart (codex review,
+        # 2026-08-20).
+        assert body.count("Industrial neighbours") >= 3
         assert "component_hazard" not in body, "the label must be translated"
 
     def test_the_override_reaches_the_scorer(self, app, real_fetch, profile):
