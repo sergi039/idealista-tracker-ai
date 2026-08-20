@@ -2,7 +2,7 @@ import logging
 import math
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 import hashlib
 
@@ -26,7 +26,7 @@ from sqlalchemy import or_, case, func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
-from app import db
+from app import db, limiter
 from services import sea_view_service
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
@@ -34,6 +34,7 @@ from services.hazard_service import (
     complete_expression as hazard_complete_expression,
     read_verdict as hazard_verdict,
 )
+from services import owner_review
 from services.listing_verification import (
     read_verdict as listing_verdict,
     verified_expression,
@@ -51,6 +52,7 @@ from services.profile_selection import (
 from utils.i18n import t
 from utils.listing_search import interpret_search, listing_search_clause
 from utils.listing_source import source_filter_clause
+from utils.listing_status_scope import resolve_hide_removed
 from utils.municipality_grouping import (
     group_key,
     group_municipalities,
@@ -995,6 +997,63 @@ def _advertiser_choices(profile_selection, applied=""):
     return choices
 
 
+def _owner_verdict_choices(profile_selection, applied=""):
+    """How many listings the owner decided what about.
+
+    `undecided` is offered whenever it holds anything, and on this table it
+    holds nearly everything. That is the point rather than noise: without it
+    the three decided counts read as a tally of the whole page, and "nobody
+    decided yet" is exactly the fact #98 says must not be folded into
+    "rejected".
+    """
+    state = owner_review.decision_expression(Property)
+    rows = apply_profile_filter(
+        db.session.query(state, func.count()),
+        Property.search_profile_id,
+        profile_selection,
+    ).group_by(state)
+    counts = {key: total for key, total in rows.all() if key}
+
+    choices = owner_review.decision_options(counts)
+    if applied and applied not in {choice["value"] for choice in choices}:
+        choices.append(
+            {
+                "value": applied,
+                "label_key": owner_review.decision_label_key(applied),
+                "count": 0,
+            }
+        )
+    return choices
+
+
+def _next_action_choices(profile_selection, applied="", on_date=None):
+    """How many listings carry an outstanding action, and how many are late.
+
+    `none` is not offered: it is most of the table, and an option that selects
+    everything selects nothing anyone is looking for. The date is the caller's
+    -- the same one the filter and the badges use, so the count cannot describe
+    a different day from the rows under it.
+    """
+    state = owner_review.action_expression_portable(Property, on_date)
+    rows = apply_profile_filter(
+        db.session.query(state, func.count()),
+        Property.search_profile_id,
+        profile_selection,
+    ).group_by(state)
+    counts = {key: total for key, total in rows.all() if key}
+
+    choices = owner_review.action_options(counts)
+    if applied and applied not in {choice["value"] for choice in choices}:
+        choices.append(
+            {
+                "value": applied,
+                "label_key": owner_review.action_label_key(applied),
+                "count": 0,
+            }
+        )
+    return choices
+
+
 def _property_filter_options(
     profile_selection,
     category_filter="",
@@ -1002,6 +1061,9 @@ def _property_filter_options(
     municipality_filter="",
     source_filter="",
     advertiser_filter="",
+    verdict_filter="",
+    action_filter="",
+    review_today=None,
 ):
     """Type / Subtype / Municipality choices for the subscriptions on screen.
 
@@ -1037,6 +1099,8 @@ def _property_filter_options(
         "municipalities": _municipality_choices(profile_selection, municipality_filter),
         "sources": _source_choices(profile_selection, source_filter),
         "advertisers": _advertiser_choices(profile_selection, advertiser_filter),
+        "verdicts": _owner_verdict_choices(profile_selection, verdict_filter),
+        "actions": _next_action_choices(profile_selection, action_filter, review_today),
         "has_unclassified_category": _selection_has_unclassified(
             Property.property_category, profile_selection
         ),
@@ -1110,35 +1174,26 @@ def properties():
         municipality_filter = request.args.get("municipality", "")
         source_filter = request.args.get("source", "")
         advertiser_filter = request.args.get("advertiser", "")
+        verdict_filter = request.args.get("verdict", "")
+        action_filter = request.args.get("action", "")
+        # One date for the whole request. `overdue` is a due date compared
+        # against today, and the badge, the filter, the count beside its option
+        # and both serializers have to compare against the *same* today or they
+        # disagree for the few minutes a day nobody is watching
+        # (services/owner_review.py).
+        review_today = owner_review.today()
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
         sea_view_filter = request.args.get("sea_view", "")
         measured_filter = request.args.get("measured", "")
 
-        # Hide removed: ON by default (similar to /lands)
-        hide_removed_param = request.args.get("hide_removed", None)
-        form_submitted = any(
-            request.args.get(p)
-            for p in [
-                "profile_id",
-                "category",
-                "subtype",
-                "municipality",
-                "search",
-                "inv_metr",
-                "sea_view",
-                "measured",
-                "sort",
-                "order",
-                "favorites",
-                "hide_removed",
-            ]
-        )
-        if form_submitted:
-            hide_removed_filter = hide_removed_param == "on"
-        else:
-            hide_removed_filter = True
+        # Hide removed: ON by default (similar to /lands), unless this request
+        # came from the filter form with the box unticked.
+        # utils/listing_status_scope.py owns that reading -- it used to be a
+        # hand-written list of filter parameter names here and a second,
+        # differently stale one in export_properties_csv() below.
+        hide_removed_filter = resolve_hide_removed(request.args)
 
         # View state carried over from /lands (issue #105): cards vs table,
         # and the combined / investment / lifestyle scoring modes.
@@ -1191,6 +1246,21 @@ def properties():
         advertiser_clause = advertiser.filter_clause(Property, advertiser_filter)
         if advertiser_clause is not None:
             query = query.filter(advertiser_clause)
+        # What the owner decided, and what is still outstanding.
+        # services/owner_review.py owns both readings, so the badge, these two
+        # filters and the counts beside their options are one answer rather
+        # than several. Both filters are applied here rather than one of them
+        # here and the other elsewhere: a surface that keeps one parameter and
+        # drops the other is the regression these two are tested against
+        # together.
+        verdict_clause = owner_review.decision_filter_clause(Property, verdict_filter)
+        if verdict_clause is not None:
+            query = query.filter(verdict_clause)
+        action_clause = owner_review.action_filter_clause(
+            Property, action_filter, review_today
+        )
+        if action_clause is not None:
+            query = query.filter(action_clause)
         # A pasted listing URL, or a bare listing id, is a search too --
         # utils/listing_search.py owns what the box accepts.
         search_clause = listing_search_clause(Property, search_query)
@@ -1341,6 +1411,9 @@ def properties():
             municipality_filter=municipality_filter,
             source_filter=source_filter,
             advertiser_filter=advertiser_filter,
+            verdict_filter=verdict_filter,
+            action_filter=action_filter,
+            review_today=review_today,
         )
 
         return render_template(
@@ -1366,6 +1439,10 @@ def properties():
             # what it looked for instead of leaving "0 properties found" to
             # mean both "no such listing" and "not understood as you typed it".
             search_interpretation=interpret_search(search_query),
+            # The page's one date. Every badge that asks whether an action is
+            # late is handed this value; a template calling `date.today()` per
+            # row would disagree with the query that selected the rows.
+            review_today=review_today,
             **filter_options,
             current_filters={
                 # A list, so `url_for` repeats the parameter instead of
@@ -1376,6 +1453,8 @@ def properties():
                 "municipality": municipality_filter,
                 "source": source_filter,
                 "advertiser": advertiser_filter,
+                "verdict": verdict_filter,
+                "action": action_filter,
                 "search": search_query,
                 "inv_metr": investment_metrics_filter,
                 "sea_view": sea_view_filter,
@@ -1558,6 +1637,16 @@ def property_detail(property_id):
                 else None
             ),
             travel_display_targets=travel_display_targets,
+            # One row, one query, and only on this page: whether the stored
+            # decision still matches the newest entry in its own log. The list
+            # must never ask this -- it would be a query per row -- which is
+            # why `owner_review.read_decision` stays a pure reader and this is
+            # a separate call (services/owner_review.py).
+            review_history_out_of_sync=owner_review.history_out_of_sync(prop),
+            # The conversation, newest first. One query for the page; the list
+            # never asks for this.
+            activity_timeline=owner_review.timeline(prop),
+            activity_channels=owner_review.CHANNELS,
             sea_view_verdict=sea_view_service.read_verdict(prop),
             # One row, and only on this page: the list would run it per row.
             # It is evidence about the coordinate, next to the coordinate, and
@@ -2717,6 +2806,231 @@ def set_advertiser(property_id):
     return redirect(url_for("main.property_detail", property_id=property_id))
 
 
+@main_bp.route("/properties/<int:property_id>/review", methods=["POST"])
+def set_review(property_id):
+    """Record what the owner decided, and what is still outstanding.
+
+    One dedicated route validating a small closed set, flashing a result and
+    redirecting -- the `set_advertiser` / `set_pool_absence` idiom, and on
+    `main_bp`, so the form carries a CSRF token. There is no JSON twin: every
+    endpoint on `api_bp` is CSRF-exempt, and this writes the one thing in the
+    application a person typed rather than a measurement.
+
+    Both fields are submitted together because they are edited together, and
+    because `services.owner_review.set_review` records one event describing the
+    state it left the row in. Two routes would produce two events for one press
+    and a timeline that reads like two decisions.
+
+    A blank decision clears it, which is not the same as rejecting: the row
+    goes back to `undecided`, the state a listing nobody has judged is in.
+    """
+    from services import owner_review as owner_review_service
+
+    prop = db.get_or_404(Property, property_id)
+
+    decision = (request.form.get("verdict") or "").strip().lower()
+    if decision and decision not in owner_review_service.DECIDED_STATES:
+        flash("Unknown verdict.", "error")
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    raw_due = (request.form.get("due_on") or "").strip()
+    due_on = None
+    if raw_due:
+        try:
+            due_on = date.fromisoformat(raw_due)
+        except ValueError:
+            flash("The due date is not a date.", "error")
+            return redirect(url_for("main.property_detail", property_id=property_id))
+
+    try:
+        result = owner_review_service.set_review(
+            prop,
+            decision=decision or None,
+            reason=request.form.get("reason"),
+            action=request.form.get("next_action"),
+            due_on=due_on,
+        )
+    except owner_review_service.ReviewError as exc:
+        # A rejected write, not a crash: the message names the field.
+        flash(str(exc), "error")
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    if not result["changed"]:
+        flash("Nothing changed.", "success")
+    elif decision:
+        flash("Recorded.", "success")
+    else:
+        flash("Cleared: this listing is undecided again.", "success")
+    return redirect(url_for("main.property_detail", property_id=property_id))
+
+
+@main_bp.route("/properties/<int:property_id>/activity", methods=["POST"])
+def add_activity(property_id):
+    """Add a note or one contact entry to a listing's timeline.
+
+    One form with a kind toggle, because the two are the same act -- writing
+    down something that happened -- and the fields a contact carries are the
+    extra structure that act sometimes has. Two forms would mean two buttons
+    for one intention.
+
+    `happened_at` is when the exchange happened and defaults to now: an answer
+    given on the phone yesterday is recorded today, and the feed is ordered by
+    the first of those.
+    """
+    from services import owner_review as owner_review_service
+
+    prop = db.get_or_404(Property, property_id)
+    kind = (request.form.get("kind") or "").strip().lower()
+
+    happened_at = None
+    raw_when = (request.form.get("happened_on") or "").strip()
+    if raw_when:
+        try:
+            happened_at = datetime.combine(date.fromisoformat(raw_when), time(12, 0))
+        except ValueError:
+            flash("That date is not a date.", "error")
+            return redirect(url_for("main.property_detail", property_id=property_id))
+
+    try:
+        if kind == owner_review_service.KIND_NOTE:
+            owner_review_service.add_note(
+                prop, body=request.form.get("body"), happened_at=happened_at
+            )
+        elif kind == owner_review_service.KIND_CONTACT:
+            owner_review_service.add_contact(
+                prop,
+                channel=request.form.get("channel"),
+                counterpart=request.form.get("counterpart"),
+                asked=request.form.get("asked"),
+                body=request.form.get("body"),
+                happened_at=happened_at,
+            )
+        else:
+            flash("Unknown entry type.", "error")
+            return redirect(url_for("main.property_detail", property_id=property_id))
+    except owner_review_service.ReviewError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    flash("Recorded.", "success")
+    return redirect(url_for("main.property_detail", property_id=property_id))
+
+
+@main_bp.route(
+    "/properties/<int:property_id>/activity/<int:entry_id>", methods=["POST"]
+)
+def edit_activity(property_id, entry_id):
+    """Edit or soft-delete one entry.
+
+    The entry is fetched **by both ids**: a URL naming another property's entry
+    would otherwise edit it from this page, and the composite lookup is what
+    makes that a 404 rather than a cross-property write.
+
+    Verdict entries are refused here rather than merely hidden in the
+    template. They are the record of a decision, written beside the columns
+    they describe, and a control that could edit them could edit the log into
+    disagreement with the state it is the history of.
+    """
+    from models import PropertyActivity
+    from services import owner_review as owner_review_service
+
+    entry = PropertyActivity.query.filter_by(
+        id=entry_id, property_id=property_id
+    ).first_or_404()
+
+    action = (request.form.get("action") or "").strip().lower()
+    if action not in ("save", "delete"):
+        flash("Unknown action.", "error")
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    try:
+        if action == "delete":
+            owner_review_service.soft_delete_entry(entry)
+            flash("Removed from the timeline.", "success")
+        else:
+            owner_review_service.edit_entry(
+                entry,
+                body=request.form.get("body"),
+                asked=request.form.get("asked"),
+                counterpart=request.form.get("counterpart"),
+                channel=request.form.get("channel") or entry.channel,
+            )
+            flash("Saved.", "success")
+    except owner_review_service.ReviewError as exc:
+        flash(str(exc), "error")
+
+    return redirect(url_for("main.property_detail", property_id=property_id))
+
+
+@main_bp.route("/properties/<int:property_id>/cadastre", methods=["POST"])
+@limiter.limit("5 per minute")
+def set_cadastral_reference(property_id):
+    """Record the parcel this listing sits on, and fetch what Catastro says.
+
+    The first rate limit in this module, and it is here rather than in the
+    idiom because this route reaches a third party. Catastro publishes no
+    numeric limit and does publish an ~10-day IP ban for abuse, so the
+    arithmetic has to be bounded at the door: three outbound requests per
+    uncached press (`services/cadastre_service.py` runs them with no retries
+    for exactly this reason), five presses a minute, fifteen requests a minute
+    at the very worst. The same 5/minute the listing-status check carries, and
+    for the same reason -- there is no authentication in front of any of it.
+
+    Clearing is a separate action and makes no request: a reference typed
+    wrongly has to be removable without a fetch.
+    """
+    from services import cadastre_service
+
+    prop = db.get_or_404(Property, property_id)
+    raw = (request.form.get("cadastral_reference") or "").strip()
+
+    if not raw:
+        # Clearing the field clears the column AND the block: leaving a
+        # measurement of a parcel this listing no longer claims would be a
+        # description of somewhere else.
+        prop.cadastral_reference = None
+        enrichment = dict(prop.enrichment or {})
+        enrichment.pop(cadastre_service.ENRICHMENT_KEY, None)
+        prop.enrichment = enrichment
+        db.session.commit()
+        flash("Cleared: no cadastral reference for this listing.", "success")
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    normalized = cadastre_service.normalize_reference(raw)
+    if not normalized:
+        flash(
+            "That is not a cadastral reference — it should be 14, 18 or 20 "
+            "letters and digits.",
+            "error",
+        )
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    try:
+        block = cadastre_service.apply_to_property(prop, normalized, commit=True)
+    except cadastre_service.CadastreError as exc:
+        # A refusal is not a crash and not a silent success: the reference is
+        # still worth storing, because the parcel it names is a fact about the
+        # listing whether or not Catastro answered this minute.
+        prop.cadastral_reference = normalized
+        db.session.commit()
+        flash(
+            f"Recorded the reference; Catastro did not answer ({exc.state}).", "error"
+        )
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    run_state = block.get("run_state")
+    if run_state == cadastre_service.RUN_OK:
+        message = "Recorded, and the parcel was measured."
+    elif run_state == cadastre_service.RUN_DEGRADED:
+        message = "Recorded, and the parcel was measured — some details are missing."
+    else:
+        message = "Recorded; the parcel could not be measured this time."
+    flash(
+        message, "success" if run_state != cadastre_service.RUN_UNAVAILABLE else "error"
+    )
+    return redirect(url_for("main.property_detail", property_id=property_id))
+
+
 @main_bp.route("/properties/<int:property_id>/pool-absence", methods=["POST"])
 def set_pool_absence(property_id):
     """The owner's hand-set 'no pool here' verdict (proposal D17).
@@ -2988,6 +3302,14 @@ def map_view():
         municipality_filter = request.args.get("municipality", "")
         source_filter = request.args.get("source", "")
         advertiser_filter = request.args.get("advertiser", "")
+        verdict_filter = request.args.get("verdict", "")
+        action_filter = request.args.get("action", "")
+        # One date for the whole request. `overdue` is a due date compared
+        # against today, and the badge, the filter, the count beside its option
+        # and both serializers have to compare against the *same* today or they
+        # disagree for the few minutes a day nobody is watching
+        # (services/owner_review.py).
+        review_today = owner_review.today()
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
@@ -3016,6 +3338,21 @@ def map_view():
         advertiser_clause = advertiser.filter_clause(Property, advertiser_filter)
         if advertiser_clause is not None:
             query = query.filter(advertiser_clause)
+        # What the owner decided, and what is still outstanding.
+        # services/owner_review.py owns both readings, so the badge, these two
+        # filters and the counts beside their options are one answer rather
+        # than several. Both filters are applied here rather than one of them
+        # here and the other elsewhere: a surface that keeps one parameter and
+        # drops the other is the regression these two are tested against
+        # together.
+        verdict_clause = owner_review.decision_filter_clause(Property, verdict_filter)
+        if verdict_clause is not None:
+            query = query.filter(verdict_clause)
+        action_clause = owner_review.action_filter_clause(
+            Property, action_filter, review_today
+        )
+        if action_clause is not None:
+            query = query.filter(action_clause)
         # A pasted listing URL, or a bare listing id, is a search too --
         # utils/listing_search.py owns what the box accepts.
         search_clause = listing_search_clause(Property, search_query)
@@ -3113,6 +3450,58 @@ def map_view():
                     }
                 )
 
+        # "List View" has to land on the set this map is drawing. It carried
+        # `profile_id` alone, so every other filter was dropped on the way
+        # back: a map of the 70 listings sold by their owners had a button
+        # that opened a list of 470, with nothing saying the set had changed.
+        # That is #435's defect in the seam between the two surfaces rather
+        # than inside one of them -- the three links that lead *to* this page
+        # have carried the full set all along.
+        #
+        # Built here, beside the filters themselves, rather than in the
+        # template: a filter added to this route and forgotten in the link is
+        # then one screenful away instead of one file away. The keys are in
+        # `current_filters`' order for the same reason /properties keeps them
+        # that way.
+        #
+        # Two of them are not simply copied from the request, and both would
+        # be wrong if they were:
+        #
+        # * `hide_removed` is not read here at all. The map excludes delisted
+        #   listings unconditionally (the `notin_` above), whatever the caller
+        #   asked for, so 'on' is what this map is actually showing, and
+        #   reading the parameter would send the reader to a list holding rows
+        #   the map refused to plot.
+        #
+        #   It is *stated* rather than left absent for the reason
+        #   `utils/listing_status_scope.py` gives (#439, merged the same day
+        #   as this): a link should say what it means instead of relying on
+        #   the reading at the far end, which is why the Export CSV link
+        #   spells out `on` and `off` too. Note what this is no longer: until
+        #   #439 the value was load bearing, because an absent `hide_removed`
+        #   alongside any other filter read as an unticked box and widened the
+        #   list. That mechanism is gone -- a cross-page link like this one
+        #   carries neither form marker and now gets the default, which is
+        #   `on` -- so measured today the far end agrees either way. Keep the
+        #   statement; do not restore the old reasoning for it.
+        # * `measured` is absent on purpose. This page never applied it, and a
+        #   link that carries a filter its origin did not apply would narrow
+        #   the list below the map it came from -- an absence of filtering
+        #   rendered as filtering.
+        list_view_args = {
+            "profile_id": list(profile_selection.link_values),
+            "category": category_filter or None,
+            "subtype": subtype_filter or None,
+            "municipality": municipality_filter or None,
+            "source": source_filter or None,
+            "advertiser": advertiser_filter or None,
+            "search": search_query or None,
+            "inv_metr": investment_metrics_filter or None,
+            "sea_view": sea_view_filter or None,
+            "favorites": "on" if favorites_filter else None,
+            "hide_removed": "on",
+        }
+
         markers = []
         for prop in props:
             markers.append(
@@ -3146,7 +3535,7 @@ def map_view():
             profiles=profiles,
             selected_profile_id=selected_profile_id,
             profile_selection=profile_selection,
-            list_view_profile_id=list(profile_selection.link_values),
+            list_view_args=list_view_args,
             travel_display_targets=travel_display_targets,
             focus_notice=focus_notice,
             # The map drops a hidden subscription's markers exactly as the
@@ -3165,7 +3554,7 @@ def map_view():
             profiles=[],
             selected_profile_id=None,
             profile_selection=empty_profile_selection(),
-            list_view_profile_id=None,
+            list_view_args={},
             travel_display_targets=[],
             focus_notice=None,
             # It failed before it could ask; "0 hidden" would be a claim.
@@ -4072,32 +4461,30 @@ def export_properties_csv():
         municipality_filter = request.args.get("municipality", "")
         source_filter = request.args.get("source", "")
         advertiser_filter = request.args.get("advertiser", "")
+        verdict_filter = request.args.get("verdict", "")
+        action_filter = request.args.get("action", "")
+        # One date for the whole request. `overdue` is a due date compared
+        # against today, and the badge, the filter, the count beside its option
+        # and both serializers have to compare against the *same* today or they
+        # disagree for the few minutes a day nobody is watching
+        # (services/owner_review.py).
+        review_today = owner_review.today()
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
         sea_view_filter = request.args.get("sea_view", "")
+        # The export did not read this one at all, so the Export CSV button on
+        # a `measured=full` page exported the whole subscription: measured
+        # against production 2026-08-20, the page found 72 listings and its own
+        # export returned 471 rows.
+        measured_filter = request.args.get("measured", "")
 
-        hide_removed_param = request.args.get("hide_removed", None)
-        form_submitted = any(
-            request.args.get(p)
-            for p in [
-                "profile_id",
-                "category",
-                "subtype",
-                "municipality",
-                "search",
-                "inv_metr",
-                "sea_view",
-                "sort",
-                "order",
-                "favorites",
-                "hide_removed",
-            ]
-        )
-        if form_submitted:
-            hide_removed_filter = hide_removed_param == "on"
-        else:
-            hide_removed_filter = True
+        # The same reading as /properties, from the same module, so an export
+        # and the page it was taken from cannot disagree about which listings
+        # are in scope. The Export CSV link states `hide_removed` outright in
+        # both directions, so for a page-drawn export the default below is
+        # never consulted.
+        hide_removed_filter = resolve_hide_removed(request.args)
 
         sort_by = request.args.get("sort", "created_at")
         sort_order = request.args.get("order", "desc")
@@ -4135,6 +4522,21 @@ def export_properties_csv():
         advertiser_clause = advertiser.filter_clause(Property, advertiser_filter)
         if advertiser_clause is not None:
             query = query.filter(advertiser_clause)
+        # What the owner decided, and what is still outstanding.
+        # services/owner_review.py owns both readings, so the badge, these two
+        # filters and the counts beside their options are one answer rather
+        # than several. Both filters are applied here rather than one of them
+        # here and the other elsewhere: a surface that keeps one parameter and
+        # drops the other is the regression these two are tested against
+        # together.
+        verdict_clause = owner_review.decision_filter_clause(Property, verdict_filter)
+        if verdict_clause is not None:
+            query = query.filter(verdict_clause)
+        action_clause = owner_review.action_filter_clause(
+            Property, action_filter, review_today
+        )
+        if action_clause is not None:
+            query = query.filter(action_clause)
         # A pasted listing URL, or a bare listing id, is a search too --
         # utils/listing_search.py owns what the box accepts.
         search_clause = listing_search_clause(Property, search_query)
@@ -4148,6 +4550,9 @@ def export_properties_csv():
 
         if sea_view_filter:
             query = _filter_by_sea_view(query, Property, sea_view_filter)
+
+        if measured_filter:
+            query = _filter_by_measured(query, Property, measured_filter)
 
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
@@ -4307,6 +4712,16 @@ def export_properties_csv():
             "Nearest Hazard Distance Min (m)",
             "Nearest Hazard Distance Max (m)",
             "Nearest Hazard Bearing",
+            # What the owner decided and what is still outstanding. The
+            # decision column says `undecided` where nobody has judged the
+            # listing -- never blank and never `rejected`, because a report
+            # built off a blank cell reads "nobody looked" as "looked and said
+            # no" (services/owner_review.py).
+            "Owner Verdict",
+            "Owner Verdict Reason",
+            "Next Action",
+            "Next Action Due",
+            "Next Action State",
             "Created At",
         ]
 
@@ -4342,6 +4757,9 @@ def export_properties_csv():
             # a point distance for a locality centroid the page refuses to.
             hazards = hazard_verdict(prop)
             hazard_nearest = hazards["nearest"]
+            # The request's one date, so a row exported at 23:59 Madrid is
+            # described against the same day the filter selected it on.
+            review_action = owner_review.read_action(prop, review_today)
 
             row = [
                 prop.id,
@@ -4388,6 +4806,11 @@ def export_properties_csv():
                 hazard_nearest.get("min_distance_m") if hazard_nearest else None,
                 hazard_nearest.get("max_distance_m") if hazard_nearest else None,
                 hazard_nearest.get("cardinal") if hazard_nearest else None,
+                owner_review.read_decision(prop)["state"],
+                prop.owner_verdict_reason or "",
+                prop.next_action or "",
+                prop.next_action_due_on.isoformat() if prop.next_action_due_on else "",
+                review_action["state"],
                 prop.created_at.isoformat() if prop.created_at else "",
             ]
 

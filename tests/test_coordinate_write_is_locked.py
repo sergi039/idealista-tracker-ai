@@ -294,10 +294,16 @@ class TestTheChainAsksForIt:
         """Both halves of one decision.
 
         `check_writable` refuses a `commit=True` write on a session with
-        anything pending, and `advertiser.enrich(commit=False)` assigns
-        `prop.enrichment` on a row whose seller nothing has established — every
-        fresh fotocasa import, which is exactly the population that needs a
-        coordinate. So the order is load-bearing, not tidiness.
+        anything pending, and the advertiser step assigns `prop.enrichment` on
+        a row whose seller nothing has established — every fresh fotocasa
+        import, which is exactly the population that needs a coordinate. So
+        the order is load-bearing, not tidiness.
+
+        Since #434 the advertiser step is itself a `commit=True` write: it
+        belongs to the advisory pass, which runs after the decisive one has
+        committed and where every step owns its own locked write. That makes
+        this ordering matter more rather than less — the coordinate step is
+        what leaves the session clean enough for it.
         """
         from services import property_enrichment_service as module
 
@@ -318,7 +324,7 @@ class TestTheChainAsksForIt:
         service.enrich_property(prop, recalc_scoring=False)
 
         assert order[0] == ("coordinates", True), order
-        assert ("advertiser", False) in order
-        assert order.index(("coordinates", True)) < order.index(
-            ("advertiser", False)
-        ), order
+        assert ("advertiser", True) in order
+        assert order.index(("coordinates", True)) < order.index(("advertiser", True)), (
+            order
+        )

@@ -344,6 +344,24 @@ def create_app(testing: bool = False):
     from services.hazard_service import read_verdict as hazard_verdict_for
 
     app.jinja_env.globals["hazard_verdict_for"] = hazard_verdict_for
+    # What the owner decided, and what is still outstanding. Two readings, and
+    # the second one takes the date: `overdue` is a due date compared against
+    # today, and a template that let each row compute its own today would
+    # disagree with the query that selected the rows, once a day, at midnight
+    # in Madrid. Every list passes `review_today` explicitly
+    # (services/owner_review.py).
+    from services.owner_review import action_label_key, decision_label_key
+    from services.owner_review import read_action as owner_action_for
+    from services.owner_review import read_decision as owner_decision_for
+
+    app.jinja_env.globals["owner_decision_for"] = owner_decision_for
+    app.jinja_env.globals["owner_action_for"] = owner_action_for
+    app.jinja_env.globals["owner_decision_label_key"] = decision_label_key
+    app.jinja_env.globals["owner_action_label_key"] = action_label_key
+
+    from services.owner_review import was_edited as owner_review_was_edited
+
+    app.jinja_env.globals["owner_review_was_edited"] = owner_review_was_edited
 
     # #379: how much of the enabled weight a score rests on, read off the
     # stored payload (derived for rows scored before it was recorded). The

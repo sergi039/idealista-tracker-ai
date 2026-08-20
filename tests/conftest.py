@@ -54,7 +54,7 @@ from utils.cache import cache as flask_cache
 
 
 def pytest_runtest_setup(item) -> None:
-    """Close the listing-status refusal breaker before every test.
+    """Close every refusal breaker before every test.
 
     `ListingStatusService.breakers` is process-global on purpose: it counts
     each host's refusals across calls so the next press of the check button
@@ -76,8 +76,15 @@ def pytest_runtest_setup(item) -> None:
     deliberately can still read it in its own teardown.
     """
     from services.listing_status_service import ListingStatusService
+    from utils.http import OVERPASS_BREAKERS
 
     ListingStatusService.breakers.reset()
+    # And the Overpass one (#399), for exactly the reason above and with the
+    # same measured consequence: it is process-global, three refusals in a row
+    # open it, and every later test that expects a measured answer then gets a
+    # skip instead -- with no reference to the module that armed it. Found the
+    # moment it was wired: 24 failures in one run, all green in isolation.
+    OVERPASS_BREAKERS.reset()
 
     # Ingestion may not reach a billed Google API unless a test says so.
     #

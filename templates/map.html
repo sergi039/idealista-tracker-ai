@@ -12,10 +12,14 @@
                 <span class="badge bg-secondary">{{ markers|length }}</span>
             </h1>
             {# The markers come from `properties`, so the list view is /properties --
-               and it has to inherit this map's subscription selection, or it would
-               auto-select its own and show a different set of listings. #}
+               and it has to inherit this map's whole filter state, not just its
+               subscription selection, or it opens a wider set than the map the
+               reader is looking at and says nothing about it. `list_view_args`
+               is built in map_view() beside the filters it applies; see the
+               comment there for why `hide_removed` is asserted and `measured`
+               is left out. #}
             <a id="map-list-view-link"
-               href="{{ url_for('main.properties', profile_id=list_view_profile_id) }}"
+               href="{{ url_for('main.properties', **list_view_args) }}"
                class="btn btn-outline-secondary">
                 <i class="fas fa-list me-1"></i>List View
             </a>

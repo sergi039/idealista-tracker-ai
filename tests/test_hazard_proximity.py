@@ -2535,10 +2535,18 @@ class TestOneHomePerRule:
         service.enrich_free_sources(prop, commit=True, use_ai=False)
         assert prop.enrichment["hazards"]["status"] == hazard_service.STATUS_OK
 
-    def test_the_enrich_button_scans_after_its_shared_transaction(
+    def test_the_enrich_button_scans_in_the_advisory_pass(
         self, app, real_fetch, monkeypatch
     ):
-        """And the scan the Enrich flow does run is the locked one."""
+        """Where every score-neutral step owns its own locked write (#434).
+
+        The scan has to land after the decisive pass has committed -- that
+        pass ends by assigning the whole `enrichment` column from a copy
+        loaded before its network calls, so a locked write placed ahead of it
+        is restored to the older value by its commit -- and before scoring,
+        which reads the block. #443 built exactly that shape for the paid
+        steps; this is the scan taking its place in it.
+        """
         from services import property_enrichment_service as pes
 
         locked = []
@@ -2596,34 +2604,23 @@ class TestOneHomePerRule:
         monkeypatch.setattr(
             db.session,
             "commit",
-            lambda: (
-                order.append("shared commit")
-                if order and order[-1] == "advertiser"
-                else None,
-                real_commit(),
-            )[1],
+            lambda: (order.append("commit"), real_commit())[1],
         )
         service.enrich_property(prop)
 
         assert prop.enrichment["hazards"]["status"] == hazard_service.STATUS_OK
         assert True in locked, "the scan must take the row under FOR UPDATE"
-        # Exactly once, with its own commit, and **after** the shared
-        # transaction has been committed -- everything in that phase assigns
-        # the whole `enrichment` column from a copy loaded before its network
-        # calls, so a locked write placed ahead of it is restored to that
-        # older value by its commit (codex review, 2026-08-20). Scoring runs
-        # again afterwards, because the first pass could not see this block.
+        # Exactly once, and owning its own commit.
         assert scans == [True]
-        # Measure, then score, with the scan behind the shared commit and
-        # scoring behind the scan -- one scoring pass that has seen every
-        # measurement it reads.
-        assert order == [
-            "coordinates",
-            "advertiser",
-            "shared commit",
-            "hazards",
-            "scoring",
-        ]
+        # After the decisive pass has committed -- an earlier version of this
+        # test labelled the advisory advertiser's *own* commit as that one and
+        # went on passing when the shape around it changed, which is the
+        # defect this file keeps rediscovering.
+        decisive_commit = order.index("commit")
+        assert decisive_commit < order.index("advertiser")
+        assert decisive_commit < order.index("hazards")
+        # ...and before scoring, which reads the block.
+        assert order.index("hazards") < order.index("scoring")
 
     def test_a_row_with_no_coordinate_still_gets_a_block(self, app, real_fetch):
         """`enrich_property` returns early for a coordinate-less row, before

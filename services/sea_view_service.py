@@ -48,8 +48,11 @@ from services.enrichment_origin import origin_of, origins_agree
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 from utils.http import (
     HTTP_USER_AGENT,
+    OVERPASS_BREAKERS,
     OVERPASS_GATE,
+    LookupBudgetExceeded,
     RateGate,
+    lookup_deadline,
     request_with_retries,
 )
 
@@ -155,6 +158,21 @@ GEOMETRY_CACHE_TIMEOUT_S = 60 * 60 * 24 * 7
 # --- text signals -----------------------------------------------------------
 
 # An unambiguous claim of a *view*. Used directly when the AI bridge is down.
+#
+# This is a list of literal substrings, so it recognises a phrasing and not an
+# idea: every entry is a form somebody actually wrote. The two at the end were
+# added after they were measured missing on production rows -- listing 111186983
+# offers "Building plot with sea and city views" and the Villahormes plot
+# "vistas abiertas y despejadas, con presencia del mar en el horizonte", and
+# both scored `unknown` because "sea view" and "vistas al mar" require an
+# adjacency neither sentence has. Nothing read them as "no sea": an absent
+# keyword leaves the text saying nothing, which is why the miss was quiet.
+#
+# Both are cut back to the part that carries the claim, so they generalise as
+# far as a substring can -- "sea and city view" also matches the plural, and
+# "mar en el horizonte" matches "se ve el mar en el horizonte" as well as the
+# sentence above. Neither is cut back further: "and city views" would match a
+# park, and "el horizonte" says nothing about the sea.
 VIEW_KEYWORDS = (
     "vista al mar",
     "vistas al mar",
@@ -171,6 +189,8 @@ VIEW_KEYWORDS = (
     "ocean views",
     "views of the sea",
     "view of the sea",
+    "sea and city view",
+    "mar en el horizonte",
 )
 
 # Mentions the sea without claiming a view. "primera línea" and "frente al mar"
@@ -298,6 +318,18 @@ def coastline_cell(lat: float, lon: float) -> Tuple[float, float]:
     )
 
 
+class SeaViewBudgetExceeded(SeaViewSourceError):
+    """The caller's lookup budget ran out before Overpass could answer (#434).
+
+    A `SeaViewSourceError` so every existing handler still degrades the
+    verdict to `unknown` -- but its own type, because the breaker must not
+    count it. A spent clock says nothing about whether the instance would
+    have answered, and recording it as a refusal would arm five minutes of
+    silence against a healthy host on the strength of somebody else's slow
+    run.
+    """
+
+
 def fetch_coastline_points(
     lat: float, lon: float, session: Optional[requests.Session] = None
 ) -> List[Tuple[float, float]]:
@@ -317,6 +349,43 @@ def fetch_coastline_points(
     if cached is not None:
         return [tuple(point) for point in cached]
 
+    # This client dials one instance -- it never adopted #415's fallback list --
+    # so a primary that is down costs its whole budget with no chance of
+    # success. Until that is fixed the breaker is what bounds it: three
+    # refusals and later calls answer immediately for five minutes, and the
+    # registry is shared with the amenity client, so whichever of the two
+    # learns the outage first spares the other from re-discovering it.
+    #
+    # A skip raises rather than returning `[]`, because this function's whole
+    # contract is that an empty list means "Overpass answered and there is no
+    # coastline in range". A refusal that read as an empty coastline is the
+    # #98 defect this module was built around.
+    breaker = OVERPASS_BREAKERS.for_url(Config.OSM_OVERPASS_URL)
+    if breaker.should_skip():
+        raise SeaViewSourceError(
+            f"{OVERPASS_BREAKERS.host_of(Config.OSM_OVERPASS_URL)} refused the "
+            f"last {OVERPASS_BREAKERS.threshold} attempts; not dialled"
+        )
+    try:
+        points = _coastline_round_trip(cell_lat, cell_lon, session)
+    except SeaViewBudgetExceeded:
+        # Neither a refusal nor a success: this instance was never asked.
+        raise
+    except SeaViewSourceError:
+        breaker.record_refusal("coastline")
+        raise
+    breaker.record_success()
+
+    _cache_set(
+        cell_lat, cell_lon, cache_type, points, timeout=COASTLINE_CACHE_TIMEOUT_S
+    )
+    return points
+
+
+def _coastline_round_trip(
+    cell_lat: float, cell_lon: float, session: Optional[requests.Session] = None
+) -> List[Tuple[float, float]]:
+    """The trip itself. Every refusal here is observed by the caller above."""
     query = (
         "[out:json][timeout:90];"
         f"way(around:{COASTLINE_QUERY_RADIUS_M},{cell_lat:.4f},{cell_lon:.4f})"
@@ -339,7 +408,20 @@ def fetch_coastline_points(
             max_attempts=5,
             backoff_base=8.0,
             backoff_max=90.0,
-            timeout=120,
+            # Connect and read split for the reason the amenity transport
+            # gives; this one keeps its longer read budget, which a coastline
+            # query over a 25 km box genuinely needs.
+            timeout=(
+                float(getattr(Config, "OSM_OVERPASS_CONNECT_TIMEOUT_S", 3.0)),
+                120,
+            ),
+            # A `504` is worth all five attempts -- the instance is alive and
+            # busy. Silence is not: this client has no fallback instance to
+            # move to, so the only thing a second attempt buys is another
+            # 120 s of the caller's clock (#434).
+            silence_max_attempts=1,
+            # Bounded by whatever budget the run that asked opened, if any.
+            deadline=lookup_deadline(),
             # Streamed so the size ceiling is enforced as the body arrives,
             # not after it is already in memory.
             stream=True,
@@ -347,6 +429,8 @@ def fetch_coastline_points(
             # Shared with the amenity query, and it covers the retries too.
             gate=OVERPASS_GATE,
         )
+    except LookupBudgetExceeded as exc:
+        raise SeaViewBudgetExceeded(f"Overpass not dialled: {exc}") from exc
     except requests.RequestException as exc:
         raise SeaViewSourceError(f"Overpass request failed: {exc}") from exc
 
@@ -380,10 +464,6 @@ def fetch_coastline_points(
             # Cleanup must not replace the verdict-bearing exception (or a
             # successful return) with a close() failure of its own.
             logger.debug("Closing the Overpass response failed", exc_info=True)
-
-    _cache_set(
-        cell_lat, cell_lon, cache_type, points, timeout=COASTLINE_CACHE_TIMEOUT_S
-    )
     return points
 
 
@@ -539,7 +619,12 @@ def fetch_elevations(
             Config.SEA_VIEW_ELEVATION_URL,
             params={"locations": locations},
             headers={"User-Agent": HTTP_USER_AGENT},
-            timeout=60,
+            timeout=(
+                float(getattr(Config, "OSM_OVERPASS_CONNECT_TIMEOUT_S", 3.0)),
+                60,
+            ),
+            silence_max_attempts=1,
+            deadline=lookup_deadline(),
             logger=logger,
             # OpenTopoData's public instance asks for one call a second, and
             # the retries count towards that as much as the first attempt.
