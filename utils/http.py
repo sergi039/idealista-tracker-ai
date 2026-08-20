@@ -440,11 +440,24 @@ def request_with_retries(
     four. Left unset, silence keeps the same budget as everything else, which
     is what every caller that has no second instance still wants.
 
-    `deadline` is a `time.monotonic()` ceiling for the whole call, retries and
-    backoff included. It clamps each attempt's timeout to what is left, never
-    sleeps past it, and raises `LookupBudgetExceeded` rather than starting an
-    attempt it cannot finish -- so a budget already spent costs no socket at
-    all. A caller inside a `lookup_budget(...)` block passes
+    `deadline` is a `time.monotonic()` ceiling on when an attempt may *start*
+    and on what its socket timeouts may be. It clamps each attempt's timeout
+    to what is left, never sleeps past it, and raises `LookupBudgetExceeded`
+    rather than starting an attempt it cannot finish -- so a budget already
+    spent costs no socket at all.
+
+    **It is not a total-time guarantee, and the difference is measurable.**
+    `requests` applies its read timeout *between* reads, not to the response as
+    a whole, so a server that keeps sending a byte just often enough can hold
+    one attempt open indefinitely: measured against a loopback server on
+    2026-08-20, a request under a 0.20 s deadline returned successfully after
+    0.63 s. That is stated rather than fixed because the failure this bound
+    exists for is the opposite one -- three instances that connect and then say
+    nothing -- and because a total-time bound needs a streamed body with its
+    own clock, which the coastline client already has
+    (`services/sea_view_service._read_bounded_body`) and a 25 km amenity query
+    does not need. What the deadline does guarantee is that the *next* attempt,
+    and the next instance, do not start. A caller inside a `lookup_budget(...)` block passes
     `earliest_deadline(lookup_deadline(), its_own)`; nothing here reads the
     ambient budget on a caller's behalf, because the paid transports must not
     honour it (see `_LOOKUP_DEADLINE`).

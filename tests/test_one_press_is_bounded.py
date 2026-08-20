@@ -268,6 +268,71 @@ class TestTheBudgetIsAWallClockCeiling:
         assert seen == [(5.0, 12.0)]
         assert clock.elapsed == pytest.approx(12.0)
 
+    def test_it_bounds_the_next_attempt_and_not_a_dripping_body(self):
+        """The boundary of the guarantee, measured rather than claimed.
+
+        `requests` applies its read timeout *between* reads, so a server that
+        sends a byte just often enough holds one attempt open past the
+        deadline. This runs a real loopback server to record that -- and to
+        record what the deadline does still guarantee: the *next* attempt does
+        not start. If someone later reads the docstring as a total-time bound,
+        this is the line that disagrees.
+        """
+        import http.server
+        import socketserver
+        import threading
+        import time as real_time
+
+        class _Drip(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = b'{"elements": [' + b" " * 6 + b"]}"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                # A byte at a time, slowly enough that the whole response
+                # outlives the deadline and quickly enough that no single read
+                # ever hits the inactivity timeout.
+                for index in range(len(body)):
+                    real_time.sleep(0.03)
+                    self.wfile.write(body[index : index + 1])
+                    self.wfile.flush()
+
+            def log_message(self, *args):
+                pass
+
+        server = socketserver.TCPServer(("127.0.0.1", 0), _Drip)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{server.server_address[1]}/"
+        try:
+            started = real_time.monotonic()
+            response = request_with_retries(
+                requests.post,
+                url,
+                data="x",
+                max_attempts=1,
+                timeout=(3.0, 60.0),
+                silence_max_attempts=1,
+                deadline=real_time.monotonic() + 0.1,
+            )
+            elapsed = real_time.monotonic() - started
+            assert response.status_code == 200
+            assert elapsed > 0.1, "the drip did not outlive the deadline"
+
+            # What it does guarantee: nothing else starts.
+            with pytest.raises(LookupBudgetExceeded):
+                request_with_retries(
+                    requests.post,
+                    url,
+                    data="x",
+                    max_attempts=1,
+                    timeout=(3.0, 60.0),
+                    deadline=real_time.monotonic() - 0.001,
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+
     def test_a_nested_budget_may_shorten_a_run_but_never_extend_it(self, clock):
         with lookup_budget(30.0) as outer:
             with lookup_budget(300.0) as inner:
@@ -561,6 +626,84 @@ class TestThePaidMeasurementIsCommittedFirst:
         assert order.index("travel") < first_commit, order
         for advisory in ("advertiser", "free_sources", "pool"):
             assert order.index(advisory) > first_commit, (advisory, order)
+
+
+class TestTheDecisiveStepsGetTheClockFirst:
+    """The ordering is a budget decision as much as a commit one.
+
+    An independent review of this branch put it exactly right: the starvation
+    to worry about is not the paid call itself -- it never sees the deadline --
+    but the *free* lookup it depends on. `services/osm_places.py` resolves the
+    travel presets from Overpass, and no destinations means no Distance Matrix
+    request. So the steps that feed a score, and the one that spends money,
+    must be the ones holding the budget when it is short.
+    """
+
+    @pytest.fixture
+    def app(self):
+        setup_test_environment()
+        app = create_app()
+        app.config["TESTING"] = True
+        with app.app_context():
+            db.create_all()
+            yield app
+            db.drop_all()
+
+    def test_travel_holds_the_budget_and_the_advisory_steps_get_what_is_left(
+        self, app, monkeypatch
+    ):
+        from services import property_enrichment_service as module
+        from utils.http import lookup_deadline
+
+        seen = []
+
+        class _Location:
+            def ensure_coordinates(self, prop, refresh=False, *, commit=False):
+                return True
+
+        class _Sea:
+            def update_property(self, prop, *, commit=False):
+                seen.append(("sea", lookup_deadline() is not None))
+                return None
+
+        class _Travel:
+            def calculate_for_property(self, prop, commit=False):
+                remaining = lookup_deadline()
+                seen.append(("travel", remaining))
+                return True
+
+        class _Pool:
+            def enrich(self, prop, commit=False):
+                seen.append(("pool", lookup_deadline()))
+                return {}
+
+        service = module.PropertyEnrichmentService(
+            location_service=_Location(),
+            travel_service=_Travel(),
+            sea_distance_service=_Sea(),
+            pool_service=_Pool(),
+        )
+        monkeypatch.setattr(service, "enrich_free_sources", lambda p, **kw: None)
+        monkeypatch.setattr(
+            module.advertiser, "enrich", lambda prop, *, commit=False: {}
+        )
+
+        prop = Property(
+            source_email_id="budget-order",
+            title="Plot",
+            location_lat=43.5,
+            location_lon=-6.0,
+        )
+        db.session.add(prop)
+        db.session.commit()
+
+        service.enrich_property(prop, recalc_scoring=False)
+
+        order = [name for name, _ in seen]
+        assert order.index("travel") < order.index("pool"), order
+        # Every step runs inside the run's budget -- and the paid one reaches
+        # it before the advisory one has had a chance to spend any of it.
+        assert all(value is not None for _name, value in seen), seen
 
 
 class TestASecondPressJoinsTheFirst:
