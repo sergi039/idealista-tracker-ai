@@ -31,7 +31,7 @@ from services import sea_view_service
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
 from services.hazard_service import (
-    measured_expression as hazard_measured_expression,
+    complete_expression as hazard_complete_expression,
     read_verdict as hazard_verdict,
 )
 from services.listing_verification import (
@@ -1251,7 +1251,7 @@ def properties():
         # of those is what this line exists to make visible. Same filtered
         # set, same predicate the badge reads.
         hazard_scanned_count = query.filter(
-            hazard_measured_expression(Property)
+            hazard_complete_expression(Property)
         ).count()
 
         # Sorting (safe allow-list). An unknown sort -- an old /lands bookmark

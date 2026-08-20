@@ -444,6 +444,41 @@ def fold(text: Any) -> str:
     return stripped.casefold().strip()
 
 
+def _range_end(raw: str) -> str:
+    """The last endpoint of an OSM date range, or the value unchanged.
+
+    OSM's date specification allows `1990..2020`, `1990-2020`, an open start
+    (`-1964`), and full dates on both sides (`2020-01-01--2022-06-30`). All of
+    them failed to parse as a single date and therefore read as *active* -- a
+    plant closed years ago, back on the map (codex review, 2026-08-20).
+
+    Only forms whose tail is itself a date are split, which is what keeps
+    `2020-06` a month rather than a range from 2020 to June.
+    """
+    for separator in ("--", ".."):
+        if separator in raw:
+            return raw.rsplit(separator, 1)[-1].strip()
+    if raw.startswith("-"):
+        return raw[1:].strip()
+    # `A-B` where B is a whole date of its own: `1990-2020`, and
+    # `2020-01-01-2022-06-30`, whose tail is the last three groups.
+    groups = raw.split("-")
+    if len(groups) in (2, 4, 6):
+        tail = "-".join(groups[len(groups) // 2 :]).strip()
+        if _looks_like_a_date(tail):
+            return tail
+    return raw
+
+
+def _looks_like_a_date(text: str) -> bool:
+    parts = text.split("-")
+    if not 1 <= len(parts) <= 3:
+        return False
+    if len(parts[0]) != 4 or not parts[0].isdigit():
+        return False
+    return all(part.isdigit() for part in parts[1:])
+
+
 def _closed_before_today(tags: Dict[str, Any]) -> bool:
     """Does `end_date` name a day that has already passed?
 
@@ -461,12 +496,7 @@ def _closed_before_today(tags: Dict[str, Any]) -> bool:
     # therefore read as *active* -- a retired plant back on the map (codex
     # review, 2026-08-20). The second form is only a range when the tail is a
     # bare year, or `2020-06` would be split into `2020` and `06`.
-    if ".." in raw:
-        raw = raw.rsplit("..", 1)[-1].strip()
-    else:
-        head, _, tail = raw.rpartition("-")
-        if head and len(tail) == 4 and tail.isdigit():
-            raw = tail
+    raw = _range_end(raw)
     for pattern, roll in (("%Y-%m-%d", 0), ("%Y-%m", 1), ("%Y", 2)):
         try:
             parsed = datetime.strptime(raw, pattern).date()

@@ -35,6 +35,7 @@ from typing import Dict
 
 from app import create_app, db
 from services.hazard_service import HazardService, needs_hazards
+from services.property_scoring_service import PropertyScoringService
 from utils.enrich_scope import log_scope, scoped_properties, window_note
 from utils.inflight import inflight
 
@@ -76,6 +77,7 @@ def main() -> None:
             return
 
         service = HazardService()
+        scoring = PropertyScoringService()
         counts: Dict[str, int] = {}
         failed = 0
         # Resumable: per-row commit, and `needs_hazards` drops a row the
@@ -92,6 +94,13 @@ def main() -> None:
                     payload = service.enrich(prop, commit=True)
                     status = payload.get("status") or "missing"
                     counts[status] = counts.get(status, 0) + 1
+                    # A second transaction, after the block is stored, the way
+                    # `utils/backfill_pool.py` already does it. It is a no-op
+                    # while the criterion ships at weight 0 -- and the moment
+                    # the owner turns it on, a row this run measured would
+                    # otherwise keep the score it had before anybody looked
+                    # (codex review, 2026-08-20).
+                    scoring.calculate_for_property(prop, commit=True)
                 except Exception as exc:
                     db.session.rollback()
                     failed += 1

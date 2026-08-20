@@ -193,11 +193,17 @@ def _coordinate(value: Any, limit: float) -> Optional[float]:
 
 
 def _safe_float(value: Any) -> Optional[float]:
+    """A finite number, or None.
+
+    `math.isfinite` and not `isnan`: a stored `"Infinity"` parses, and it made
+    `guaranteed_m` infinite, which cleared every horizon the scorer checks and
+    scored a listing 100 (codex review, 2026-08-20).
+    """
     try:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return None if math.isnan(number) else number
+    return number if math.isfinite(number) else None
 
 
 # The spellings a stored `truncated` may arrive in that mean "not truncated".
@@ -215,7 +221,24 @@ def _is_truncated(value: Any) -> bool:
         return False
     if isinstance(value, bool):
         return value
-    return str(value).strip().casefold() not in _NOT_TRUNCATED_TEXT
+    # `strip(" ")` and not a bare `strip()`: SQL's `trim` removes spaces and
+    # nothing else, so stripping tabs and newlines here would make `"\tfalse"`
+    # complete in one language and truncated in the other (codex review,
+    # 2026-08-20). A value carrying a tab is not one of the spellings this
+    # writer produces, and the fail-closed reading of an unrecognised one is
+    # that the scan was short.
+    return str(value).strip(" ").casefold() not in _NOT_TRUNCATED_TEXT
+
+
+def _as_list(value: Any) -> Optional[list]:
+    """The value if it really is a list, else None.
+
+    `value or []` is not this: it turns a stored `1` into `1` and a `{}` into
+    `[]`, so the template iterated an integer and raised, and a block whose
+    items were an object read as a clean neighbourhood (codex review,
+    2026-08-20).
+    """
+    return value if isinstance(value, list) else None
 
 
 def _element_point(element: Dict[str, Any]) -> Optional[Tuple[float, float]]:
@@ -259,8 +282,15 @@ def fetch_elements(
         return None, failure
 
     trimmed: List[Dict[str, Any]] = []
+    unreadable = 0
     for element in elements or []:
-        if not isinstance(element, dict):
+        if not isinstance(element, dict) or not isinstance(element.get("tags"), dict):
+            # A 200 carrying `[42]`, or an element with `tags: null`, used to
+            # be dropped here and the scan then reported `none_within_radius`
+            # with `truncated: False` -- a clean neighbourhood built out of a
+            # response nobody could read (codex review, 2026-08-20). Counted
+            # with the unplaced ones instead.
+            unreadable += 1
             continue
         # An element with no readable centre is kept, with no point. Dropping
         # it here would be silent: `out center` normally gives every way and
@@ -270,14 +300,13 @@ def fetch_elements(
         # (codex review, 2026-08-20). What to do about it is `measure`'s, which
         # is where the rules live.
         point = _element_point(element)
-        tags = element.get("tags")
         trimmed.append(
             {
                 "type": element.get("type"),
                 "id": element.get("id"),
                 "lat": None if point is None else point[0],
                 "lon": None if point is None else point[1],
-                "tags": tags if isinstance(tags, dict) else {},
+                "tags": element["tags"],
             }
         )
     # `returned` is the count Overpass *answered with*, not the count that
@@ -286,7 +315,11 @@ def fetch_elements(
     # cap read as one that did not. The cap is the only way this feature can
     # quietly show a short list, so the number that detects it has to be the
     # raw one, and it has to survive into the cache.
-    payload = {"elements": trimmed, "returned": len(elements or [])}
+    payload = {
+        "elements": trimmed,
+        "returned": len(elements or []),
+        "unreadable": unreadable,
+    }
     try:
         cache_enrichment_data(lat, lon, _CACHE_KEY, payload, timeout=_CACHE_TTL_S)
     except Exception:
@@ -361,6 +394,7 @@ class HazardService:
         # things last -- it has simply not seen everything. Saying so is the
         # only honest option; silently shortening the list is the defect.
         truncated = int(answer.get("returned") or 0) >= hazard_rules.ELEMENT_LIMIT
+        unreadable = int(answer.get("unreadable") or 0)
 
         qualifying: List[Dict[str, Any]] = []
         unplaced = 0
@@ -400,8 +434,9 @@ class HazardService:
         return {
             "status": STATUS_OK if items else STATUS_NONE,
             "searched_m": hazard_rules.SEARCH_RADIUS_M - _CACHE_CELL_SLACK_M,
-            "truncated": truncated or bool(unplaced),
+            "truncated": truncated or bool(unplaced) or bool(unreadable),
             "unplaced": unplaced,
+            "unreadable": unreadable,
             "item_count": len(items),
             "items": items[:MAX_ITEMS],
             "candidates_seen": int(answer.get("returned") or 0),
@@ -715,10 +750,13 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
     # a kept measurement of a place the listing may no longer be near is worth
     # storing and not worth *asserting* (codex review, 2026-08-20). An
     # unreadable stored origin is the only "cannot tell", and it restates.
-    stored_origin = stored.get("origin")
-    if isinstance(stored_origin, dict):
-        if origins_agree(stored_origin, origin_of(prop)) is not True:
-            return {**base, "status": STATUS_STALE_ORIGIN}
+    # And it has to be **there**. A block with no readable origin cannot be
+    # shown to be about this coordinate, and treating that as "cannot tell"
+    # let a moved precise row keep asserting its old distances (codex review,
+    # 2026-08-20). Every block this writer produces records one, so requiring
+    # it costs nothing and closes the case that does not.
+    if origins_agree(stored.get("origin"), origin_of(prop)) is not True:
+        return {**base, "status": STATUS_STALE_ORIGIN}
 
     base["updated_at"] = stored.get("updated_at")
     base["last_attempt_status"] = stored.get("last_attempt_status")
@@ -734,7 +772,25 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
 
     items = []
     high = 0
-    stored_items = stored.get("items") or []
+    stored_items = _as_list(stored.get("items"))
+    counted = stored.get("item_count")
+    if stored_items is None or not isinstance(counted, int) or counted < 0:
+        return {**base, "status": STATUS_MISSING}
+    # A count that does not match what is stored is a block nobody can read
+    # either: `status=ok, items=[], item_count=1` rendered "Nothing
+    # recognised" and scored 100 (codex review, 2026-08-20). Fewer stored than
+    # counted is the ordinary `MAX_ITEMS` cap and is handled by the scorer's
+    # own bound, so only an *undercount* is impossible.
+    if counted < len(stored_items):
+        return {**base, "status": STATUS_MISSING}
+    if status == STATUS_NONE and (counted or stored_items):
+        return {**base, "status": STATUS_MISSING}
+    # `ok` means something qualified, so the block holds at least one item:
+    # the writer stores the nearest `MAX_ITEMS` and `MAX_ITEMS` is not zero.
+    # A count of one over an empty list rendered "Nothing recognised" beside
+    # an exported facility count of 1 (codex review, 2026-08-20).
+    if status == STATUS_OK and (not counted or not stored_items):
+        return {**base, "status": STATUS_MISSING}
     for stored_item in stored_items:
         if not isinstance(stored_item, dict):
             # A stored shape nobody can read is not an item that can be walked
@@ -755,10 +811,10 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
             # and `routes/main_routes.py` turns that into a flash and an empty
             # page rather than an error anyone sees (codex review,
             # 2026-08-20). Normalised here, once, for all three surfaces.
-            "kinds": stored_item.get("kinds") or [],
-            "elements": stored_item.get("elements") or [],
-            "evidence": stored_item.get("evidence") or [],
-            "names": stored_item.get("names") or [],
+            "kinds": _as_list(stored_item.get("kinds")) or [],
+            "elements": _as_list(stored_item.get("elements")) or [],
+            "evidence": _as_list(stored_item.get("evidence")) or [],
+            "names": _as_list(stored_item.get("names")) or [],
             "origin_distance_m": measured,
             "distance_m": measured if not slack else None,
             "min_distance_m": lower,
@@ -784,21 +840,19 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
     # handled by the scorer's own bound; *more* counted than were readable
     # here means something was dropped above, and that is not a complete
     # answer either.
-    counted = stored.get("item_count")
-    item_count = int(counted) if isinstance(counted, int) else len(items)
     return {
         **base,
         "status": status,
         "measured": True,
         "flagged": bool(items),
         "items": items,
-        "item_count": item_count,
+        "item_count": counted,
         "high_count": high,
         "nearest": items[0] if items else None,
     }
 
 
-def measured_expression(model):
+def complete_expression(model):
     """`read_verdict(...)["complete"]` as a SQL predicate over `model`.
 
     "Carries a complete scan" -- the same question in both languages, and
@@ -824,7 +878,9 @@ def measured_expression(model):
     """
     block = model.enrichment[ENRICHMENT_KEY]
     status = block["status"].as_string()
-    truncated = func.lower(block["truncated"].as_string())
+    # `trim` as well as `lower`: the Python side strips, and `" false "`
+    # was complete there and truncated here (codex review, 2026-08-20).
+    truncated = func.trim(func.lower(block["truncated"].as_string()))
     return and_(
         or_(*[status == value for value in MEASURED_STATUSES]),
         or_(truncated.is_(None), truncated.in_(_NOT_TRUNCATED_TEXT)),
@@ -838,13 +894,19 @@ def needs_hazards(prop: Any) -> bool:
     it: a row that answered leaves the scope, so a killed run repeats one
     property at most.
     """
-    enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
-    stored = enrichment.get(ENRICHMENT_KEY)
-    if not isinstance(stored, dict):
-        return True
-    if stored.get("status") in RETRYABLE_STATUSES:
-        return True
-    # A block measured from a point the listing has since moved away from is
-    # not an answer about this listing, and the surfaces already refuse to
-    # read it as one. Re-scanning is one free Overpass query.
-    return origins_agree(stored.get("origin"), origin_of(prop)) is False
+    verdict = read_verdict(prop)
+    # Read through the same verdict the surfaces do, rather than off the raw
+    # status. Three rows fell out of scope for good by reading the column
+    # directly (codex review, 2026-08-20): a truncated scan, which a re-run
+    # may well complete; a block nobody can read, which is not an answer at
+    # all; and a row stored `no_coordinates` that has since *gained* one,
+    # where `origins_agree` says "cannot tell" rather than "moved". A scan is
+    # one free Overpass query, so the scope is simply everything that does not
+    # currently hold a complete measurement of where this listing is.
+    return not (verdict["measured"] and verdict["complete"])
+
+
+# The old name, kept so nothing outside this module has to know that the
+# question it asks is `complete` and never `measured`. It answers what it
+# always answered; the name was the thing that was wrong.
+measured_expression = complete_expression

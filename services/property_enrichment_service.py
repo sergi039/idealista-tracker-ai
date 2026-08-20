@@ -84,7 +84,7 @@ class PropertyEnrichmentService:
         )
 
     def enrich_free_sources(
-        self, prop: Property, *, commit: bool, use_ai: bool
+        self, prop: Property, *, commit: bool, use_ai: bool, scan_hazards: bool = True
     ) -> None:
         """The free pass: OSM amenities, quality-of-life, hazards, sea view.
 
@@ -159,7 +159,7 @@ class PropertyEnrichmentService:
         # Enrich path runs the scan on its own, under its own lock, before its
         # shared transaction opens; `enrich_property` does that and this skips
         # it rather than doing it twice.
-        if commit:
+        if commit and scan_hazards:
             try:
                 self.hazard_service.enrich(prop, commit=True)
             except Exception as e:
@@ -262,7 +262,10 @@ class PropertyEnrichmentService:
             # `use_ai=True` because this method is the Enrich button: the
             # text signal runs before the coordinate check, so it is the one
             # part of the pass a coordinate-less row still gets in full.
-            self.enrich_free_sources(prop, commit=True, use_ai=True)
+            # `scan_hazards=False`: `enrich_property` already ran it above,
+            # under its own lock, and a second call would take the row twice
+            # for an answer that cannot have changed.
+            self.enrich_free_sources(prop, commit=True, use_ai=True, scan_hazards=False)
             return False
 
         # Enrichment does not touch `search_profile_id` (owner decision,

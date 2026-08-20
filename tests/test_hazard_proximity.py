@@ -470,16 +470,26 @@ class TestTheRulesTable:
         for gone in (
             {"end_date": "2020..2022"},
             {"end_date": "2020-2022"},
+            # The forms OSM's date specification documents and the parser did
+            # not read: full dates on both sides, and an open start.
+            {"end_date": "2020-01-01-2022-06-30"},
+            {"end_date": "2020-01-01--2022-06-30"},
+            {"end_date": "-1964"},
             {"removed:power": "plant"},
             {"destroyed:power": "plant"},
             {"proposed:power": "plant"},
             {"construction:power": "plant"},
+            {"planned:power": "plant"},
+            {"abandoned:power": "plant"},
+            {"razed:power": "plant"},
+            {"ruins:power": "plant"},
         ):
             assert hazard_rules.classify({**named, **gone}) is None, gone
         # A date still ahead of us is not a closure, and a month is not a
         # range: `2020-06` must not be read as "2020 to 06".
-        future = hazard_rules.classify({**named, "end_date": "2099"})
-        assert future is not None and future.kind == "power_plant"
+        for still_here in ("2099", "2099-01-01", "2099..2100", "junk", "2020-W53"):
+            future = hazard_rules.classify({**named, "end_date": still_here})
+            assert future is not None and future.kind == "power_plant", still_here
         assert hazard_rules.classify({**named, "end_date": "2020-06"}) is None
         # And the dates that describe a survey, not an ending, are ignored.
         for ignored in ({"check_date": "2020-01-01"}, {"start_date": "1990"}):
@@ -718,6 +728,31 @@ class TestTruncationIsDisclosed:
             {"landuse": "quarry", "name": "Parque de carbones"}
         )
         assert coal is not None and coal.kind == "coal_yard"
+
+    def test_an_element_nobody_can_read_makes_the_scan_incomplete(
+        self, app, real_fetch
+    ):
+        """A 200 carrying `[42]`, or an element with `tags: null`, used to be
+        dropped and the scan then reported a clean neighbourhood built out of
+        a response nobody could read (codex review, 2026-08-20)."""
+        for elements in (
+            [42],
+            [{"type": "way", "id": 1, "lat": XIVARES[0], "lon": XIVARES[1]}],
+            [
+                {
+                    "type": "way",
+                    "id": 2,
+                    "lat": XIVARES[0],
+                    "lon": XIVARES[1],
+                    "tags": None,
+                }
+            ],
+        ):
+            measurement = HazardService(
+                enrichment_service=_FakeEnrichment(elements=elements)
+            ).measure(*XIVARES)
+            assert measurement["unreadable"] == 1, elements
+            assert measurement["truncated"] is True, elements
 
     def test_an_element_with_no_readable_centre_does_not_shorten_the_count(
         self, app, real_fetch
@@ -1011,12 +1046,71 @@ class TestHonestAbsence:
         assert verdict["measured"] is False
         assert verdict["flagged"] is False
 
-    def test_the_scope_keeps_a_refusal_and_drops_an_answer(self, app, real_fetch):
+    def test_the_scope_is_everything_without_a_complete_current_answer(
+        self, app, real_fetch
+    ):
+        """Read through the verdict, not off the raw status.
+
+        Three rows fell out of scope for good by reading the column directly
+        (codex review, 2026-08-20): a truncated scan a re-run may complete, a
+        block nobody can read, and a row stored `no_coordinates` that has
+        since gained one.
+        """
         prop = _prop(title="ScopeRules")
+        origin = {"lat": XIVARES[0], "lon": XIVARES[1]}
         assert hazard_service.needs_hazards(prop) is True
-        prop.enrichment = {"hazards": {"status": hazard_service.STATUS_UNAVAILABLE}}
-        assert hazard_service.needs_hazards(prop) is True
-        prop.enrichment = {"hazards": {"status": hazard_service.STATUS_NONE}}
+
+        for label, block in (
+            ("a refusal", {"status": hazard_service.STATUS_UNAVAILABLE}),
+            (
+                "no coordinate then one",
+                {"status": hazard_service.STATUS_NO_COORDINATES},
+            ),
+            (
+                "a truncated scan",
+                {
+                    "status": hazard_service.STATUS_NONE,
+                    "items": [],
+                    "item_count": 0,
+                    "truncated": True,
+                    "origin": origin,
+                },
+            ),
+            (
+                "a block nobody can read",
+                {
+                    "status": hazard_service.STATUS_OK,
+                    "items": "not a list",
+                    "item_count": 1,
+                    "origin": origin,
+                },
+            ),
+            (
+                "a scan of somewhere else",
+                {
+                    "status": hazard_service.STATUS_NONE,
+                    "items": [],
+                    "item_count": 0,
+                    "origin": {"lat": XIVARES[0] + 0.02, "lon": XIVARES[1]},
+                },
+            ),
+        ):
+            prop.enrichment = {"hazards": block}
+            db.session.commit()
+            assert hazard_service.needs_hazards(prop) is True, label
+
+        # Only a complete measurement of where this listing is leaves the
+        # scope.
+        prop.enrichment = {
+            "hazards": {
+                "status": hazard_service.STATUS_NONE,
+                "items": [],
+                "item_count": 0,
+                "truncated": False,
+                "origin": origin,
+            }
+        }
+        db.session.commit()
         assert hazard_service.needs_hazards(prop) is False
 
 
@@ -1177,6 +1271,12 @@ class TestOneAnswerInTwoLanguages:
             ({"truncated": {}}, False),
             ({"truncated": []}, False),
             ({"truncated": "junk"}, False),
+            # Python strips, and SQL did not: `" false "` was complete in one
+            # language and truncated in the other (codex review, 2026-08-20).
+            ({"truncated": " false "}, True),
+            ({"truncated": "\tfalse\n"}, False),
+            ({"truncated": " true "}, False),
+            ({"truncated": "   "}, True),
         ],
     )
     def test_the_truncation_flag_reads_the_same_in_both_languages(
@@ -1205,6 +1305,88 @@ class TestOneAnswerInTwoLanguages:
         )
         assert bool(counted) is complete
 
+    @pytest.mark.parametrize(
+        "block",
+        [
+            # A count that disagrees with what is stored.
+            {"status": "ok", "items": [], "item_count": 1},
+            {"status": "none_within_radius", "items": [], "item_count": 3},
+            {"status": "ok", "items": [{"kind": "landfill"}], "item_count": 0},
+            # Items that are not a list at all -- `value or []` turned these
+            # into a clean neighbourhood, and `items: 1` raised outright.
+            {"status": "ok", "items": {}, "item_count": 1},
+            {"status": "ok", "items": 1, "item_count": 1},
+            {"status": "ok", "items": "none", "item_count": 1},
+            # A count nobody can read.
+            {"status": "ok", "items": [], "item_count": "1"},
+            {"status": "ok", "items": [], "item_count": -1},
+        ],
+    )
+    def test_a_block_that_contradicts_itself_is_a_block_nobody_read(self, app, block):
+        """Every one of these scored 100 or raised (codex review,
+        2026-08-20). None of them may assert anything."""
+        prop = _prop(title=f"Contradicts{block['items']}{block['item_count']}")
+        prop.enrichment = {
+            "hazards": {
+                "searched_m": 5984.0,
+                "truncated": False,
+                "origin": {"lat": XIVARES[0], "lon": XIVARES[1]},
+                **block,
+            }
+        }
+        db.session.commit()
+        verdict = hazard_service.read_verdict(prop)
+        assert verdict["status"] == hazard_service.STATUS_MISSING
+        assert verdict["measured"] is False
+        score, _ = HousingPropertyScorer()._hazard_score(
+            prop, near_m=1000.0, far_m=5000.0, moderate_factor=0.5
+        )
+        assert score is None
+
+    def test_an_unreadable_measurement_grants_no_horizon(self, app):
+        """`searched_m: "Infinity"` parses, and it cleared every horizon the
+        scorer checks (codex review, 2026-08-20)."""
+        prop = _prop(title="InfiniteHorizon")
+        prop.enrichment = {
+            "hazards": {
+                "status": hazard_service.STATUS_NONE,
+                "items": [],
+                "item_count": 0,
+                "truncated": False,
+                "searched_m": "Infinity",
+                "origin": {"lat": XIVARES[0], "lon": XIVARES[1]},
+            }
+        }
+        db.session.commit()
+        verdict = hazard_service.read_verdict(prop)
+        assert verdict["searched_m"] is None
+        assert verdict["guaranteed_m"] is None
+        score, meta = HousingPropertyScorer()._hazard_score(
+            prop, near_m=1000.0, far_m=5000.0, moderate_factor=0.5
+        )
+        assert score is None
+        assert meta["status"] == "searched_radius_too_small"
+
+    def test_a_block_with_no_readable_origin_asserts_nothing(self, app):
+        """It cannot be shown to be about this coordinate, and reading that as
+        "cannot tell" let a moved precise row keep its old distances."""
+        for origin in (None, {}, "somewhere", {"lat": None, "lon": None}):
+            prop = _prop(title=f"NoOrigin{origin}")
+            prop.enrichment = {
+                "hazards": {
+                    "status": hazard_service.STATUS_NONE,
+                    "items": [],
+                    "item_count": 0,
+                    "truncated": False,
+                    "searched_m": 5984.0,
+                    "origin": origin,
+                }
+            }
+            db.session.commit()
+            verdict = hazard_service.read_verdict(prop)
+            assert verdict["status"] == hazard_service.STATUS_STALE_ORIGIN, origin
+            assert verdict["measured"] is False
+
     def test_an_item_nobody_can_read_costs_the_block_its_completeness(self, app):
         """Dropping it silently reported the rest as the whole list, with a
         clean badge and a 100 from the scorer (codex review, 2026-08-20)."""
@@ -1230,6 +1412,10 @@ class TestOneAnswerInTwoLanguages:
         assert verdict["measured"] is False
         assert verdict["flagged"] is False
         assert verdict["items"] == []
+        # `complete` is left as stored on purpose -- SQL cannot see an item's
+        # shape, and the two readings must not diverge over something one of
+        # them is blind to.
+        assert verdict["complete"] is True
         score, meta = HousingPropertyScorer()._hazard_score(
             prop, near_m=1000.0, far_m=5000.0, moderate_factor=0.5
         )
@@ -1256,14 +1442,15 @@ class TestTheCriterionShipsWeightless:
         assert scorer.DEFAULT_INVESTMENT_WEIGHTS["hazard_score"] == 0.0
         assert scorer.DEFAULT_LIFESTYLE_WEIGHTS["hazard_score"] == 0.0
 
+    @pytest.mark.parametrize("branch", ["investment", "lifestyle"])
     def test_turning_it_on_is_previewed_even_beside_another_live_criterion(
-        self, app, client
+        self, app, client, branch
     ):
         """The gate asked "is *any* weightless criterion on", so with the pool
         weight already positive the transition read `True -> True` and
         enabling hazards re-scored the subscription on an ordinary save, with
         no preview and no confirm (codex review, 2026-08-20)."""
-        profile = SearchProfile(name="Both", is_active=True, is_default=True)
+        profile = SearchProfile(name=f"Both {branch}", is_active=True, is_default=True)
         db.session.add(profile)
         db.session.commit()
         _prop(title="GateRow", search_profile_id=profile.id, price=100000, area=200)
@@ -1273,14 +1460,14 @@ class TestTheCriterionShipsWeightless:
             f"/profiles/{profile.id}/edit",
             data={
                 "action": "save_scoring_weights",
-                "scoring__land__lifestyle__pool_score": "0.2",
+                "scoring__land__%s__pool_score" % branch: "0.2",
             },
         )
         client.post(
             f"/profiles/{profile.id}/edit", data={"action": "confirm_pool_scoring"}
         )
         db.session.refresh(profile)
-        stored = (profile.scoring_config or {})["categories"]["land"]["lifestyle"]
+        stored = (profile.scoring_config or {})["categories"]["land"][branch]
         assert stored["pool_score"] == 0.2
 
         # Now hazards, beside it. This must not apply on the save.
@@ -1288,14 +1475,14 @@ class TestTheCriterionShipsWeightless:
             f"/profiles/{profile.id}/edit",
             data={
                 "action": "save_scoring_weights",
-                "scoring__land__lifestyle__pool_score": "0.2",
-                "scoring__land__lifestyle__hazard_score": "0.3",
+                "scoring__land__%s__pool_score" % branch: "0.2",
+                "scoring__land__%s__hazard_score" % branch: "0.3",
             },
             follow_redirects=True,
         )
         assert "preview" in response.get_data(as_text=True).lower()
         db.session.refresh(profile)
-        still = (profile.scoring_config or {})["categories"]["land"]["lifestyle"]
+        still = (profile.scoring_config or {})["categories"]["land"][branch]
         assert still.get("hazard_score") in (None, 0, 0.0), (
             "the hazard weight must wait for the confirm, not ride the save"
         )
@@ -1304,7 +1491,7 @@ class TestTheCriterionShipsWeightless:
             f"/profiles/{profile.id}/edit", data={"action": "confirm_pool_scoring"}
         )
         db.session.refresh(profile)
-        applied = (profile.scoring_config or {})["categories"]["land"]["lifestyle"]
+        applied = (profile.scoring_config or {})["categories"]["land"][branch]
         assert applied["hazard_score"] == 0.3
 
     def test_the_editor_really_renders_the_weight_and_its_thresholds(self, app, client):
@@ -1313,7 +1500,11 @@ class TestTheCriterionShipsWeightless:
         db.session.add(profile)
         db.session.commit()
         body = client.get(f"/profiles/{profile.id}/edit").get_data(as_text=True)
+        # Both branches: removing only the investment field passed a test that
+        # checked lifestyle (codex review, 2026-08-20).
         assert "scoring__land__lifestyle__hazard_score" in body
+        assert "scoring__land__investment__hazard_score" in body
+        assert "scoring__land__hazard__near_m" in body
         assert "scoring__land__hazard__far_m" in body
         assert "scoring__land__hazard__moderate_factor" in body
 
@@ -1639,7 +1830,7 @@ class TestTheSurfaces:
         body = client.get("/properties").get_data(as_text=True)
         assert body.count('class="badge bg-danger fw-normal"') >= 1
         assert "Industry nearby" in body
-        assert "1 of 2 listings fully scanned" in body
+        assert "1 of 2 listings hold a complete scan" in body
 
     def test_an_incomplete_scan_is_not_a_clean_row_on_the_list(
         self, app, client, real_fetch, profile
@@ -1665,7 +1856,7 @@ class TestTheSurfaces:
 
         body = client.get("/properties").get_data(as_text=True)
         assert "Scan incomplete" in body
-        assert "0 of 1 listings fully scanned" in body
+        assert "0 of 1 listings hold a complete scan" in body
 
     def test_the_csv_carries_the_verdict(self, app, client, real_fetch, profile):
         prop = _prop(
@@ -1689,6 +1880,31 @@ class TestTheSurfaces:
         # Blank on an approximate row, exactly as the page refuses to print it.
         assert by_name["Nearest Hazard Distance (m)"] == ""
         assert by_name["Nearest Hazard Distance Max (m)"]
+
+    def test_the_csv_says_when_a_scan_came_back_short(
+        self, app, client, real_fetch, profile
+    ):
+        """Exporting `True` for every measured row passed the test above
+        (codex review, 2026-08-20)."""
+        filler = [
+            {
+                "type": "node",
+                "id": 80_000 + index,
+                "lat": XIVARES[0] + 0.001,
+                "lon": XIVARES[1] + 0.001,
+                "tags": {"landuse": "industrial"},
+            }
+            for index in range(hazard_rules.ELEMENT_LIMIT)
+        ]
+        prop = _prop(title="CsvTruncated", search_profile_id=profile.id)
+        HazardService(enrichment_service=_FakeEnrichment(elements=filler)).enrich(
+            prop, commit=True
+        )
+        body = client.get("/properties/export.csv").get_data(as_text=True)
+        header, *rows = list(csv.reader(io.StringIO(body)))
+        by_name = dict(zip(header, rows[0]))
+        assert by_name["Hazards"] == "none_within_radius"
+        assert by_name["Hazard Scan Complete"] == "False"
 
 
 class TestOneHomePerRule:
@@ -1718,6 +1934,25 @@ class TestOneHomePerRule:
         source = Path(hazard_service.__file__).read_text(encoding="utf-8")
         assert "requests" not in source
         assert "OVERPASS_GATE" not in source
+
+    def test_every_element_is_judged_by_the_one_table(
+        self, app, real_fetch, monkeypatch
+    ):
+        """Behavioural: a duplicate rule elsewhere is invisible to a grep, so
+        what is pinned is that the scan asks *this* function about every
+        element it saw (codex review, 2026-08-20)."""
+        asked = []
+        real_classify = hazard_rules.classify
+        monkeypatch.setattr(
+            hazard_service.hazard_rules,
+            "classify",
+            lambda tags: (asked.append(tags), real_classify(tags))[1],
+        )
+        service = HazardService(
+            enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
+        )
+        measurement = service.measure(*XIVARES)
+        assert len(asked) == measurement["candidates_seen"] == 144
 
     def test_the_rules_table_has_one_home(self):
         import subprocess
@@ -1880,14 +2115,25 @@ class TestOneHomePerRule:
         )
 
         prop = _prop(title="EnrichLocked")
+        scans = []
+        order = []
+
+        class _CountingHazards(HazardService):
+            def enrich(self, prop, commit=False):
+                scans.append(commit)
+                order.append("hazards")
+                return super().enrich(prop, commit=commit)
+
         service = pes.PropertyEnrichmentService(
             enrichment_service=_FakeEnrichment(failure="stubbed"),
-            hazard_service=HazardService(
+            hazard_service=_CountingHazards(
                 enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
             ),
             sea_view_calculator=lambda prop, commit, use_ai: None,
             location_service=SimpleNamespace(
-                ensure_coordinates=lambda prop, refresh, commit: None
+                ensure_coordinates=lambda prop, refresh, commit: order.append(
+                    "coordinates"
+                )
             ),
             travel_service=SimpleNamespace(
                 calculate_for_property=lambda prop, commit: True
@@ -1905,6 +2151,55 @@ class TestOneHomePerRule:
 
         assert prop.enrichment["hazards"]["status"] == hazard_service.STATUS_OK
         assert True in locked, "the scan must take the row under FOR UPDATE"
+        # Exactly once, with its own commit, and **before** anything joins the
+        # shared transaction -- moving it after the advertiser step, or
+        # calling it twice, passed this test until it counted (codex review,
+        # 2026-08-20).
+        assert scans == [True]
+        assert order[:2] == ["coordinates", "hazards"]
+
+    def test_the_default_service_scans_without_being_handed_one(self, app, monkeypatch):
+        """A test that injects its own hazard service passes when the default
+        construction is broken (codex review, 2026-08-20). This one builds the
+        service the way production does and only replaces the network seam.
+        """
+        from services.property_enrichment_service import PropertyEnrichmentService
+
+        monkeypatch.setattr(
+            hazard_service,
+            "fetch_elements",
+            lambda service, lat, lon: (
+                {
+                    "elements": [
+                        {
+                            "type": "way",
+                            "id": 91_001,
+                            "lat": XIVARES[0] + 0.001,
+                            "lon": XIVARES[1],
+                            "tags": {"landuse": "landfill", "name": "Vertedero"},
+                        }
+                    ],
+                    "returned": 1,
+                    "unreadable": 0,
+                },
+                None,
+            ),
+        )
+        prop = _prop(title="DefaultScans")
+        service = PropertyEnrichmentService()
+        # The other two free steps reach Overpass and OpenTopoData through
+        # their own transports, which this test is not about; stubbing them
+        # keeps `tests/network_guard.py` out of it without touching the wiring
+        # under test.
+        monkeypatch.setattr(
+            service.enrichment_service,
+            "_overpass_elements",
+            lambda query: (None, SimpleNamespace(reason="stubbed")),
+        )
+        monkeypatch.setattr(service, "sea_view_calculator", lambda **kwargs: None)
+        service.enrich_free_sources(prop, commit=True, use_ai=False)
+        assert prop.enrichment["hazards"]["status"] == hazard_service.STATUS_OK
+        assert prop.enrichment["hazards"]["items"][0]["name"] == "Vertedero"
 
     def test_the_default_construction_wires_the_shared_client(self, app):
         """The test above injects its own service, so a broken default would
