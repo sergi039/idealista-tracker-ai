@@ -21,9 +21,23 @@ Nothing in the repository read any of them, and nothing defended them.
 
 This tool does not touch those three rows and neither does anything else in this
 change. Nothing in the database distinguishes a `precise` a person curated from
-a `precise` Google returned -- 129 of the 130 `precise` rows on production carry
-no portal pin -- so converting them by inference is the STATUS-002 mistake in a
-new column. They are converted by a person running this tool with the note their
+a `precise` Google returned -- 130 of the 132 `precise` rows on production carry
+no portal pin (measured 15:02Z; that count moves with every ingest, so re-measure
+rather than quoting it) -- so converting them by inference is the STATUS-002
+mistake in a new column.
+
+**Two of those three rows have since been "defended" the wrong way, and that is
+the clearest argument for this tool.** Between the morning measurement and
+15:02Z, hand-run scripts wrote their cadastre conclusions into
+`enrichment["import"]["coordinate"]` -- 161 as `source: cadastre_manual`, 792 as
+`cadastre_parcel` -- which is the field `services/coordinate_quality.py`
+documents as "the coordinate the source portal published for this listing". A
+cadastral parcel centroid is not a portal's pin. It works, because
+`_apply_geocode_outcome` defends that field, and it is exactly the STATUS-002
+mistake the paragraph above refuses: an inference stored under a name that means
+something else, where the next reader has no way to tell the two apart. Those
+rows want moving to `enrichment["location"]` with `--source cadastre`, by the
+person who established them. They are converted by a person running this tool with the note their
 own block already contains, or not at all.
 
     python -m utils.set_property_location --id 792 \\

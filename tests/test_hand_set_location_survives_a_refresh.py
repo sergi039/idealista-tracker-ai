@@ -13,8 +13,12 @@ in the repository read any of them**: 161 and 792 under
 timestamps under two different names), 774 under `enrichment["cadastre"]`. 161
 and 792 both carry a `precise` their own `enrichment["geocoding"]` record
 contradicts -- the fingerprint of a write made outside the geocoder. 161 is
-defended today only by accident, because it happens to also carry a portal pin;
-792 is not defended at all, and 129 of the 130 `precise` rows carry no pin.
+was defended only by accident, because it happens to also carry a portal pin,
+and 130 of the 132 `precise` rows carry none (15:02Z -- re-measure rather than
+quoting it). 792 gained such a pin the same afternoon, from a hand-run script
+that wrote its cadastre conclusion under `source: cadastre_parcel` into the
+field meaning "what the portal published" -- which defends the row and is the
+STATUS-002 mistake this change exists to give an honest alternative to.
 
 Two things are pinned here that are decisions rather than mechanics.
 
@@ -580,3 +584,261 @@ class TestTheToolNamesADisagreement:
 
             assert "hand-set      no" in said
             assert "DISAGREES" not in said
+
+
+class TestTheGuardIsRecheckedUnderTheLock:
+    """The race this change reopened, found by adversarial review and
+    reproduced by every refuter that looked at it.
+
+    `ensure_coordinates` reads `manual_coordinate` once, *before* the geocode,
+    which the file's own #400 history documents as taking minutes. The write
+    then happens inside `locked_write`, which re-reads the row FOR UPDATE --
+    and `_apply_geocode_outcome` re-derives `portal_coordinate` there, with a
+    docstring explaining exactly why ("an operator who wrote a better pin while
+    the geocode ran must not have it replaced"), while never re-deriving
+    `manual_coordinate`. The two live under different keys, so the portal
+    re-check protects nothing here.
+
+    So a hand-set location committed while the geocode was in flight was
+    overwritten by a candidate chosen against a row that did not yet have one --
+    #339 and #400 again, in the mechanism this change introduced to outrank
+    them both.
+    """
+
+    def test_a_hand_set_location_that_lands_mid_geocode_is_not_overwritten(self, app):
+        with app.app_context():
+            row = _row(location_accuracy="approximate")
+
+            class _GeocoderThatRacesUs:
+                """Stands in for Google, and for the operator who presses the
+                button while Google is thinking."""
+
+                def __init__(self):
+                    self.queries = []
+
+                def geocode_address(self, query):
+                    self.queries.append(query)
+                    if len(self.queries) == 1:
+                        # The concurrent write, committed inside the window
+                        # `ensure_coordinates` leaves open on purpose.
+                        set_location_by_hand(
+                            row,
+                            lat=HAND_LAT,
+                            lon=HAND_LON,
+                            accuracy="precise",
+                            note=NOTE,
+                            commit=True,
+                        )
+                    return _google_says("approximate")
+
+            geocoder = _GeocoderThatRacesUs()
+            PropertyLocationService(geocoder).ensure_coordinates(
+                row, refresh=True, commit=True
+            )
+
+            db.session.expire_all()
+            stored = db.session.get(Property, row.id)
+            assert geocoder.queries, "the geocode did not run; the race is untested"
+            assert stored.location_accuracy == "precise"
+            assert float(stored.location_lat) == pytest.approx(HAND_LAT)
+            assert manual_coordinate(stored) is not None
+
+    def test_a_refusal_mid_geocode_does_not_unlocate_the_hand_set_row(self, app):
+        """The other path into the locked tail: a refresh that answers nothing
+        clears the columns, and must not clear a location that arrived since."""
+        with app.app_context():
+            row = _row(location_accuracy="approximate")
+
+            class _SilentButRacing:
+                def __init__(self):
+                    self.queries = []
+
+                def geocode_address(self, query):
+                    self.queries.append(query)
+                    if len(self.queries) == 1:
+                        set_location_by_hand(
+                            row,
+                            lat=HAND_LAT,
+                            lon=HAND_LON,
+                            accuracy="precise",
+                            note=NOTE,
+                            commit=True,
+                        )
+                    return None
+
+            PropertyLocationService(_SilentButRacing()).ensure_coordinates(
+                row, refresh=True, commit=True
+            )
+
+            db.session.expire_all()
+            stored = db.session.get(Property, row.id)
+            assert stored.location_lat is not None
+            assert stored.location_accuracy == "precise"
+
+
+class TestZeroIsAPlace:
+    """`0, 0` is the Gulf of Guinea, and this repository already says so twice:
+    `record_portal_coordinate`'s docstring refuses to write it as a stand-in for
+    "no pin", and `PropertyEnrichmentService.enrich_property` reads the columns
+    with `is None, not truthiness` for exactly this reason.
+
+    The refusal added here used `bool(lat and lon)`, which reads a real
+    coordinate on the equator as an absent one.
+    """
+
+    def test_a_hand_set_row_at_zero_reports_that_it_has_a_coordinate(self, app):
+        with app.app_context():
+            row = _row()
+            set_location_by_hand(
+                row, lat=0.0, lon=0.0, accuracy="precise", note="the null island"
+            )
+            geocoder = _Geocoder([_google_says("precise")])
+
+            assert (
+                PropertyLocationService(geocoder).ensure_coordinates(row, refresh=True)
+                is True
+            )
+            assert geocoder.queries == []
+
+
+class TestARollbackDoesNotDiscardCurationDoneAfterIt:
+    """`utils/refresh_property_accuracy.py --restore` writes `enrichment`
+    verbatim from a snapshot. A snapshot taken before a re-geocode run holds
+    the geocoder-era value, so restoring it after somebody curated the row
+    silently erases both the hand-set block and the coordinate it established.
+
+    `utils/restore_score_snapshot.py` already settled how this repository
+    answers that: rows the snapshot cannot speak for are **named**, not
+    quietly overwritten. Same answer here, and narrowly -- a snapshot that
+    *does* carry the hand-set block restores normally, because then the
+    rollback really is putting back what a person had.
+    """
+
+    def _snapshot(self, tmp_path, rows):
+        import json
+
+        path = tmp_path / "snap.json"
+        path.write_text(json.dumps(rows), encoding="utf-8")
+        return str(path)
+
+    def test_a_hand_set_row_absent_from_the_snapshot_is_skipped_and_named(
+        self, app, tmp_path, caplog
+    ):
+        import logging
+
+        from utils.refresh_property_accuracy import _restore, _snapshot_row
+
+        with app.app_context():
+            row = _row(
+                location_lat=GOOGLE_LAT,
+                location_lon=GOOGLE_LON,
+                location_accuracy="approximate",
+            )
+            taken = [_snapshot_row(row)]
+            path = self._snapshot(tmp_path, taken)
+
+            set_location_by_hand(
+                row, lat=HAND_LAT, lon=HAND_LON, accuracy="precise", note=NOTE
+            )
+
+            with caplog.at_level(logging.WARNING):
+                restored = _restore(path)
+
+            db.session.expire_all()
+            stored = db.session.get(Property, row.id)
+            assert restored == 0
+            assert stored.location_accuracy == "precise"
+            assert float(stored.location_lat) == pytest.approx(HAND_LAT)
+            assert manual_coordinate(stored) is not None
+            assert str(row.id) in caplog.text and "hand" in caplog.text.lower()
+
+    def test_a_snapshot_that_holds_the_block_restores_normally(self, app, tmp_path):
+        from utils.refresh_property_accuracy import _restore, _snapshot_row
+
+        with app.app_context():
+            row = _row(location_accuracy="approximate")
+            set_location_by_hand(
+                row, lat=HAND_LAT, lon=HAND_LON, accuracy="precise", note=NOTE
+            )
+            path = self._snapshot(tmp_path, [_snapshot_row(row)])
+
+            row.location_lat = 43.9
+            row.location_accuracy = "unknown"
+            db.session.commit()
+
+            assert _restore(path) == 1
+
+            db.session.expire_all()
+            stored = db.session.get(Property, row.id)
+            assert stored.location_accuracy == "precise"
+            assert float(stored.location_lat) == pytest.approx(HAND_LAT)
+
+    def test_an_ordinary_row_still_restores(self, app, tmp_path):
+        from utils.refresh_property_accuracy import _restore, _snapshot_row
+
+        with app.app_context():
+            row = _row(location_accuracy="approximate")
+            path = self._snapshot(tmp_path, [_snapshot_row(row)])
+            row.location_accuracy = "unknown"
+            db.session.commit()
+
+            assert _restore(path) == 1
+
+            db.session.expire_all()
+            assert db.session.get(Property, row.id).location_accuracy == "approximate"
+
+
+class TestTheApiSaysWhenItRefusedTheRefresh:
+    """The CLI in this same change names the rows it skipped. The endpoint
+    accepted `refresh_coords`, did not perform it, and said nothing -- and a
+    caller told nothing reads the silence as "done"."""
+
+    def _post(self, client, prop_id, refresh):
+        return client.post(
+            f"/api/property/{prop_id}/enrich" + ("?refresh_coords=1" if refresh else "")
+        )
+
+    def test_it_names_the_refusal_and_does_not_pass_the_flag_on(self, app, monkeypatch):
+        seen = {}
+
+        def _fake(self, prop, refresh_coords=False, recalc_scoring=True):
+            seen["refresh_coords"] = refresh_coords
+            return True
+
+        with app.app_context():
+            row = _row()
+            set_location_by_hand(
+                row, lat=HAND_LAT, lon=HAND_LON, accuracy="precise", note=NOTE
+            )
+            prop_id = row.id
+
+        from services.property_enrichment_service import PropertyEnrichmentService
+
+        monkeypatch.setattr(PropertyEnrichmentService, "enrich_property", _fake)
+
+        with app.test_client() as client:
+            body = self._post(client, prop_id, refresh=True).get_json()
+
+        assert body.get("coordinate_refresh") == "refused_hand_set"
+        assert "set by hand" in (body.get("message") or "")
+        assert seen.get("refresh_coords") is False
+
+    def test_an_ordinary_row_is_unchanged(self, app, monkeypatch):
+        seen = {}
+
+        def _fake(self, prop, refresh_coords=False, recalc_scoring=True):
+            seen["refresh_coords"] = refresh_coords
+            return True
+
+        with app.app_context():
+            prop_id = _row().id
+
+        from services.property_enrichment_service import PropertyEnrichmentService
+
+        monkeypatch.setattr(PropertyEnrichmentService, "enrich_property", _fake)
+
+        with app.test_client() as client:
+            body = self._post(client, prop_id, refresh=True).get_json()
+
+        assert body.get("coordinate_refresh") is None
+        assert seen.get("refresh_coords") is True

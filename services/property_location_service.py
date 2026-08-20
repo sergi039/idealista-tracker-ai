@@ -434,6 +434,18 @@ def _build_geocoding_queries(prop: Property) -> List[str]:
     return out
 
 
+def _has_coordinate(prop) -> bool:
+    """Does this row have a coordinate at all?
+
+    `is None`, never truthiness: `0, 0` is a real place in the Gulf of Guinea,
+    which this repository already says twice -- `record_portal_coordinate`
+    refuses to write it as a stand-in for "no pin", and
+    `PropertyEnrichmentService.enrich_property` reads these columns with an
+    explicit `is None` for the same reason. A row on the equator is located.
+    """
+    return prop.location_lat is not None and prop.location_lon is not None
+
+
 class PropertyLocationService:
     def __init__(self, geocoding_service: Optional[GeocodingService] = None):
         self.geocoding_service = geocoding_service or GeocodingService()
@@ -620,6 +632,22 @@ class PropertyLocationService:
         the geocode ran must not have it replaced by a candidate that was only
         an improvement on what the row said before.
         """
+        # Re-read under the lock, the way `portal_pin` is two lines below and
+        # for the same reason -- and this one first, because it outranks the
+        # pin. The pre-lock check in `ensure_coordinates` read the row as it was
+        # before the geocode, which the #400 note in this file measures in
+        # minutes; a location a person established inside that window would
+        # otherwise lose to a candidate chosen against a row that did not yet
+        # have one. That is #339 and #400 again, in the mechanism added to
+        # outrank them, and it is not hypothetical: it was reproduced before
+        # this guard existed.
+        #
+        # Nothing is written and nothing is recorded, exactly as the pre-lock
+        # refusal writes nothing: the geocode's own record would describe a
+        # coordinate this row does not have.
+        if manual_coordinate(prop) is not None:
+            return _has_coordinate(prop)
+
         portal_pin = portal_coordinate(prop) if refresh else None
         previous_accuracy = normalize_accuracy(prop.location_accuracy)
         kind = outcome.get("kind")
@@ -804,9 +832,10 @@ class PropertyLocationService:
         in front of the geocode rather than after it, the shape
         `services/advertiser.enrich` uses for a hand-set seller verdict.
         Measured on production 2026-08-20: three rows carried a curated
-        location in three ad-hoc shapes and nothing read any of them, while 129
-        of the 130 `precise` rows carry no portal pin and so had no defence at
-        all. `improves_on` is not consulted -- a person outranks a better label,
+        location in three ad-hoc shapes and nothing read any of them, while
+        130 of the 132 `precise` rows carry no portal pin and so have no
+        defence at all (15:02Z -- the set grows with every ingest, so
+        re-measure rather than quoting this). `improves_on` is not consulted -- a person outranks a better label,
         because the label is Google's opinion of its own match and the person
         looked at the parcel.
 
@@ -837,7 +866,7 @@ class PropertyLocationService:
         # other writer is a row with no coordinate, and saying otherwise would
         # be the kind of claim this file exists to refuse.
         if manual_coordinate(prop) is not None:
-            return bool(prop.location_lat and prop.location_lon)
+            return _has_coordinate(prop)
 
         # `refresh` used to reach this by clearing the columns first; it says so
         # directly now, for the reason in the docstring.

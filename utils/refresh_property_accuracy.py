@@ -53,10 +53,29 @@ from typing import Any, Dict, List
 from app import create_app, db
 from models import Property
 from services.coordinate_quality import is_hand_set
+
+
 from services.property_location_service import PropertyLocationService
 from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
+
+
+class _Snapshot:
+    """A snapshot row, wearing just enough of a `Property` for `is_hand_set`.
+
+    `manual_coordinate` reads `record.enrichment` and nothing else, so asking
+    the same question of a snapshot needs no second reader -- which is the
+    point. A copy of that parsing here would be free to disagree with the one
+    the service uses, and the whole reason this check exists is that the two
+    sides of a rollback must agree about what a hand-set location is.
+    """
+
+    __slots__ = ("enrichment",)
+
+    def __init__(self, enrichment):
+        self.enrichment = enrichment
+
 
 DEFAULT_SLEEP_S = 0.2
 
@@ -165,6 +184,29 @@ def _restore(path: str) -> int:
         if prop is None:
             logger.warning("Property %s is gone; not restored", row["id"])
             continue
+        # A rollback puts back what the snapshot held. It must not put back
+        # what the snapshot did not know about: this writes `enrichment`
+        # verbatim, so a location a person established *after* the snapshot was
+        # taken would be erased along with the coordinate it set, silently and
+        # with no way to tell afterwards which rows lost one.
+        #
+        # `utils/restore_score_snapshot.py` already settled how this repository
+        # answers that -- rows the snapshot cannot speak for are named, not
+        # quietly overwritten. Narrowly: a snapshot that *does* carry the block
+        # restores normally, because then the rollback really is restoring a
+        # person's own state rather than discarding it.
+        snapshot_had_one = is_hand_set(_Snapshot(row.get("enrichment")))
+        if is_hand_set(prop) and not snapshot_had_one:
+            logger.warning(
+                "Property %s: not restored -- its location was set by hand after "
+                "this snapshot was taken, and restoring would discard it. Clear "
+                "it with `python -m utils.set_property_location --id %s --clear "
+                "--apply` first if that is really what you want.",
+                row["id"],
+                row["id"],
+            )
+            continue
+
         prop.location_lat = row["location_lat"]
         prop.location_lon = row["location_lon"]
         prop.location_accuracy = row["location_accuracy"]

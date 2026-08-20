@@ -793,10 +793,23 @@ match and timestamps under two different names, 774 under
 `enrichment["cadastre"]` -- and **nothing in the repository read any of them**.
 161 and 792 both carry a `precise` their own `enrichment["geocoding"]` record
 contradicts, the fingerprint of a write made outside the geocoder; 161 survives
-today only by accident, because it also happens to carry a portal pin, and 129
-of the 130 `precise` rows carry none. **Re-measure rather than quoting those
-two**, the way the `location_accuracy` paragraph above says: four hours later
-the same query answered 130 of 132, because the set grows with every ingest.
+today only by accident, because it also happens to carry a portal pin, and 130
+of the 132 `precise` rows carry none. **Re-measure rather than quoting those
+two**, the way the `location_accuracy` paragraph above says: the morning's
+answer was 129 of 130, because the set grows with every ingest.
+
+**And within the same afternoon the pressure this creates produced the wrong
+write.** By 15:02Z rows 161 and 792 both carried
+`enrichment["import"]["coordinate"]` -- `source: cadastre_manual` and
+`cadastre_parcel` -- put there by hand-run scripts. That field means *the
+coordinate the source portal published*, and a cadastral parcel centroid is not
+that. It works, because `_apply_geocode_outcome` defends the portal pin, which
+is precisely why it is the STATUS-002 mistake and not merely untidy: the row now
+answers "the portal placed this pin" to anyone who asks, and no reader can tell
+those two rows from the 57 fotocasa ones. Nobody was being careless -- there was
+nowhere honest to put it, which is the hole this section closes. Moving them is
+one `utils/set_property_location.py --source cadastre` per row, by the person
+who established them, and is deliberately not done here.
 
 The reason those blocks were ad-hoc is that there was no hand-set path for a
 coordinate at all -- the only writers of `location_accuracy` are the geocoder,
