@@ -980,6 +980,32 @@
                         {{ t('approximate_origin_notice') }}
                     </div>
                 {% endif %}
+                {# Which engine produced the minutes below. Two engines read the
+                   same OpenStreetMap roads and disagree about how fast they are
+                   driven -- measured over 30 production pairs, the distances
+                   agree while OSRM is 26-34% slower on motorway runs -- so a
+                   table holding both is comparing two things unless the row
+                   says which. A row measured before 2026-08-20 carries no such
+                   record and this line is absent for it, which is exactly what
+                   tells the two apart: nothing here infers an engine from the
+                   configuration, because the configuration can change between
+                   the run and the reading. #}
+                {# `api_status` is guarded as a mapping, not merely as truthy:
+                   `tests/test_travel_target_refusals_render.py` feeds this page
+                   the barest and the malformed records on purpose, and a
+                   template error here is a 302 with a flash rather than a
+                   visible break -- which is how a page can look fine while
+                   every listing redirects. #}
+                {% set _api_status = property.travel.get('api_status')
+                       if property.travel is mapping else none %}
+                {% set _routing_engine = _api_status.get('routing_engine')
+                       if _api_status is mapping else none %}
+                {% if _routing_engine is string %}
+                    <div class="small text-body-secondary mb-2" id="travel-routing-engine">
+                        <i class="fas fa-route me-1"></i>
+                        {{ t('routing_engine_' ~ _routing_engine) if t('routing_engine_' ~ _routing_engine) != 'routing_engine_' ~ _routing_engine else _routing_engine }}
+                    </div>
+                {% endif %}
                 {# Straight-line distance to the coastline (OSM), a scoring input in its
                    own right -- shown with the real status so an API refusal never reads
                    as "there is no sea nearby". #}

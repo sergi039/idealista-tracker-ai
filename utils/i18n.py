@@ -248,6 +248,10 @@ TRANSLATIONS = {
             "measured: travel times, beaches and distance to the sea all "
             "start from a point this row does not have. Enrich geocodes it."
         ),
+        # Which engine measured the drive times on this row. Recorded
+        # per run, never inferred from the configuration.
+        "routing_engine_osrm": "Drive times from the local routing engine (OSRM)",
+        "routing_engine_google_distance_matrix": "Drive times from Google Distance Matrix",
         "from_the_geocoded_point": "from the geocoded point",
         "shared_coordinate_with": "same coordinate as",
         "shared_coordinate_tooltip": (
@@ -677,6 +681,10 @@ TRANSLATIONS = {
             "distancia al mar parten de un punto que esta fila no tiene. "
             "Enriquecer lo geocodifica."
         ),
+        # Which engine measured the drive times on this row. Recorded
+        # per run, never inferred from the configuration.
+        "routing_engine_osrm": "Tiempos de conducción del motor de rutas local (OSRM)",
+        "routing_engine_google_distance_matrix": "Tiempos de conducción de Google Distance Matrix",
         "from_the_geocoded_point": "desde el punto geocodificado",
         "shared_coordinate_with": "misma coordenada que",
         "shared_coordinate_tooltip": (
