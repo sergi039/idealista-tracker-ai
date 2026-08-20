@@ -284,6 +284,86 @@ def _responses(*, mapped=PARCEL_4326, metric=PARCEL_25829, attributes=DNPRC_OK):
     return fake_get, calls
 
 
+class TestTheRequestBudget:
+    """The number the route's rate limit is arithmetic over.
+
+    Every other test here mocks `_get`, which is the whole client; this one
+    mocks `requests.get` underneath it, because "three requests per press" is a
+    claim about what leaves the machine and `max_attempts` lives between the
+    two. With retries on, one refused call is three requests and five presses
+    is forty-five rather than fifteen -- against an endpoint whose documented
+    failure mode is a ten-day IP ban.
+    """
+
+    def test_a_refused_call_is_attempted_once(self):
+        import requests
+
+        attempts = []
+
+        def one_failure(url, **kwargs):
+            attempts.append(url)
+            return _Response(status_code=500, text="")
+
+        with (
+            patch.object(requests, "get", side_effect=one_failure),
+            patch.object(cadastre_service.CATASTRO_GATE, "wait", return_value=0.0),
+        ):
+            with pytest.raises(cadastre_service.CadastreError):
+                cadastre_service._fetch_outline(BAYAS, 4326)
+
+        # 500 is in `request_with_retries`'s retryable set, so this is exactly
+        # the case where a default `max_attempts` would spend three.
+        assert len(attempts) == 1, attempts
+
+    def test_the_whole_run_is_three_requests_on_the_wire(self):
+        import requests
+
+        seen = []
+
+        def transport(url, params=None, **kwargs):
+            seen.append((url, dict(params or {})))
+            if "wfsCP" in url:
+                if params.get("srsname") == "EPSG::4326":
+                    return _Response(text=PARCEL_4326)
+                return _Response(text=PARCEL_25829)
+            return _Response(payload=DNPRC_OK)
+
+        with (
+            patch.object(requests, "get", side_effect=transport),
+            patch.object(cadastre_service.CATASTRO_GATE, "wait", return_value=0.0),
+            patch.object(cadastre_service, "_cache_get", return_value=None),
+            patch.object(cadastre_service, "_cache_set"),
+        ):
+            block = cadastre_service.fetch_parcel(BAYAS)
+
+        assert block["run_state"] == cadastre_service.RUN_OK
+        assert len(seen) == 3, seen
+
+    def test_the_gate_paces_every_attempt_rather_than_the_caller(self):
+        """Handed to the transport, not taken around it.
+
+        A caller that waits on the gate itself and then hands the retry loop a
+        free hand paces its own lookups and leaves the retries unpaced, which
+        is the traffic a struggling endpoint sees most of -- the rule
+        `utils/http.py` states for Overpass.
+        """
+        import requests
+
+        waits = []
+
+        with (
+            patch.object(requests, "get", return_value=_Response(text=PARCEL_4326)),
+            patch.object(
+                cadastre_service.CATASTRO_GATE,
+                "wait",
+                side_effect=lambda: waits.append(1) or 0.0,
+            ),
+        ):
+            cadastre_service._fetch_outline(BAYAS, 4326)
+
+        assert waits, "the transport did not take the gate"
+
+
 class TestTheRun:
     @pytest.fixture(autouse=True)
     def _no_cache(self):
