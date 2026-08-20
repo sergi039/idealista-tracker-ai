@@ -290,6 +290,80 @@ class TestTheRulesTable:
             is None
         )
 
+    def test_a_plant_that_says_what_it_makes_is_read(self):
+        """`product=*` is the most direct claim an industrial plant can make.
+
+        `relation/11519713` is *Asturiana de Zinc* in San Juan de Nieva -- a
+        zinc smelter and sulfuric-acid plant inside the owner's own search
+        area, `man_made=works` + `product=zinc` + `operator=Glencore`, with a
+        name no industry vocabulary can read. It classified as nothing at all
+        until `product` was read (codex review, 2026-08-20).
+        """
+        verdict = hazard_rules.classify(
+            {
+                "man_made": "works",
+                "name": "Asturiana de Zinc",
+                "operator": "Glencore",
+                "product": "zinc",
+                "type": "multipolygon",
+            }
+        )
+        assert verdict is not None
+        assert verdict.severity == hazard_rules.SEVERITY_HIGH
+        assert verdict.evidence == "product=zinc"
+
+    def test_a_closed_power_station_is_not_an_emitting_one(self):
+        """Spain shut both of these on 2020-06-30, and both are still mapped.
+
+        `way/16851312` (Narcea) and `way/88799255` (Meirama) carry
+        `disused:power=plant`, `disused:plant:source=coal` and `end_date`, on
+        an element still tagged `landuse=industrial` and still named *Central
+        térmica* -- so the name rule reported them as live (codex review).
+        """
+        narcea = {
+            "disused:plant:method": "combustion",
+            "disused:plant:source": "coal",
+            "disused:power": "plant",
+            "end_date": "2020-06-30",
+            "landuse": "industrial",
+            "name": "Central termica del Narcea",
+        }
+        assert hazard_rules.classify(narcea) is None
+        # Each half refuses on its own: a mapper who wrote only one still gets
+        # the right answer.
+        assert hazard_rules.classify({**narcea, "end_date": ""}) is None
+        no_prefixes = {
+            key: value for key, value in narcea.items() if not key.startswith("disused")
+        }
+        assert hazard_rules.classify(no_prefixes) is None
+        # And a lifecycle prefix on something that was never evidence is not a
+        # closure -- a disused siding at a live steelworks.
+        alive = hazard_rules.classify(
+            {
+                "landuse": "industrial",
+                "industrial": "steelmaking",
+                "disused:railway": "rail",
+                "name": "Aceria",
+            }
+        )
+        assert alive is not None and alive.kind == "steelworks"
+
+    def test_a_galician_depuradora_may_be_purifying_shellfish(self):
+        """`way/407548492` and `way/498273059` are cetáreas, not sewage works."""
+        assert (
+            hazard_rules.classify(
+                {"landuse": "industrial", "name": "Depuradora e Cetaria de Mariscos"}
+            )
+            is None
+        )
+        real = hazard_rules.classify(
+            {
+                "landuse": "industrial",
+                "name": "Depuradora de Aguas Residuales de Villaviciosa",
+            }
+        )
+        assert real is not None and real.kind == "wastewater_plant"
+
     def test_a_listed_chimney_is_history_not_combustion(self):
         tags = _tagged("Antigua chimenea de Cristasa")
         assert tags and tags[0].get("historic")
@@ -441,6 +515,24 @@ class TestGroupingBounds:
         ).measure(*XIVARES)
         assert len(measurement["items"]) == 2
         assert [item["element_count"] for item in measurement["items"]] == [1, 1]
+
+    def test_a_generic_name_never_absorbs_a_specific_one(self, app, real_fetch):
+        """`way/231335217` is a quarry named *Cantera*; `way/169318445` is a
+        different quarry named *Cantera Blokdegal S.A.*
+
+        Only an operator may absorb another key. A name is just what somebody
+        typed, and the generic one swallowed the specific one, reporting two
+        workings as one (codex review, 2026-08-20).
+        """
+        merged = hazard_rules.merge_keys(
+            ["cantera", "cantera blokdegal s a"], absorbing=set()
+        )
+        assert merged["cantera blokdegal s a"] == "cantera blokdegal s a"
+        # An operator still absorbs, which is what the acceptance criteria need.
+        by_operator = hazard_rules.merge_keys(
+            ["arcelormittal", "vertedero arcelormittal"], absorbing={"arcelormittal"}
+        )
+        assert by_operator["vertedero arcelormittal"] == "arcelormittal"
 
     def test_one_plant_mapped_in_parts_is_still_one_hazard(self, app, real_fetch):
         """And the bound must not undo what the acceptance criteria ask for."""

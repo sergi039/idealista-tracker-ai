@@ -50,6 +50,7 @@ about a plant that is approved but not yet built.
 """
 
 import unicodedata
+from datetime import date, datetime, timedelta
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -175,7 +176,11 @@ class HazardVerdict:
 # `Neoalgae`, `Centro de Transportes de Gijón`, `Moeve`, `Astilleros Armón`,
 # `INDRA (El Tallerón)`, `Esmena / Mecalux`, `Industrias Metalicas Ruiz`,
 # `EBHISA`, or any of the eight `Polígono Industrial ...` estates.
-_NAME_EVIDENCE: Tuple[Tuple[str, str, str], ...] = (
+# Words that say a *depuradora* purifies shellfish rather than sewage.
+_SHELLFISH = ("marisco", "mariscos", "cetarea", "cetaria", "moluscos", "mejillon")
+
+# `(folded needle, kind, severity)` or `(..., words that disqualify it)`.
+_NAME_EVIDENCE: Tuple[Tuple, ...] = (
     # (folded substring, kind, severity)
     ("cemento", "cement_works", SEVERITY_HIGH),
     ("cement works", "cement_works", SEVERITY_HIGH),
@@ -206,8 +211,15 @@ _NAME_EVIDENCE: Tuple[Tuple[str, str, str], ...] = (
     ("coquer", "coking_plant", SEVERITY_HIGH),
     ("vertedero", "landfill", SEVERITY_HIGH),
     ("escombrera", "landfill", SEVERITY_HIGH),
-    ("depuradora", "wastewater_plant", SEVERITY_MODERATE),
-    ("edar ", "wastewater_plant", SEVERITY_MODERATE),
+    # *Depuradora* is a sewage works in Asturias and a **shellfish purification
+    # plant** on the Galician coast, and both are mapped `landuse=industrial`
+    # with nothing but a name. Codex found two real ones -- `way/407548492`
+    # *Depuradora e Cetaria de Mariscos* and `way/498273059* *Depuradora de
+    # Marisco* -- so the entry carries the words that say which sense is meant.
+    # Narrow and measured beats dropping the entry: a sewage works mapped by
+    # name alone is exactly what it is here to catch.
+    ("depuradora", "wastewater_plant", SEVERITY_MODERATE, _SHELLFISH),
+    ("edar ", "wastewater_plant", SEVERITY_MODERATE, ()),
 )
 
 # `plant:source` values whose plant burns something. Everything absent from
@@ -258,6 +270,43 @@ _INDUSTRIAL_EVIDENCE: Dict[str, Tuple[str, str]] = {
     "quarry": ("quarry", SEVERITY_MODERATE),
 }
 
+# `product=*` is the most direct claim an industrial plant can make about
+# itself, and the issue named it first: *"tags that are claims about what the
+# thing is -- `plant:source=coal`, `product=cement`"*. It was missing, and
+# codex found the object that proves the cost: `relation/11519713`,
+# *Asturiana de Zinc* in San Juan de Nieva -- a zinc smelter and sulfuric-acid
+# plant inside the owner's own search area, tagged `man_made=works`,
+# `product=zinc`, `operator=Glencore`, with a name that says nothing an
+# industry vocabulary can read. Without this table it classified as nothing at
+# all.
+_PRODUCT_EVIDENCE: Dict[str, Tuple[str, str]] = {
+    "cement": ("cement_works", SEVERITY_HIGH),
+    "concrete": ("concrete_plant", SEVERITY_MODERATE),
+    "lime": ("cement_works", SEVERITY_HIGH),
+    "steel": ("steelworks", SEVERITY_HIGH),
+    "iron": ("steelworks", SEVERITY_HIGH),
+    "zinc": ("smelter", SEVERITY_HIGH),
+    "aluminium": ("smelter", SEVERITY_HIGH),
+    "aluminum": ("smelter", SEVERITY_HIGH),
+    "copper": ("smelter", SEVERITY_HIGH),
+    "lead": ("smelter", SEVERITY_HIGH),
+    "metal": ("smelter", SEVERITY_HIGH),
+    "coke": ("coking_plant", SEVERITY_HIGH),
+    "paper": ("paper_mill", SEVERITY_HIGH),
+    "pulp": ("paper_mill", SEVERITY_HIGH),
+    "chemicals": ("chemical_works", SEVERITY_HIGH),
+    "chemical": ("chemical_works", SEVERITY_HIGH),
+    "fertilizer": ("chemical_works", SEVERITY_HIGH),
+    "fertiliser": ("chemical_works", SEVERITY_HIGH),
+    "sulfuric_acid": ("chemical_works", SEVERITY_HIGH),
+    "glass": ("glassworks", SEVERITY_HIGH),
+    "asphalt": ("asphalt_plant", SEVERITY_HIGH),
+    "bitumen": ("asphalt_plant", SEVERITY_HIGH),
+    "gypsum": ("cement_works", SEVERITY_MODERATE),
+    "oil": ("refinery", SEVERITY_HIGH),
+    "petroleum": ("refinery", SEVERITY_HIGH),
+}
+
 # What a storage tank may be holding for it to count. A tank with
 # `building=yes` and nothing else -- 55 of the 82 at property 793 -- has made
 # no claim, and inventing one for it is the STATUS-002 mistake in a new column.
@@ -291,16 +340,37 @@ _TAG_EVIDENCE: Dict[Tuple[str, str], Tuple[str, str]] = {
     ("amenity", "waste_transfer_station"): ("waste_transfer", SEVERITY_MODERATE),
 }
 
-# Keys that mean the thing is not there any more. **Bare keys only**, and that
-# is the whole of the rule: OSM's lifecycle *prefixes* (`disused:`,
-# `abandoned:`, `was:`) apply to the tag they prefix, and an element that
-# reached this function carries the bare candidate tag -- `man_made=works`,
-# not `disused:man_made=works` -- so a prefixed key on it is about something
-# else entirely. `disused:railway=rail` on a live steelworks is a siding, and
-# `was:name=Ensidesa` on `Acería de Veriña - ArcelorMittal` is the plant's own
-# renaming history through Ensidesa -> Aceralia -> Arcelor -> ArcelorMittal.
-# Reading either as "gone" erased the one hazard this feature was written to
-# catch (review, 2026-08-20).
+# Keys that mean the thing is not there any more.
+#
+# A lifecycle *prefix* means "gone" only when it prefixes a key that would
+# itself have been evidence. That distinction is the whole rule, and both
+# halves of it cost a review round. `was:name=Ensidesa` on
+# *Acería de Veriña - ArcelorMittal* is the plant's renaming history through
+# Ensidesa -> Aceralia -> Arcelor -> ArcelorMittal, and `disused:railway=rail`
+# on a live works is a siding -- reading either as "gone" erased a live
+# hazard. But `disused:power=plant` **is** the claim, and codex found two real
+# ones: `way/16851312` *Central térmica del Narcea* and `way/88799255`
+# *Central Térmica de Meirama*, both carrying `disused:power=plant`,
+# `disused:plant:source=coal` and `end_date=2020-06-30`, still tagged
+# `landuse=industrial` and still named *Central térmica*. Spain closed them in
+# June 2020; the name rule reported them as emitting power stations.
+_LIFECYCLE_PREFIXES = ("disused", "abandoned", "ruins", "demolished", "razed", "was")
+
+# The keys a prefix has to be attached to for the prefix to mean the hazard is
+# gone. `name` is deliberately absent -- that is the `was:name` case above.
+_EVIDENCE_KEYS = frozenset(
+    {
+        "power",
+        "man_made",
+        "landuse",
+        "industrial",
+        "amenity",
+        "product",
+        "plant",
+        "content",
+    }
+)
+
 _DISUSED_KEYS = ("disused", "abandoned", "ruins", "demolished", "razed")
 
 # `historic` is a claim about significance, not about status, so it refuses
@@ -334,13 +404,46 @@ def fold(text: Any) -> str:
     return stripped.casefold().strip()
 
 
+def _closed_before_today(tags: Dict[str, Any]) -> bool:
+    """Does `end_date` name a day that has already passed?
+
+    A plain year or year-month counts as its last day, so a plant that closed
+    in 2020 is closed whether the mapper wrote `2020`, `2020-06` or
+    `2020-06-30`. Anything this cannot parse -- an OSM date range, a `~2020`
+    -- is left alone: a date nobody can read is not evidence of a closure.
+    """
+    raw = str(tags.get("end_date") or "").strip()
+    if not raw:
+        return False
+    for pattern, roll in (("%Y-%m-%d", 0), ("%Y-%m", 1), ("%Y", 2)):
+        try:
+            parsed = datetime.strptime(raw, pattern).date()
+        except ValueError:
+            continue
+        if roll == 2:
+            parsed = date(parsed.year, 12, 31)
+        elif roll == 1:
+            month_end = date(parsed.year + parsed.month // 12, parsed.month % 12 + 1, 1)
+            parsed = month_end - timedelta(days=1)
+        return parsed < date.today()
+    return False
+
+
 def _is_disused(tags: Dict[str, Any]) -> bool:
+    if _closed_before_today(tags):
+        return True
     for key, value in tags.items():
         name = str(key).strip().casefold()
         if name in _DISUSED_KEYS and fold(value) not in _NEGATIVE_VALUES:
             return True
         if name == "historic" and fold(value) in _HISTORIC_DISUSED_VALUES:
             return True
+        prefix, _, rest = name.partition(":")
+        if prefix in _LIFECYCLE_PREFIXES and rest:
+            # `disused:plant:source` counts as `plant`, so the first segment
+            # after the prefix is what decides.
+            if rest.partition(":")[0] in _EVIDENCE_KEYS:
+                return True
     return False
 
 
@@ -423,15 +526,27 @@ def _name_verdict(tags: Dict[str, Any]) -> Optional[HazardVerdict]:
     tokens = _name_tokens(fold(tags.get("name")))
     if not tokens:
         return None
-    for needle, kind, severity in _NAME_EVIDENCE:
-        if _name_says(tokens, needle):
-            return HazardVerdict(
-                kind=kind, severity=severity, evidence=f"name:{needle.strip()}"
-            )
+    for entry in _NAME_EVIDENCE:
+        needle, kind, severity = entry[0], entry[1], entry[2]
+        unless = entry[3] if len(entry) > 3 else ()
+        if not _name_says(tokens, needle):
+            continue
+        if any(_name_says(tokens, word) for word in unless):
+            continue
+        return HazardVerdict(
+            kind=kind, severity=severity, evidence=f"name:{needle.strip()}"
+        )
     return None
 
 
 def _tag_verdict(tags: Dict[str, Any]) -> Optional[HazardVerdict]:
+    product = fold(tags.get("product"))
+    if product in _PRODUCT_EVIDENCE:
+        kind, severity = _PRODUCT_EVIDENCE[product]
+        return HazardVerdict(
+            kind=kind, severity=severity, evidence=f"product={product}"
+        )
+
     industrial = fold(tags.get("industrial"))
     if industrial in _INDUSTRIAL_EVIDENCE:
         kind, severity = _INDUSTRIAL_EVIDENCE[industrial]
@@ -503,6 +618,13 @@ def _tag_verdict(tags: Dict[str, Any]) -> Optional[HazardVerdict]:
 _MIN_CONTAINMENT_KEY_CHARS = 5
 
 
+def operator_key(tags: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The folded operator, or None. What a facility key may be *absorbed* by."""
+    if not isinstance(tags, dict):
+        return None
+    return fold(tags.get("operator")) or None
+
+
 def facility_key(tags: Optional[Dict[str, Any]]) -> Optional[str]:
     """Which facility this element belongs to, as a folded string.
 
@@ -544,7 +666,9 @@ def _contains(haystack: List[str], needle: List[str]) -> bool:
     )
 
 
-def merge_keys(keys: Iterable[str]) -> Dict[str, str]:
+def merge_keys(
+    keys: Iterable[str], absorbing: Optional[Iterable[str]] = None
+) -> Dict[str, str]:
     """`{key: canonical key}`, folding a facility name into its operator.
 
     OSM does not tag one facility consistently. At property 793 the steelworks
@@ -555,18 +679,28 @@ def merge_keys(keys: Iterable[str]) -> Dict[str, str]:
 
     So a key whose tokens *contain* another key's tokens contiguously is folded
     into the shorter one -- `arcelormittal` absorbs both names above, and
-    `exolum` absorbs `exolum - musel i`, `- ii` and `- iii`. The guards are
-    what keep that from becoming a wildcard: the absorbing key must be at least
+    `exolum` absorbs `exolum - musel i`, `- ii` and `- iii`.
+
+    **Only an operator may absorb**, and that is the guard that matters. The
+    first version let any short key do it, and codex found what that costs on
+    real data: `way/231335217` is a quarry whose entire name is *Cantera*, and
+    `way/169318445` is a different quarry named *Cantera Blokdegal S.A.* -- the
+    generic name swallowed the specific one and reported two workings as one.
+    An operator is a claim about who runs a thing; a name is just what somebody
+    typed. The other two guards stay: the absorbing key must be at least
     `_MIN_CONTAINMENT_KEY_CHARS` long, and the match is over whole tokens in
-    order, so `mar` never absorbs `marisma` and `de` absorbs nothing at all.
-    Anything not absorbed stays its own facility, which is the safe direction:
-    two rows for one plant over-reports, one row for two plants hides one.
+    order, so `mar` never absorbs `marisma`. Anything not absorbed stays its
+    own facility, which is the safe direction: two rows for one plant
+    over-reports, one row for two plants hides one.
     """
     unique = sorted({key for key in keys if key}, key=lambda k: (len(k), k))
+    may_absorb = set(unique) if absorbing is None else {k for k in absorbing if k}
     canonical: Dict[str, str] = {key: key for key in unique}
     token_cache = {key: _tokens(key) for key in unique}
     for index, longer in enumerate(unique):
         for shorter in unique[:index]:
+            if shorter not in may_absorb:
+                continue
             if len(shorter) < _MIN_CONTAINMENT_KEY_CHARS:
                 continue
             if _contains(token_cache[longer], token_cache[shorter]):

@@ -379,14 +379,20 @@ class HazardService:
         """
         keyed: Dict[str, List[Dict[str, Any]]] = {}
         keyless: List[Dict[str, Any]] = []
+        operators: set = set()
         for candidate in qualifying:
             key = hazard_rules.facility_key(candidate["tags"])
+            operator = hazard_rules.operator_key(candidate["tags"])
+            if operator:
+                operators.add(operator)
             if key:
                 keyed.setdefault(key, []).append(candidate)
             else:
                 keyless.append(candidate)
 
-        canonical = hazard_rules.merge_keys(keyed.keys())
+        # Only an operator may absorb another key: a generic *name* swallowing
+        # a specific one reported two quarries as one.
+        canonical = hazard_rules.merge_keys(keyed.keys(), absorbing=operators)
         groups: Dict[str, List[Dict[str, Any]]] = {}
         for key, members in keyed.items():
             groups.setdefault(canonical.get(key, key), []).extend(members)
