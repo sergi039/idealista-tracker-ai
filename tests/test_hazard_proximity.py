@@ -1312,6 +1312,18 @@ class TestOneAnswerInTwoLanguages:
             {"status": "ok", "items": [], "item_count": 1},
             {"status": "none_within_radius", "items": [], "item_count": 3},
             {"status": "ok", "items": [{"kind": "landfill"}], "item_count": 0},
+            # An undercount on its own: `ok`, a non-empty list, and a count
+            # that is smaller than it. Fewer stored than counted is the
+            # ordinary `MAX_ITEMS` cap; more stored than counted is not a
+            # shape anything produces.
+            {
+                "status": "ok",
+                "items": [
+                    {"kind": "landfill", "origin_distance_m": 1200},
+                    {"kind": "quarry", "origin_distance_m": 1300},
+                ],
+                "item_count": 1,
+            },
             # Items that are not a list at all -- `value or []` turned these
             # into a clean neighbourhood, and `items: 1` raised outright.
             {"status": "ok", "items": {}, "item_count": 1},
