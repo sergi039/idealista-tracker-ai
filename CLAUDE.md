@@ -656,6 +656,70 @@ favorites, `utils/enrich_scope.py`), costs at most three Distance Matrix
 elements per property, and is resumable per row; everything older stays manual
 via the Enrich button.
 
+**What is 1.1 km away is a datum, and an empty page was answering "nothing"**
+(#437). Property 793 is a plot advertised as a "quiet environment surrounded by
+nature" with a cement works 1.12 km off, a coal yard at 1.57, Repsol's LPG
+spheres at 1.79 and a coal-fired power station at 2.13; the page showed net
+income, supermarkets, hospitals, beaches and drive times, and not one word about
+any of it. `services/hazard_service.py` writes `enrichment["hazards"]` -- free,
+OpenStreetMap, one query per listing on the *free* pass through
+`EnrichmentService._overpass_elements` -- with the four states this file keeps
+insisting on: `ok`, `none_within_radius` (a measurement), `unavailable` (a
+refusal, never cached, never allowed to overwrite an earlier measurement) and
+`no_coordinates`. The card renders on **every** property page, including the
+rows nobody has scanned, because the question it answers is "is anything bad
+near this plot" and silence reads as no.
+
+**The tag is not the severity, and that was measured before it was written.**
+One live Overpass answer at 793's own coordinate, 6 km, ten candidate tags,
+committed verbatim as `tests/data/osm_hazards_xivares_793.json`: **144
+elements**, of which 82 are storage tanks and 42 are `landuse=industrial`. On
+the identical tags sit *Alskin Cosmetics* (`industrial=laboratory`), *Neoalgae*,
+*Fábrica de Hielo* -- an ice factory -- *Talleres Prendes*, eight *polígonos
+industriales* and a lorry park. So `services/hazard_rules.py` is the sibling of
+`services/place_rules.py` and the rule is that **a hazard has to say what it
+is**: `plant:source=coal`, `content=gas`, `industrial=steelmaking`,
+`landuse=landfill`, or the word *cementos* in its name. `landuse=industrial`
+and `man_made=works` never qualify alone. The name is read *first*, because OSM
+is sometimes coarser in its tags than in its labels -- El Musel's coal yard is
+mapped `landuse=quarry` and the cement works carries no `product` tag at all.
+Do not copy the table into a second caller; import it.
+
+**Sibling elements collapse into their facility**, which is #325's
+hospital-indexed-room-by-room in a new place: `facility_key` takes the operator
+before the name, and `merge_keys` folds a name that *contains* an operator into
+it, so *Turbina A*, *Turbina B*, two stacks, *Vertedero ArcelorMittal* and
+*Acería de Veriña - ArcelorMittal* are one entry and not six. Elements with
+neither operator nor name cluster by position at 500 m. The direction of the
+guards matters: two rows for one plant over-reports, one row for two plants
+hides one.
+
+Four more things are load bearing. **An approximate coordinate cannot support
+"1.1 km"** -- `read_verdict` restates the stored block against the row's
+*current* accuracy exactly as `sea_distance_service.parcel_measurement` does,
+so a centroid gets a band (0.0-6.1 km) and never a point, and the block reports
+`guaranteed_m` -- the 6 km scan around the point guarantees only 1 km around the
+parcel. **The bearing is recorded and never interpreted**: whether 1.1 km
+matters depends on the wind, there is no free per-listing wind rose here, and
+writing "downwind" into a measurement field would be the STATUS-002 mistake.
+**The criterion ships weightless**, `hazard_score: 0.0` in all six scorers, and
+raising it goes through the same dry-run preview the pool weight does --
+`WEIGHTLESS_SCORE_KEYS` in `services/property_scoring_service.py` is now what
+that gate reads, so a third such criterion cannot be added to a scorer and
+forgotten by the gate. And **the scan is deliberately not folded into the
+preset Overpass query** the issue suggested folding it into: those presets run
+only on the paid path, this runs on every ingest, so sharing would drag a 100 km
+aerodrome query into every ingested row to save one round trip on an Enrich
+press -- and would invalidate every cached preset cell at a moment when Overpass
+was refusing the mini outright (#434).
+
+What OSM cannot answer is named on the card rather than left to be assumed
+away: emissions (PRTR-España publishes those, and it is worth its own issue),
+measured air quality (Asturias runs a station named *Xivares* inside this very
+urbanisation), and a plant approved but not yet built. `utils/backfill_hazards.py`
+fills the Phase-2 scope, free and resumable per row; announce it before running
+it on the mini, and read `tools/backfill_status.sh` first.
+
 **`/municipalities` keeps municipality facts and listing medians apart, and says
 which is which on the page** (proposal D22, #281). Facts are the municipality's
 own values — INE renta and población, SEPE registered unemployment — with no

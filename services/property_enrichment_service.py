@@ -8,6 +8,7 @@ from app import db
 from models import Property
 from services import advertiser, sea_view_service
 from services.enrichment_service import EnrichmentService
+from services.hazard_service import HazardService
 from services.property_location_service import PropertyLocationService
 from services.property_scoring_service import PropertyScoringService
 from services.pool_service import PoolService
@@ -24,8 +25,9 @@ class PropertyEnrichmentService:
     Mirrors the legacy "Enrich with Google APIs" flow:
     - ensure coordinates (Geocoding)
     - measure distance to the sea (OpenStreetMap, free)
-    - the free pass: nearby amenities, quality of life, sea-view verdict
-      (OpenStreetMap / OpenTopoData / local reference files, all free)
+    - the free pass: nearby amenities, quality of life, hazardous
+      neighbours, sea-view verdict (OpenStreetMap / OpenTopoData / local
+      reference files, all free)
     - compute travel targets (Places + Distance Matrix, with fallback)
     - recompute scoring (local)
 
@@ -42,6 +44,7 @@ class PropertyEnrichmentService:
         sea_distance_service: Optional[SeaDistanceService] = None,
         enrichment_service: Optional[EnrichmentService] = None,
         quality_of_life_service: Optional["QualityOfLifeService"] = None,
+        hazard_service: Optional["HazardService"] = None,
         pool_service: Optional["PoolService"] = None,
         sea_view_calculator=None,
     ):
@@ -55,6 +58,13 @@ class PropertyEnrichmentService:
         # Shares the amenity client's Overpass transport through the same
         # EnrichmentService instance, so one gate paces both lookups.
         self.quality_of_life_service = quality_of_life_service or QualityOfLifeService(
+            enrichment_service=self.enrichment_service
+        )
+        # And again for the hazard scan (#437): one EnrichmentService means
+        # one Overpass client and one 5 s gate across all three lookups, which
+        # is the whole reason this class holds the instance rather than each
+        # service building its own.
+        self.hazard_service = hazard_service or HazardService(
             enrichment_service=self.enrichment_service
         )
         # Same sharing for the pool lookup (Overpass) and its drive times
@@ -76,15 +86,16 @@ class PropertyEnrichmentService:
     def enrich_free_sources(
         self, prop: Property, *, commit: bool, use_ai: bool
     ) -> None:
-        """The free pass: OSM amenities, quality-of-life, sea view (#299).
+        """The free pass: OSM amenities, quality-of-life, hazards, sea view.
 
-        One home for the three enrichers that reach no billed API -- the
-        amenity counts (#152), the QoL block (#275) and the sea-view verdict
-        come from OpenStreetMap, OpenTopoData and local reference files, so
-        there is no billing argument for skipping them. Ingestion skipped
-        them anyway until #299, which is how every row ingested 13-14 Aug
-        arrived with no Extended Infrastructure card, no QoL block and no
-        sea-view verdict. No Google call is fired here at all.
+        One home for the enrichers that reach no billed API -- the amenity
+        counts (#152), the QoL block (#275), the hazardous-neighbour scan
+        (#437) and the sea-view verdict come from OpenStreetMap, OpenTopoData
+        and local reference files, so there is no billing argument for
+        skipping them. Ingestion skipped them anyway until #299, which is how
+        every row ingested 13-14 Aug arrived with no Extended Infrastructure
+        card, no QoL block and no sea-view verdict. No Google call is fired
+        here at all.
 
         `use_ai` is required, and it is the one part of this pass that is not
         free of consequences. The sea-view *text* signal can ask the owner's
@@ -132,6 +143,22 @@ class PropertyEnrichmentService:
         except Exception as e:
             logger.warning(
                 "Quality-of-life enrichment failed for %s: %s",
+                getattr(prop, "id", None),
+                e,
+            )
+            if commit:
+                db.session.rollback()
+
+        # The hazard scan (#437) is one more Overpass round trip through the
+        # same client and gate. It goes here rather than into `enrich_property`
+        # for the reason this method exists: ingestion needs it too, and a
+        # listing whose page says nothing about a cement works 1.1 km away
+        # reads as a listing with no cement works near it.
+        try:
+            self.hazard_service.enrich(prop, commit=commit)
+        except Exception as e:
+            logger.warning(
+                "Hazard scan failed for %s: %s",
                 getattr(prop, "id", None),
                 e,
             )

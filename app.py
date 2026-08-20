@@ -337,6 +337,14 @@ def create_app(testing: bool = False):
     app.jinja_env.globals["advertiser_verdict_for"] = advertiser_verdict_for
     app.jinja_env.globals["advertiser_state_from_portal"] = advertiser_state_from_portal
 
+    # What is nearby that a buyer would walk away over (#437). Restated on
+    # read against the row's *current* accuracy, because a centroid cannot
+    # support "1.1 km" -- so the badge, the property card and the CSV all
+    # take the same reading rather than three of them parsing the block.
+    from services.hazard_service import read_verdict as hazard_verdict_for
+
+    app.jinja_env.globals["hazard_verdict_for"] = hazard_verdict_for
+
     # #379: how much of the enabled weight a score rests on, read off the
     # stored payload (derived for rows scored before it was recorded). The
     # list and the detail page show it; the score itself never contains it.

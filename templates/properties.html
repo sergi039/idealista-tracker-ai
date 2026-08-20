@@ -128,6 +128,23 @@
     {% endif %}
 {%- endmacro %}
 
+{# A badge only when something qualifies (#437). The rule the advertiser and
+   sea-view badges above already follow, for the reason they follow it: a badge
+   on ~100% of rows marks nothing. Here it also has to stay silent for the rows
+   nobody scanned, which is most of the table until the backfill has run -- and
+   "no badge" then means two different things, so the coverage line beside the
+   result count is where that distinction is disclosed rather than in a second
+   badge nobody could read. #}
+{% macro hazard_badge(p) -%}
+    {% set verdict = hazard_verdict_for(p) %}
+    {% if verdict.flagged and verdict.nearest %}
+        <span class="badge {{ 'bg-danger' if verdict.high_count else 'bg-secondary' }} fw-normal"
+              title="{{ t('hazards_badge_tooltip') }} — {{ verdict.nearest.name or t('hazard_kind_' ~ verdict.nearest.kind) }}">
+            <i class="fas fa-industry me-1"></i>{{ t('hazards_badge') }}
+        </span>
+    {% endif %}
+{%- endmacro %}
+
 {# For a plot, distance to the shoreline is a verdict rather than a detail:
    POLA/PESC forbids a dwelling within 500 m of the Asturian coast -- in all
    three of its categories, and over the top of whatever the municipal PGOU
@@ -927,6 +944,18 @@
                             <i class="fas fa-circle-info me-1"></i>{{ t('listing_status_coverage')|format(listing_verified_count, pagination.total) }}
                         </span>
                     {% endif %}
+                    {# The same disclosure for the hazard scan (#437), and for the
+                       same reason: a row that was never scanned shows no badge,
+                       and without this line "no badge" reads as "nothing near
+                       it". Counted over the same filtered set as the total
+                       beside it, with the predicate `hazard_badge` reads
+                       (services/hazard_service.py). #}
+                    {% if hazard_scanned_count is defined and pagination %}
+                        <span id="hazard-scan-coverage" class="text-body-secondary small"
+                              title="{{ t('hazards_coverage_tooltip') }}">
+                            <i class="fas fa-circle-info me-1"></i>{{ t('hazards_coverage')|format(hazard_scanned_count, pagination.total) }}
+                        </span>
+                    {% endif %}
                     {% if not selected_profile_id and profile_selection.withholds_profile_travel %}
                         <span class="small text-body-secondary" id="profile-travel-notice">
                             <i class="fas fa-circle-info me-1"></i>{{ profile_selection.travel_notice }}
@@ -1080,6 +1109,7 @@
                                     {{ source_badge(p) }}
                                                     {{ advertiser_badge(p) }}
                                                     {{ sea_view_badge(p) }}
+                                                    {{ hazard_badge(p) }}
                                                     {{ plot_badges(p) }}
                                                 </div>
                                             </td>
@@ -1261,6 +1291,7 @@
                                     {{ source_badge(p) }}
                                     {{ advertiser_badge(p) }}
                                     {{ sea_view_badge(p) }}
+                                    {{ hazard_badge(p) }}
                                                     {{ plot_badges(p) }}
                                 </div>
 

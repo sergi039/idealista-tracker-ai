@@ -30,6 +30,10 @@ from app import db
 from services import sea_view_service
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
+from services.hazard_service import (
+    measured_expression as hazard_measured_expression,
+    read_verdict as hazard_verdict,
+)
 from services.listing_verification import (
     read_verdict as listing_verdict,
     verified_expression,
@@ -1241,6 +1245,15 @@ def properties():
         # cannot disagree (services/listing_verification.py).
         listing_verified_count = query.filter(verified_expression(Property)).count()
 
+        # And the same disclosure for the hazard scan (#437). The badge is
+        # drawn only for a row where something qualifies, so "no badge" covers
+        # both "scanned, nothing there" and "nobody looked" -- and the second
+        # of those is what this line exists to make visible. Same filtered
+        # set, same predicate the badge reads.
+        hazard_scanned_count = query.filter(
+            hazard_measured_expression(Property)
+        ).count()
+
         # Sorting (safe allow-list). An unknown sort -- an old /lands bookmark
         # asking for travel_time_nearest_beach, say -- falls back to the
         # default *and says so*, so the page never claims an order it did not
@@ -1348,6 +1361,7 @@ def properties():
             profile_selection=profile_selection,
             travel_display_targets=travel_display_targets,
             listing_verified_count=listing_verified_count,
+            hazard_scanned_count=hazard_scanned_count,
             # How the search box entry was read, so an empty result can say
             # what it looked for instead of leaving "0 properties found" to
             # mean both "no such listing" and "not understood as you typed it".
@@ -1862,7 +1876,10 @@ def edit_profile(profile_id):
             # in the stored config (a hand-written key, a category with no
             # scorer) is carried across untouched rather than dropped by a UI
             # that never knew about it (#239).
-            from services.property_scoring_service import PropertyScoringService
+            from services.property_scoring_service import (
+                WEIGHTLESS_SCORE_KEYS,
+                PropertyScoringService,
+            )
 
             service = PropertyScoringService()
             stored = (
@@ -1949,13 +1966,19 @@ def edit_profile(profile_id):
                 )
                 return redirect(url_for("main.edit_profile", profile_id=profile_id))
 
-            # Turning the pool criterion ON is the one save that re-scores
-            # every listing in the subscription by design (proposal D17, the
-            # agreed weight-0 shipping rule): it must not happen from a save
-            # that merely *looked* like the others. The transition to a
-            # positive pool weight therefore shows a dry-run preview first
-            # and commits only on the explicit confirm below.
-            def _pool_weight_enabled(cats: dict) -> bool:
+            # Turning a weightless criterion ON is the one save that
+            # re-scores every listing in the subscription by design (proposal
+            # D17, the agreed weight-0 shipping rule): it must not happen from
+            # a save that merely *looked* like the others. The transition to a
+            # positive weight therefore shows a dry-run preview first and
+            # commits only on the explicit confirm below.
+            #
+            # It is a *set* of keys rather than `pool_score` alone since #437
+            # added the second one. A criterion that ships at weight 0 and
+            # rescores the table when it is raised belongs here; forgetting to
+            # add it is a silent mass rescore that `git log` cannot explain,
+            # which is the failure this whole path exists to prevent.
+            def _weightless_criterion_enabled(cats: dict) -> bool:
                 # Every level is isinstance-guarded: `categories` can hold a
                 # hand-written category whose branch is a scalar (#239 keeps
                 # unmanaged keys), and a crash here would take the whole save
@@ -1969,13 +1992,14 @@ def edit_profile(profile_id):
                         branch_cfg = cat_cfg.get(branch)
                         if not isinstance(branch_cfg, dict):
                             continue
-                        weight = branch_cfg.get("pool_score")
-                        if (
-                            isinstance(weight, (int, float))
-                            and not isinstance(weight, bool)
-                            and weight > 0
-                        ):
-                            return True
+                        for key in WEIGHTLESS_SCORE_KEYS:
+                            weight = branch_cfg.get(key)
+                            if (
+                                isinstance(weight, (int, float))
+                                and not isinstance(weight, bool)
+                                and weight > 0
+                            ):
+                                return True
                 return False
 
             stored_before = (
@@ -1983,8 +2007,8 @@ def edit_profile(profile_id):
                 if isinstance(profile.scoring_config, dict)
                 else {}
             )
-            pool_turning_on = _pool_weight_enabled(categories) and not (
-                _pool_weight_enabled(stored_before.get("categories") or {})
+            pool_turning_on = _weightless_criterion_enabled(categories) and not (
+                _weightless_criterion_enabled(stored_before.get("categories") or {})
             )
 
             if pool_turning_on:
@@ -2041,7 +2065,7 @@ def edit_profile(profile_id):
                 session["pending_scoring_baseline"] = stored_before or {}
                 mean_delta = (sum(deltas) / len(deltas)) if deltas else 0.0
                 flash(
-                    "Pool criterion preview: "
+                    "Scoring criterion preview: "
                     f"{changed} of {len(before)} listings would change score "
                     f"(mean total shift {mean_delta:+.1f}). Nothing is saved "
                     "yet — press «Confirm pool scoring» below to apply.",
@@ -2114,7 +2138,7 @@ def edit_profile(profile_id):
                     rescored += 1
             db.session.commit()
             flash(
-                f"Pool criterion enabled; {rescored} listings rescored.",
+                f"Scoring criterion enabled; {rescored} listings rescored.",
                 "success",
             )
             return redirect(url_for("main.edit_profile", profile_id=profile_id))
@@ -4252,6 +4276,22 @@ def export_properties_csv():
             # durations are routes from the village, not from the parcel --
             # and a spreadsheet sorting on them cannot tell without this.
             "Location Accuracy",
+            # The hazard scan (#437). `Hazards` is the *verdict*, not a count:
+            # `none_within_radius` is a measurement and `not_scanned` is not,
+            # and a spreadsheet that folded the two into an empty cell would
+            # rebuild the defect the block exists to remove. The distance is
+            # blank on an approximate row and the min/max pair carries the
+            # band instead, for the same reason the page never prints a point
+            # distance from a locality centroid.
+            "Hazards",
+            "Hazard Facilities",
+            "Nearest Hazard",
+            "Nearest Hazard Kind",
+            "Nearest Hazard Severity",
+            "Nearest Hazard Distance (m)",
+            "Nearest Hazard Distance Min (m)",
+            "Nearest Hazard Distance Max (m)",
+            "Nearest Hazard Bearing",
             "Created At",
         ]
 
@@ -4282,6 +4322,11 @@ def export_properties_csv():
             sea_view_target = sea_view_verdict["target"]
             listing_verdict_row = listing_verdict(prop)
             advertiser_verdict = advertiser.read_verdict(prop)
+            # Restated against the row's *current* accuracy, exactly as the
+            # page does it -- an export read off the stored block would print
+            # a point distance for a locality centroid the page refuses to.
+            hazards = hazard_verdict(prop)
+            hazard_nearest = hazards["nearest"]
 
             row = [
                 prop.id,
@@ -4313,6 +4358,15 @@ def export_properties_csv():
                 float(prop.location_lat) if prop.location_lat else None,
                 float(prop.location_lon) if prop.location_lon else None,
                 prop.location_accuracy or "unknown",
+                hazards["status"],
+                hazards["item_count"] if hazards["measured"] else None,
+                hazard_nearest.get("name") if hazard_nearest else None,
+                hazard_nearest.get("kind") if hazard_nearest else None,
+                hazard_nearest.get("severity") if hazard_nearest else None,
+                hazard_nearest.get("distance_m") if hazard_nearest else None,
+                hazard_nearest.get("min_distance_m") if hazard_nearest else None,
+                hazard_nearest.get("max_distance_m") if hazard_nearest else None,
+                hazard_nearest.get("cardinal") if hazard_nearest else None,
                 prop.created_at.isoformat() if prop.created_at else "",
             ]
 
