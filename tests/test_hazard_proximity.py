@@ -312,6 +312,44 @@ class TestTheRulesTable:
         assert verdict.severity == hazard_rules.SEVERITY_HIGH
         assert verdict.evidence == "product=zinc"
 
+    def test_a_solar_thermal_plant_burns_nothing(self):
+        """Spain's concentrated-solar plants are *centrales térmicas solares*.
+
+        The name rule would have reported one as a coal station. A declared
+        `plant:source` contradicts the name, and the name entry carries the
+        words on its own for a plant with no power tag at all.
+        """
+        assert (
+            hazard_rules.classify(
+                {
+                    "power": "plant",
+                    "plant:source": "solar",
+                    "name": "Central Termica Solar Andasol",
+                }
+            )
+            is None
+        )
+        assert (
+            hazard_rules.classify(
+                {"landuse": "industrial", "name": "Central termosolar Gemasolar"}
+            )
+            is None
+        )
+        coal = hazard_rules.classify(
+            {"landuse": "industrial", "name": "Central Termica de Soto de Ribera"}
+        )
+        assert coal is not None and coal.kind == "power_plant"
+
+    def test_a_nuclear_plant_is_not_walked_past_for_burning_nothing(self):
+        """`plant:source=nuclear` is not combustion and is not harmless."""
+        verdict = hazard_rules.classify(
+            {"power": "plant", "plant:source": "nuclear", "name": "CN Trillo"}
+        )
+        assert verdict is not None and verdict.kind == "nuclear_plant"
+        assert verdict.severity == hazard_rules.SEVERITY_HIGH
+        # And the renewables still are.
+        assert hazard_rules.classify({"power": "plant", "plant:source": "wind"}) is None
+
     def test_a_generic_product_is_not_a_hazardous_process(self):
         """`product=metal` is a parts maker; `product=oil` is often olive oil.
 

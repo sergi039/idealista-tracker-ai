@@ -179,6 +179,11 @@ class HazardVerdict:
 # Words that say a *depuradora* purifies shellfish rather than sewage.
 _SHELLFISH = ("marisco", "mariscos", "cetarea", "cetaria", "moluscos", "mejillon")
 
+# ...and words that say a *central térmica* is solar. A concentrated-solar
+# plant is a *central térmica solar* or a *central termosolar* in Spanish, and
+# it burns nothing.
+_SOLAR = ("solar", "termosolar", "fotovoltaica", "fotovoltaico")
+
 # `(folded needle, kind, severity)` or `(..., words that disqualify it)`.
 _NAME_EVIDENCE: Tuple[Tuple, ...] = (
     # (folded substring, kind, severity)
@@ -191,7 +196,7 @@ _NAME_EVIDENCE: Tuple[Tuple, ...] = (
     ("refinery", "refinery", SEVERITY_HIGH),
     ("petroquim", "chemical_works", SEVERITY_HIGH),
     ("quimica", "chemical_works", SEVERITY_HIGH),
-    ("central termica", "power_plant", SEVERITY_HIGH),
+    ("central termica", "power_plant", SEVERITY_HIGH, _SOLAR),
     ("power station", "power_plant", SEVERITY_HIGH),
     ("regasificadora", "lng_terminal", SEVERITY_HIGH),
     ("butano", "lpg_storage", SEVERITY_HIGH),
@@ -243,6 +248,12 @@ _COMBUSTION_SOURCES = frozenset(
         "blast_furnace_gas",
     }
 )
+
+# Not combustion, and not something to walk past either. Kept apart from the
+# set above because the kind and the reason differ: nothing here burns.
+_NON_COMBUSTION_PLANT_SOURCES: Dict[str, Tuple[str, str]] = {
+    "nuclear": ("nuclear_plant", SEVERITY_HIGH),
+}
 
 # `industrial=*` values that name a hazardous industry. The refusals matter as
 # much as the accepts: `laboratory` (Alskin Cosmetics), `warehouse` (Moeve),
@@ -543,6 +554,14 @@ def classify(tags: Optional[Dict[str, Any]]) -> Optional[HazardVerdict]:
 
     by_name = None if _retired_evidence(tags) else _name_verdict(tags)
     by_tag = _tag_verdict(tags)
+    # A declared source contradicts a name that claims combustion. Spain's
+    # concentrated-solar plants are *centrales térmicas solares*, and the
+    # name rule would otherwise report one as a coal station -- the tag says
+    # what it burns, and for solar, wind and hydro the answer is nothing.
+    if by_name is not None and by_name.kind == "power_plant":
+        source = fold(tags.get("plant:source"))
+        if source and source not in _COMBUSTION_SOURCES:
+            by_name = None
     # The **more severe** of the two wins, and a tie goes to the name. That
     # keeps every reason the name is read at all -- the cement works carries no
     # `product` tag, and El Musel's coal yard is mapped `landuse=quarry` -- and
@@ -604,6 +623,11 @@ def _tag_verdict(tags: Dict[str, Any]) -> Optional[HazardVerdict]:
     if fold(tags.get("power")) == "plant":
         source = fold(tags.get("plant:source"))
         method = fold(tags.get("plant:method"))
+        if source in _NON_COMBUSTION_PLANT_SOURCES:
+            kind, severity = _NON_COMBUSTION_PLANT_SOURCES[source]
+            return HazardVerdict(
+                kind=kind, severity=severity, evidence=f"plant:source={source}"
+            )
         if source in _COMBUSTION_SOURCES:
             return HazardVerdict(
                 kind="power_plant",
