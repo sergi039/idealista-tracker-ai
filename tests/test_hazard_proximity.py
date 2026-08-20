@@ -394,6 +394,43 @@ class TestTheRulesTable:
         # And the renewables still are.
         assert hazard_rules.classify({"power": "plant", "plant:source": "wind"}) is None
 
+    def test_a_tag_a_real_plant_carries_is_accepted(self):
+        """`industrial=concrete_plant` is the tag CEMEX's own objects carry
+        (`way/1221635493`), and only the bare word was listed (codex review,
+        2026-08-20)."""
+        for value in ("concrete", "concrete_plant", "cement_plant"):
+            verdict = hazard_rules.classify(
+                {"landuse": "industrial", "industrial": value, "name": "CEMEX"}
+            )
+            assert verdict is not None, value
+
+    def test_an_oil_works_may_be_pressing_olives(self):
+        """`way/591673652` is *Almazara Molino de las Torres*.
+
+        The same `industrial=oil` on El Musel is Exolum's petroleum terminals,
+        which is why the entry stays and carries the words that say which
+        sense is meant (codex review, 2026-08-20).
+        """
+        assert (
+            hazard_rules.classify(
+                {
+                    "landuse": "industrial",
+                    "industrial": "oil",
+                    "name": "Almazara Molino de las Torres",
+                }
+            )
+            is None
+        )
+        petroleum = hazard_rules.classify(
+            {
+                "landuse": "industrial",
+                "industrial": "oil",
+                "name": "Exolum - Musel II",
+                "operator": "Exolum",
+            }
+        )
+        assert petroleum is not None and petroleum.kind == "fuel_depot"
+
     def test_a_generic_product_is_not_a_hazardous_process(self):
         """`product=metal` is a parts maker; `product=oil` is often olive oil.
 
@@ -1517,6 +1554,29 @@ class TestOneAnswerInTwoLanguages:
         )
         assert score is None, why
 
+    def test_a_radius_larger_than_the_writer_can_store_is_not_a_radius(self, app):
+        """`1e300` cleared every horizon the scorer checks and turned an empty
+        scan into a clean 100 (codex review, 2026-08-20)."""
+        prop = _prop(title="HugeRadius")
+        prop.enrichment = {
+            "hazards": {
+                "status": hazard_service.STATUS_NONE,
+                "items": [],
+                "item_count": 0,
+                "truncated": False,
+                "searched_m": 1e300,
+                "origin": {"lat": XIVARES[0], "lon": XIVARES[1]},
+            }
+        }
+        db.session.commit()
+        verdict = hazard_service.read_verdict(prop)
+        assert verdict["status"] == hazard_service.STATUS_MISSING
+        assert verdict["measured"] is False
+        score, _ = HousingPropertyScorer()._hazard_score(
+            prop, near_m=1000.0, far_m=5000.0, moderate_factor=0.5
+        )
+        assert score is None
+
     def test_a_radius_of_zero_is_not_a_radius(self, app):
         """Dropping the positivity check rendered "Scanned 0.0 km around the
         stored coordinate" from a block the writer never produces (found in
@@ -2055,7 +2115,11 @@ class TestTheComponent:
         assert lifestyle["score"] == pytest.approx(component)
 
         body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
-        assert "Industrial neighbours" in body
+        # Twice: the card's own header, and the line in the score breakdown
+        # that explains where the number came from. The breakdown never listed
+        # the criterion at all (codex review, 2026-08-20), and asserting the
+        # phrase once cannot tell the two apart.
+        assert body.count("Industrial neighbours") >= 2
         assert "component_hazard" not in body, "the label must be translated"
 
     def test_the_override_reaches_the_scorer(self, app, real_fetch, profile):
