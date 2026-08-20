@@ -866,6 +866,201 @@ def analyze_property_structured(land_id):
         ), 500
 
 
+# --- one press, both analyses (#434) -------------------------------------
+#
+# The AI analysis used to exist only as a step in a browser promise chain:
+# `templates/property_detail.html::runEnrichAndAnalyze` awaited the enrichment
+# poller and only then POSTed here, so "I pressed Enrich" and "I got an
+# analysis" were connected by nothing but the tab staying open. Measured on
+# 2026-08-20, property 793: four presses, sixteen minutes of enrichment, and
+# **not one `property_ai_analysis` row was ever created** -- every re-press
+# reloaded the page and killed the chain that was going to make it.
+#
+# So the closure below is deliberately free of the request that asks for it:
+# it captures plain values, nothing request-scoped, and the enrich job can
+# therefore start it once its own work is committed.
+
+
+def _property_ai_dedupe_key(property_id: int, provider: str) -> str:
+    """The key every writer of one (property, provider) analysis claims.
+
+    The observed #176 failure: a redeploy interrupted this exact job for
+    (property, provider), and resubmitting it must reuse the in-flight run
+    rather than start a second one racing to write the same
+    PropertyAiAnalysisVariant row. Also what keeps a `?sync=1` call from
+    running alongside a live async one for the same pair (#190 review round 3,
+    finding 4) -- and, since #434, what makes the page's own POST *join* the
+    job the enrich run already started instead of paying for a second one.
+    """
+    return f"property_ai_analysis:{property_id}:{provider}"
+
+
+def _property_ai_job(property_id: int, provider: str, existing_analysis=None):
+    """Build the analysis closure for one (property, provider).
+
+    A factory rather than an inline `def` because two callers need it now: the
+    endpoint below, and the enrichment job that chains it. It captures
+    `property_id`, `provider` and `existing_analysis` -- three plain values --
+    and reaches nothing from `flask.request`, which is what lets a background
+    worker run it.
+    """
+    from models import Property
+    from services.property_ai_service import PropertyAIService
+
+    is_enrichment = existing_analysis is not None
+
+    def _run():
+        prop_local = db.session.get(Property, property_id)
+        if not prop_local:
+            return {"success": False, "error": "Property not found"}
+
+        service = PropertyAIService()
+        result = service.analyze_property_structured(prop_local, provider=provider)
+
+        if not result or result.get("status") != "success":
+            return {
+                "success": False,
+                "error": (result.get("error") if isinstance(result, dict) else None)
+                or "Analysis failed",
+                "failure_kind": result.get("failure_kind")
+                if isinstance(result, dict)
+                else None,
+            }
+
+        new_analysis = result.get("structured_analysis") or {}
+
+        final = new_analysis
+        if (
+            is_enrichment
+            and isinstance(existing_analysis, dict)
+            and isinstance(new_analysis, dict)
+        ):
+            merged = dict(existing_analysis)
+            merged.update(new_analysis)
+            final = merged
+
+        # Claude remains the primary analysis stored on the Property
+        # record itself (legacy parity). Staged, not committed: the
+        # variant upsert below has its own SAVEPOINT-scoped recovery
+        # now (#190 review round 4, finding 4), so it no longer needs
+        # this change committed first to protect it from its own
+        # rollback -- _execute_job commits this together with the
+        # job's own terminal CAS write, once, so a reap racing this
+        # job's execution rolls both back together.
+        if provider == "claude":
+            prop_local.ai_analysis = final
+
+        # Store per-provider analysis for side-by-side comparison in the
+        # UI. _upsert_property_ai_variant is an update-or-insert that
+        # recovers from a lost race against the unique constraint
+        # migration 017 adds, rather than the old query-then-insert that
+        # let two concurrent writers both see "no row" and both insert.
+        # It stages its own write too -- no commit or rollback here
+        # either, since its own SAVEPOINT-based recovery already leaves
+        # the session valid for whatever failed for a reason other than
+        # the recognized race.
+        try:
+            _upsert_property_ai_variant(
+                property_id,
+                provider,
+                model=result.get("model"),
+                analysis=final,
+                price_at_analysis=prop_local.price,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to store AI analysis variant for property %s (%s): %s",
+                property_id,
+                provider,
+                e,
+            )
+
+        return {
+            "success": True,
+            "analysis": final,
+            "provider": provider,
+            "model": result.get("model"),
+            "is_enrichment": is_enrichment,
+        }
+
+    return _run
+
+
+def _ai_chain_providers() -> tuple:
+    """Which providers one Enrich press should analyse with.
+
+    Both run on the owner's subscription through `tools/ai_bridge.py`, and
+    `AI_BRIDGE_TOKEN` is what makes either of them possible:
+    `services/anthropic_service.py` and `services/openai_service.py` each
+    refuse without it and `services/subscription_transport.py` fails closed.
+    So an unset token chains *nothing* rather than queueing two jobs that can
+    only fail -- a queued job that cannot succeed is a failure wearing a
+    pending job's clothes.
+
+    `openai_configured` in `routes/main_routes.py` and twice below is this
+    same expression under a narrower name: it gates the ChatGPT tab, but the
+    token gates Claude just as much.
+    """
+    from config import Config
+
+    if not bool(getattr(Config, "AI_BRIDGE_TOKEN", None)):
+        return ()
+    return ("claude", "openai")
+
+
+def _start_property_ai(property_id: int) -> dict:
+    """Start the analyses an Enrich press promises. Never fails its run.
+
+    Called from *inside* the enrichment job and only after
+    `enrich_property` has committed: the analysis reads the numbers that run
+    has just written, so starting it any earlier analyses the previous state.
+
+    Returns `{provider: job_id}` for the providers actually started. A
+    provider that could not be started is **absent**, not present with a
+    null: "no job" and "a job that failed" are different facts, and the page
+    reading this must not be able to poll an id that names nothing (#98).
+
+    `JobAlreadyActive` is an ordinary outcome here, not an error -- the page
+    may already have asked for the same analysis, and the dedupe key doing
+    its job is the point.
+    """
+    from services.background_jobs import JobAlreadyActive
+
+    started: dict = {}
+    for provider in _ai_chain_providers():
+        try:
+            kwargs = {
+                "job_type": "property_ai_analysis",
+                "meta": {"property_id": property_id, "provider": provider},
+                "dedupe_key": _property_ai_dedupe_key(property_id, provider),
+            }
+            job_fn = _property_ai_job(property_id, provider)
+            if _should_run_sync():
+                job = _run_sync(job_fn, **kwargs)
+                job_id = (job or {}).get("id")
+            else:
+                job_id = _enqueue(job_fn, **kwargs)
+            if job_id:
+                started[provider] = job_id
+        except JobAlreadyActive as exc:
+            logger.info(
+                "The %s analysis for property %s was already running; joining %s",
+                provider,
+                property_id,
+                getattr(exc, "job_id", None),
+            )
+            if getattr(exc, "job_id", None):
+                started[provider] = exc.job_id
+        except Exception as e:
+            logger.warning(
+                "Could not start the %s analysis for property %s after enrichment: %s",
+                provider,
+                property_id,
+                e,
+            )
+    return started
+
+
 @api_bp.route("/property/<int:property_id>/analyze/structured", methods=["POST"])
 @limiter.limit("3 per 5 minutes")
 def analyze_universal_property_structured(property_id: int):
@@ -873,7 +1068,6 @@ def analyze_universal_property_structured(property_id: int):
     try:
         from models import Property
         from services.background_jobs import EnqueueOutcomeUnknown
-        from services.property_ai_service import PropertyAIService
 
         prop = db.get_or_404(Property, property_id)
 
@@ -888,89 +1082,9 @@ def analyze_universal_property_structured(property_id: int):
         else:
             provider = "claude"
         existing_analysis = request_data.get("existing_analysis")
-        is_enrichment = existing_analysis is not None
 
-        def _run():
-            prop_local = db.session.get(Property, property_id)
-            if not prop_local:
-                return {"success": False, "error": "Property not found"}
-
-            service = PropertyAIService()
-            result = service.analyze_property_structured(prop_local, provider=provider)
-
-            if not result or result.get("status") != "success":
-                return {
-                    "success": False,
-                    "error": (result.get("error") if isinstance(result, dict) else None)
-                    or "Analysis failed",
-                    "failure_kind": result.get("failure_kind")
-                    if isinstance(result, dict)
-                    else None,
-                }
-
-            new_analysis = result.get("structured_analysis") or {}
-
-            final = new_analysis
-            if (
-                is_enrichment
-                and isinstance(existing_analysis, dict)
-                and isinstance(new_analysis, dict)
-            ):
-                merged = dict(existing_analysis)
-                merged.update(new_analysis)
-                final = merged
-
-            # Claude remains the primary analysis stored on the Property
-            # record itself (legacy parity). Staged, not committed: the
-            # variant upsert below has its own SAVEPOINT-scoped recovery
-            # now (#190 review round 4, finding 4), so it no longer needs
-            # this change committed first to protect it from its own
-            # rollback -- _execute_job commits this together with the
-            # job's own terminal CAS write, once, so a reap racing this
-            # job's execution rolls both back together.
-            if provider == "claude":
-                prop_local.ai_analysis = final
-
-            # Store per-provider analysis for side-by-side comparison in the
-            # UI. _upsert_property_ai_variant is an update-or-insert that
-            # recovers from a lost race against the unique constraint
-            # migration 017 adds, rather than the old query-then-insert that
-            # let two concurrent writers both see "no row" and both insert.
-            # It stages its own write too -- no commit or rollback here
-            # either, since its own SAVEPOINT-based recovery already leaves
-            # the session valid for whatever failed for a reason other than
-            # the recognized race.
-            try:
-                _upsert_property_ai_variant(
-                    property_id,
-                    provider,
-                    model=result.get("model"),
-                    analysis=final,
-                    price_at_analysis=prop_local.price,
-                )
-            except Exception as e:
-                logger.warning(
-                    "Failed to store AI analysis variant for property %s (%s): %s",
-                    property_id,
-                    provider,
-                    e,
-                )
-
-            return {
-                "success": True,
-                "analysis": final,
-                "provider": provider,
-                "model": result.get("model"),
-                "is_enrichment": is_enrichment,
-            }
-
-        # The observed #176 failure: a redeploy interrupted this exact job
-        # for (property, provider), and resubmitting it must reuse the
-        # in-flight run rather than start a second one racing to write the
-        # same PropertyAiAnalysisVariant row. Also what keeps a `?sync=1`
-        # call from running alongside a live async one for the same pair
-        # (#190 review round 3, finding 4).
-        dedupe_key = f"property_ai_analysis:{prop.id}:{provider}"
+        _run = _property_ai_job(property_id, provider, existing_analysis)
+        dedupe_key = _property_ai_dedupe_key(prop.id, provider)
 
         if _should_run_sync():
             from services.background_jobs import JobAlreadyActive
@@ -2124,9 +2238,17 @@ def manual_property_enrichment(property_id: int):
                 recalc_scoring=True,
             )
             if ok:
+                # The press promised an analysis, so the *server* starts it
+                # (#434). `enrich_property` has committed by the time it
+                # returns, so the analyses read what this run just wrote --
+                # and starting them here rather than in the page means a
+                # closed tab, a reload or an impatient second press no longer
+                # loses them. The page still POSTs for itself; the dedupe key
+                # makes that POST join these jobs instead of paying twice.
                 return {
                     "success": True,
                     "message": "Property enriched successfully with Google API data",
+                    "analysis_jobs": _start_property_ai(property_id),
                 }
 
             # Neither a refused API nor a bad address: the address resolved,
