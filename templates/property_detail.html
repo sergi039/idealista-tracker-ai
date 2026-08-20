@@ -492,6 +492,162 @@
             </div>
         </div>
 
+        {# The conversation behind the listing (#430). One reverse-chronological
+           feed rather than a notes list beside a contacts list: the material is
+           causally ordered -- asked, answered, promised, decided -- and two
+           lists make the reader re-interleave by date what a feed already
+           says. Verdict entries appear here too, read-only: they are the
+           history of the decision block above, and a control that could edit
+           them could edit the log into disagreement with the state it
+           describes. #}
+        {% set _channel_icons = {'whatsapp': 'fa-brands fa-whatsapp', 'email': 'fas fa-envelope',
+                                 'portal': 'fas fa-comments', 'phone': 'fas fa-phone',
+                                 'visit': 'fas fa-person-walking', 'other': 'fas fa-circle-dot'} %}
+        <div class="card mb-4" id="property-timeline">
+            <div class="card-header py-2">
+                <h2 class="h6 mb-0"><i class="fas fa-clock-rotate-left me-2"></i>{{ t('timeline_title') }}</h2>
+            </div>
+            <div class="card-body">
+                {% if not activity_timeline %}
+                    <p class="text-muted">{{ t('timeline_empty') }}</p>
+                {% else %}
+                    <ul class="list-unstyled mb-3">
+                        {% for entry in activity_timeline %}
+                            <li class="d-flex gap-3 pb-3 mb-3 border-bottom">
+                                <div class="text-muted pt-1" style="min-width: 1.5rem;">
+                                    {% if entry.kind == 'contact' %}
+                                        <i class="{{ _channel_icons.get(entry.channel, 'fas fa-circle-dot') }}"></i>
+                                    {% elif entry.kind == 'verdict' %}
+                                        <i class="fas fa-gavel"></i>
+                                    {% else %}
+                                        <i class="fas fa-pen"></i>
+                                    {% endif %}
+                                </div>
+                                <div class="flex-grow-1">
+                                    <div class="small text-body-secondary mb-1">
+                                        {{ entry.happened_at.strftime('%Y-%m-%d') }}
+                                        {% if entry.kind == 'contact' %}
+                                            · {{ t('channel_' ~ entry.channel ~ '_label') }}
+                                            {%- if entry.counterpart %} · {{ entry.counterpart }}{% endif %}
+                                        {% elif entry.kind == 'verdict' %}
+                                            · {{ t('timeline_verdict_entry') }}
+                                        {% endif %}
+                                        {% if owner_review_was_edited(entry) %}
+                                            <span class="fst-italic">({{ t('timeline_edited') }})</span>
+                                        {% endif %}
+                                    </div>
+
+                                    {% if entry.kind == 'verdict' %}
+                                        {% set _snap = entry.snapshot or {} %}
+                                        <div>
+                                            <span class="badge bg-{{ _decision_class.get(_snap.get('decision'), 'body-tertiary text-body-secondary') }}">
+                                                {{ t(owner_decision_label_key(_snap.get('decision'))) }}
+                                            </span>
+                                            {% if _snap.get('reason') %}<span class="ms-1">{{ _snap.get('reason') }}</span>{% endif %}
+                                        </div>
+                                        {% if _snap.get('action') %}
+                                            <div class="small text-body-secondary">
+                                                {{ _snap.get('action') }}{% if _snap.get('due_on') %} — {{ t('next_action_due') }} {{ _snap.get('due_on') }}{% endif %}
+                                            </div>
+                                        {% endif %}
+                                    {% else %}
+                                        {% if entry.asked %}
+                                            <div class="text-body-secondary">
+                                                <i class="fas fa-arrow-right me-1"></i>{{ entry.asked }}
+                                            </div>
+                                        {% endif %}
+                                        {% if entry.body %}
+                                            <div>{{ entry.body }}</div>
+                                        {% endif %}
+
+                                        <details class="mt-1">
+                                            <summary class="small text-body-secondary">{{ t('edit') }}</summary>
+                                            <form method="POST" class="row g-2 mt-1"
+                                                  action="{{ url_for('main.edit_activity', property_id=property.id, entry_id=entry.id) }}">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                                {% if entry.kind == 'contact' %}
+                                                    <div class="col-6 col-md-3">
+                                                        <select class="form-select form-select-sm" name="channel">
+                                                            {% for _c in activity_channels %}
+                                                                <option value="{{ _c }}" {{ 'selected' if entry.channel == _c }}>{{ t('channel_' ~ _c ~ '_label') }}</option>
+                                                            {% endfor %}
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-6 col-md-4">
+                                                        <input type="text" class="form-control form-control-sm" name="counterpart"
+                                                               value="{{ entry.counterpart or '' }}" placeholder="{{ t('timeline_counterpart') }}"/>
+                                                    </div>
+                                                    <div class="col-12 col-md-5">
+                                                        <input type="text" class="form-control form-control-sm" name="asked"
+                                                               value="{{ entry.asked or '' }}" placeholder="{{ t('timeline_asked') }}"/>
+                                                    </div>
+                                                {% endif %}
+                                                <div class="col-12">
+                                                    <input type="text" class="form-control form-control-sm" name="body"
+                                                           value="{{ entry.body or '' }}"/>
+                                                </div>
+                                                <div class="col-12 d-flex gap-2">
+                                                    <button type="submit" name="action" value="save"
+                                                            class="btn btn-sm btn-primary">{{ t('timeline_save') }}</button>
+                                                    <button type="submit" name="action" value="delete"
+                                                            class="btn btn-sm btn-outline-danger">{{ t('timeline_delete') }}</button>
+                                                </div>
+                                            </form>
+                                        </details>
+                                    {% endif %}
+                                </div>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                {% endif %}
+
+                <form method="POST" action="{{ url_for('main.add_activity', property_id=property.id) }}"
+                      class="row g-2 align-items-end" id="add-activity">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <div class="col-6 col-md-2">
+                        <label class="form-label small mb-1" for="activity-kind">&nbsp;</label>
+                        <select class="form-select form-select-sm" id="activity-kind" name="kind">
+                            <option value="note">{{ t('timeline_add_note') }}</option>
+                            <option value="contact">{{ t('timeline_add_contact') }}</option>
+                        </select>
+                    </div>
+                    <div class="col-6 col-md-2">
+                        <label class="form-label small mb-1" for="activity-when">{{ t('timeline_when') }}</label>
+                        <input type="date" class="form-control form-control-sm" id="activity-when" name="happened_on"/>
+                    </div>
+                    <div class="col-6 col-md-2 activity-contact-only">
+                        <label class="form-label small mb-1" for="activity-channel">{{ t('timeline_channel') }}</label>
+                        <select class="form-select form-select-sm" id="activity-channel" name="channel">
+                            {% for _c in activity_channels %}
+                                <option value="{{ _c }}">{{ t('channel_' ~ _c ~ '_label') }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-6 col-md-3 activity-contact-only">
+                        <label class="form-label small mb-1" for="activity-counterpart">{{ t('timeline_counterpart') }}</label>
+                        <input type="text" class="form-control form-control-sm" id="activity-counterpart"
+                               name="counterpart" placeholder="{{ t('timeline_counterpart_placeholder') }}"/>
+                    </div>
+                    <div class="col-12 activity-contact-only">
+                        <label class="form-label small mb-1" for="activity-asked">{{ t('timeline_asked') }}</label>
+                        <input type="text" class="form-control form-control-sm" id="activity-asked"
+                               name="asked" placeholder="{{ t('timeline_asked_placeholder') }}"/>
+                    </div>
+                    <div class="col-12 col-md-9">
+                        <label class="form-label small mb-1" for="activity-body">
+                            <span class="activity-contact-only">{{ t('timeline_answer') }}</span>
+                            <span class="activity-note-only">{{ t('timeline_add_note') }}</span>
+                        </label>
+                        <input type="text" class="form-control form-control-sm" id="activity-body" name="body"
+                               placeholder="{{ t('timeline_note_placeholder') }}"/>
+                    </div>
+                    <div class="col-12 col-md-3">
+                        <button type="submit" class="btn btn-sm btn-primary w-100">{{ t('timeline_add') }}</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         {# The parcel behind the listing (#430). Under the decision block
            because a cadastral reference is evidence for that decision -- the
            shape metrics are what rejected 774 -- and above Overview because
@@ -3320,5 +3476,31 @@ async function generateChatGPTAnalysis(propertyId) {
         return { ok: false, status: 0 };
     }
 }
+
+// The add-entry form hides its contact-only fields for a note. It lives in
+// this block rather than in a <script> tag beside the form because the page
+// has exactly one script element and tests/test_issue_23_xss_and_prompt_injection.py
+// extracts it by index -- a second tag makes that harness read the wrong one.
+// It degrades honestly: with no JavaScript every field is visible and the form
+// still posts, because `kind` decides what the route reads.
+(function () {
+    var form = document.getElementById('add-activity');
+    var kind = document.getElementById('activity-kind');
+    // Both, not just the form: the XSS/render harnesses execute this block in
+    // node against a DOM stub, where one lookup can answer and the other
+    // cannot, and an unguarded listener there fails the whole extraction.
+    if (!form || !kind || !form.querySelectorAll) { return; }
+    function paintActivityFields() {
+        var isContact = kind.value === 'contact';
+        form.querySelectorAll('.activity-contact-only').forEach(function (el) {
+            el.style.display = isContact ? '' : 'none';
+        });
+        form.querySelectorAll('.activity-note-only').forEach(function (el) {
+            el.style.display = isContact ? 'none' : '';
+        });
+    }
+    kind.addEventListener('change', paintActivityFields);
+    paintActivityFields();
+})();
 </script>
 {% endblock %}

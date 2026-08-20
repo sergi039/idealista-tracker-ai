@@ -2,7 +2,7 @@ import logging
 import math
 import re
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 import hashlib
 
@@ -1629,6 +1629,10 @@ def property_detail(property_id):
             # why `owner_review.read_decision` stays a pure reader and this is
             # a separate call (services/owner_review.py).
             review_history_out_of_sync=owner_review.history_out_of_sync(prop),
+            # The conversation, newest first. One query for the page; the list
+            # never asks for this.
+            activity_timeline=owner_review.timeline(prop),
+            activity_channels=owner_review.CHANNELS,
             sea_view_verdict=sea_view_service.read_verdict(prop),
             # One row, and only on this page: the list would run it per row.
             # It is evidence about the coordinate, next to the coordinate, and
@@ -2822,6 +2826,104 @@ def set_review(property_id):
         flash("Recorded.", "success")
     else:
         flash("Cleared: this listing is undecided again.", "success")
+    return redirect(url_for("main.property_detail", property_id=property_id))
+
+
+@main_bp.route("/properties/<int:property_id>/activity", methods=["POST"])
+def add_activity(property_id):
+    """Add a note or one contact entry to a listing's timeline.
+
+    One form with a kind toggle, because the two are the same act -- writing
+    down something that happened -- and the fields a contact carries are the
+    extra structure that act sometimes has. Two forms would mean two buttons
+    for one intention.
+
+    `happened_at` is when the exchange happened and defaults to now: an answer
+    given on the phone yesterday is recorded today, and the feed is ordered by
+    the first of those.
+    """
+    from services import owner_review as owner_review_service
+
+    prop = db.get_or_404(Property, property_id)
+    kind = (request.form.get("kind") or "").strip().lower()
+
+    happened_at = None
+    raw_when = (request.form.get("happened_on") or "").strip()
+    if raw_when:
+        try:
+            happened_at = datetime.combine(date.fromisoformat(raw_when), time(12, 0))
+        except ValueError:
+            flash("That date is not a date.", "error")
+            return redirect(url_for("main.property_detail", property_id=property_id))
+
+    try:
+        if kind == owner_review_service.KIND_NOTE:
+            owner_review_service.add_note(
+                prop, body=request.form.get("body"), happened_at=happened_at
+            )
+        elif kind == owner_review_service.KIND_CONTACT:
+            owner_review_service.add_contact(
+                prop,
+                channel=request.form.get("channel"),
+                counterpart=request.form.get("counterpart"),
+                asked=request.form.get("asked"),
+                body=request.form.get("body"),
+                happened_at=happened_at,
+            )
+        else:
+            flash("Unknown entry type.", "error")
+            return redirect(url_for("main.property_detail", property_id=property_id))
+    except owner_review_service.ReviewError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    flash("Recorded.", "success")
+    return redirect(url_for("main.property_detail", property_id=property_id))
+
+
+@main_bp.route(
+    "/properties/<int:property_id>/activity/<int:entry_id>", methods=["POST"]
+)
+def edit_activity(property_id, entry_id):
+    """Edit or soft-delete one entry.
+
+    The entry is fetched **by both ids**: a URL naming another property's entry
+    would otherwise edit it from this page, and the composite lookup is what
+    makes that a 404 rather than a cross-property write.
+
+    Verdict entries are refused here rather than merely hidden in the
+    template. They are the record of a decision, written beside the columns
+    they describe, and a control that could edit them could edit the log into
+    disagreement with the state it is the history of.
+    """
+    from models import PropertyActivity
+    from services import owner_review as owner_review_service
+
+    entry = PropertyActivity.query.filter_by(
+        id=entry_id, property_id=property_id
+    ).first_or_404()
+
+    action = (request.form.get("action") or "").strip().lower()
+    if action not in ("save", "delete"):
+        flash("Unknown action.", "error")
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    try:
+        if action == "delete":
+            owner_review_service.soft_delete_entry(entry)
+            flash("Removed from the timeline.", "success")
+        else:
+            owner_review_service.edit_entry(
+                entry,
+                body=request.form.get("body"),
+                asked=request.form.get("asked"),
+                counterpart=request.form.get("counterpart"),
+                channel=request.form.get("channel") or entry.channel,
+            )
+            flash("Saved.", "success")
+    except owner_review_service.ReviewError as exc:
+        flash(str(exc), "error")
+
     return redirect(url_for("main.property_detail", property_id=property_id))
 
 
