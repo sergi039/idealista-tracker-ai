@@ -813,6 +813,12 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
     # how one reaches a template that has no branch for it.
     if status not in MEASURED_STATUSES:
         known = status if status in KNOWN_STATUSES else STATUS_MISSING
+        if known == STATUS_NO_COORDINATES and origin_of(prop) is not None:
+            # The row has one now. Saying it has none is a claim about today
+            # made from a block written before the geocoder answered (codex
+            # review, 2026-08-20), and `needs_hazards` already puts such a row
+            # back in the backfill's scope.
+            known = STATUS_MISSING
         return {**base, "status": known}
 
     # And a measured block has to say where it was measured from. Treating an
@@ -895,7 +901,12 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
         # of the backfill's reach; an unknown severity scored 50 where `high`
         # scores 0 (codex review, 2026-08-20).
         measured = _safe_float(stored_item.get("origin_distance_m"))
-        if measured is None or measured < 0:
+        if measured is None or measured < 0 or measured > searched:
+            # Past the radius the block itself claims to have covered. The
+            # writer filters on exactly that, so a 10 km item beside a 6 km
+            # scan is a shape it cannot produce -- and it rendered "10.0 km"
+            # under "Scanned 6.0 km" and scored 100 (codex review,
+            # 2026-08-20).
             return _unreadable(base)
         if stored_item.get("severity") not in (
             hazard_rules.SEVERITY_HIGH,

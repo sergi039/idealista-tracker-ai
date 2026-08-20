@@ -404,6 +404,45 @@ class TestTheRulesTable:
             )
             assert verdict is not None, value
 
+    def test_an_oil_tank_may_be_holding_olive_oil(self):
+        """`way/550880773` and `way/550880775` are olive-oil tanks inside SCA
+        San Antonio. `content=oil` is out; a tank that says `fuel`, `diesel`
+        or `petroleum` has said which one it holds (codex review,
+        2026-08-20)."""
+        assert (
+            hazard_rules.classify({"man_made": "storage_tank", "content": "oil"})
+            is None
+        )
+        for content in ("fuel", "diesel", "petroleum"):
+            assert hazard_rules.classify(
+                {"man_made": "storage_tank", "content": content}
+            ), content
+
+    def test_a_preserved_stack_is_not_an_operating_one(self):
+        """`node/12460849210` is *Xemeneia de l'antiga Inpacsa*, and it
+        carries no `historic` tag to refuse it by (codex review)."""
+        for name in ("Xemeneia de l'antiga Inpacsa", "Antigua chimenea"):
+            assert (
+                hazard_rules.classify({"man_made": "chimney", "name": name}) is None
+            ), name
+        live = hazard_rules.classify(
+            {"man_made": "chimney", "operator": "ArcelorMittal"}
+        )
+        assert live is not None and live.kind == "combustion_stack"
+
+    def test_the_tag_a_gas_store_carries(self):
+        """`way/885803865` is `industrial=gas_storage`, and the table had
+        every neighbouring spelling but that one (codex review)."""
+        verdict = hazard_rules.classify(
+            {"landuse": "industrial", "industrial": "gas_storage"}
+        )
+        assert verdict is not None and verdict.kind == "fuel_depot"
+        # And the works that presses olives is still not one.
+        assert (
+            hazard_rules.classify({"landuse": "industrial", "industrial": "olive_oil"})
+            is None
+        )
+
     def test_an_oil_works_may_be_pressing_olives(self):
         """`way/591673652` is *Almazara Molino de las Torres*.
 
@@ -713,6 +752,11 @@ class TestTruncationIsDisclosed:
         body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
         assert response_is_the_card(body)
         assert "element limit" in body
+        # And it does not read as a measured absence: "Nothing recognised
+        # within the radius scanned" is what a *complete* scan says (codex
+        # review, 2026-08-20).
+        assert "did not see all of them" in body
+        assert "Nothing recognised within the radius scanned" not in body
 
     def test_a_stored_null_where_a_list_belongs_still_renders(self, app, client):
         """Jinja iterates an undefined and raises on a None.
@@ -1554,6 +1598,45 @@ class TestOneAnswerInTwoLanguages:
         )
         assert score is None, why
 
+    def test_an_item_past_the_radius_the_block_claims_is_not_readable(self, app):
+        """It rendered "10.0 km" under "Scanned 6.0 km" and scored 100 (codex
+        review, 2026-08-20). The writer filters on exactly that radius."""
+        prop = _prop(title="ItemOutsideScan")
+        prop.enrichment = {
+            "hazards": {
+                "status": hazard_service.STATUS_OK,
+                "item_count": 1,
+                "truncated": False,
+                "searched_m": 5984.0,
+                "origin": {"lat": XIVARES[0], "lon": XIVARES[1]},
+                "items": [{**_ITEM, "origin_distance_m": 10000}],
+            }
+        }
+        db.session.commit()
+        verdict = hazard_service.read_verdict(prop)
+        assert verdict["status"] == hazard_service.STATUS_MISSING
+        assert verdict["measured"] is False
+
+    def test_a_block_written_before_the_row_was_located_is_not_an_answer(self, app):
+        """A stored `no_coordinates` on a row that now has one says the
+        listing has no coordinate, which is a claim about today made from
+        before the geocoder answered (codex review, 2026-08-20)."""
+        prop = _prop(title="GainedCoordinate")
+        prop.enrichment = {"hazards": {"status": hazard_service.STATUS_NO_COORDINATES}}
+        db.session.commit()
+        verdict = hazard_service.read_verdict(prop)
+        assert verdict["status"] == hazard_service.STATUS_MISSING
+        assert hazard_service.needs_hazards(prop) is True
+
+        # ...and a row that still has none keeps the honest answer.
+        prop.location_lat = None
+        prop.location_lon = None
+        db.session.commit()
+        assert (
+            hazard_service.read_verdict(prop)["status"]
+            == hazard_service.STATUS_NO_COORDINATES
+        )
+
     def test_a_radius_larger_than_the_writer_can_store_is_not_a_radius(self, app):
         """`1e300` cleared every horizon the scorer checks and turned an empty
         scan into a clean 100 (codex review, 2026-08-20)."""
@@ -2155,6 +2238,11 @@ class TestTheSurfaces:
         body = response.get_data(as_text=True)
         assert "Industrial neighbours" in body
         assert "Not scanned yet" in body
+        # ...and nothing beneath it describes a measurement. The limits
+        # paragraph asserts "OpenStreetMap says a facility exists", directly
+        # under "Not scanned yet" (codex review, 2026-08-20).
+        assert "says a facility exists" not in body
+        assert "Straight-line distance" not in body
 
     def test_the_property_page_names_the_facility_and_its_bearing(
         self, app, client, real_fetch

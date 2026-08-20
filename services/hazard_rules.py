@@ -177,6 +177,9 @@ class HazardVerdict:
 # `INDRA (El Tallerón)`, `Esmena / Mecalux`, `Industrias Metalicas Ruiz`,
 # `EBHISA`, or any of the eight `Polígono Industrial ...` estates.
 # Words that say a *depuradora* purifies shellfish rather than sewage.
+# Words that say a chimney is kept rather than used.
+_PRESERVED_STACK = ("antigua", "antiga", "antiguo", "vella", "vieja")
+
 _SHELLFISH = ("marisco", "mariscos", "cetarea", "cetaria", "moluscos", "mejillon")
 
 # ...and words that say a *central térmica* is solar. A concentrated-solar
@@ -281,6 +284,8 @@ _INDUSTRIAL_EVIDENCE: Dict[str, Tuple] = {
     # two measured true positives to lose.
     "oil": ("fuel_depot", SEVERITY_HIGH, _EDIBLE_OIL),
     "oil_tank_farm": ("fuel_depot", SEVERITY_HIGH),
+    # `way/885803865` carries it, beside `content=gas` (codex review).
+    "gas_storage": ("fuel_depot", SEVERITY_HIGH),
     "gas": ("fuel_depot", SEVERITY_HIGH),
     "chemical": ("chemical_works", SEVERITY_HIGH),
     "petrochemical": ("chemical_works", SEVERITY_HIGH),
@@ -361,7 +366,12 @@ _TANK_CONTENTS: Dict[str, Tuple[str, str]] = {
     "butane": ("lpg_storage", SEVERITY_HIGH),
     "lng": ("lng_terminal", SEVERITY_HIGH),
     "cng": ("lpg_storage", SEVERITY_HIGH),
-    "oil": ("fuel_depot", SEVERITY_HIGH),
+    # Not `oil` on its own: `way/550880773` and `way/550880775` are
+    # olive-oil tanks inside SCA San Antonio (`industrial=olive_oil`), and the
+    # word means both in Spain -- the same ambiguity that took `product=oil`
+    # out of the table and put a guard on `industrial=oil` (codex review,
+    # 2026-08-20). A tank that says `fuel`, `diesel` or `petroleum` has said
+    # which one it holds.
     "fuel": ("fuel_depot", SEVERITY_HIGH),
     "diesel": ("fuel_depot", SEVERITY_HIGH),
     "gasoline": ("fuel_depot", SEVERITY_HIGH),
@@ -743,6 +753,13 @@ def _tag_verdict(tags: Dict[str, Any]) -> Optional[HazardVerdict]:
         # exactly that. The two that do qualify carry `operator=ArcelorMittal`
         # and collapse into that facility rather than standing as hazards of
         # their own.
+        # `antigua`/`antiga` names a preserved stack, and Spain and Catalonia
+        # are full of them -- `node/12460849210` is *Xemeneia de l'antiga
+        # Inpacsa*, which carries no `historic` tag to refuse it by (codex
+        # review, 2026-08-20).
+        name_tokens = _name_tokens(fold(tags.get("name")))
+        if any(_name_says(name_tokens, word) for word in _PRESERVED_STACK):
+            return None
         if tags.get("operator") or tags.get("name"):
             return HazardVerdict(
                 kind="combustion_stack",

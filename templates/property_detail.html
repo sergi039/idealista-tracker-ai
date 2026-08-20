@@ -1936,7 +1936,12 @@
                 {% elif not hazards.measured %}
                     <div class="small text-body-secondary">{{ t('hazards_missing') }}</div>
                 {% elif not hazards['items'] %}
-                    <div class="small text-body-secondary">{{ t('hazards_none') }}</div>
+                    {# A scan that came back short and found nothing is not a
+                       measured absence, and "Nothing recognised" is exactly
+                       how that reads (codex review, 2026-08-20). #}
+                    <div class="small text-body-secondary">
+                        {{ t('hazards_none') if hazards.complete else t('hazards_none_incomplete') }}
+                    </div>
                 {% else %}
                     {% for item in hazards['items'] %}
                         <div class="d-flex justify-content-between align-items-start small mb-2">
@@ -1990,8 +1995,14 @@
                         <div class="small text-warning">{{ t('hazards_truncated') }}.</div>
                     {% endif %}
                 {% endif %}
-                <div class="small text-body-secondary mt-2">{{ t('hazards_straight_line') }}.</div>
-                <div class="small text-body-secondary mt-1">{{ t('hazards_limits') }}</div>
+                {# Both lines describe a measurement, so neither is rendered
+                   over a row that has none: "OpenStreetMap says a facility
+                   exists" under "Not scanned yet" is the card asserting the
+                   opposite of what it just said (codex review, 2026-08-20). #}
+                {% if hazards.measured %}
+                    <div class="small text-body-secondary mt-2">{{ t('hazards_straight_line') }}.</div>
+                    <div class="small text-body-secondary mt-1">{{ t('hazards_limits') }}</div>
+                {% endif %}
             </div>
         </div>
 
