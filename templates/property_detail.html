@@ -560,6 +560,30 @@
                                             <div>{{ entry.body }}</div>
                                         {% endif %}
 
+                                        {% for file in (attachments_by_entry.get(entry.id) or []) %}
+                                            {# A chip per file. The link goes to the
+                                               row's own id -- never to a path -- and
+                                               the route decides from the SNIFFED type
+                                               whether a browser may draw it or must
+                                               download it (services/attachments.py). #}
+                                            <div class="mt-1">
+                                                <a class="badge bg-body-tertiary text-body text-decoration-none border"
+                                                   href="{{ url_for('main.download_attachment', property_id=property.id, attachment_id=file.id) }}">
+                                                    <i class="fas {{ 'fa-image' if file.kind == 'photo' else 'fa-file-pdf' }} me-1"></i>
+                                                    {{ file.original_filename or ('attachment-' ~ file.id) }}
+                                                    <span class="text-body-secondary ms-1">{{ attachment_size(file.size_bytes) }}</span>
+                                                </a>
+                                                <form method="POST" class="d-inline"
+                                                      action="{{ url_for('main.delete_attachment', property_id=property.id, attachment_id=file.id) }}">
+                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                                    <button type="submit" class="btn btn-link btn-sm p-0 ms-1 text-body-secondary"
+                                                            title="{{ t('attachment_remove') }}">
+                                                        <i class="fas fa-xmark"></i>
+                                                    </button>
+                                                </form>
+                                            </div>
+                                        {% endfor %}
+
                                         <details class="mt-1">
                                             <summary class="small text-body-secondary">{{ t('edit') }}</summary>
                                             <form method="POST" class="row g-2 mt-1"
@@ -601,8 +625,13 @@
                     </ul>
                 {% endif %}
 
+                {# multipart, because this form carries the file too: the ficha
+                   catastral belongs to the exchange that delivered it, not to
+                   the listing in general, so there is one control and not a
+                   second upload box beside it. #}
                 <form method="POST" action="{{ url_for('main.add_activity', property_id=property.id) }}"
-                      class="row g-2 align-items-end" id="add-activity">
+                      class="row g-2 align-items-end" id="add-activity"
+                      enctype="multipart/form-data">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                     <div class="col-6 col-md-2">
                         <label class="form-label small mb-1" for="activity-kind">&nbsp;</label>
@@ -640,6 +669,12 @@
                         </label>
                         <input type="text" class="form-control form-control-sm" id="activity-body" name="body"
                                placeholder="{{ t('timeline_note_placeholder') }}"/>
+                    </div>
+                    <div class="col-12 col-md-9">
+                        <label class="form-label small mb-1" for="activity-file">{{ t('attachment_add') }}</label>
+                        <input type="file" class="form-control form-control-sm" id="activity-file"
+                               name="attachment" accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.heic"/>
+                        <div class="form-text small">{{ t('attachment_hint') }}</div>
                     </div>
                     <div class="col-12 col-md-3">
                         <button type="submit" class="btn btn-sm btn-primary w-100">{{ t('timeline_add') }}</button>

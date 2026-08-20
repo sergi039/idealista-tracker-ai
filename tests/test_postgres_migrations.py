@@ -63,6 +63,7 @@ PRICE_AT_ANALYSIS_MIGRATION = "019_add_price_at_analysis"
 HIDDEN_SUBSCRIPTION_MIGRATION = "020_add_search_profile_is_hidden"
 OWNER_REVIEW_MIGRATION = "021_add_property_review_and_activity"
 CADASTRAL_MIGRATION = "022_add_property_cadastral_reference"
+ATTACHMENT_MIGRATION = "023_create_property_attachment"
 PROPERTY_VARIANT_UNIQUE_CONSTRAINT = (
     "ux_property_ai_analysis_variants_property_provider"
 )
@@ -278,6 +279,7 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
             HIDDEN_SUBSCRIPTION_MIGRATION,
             OWNER_REVIEW_MIGRATION,
             CADASTRAL_MIGRATION,
+            ATTACHMENT_MIGRATION,
         ]
 
         # Two *identified* subscriptions may now share the label...
@@ -1501,6 +1503,7 @@ def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
             HIDDEN_SUBSCRIPTION_MIGRATION,
             OWNER_REVIEW_MIGRATION,
             CADASTRAL_MIGRATION,
+            ATTACHMENT_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -1688,6 +1691,7 @@ def test_017_deduplicates_existing_land_variants_and_adds_the_unique_constraint(
             HIDDEN_SUBSCRIPTION_MIGRATION,
             OWNER_REVIEW_MIGRATION,
             CADASTRAL_MIGRATION,
+            ATTACHMENT_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -1996,5 +2000,67 @@ def test_021_cannot_attach_an_exchange_to_another_property(postgres_url):
             )
         }
         assert "uq_property_activity_id_property" in unique_constraints
+    finally:
+        engine.dispose()
+
+
+def test_023_cannot_attach_a_file_to_another_propertys_exchange(postgres_url):
+    """The composite key, exercised where it is actually enforced.
+
+    SQLite does not check foreign keys unless the pragma is set per connection,
+    so the suite's own engine cannot refuse this insert; the model-side test in
+    tests/test_property_attachments.py checks only that the pair is declared.
+    This is the one that proves the database refuses it -- an attachment on one
+    property that names another property's exchange would otherwise be
+    reachable, and editable, from a page it does not belong to.
+    """
+    from migrations.runner import run_migrations
+
+    engine = create_engine(postgres_url)
+    try:
+        run_migrations(engine)
+
+        with engine.begin() as connection:
+            mine = _insert_property(connection, source_email_id="mine")
+            theirs = _insert_property(connection, source_email_id="theirs")
+            their_entry = connection.execute(
+                text(
+                    "INSERT INTO property_activity "
+                    "(property_id, kind, happened_at, body) "
+                    "VALUES (:p, 'note', NOW(), 'theirs') RETURNING id"
+                ),
+                {"p": theirs},
+            ).scalar_one()
+
+        def insert(property_id, activity_id, sha):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO property_attachment "
+                        "(property_id, activity_id, content_sha256, storage_path, "
+                        " content_type, size_bytes, kind) VALUES "
+                        "(:p, :a, :s, 'aa/bb/x.pdf', 'application/pdf', 10, 'document')"
+                    ),
+                    {"p": property_id, "a": activity_id, "s": sha},
+                )
+
+        with pytest.raises(IntegrityError):
+            insert(mine, their_entry, "a" * 64)
+
+        # The same file against its own property's exchange is fine, and so is
+        # one filed against the listing with no exchange at all -- MATCH SIMPLE
+        # is what makes the optional half work.
+        insert(theirs, their_entry, "b" * 64)
+        insert(mine, None, "c" * 64)
+
+        for bad_sha in ("nothex", "A" * 64, "a" * 63):
+            with pytest.raises(IntegrityError):
+                insert(mine, None, bad_sha)
+
+        sql = (MIGRATIONS_DIR / f"{ATTACHMENT_MIGRATION}.sql").read_text(
+            encoding="utf-8"
+        )
+        with engine.begin() as connection:
+            connection.exec_driver_sql(sql)
     finally:
         engine.dispose()
