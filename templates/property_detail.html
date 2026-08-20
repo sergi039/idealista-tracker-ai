@@ -383,73 +383,49 @@
 
 <div class="row" data-property-id="{{ property.id }}">
     <div class="col-lg-8">
-        {# What the owner decided, and what is still outstanding (#430).
-           A section rather than a tab: this is the story of the listing, and
-           the six entries a real thread carries do not earn a click to reach.
-           It sits above Overview because it is what the page is opened to find
-           out, and because a rejected listing should say so before its score
-           does. #}
+        {# What the owner decided, and what is still outstanding (#430) --
+           one line, not a card. The listing is the point of this page: its
+           price, description and measurements come first, and the owner's own
+           verdict is a label on them, not a form above them (owner verdict on
+           the first layout: it buried the object under controls). The line
+           stays at the top because a rejected listing must say so before its
+           score does -- the ticket's own requirement -- and the form costs a
+           click, which is the right price for something touched once per
+           listing. #}
         {% set _decision = owner_decision_for(property) %}
         {% set _action = owner_action_for(property) %}
         {% set _decision_class = {'interested': 'success', 'waiting': 'warning', 'rejected': 'danger'} %}
-        <div class="card mb-4" id="owner-review">
-            <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
-                <h2 class="h6 mb-0">
-                    <i class="fas fa-gavel me-2"></i>{{ t('review_section_title') }}
-                </h2>
-                <span class="d-inline-flex align-items-center gap-2">
-                    {# The decided states are badged in colour; `undecided` is
-                       badged too, but neutrally -- it is a real state, not an
-                       empty space, and the one thing it must never look like
-                       is a rejection. #}
-                    <span class="badge bg-{{ _decision_class.get(_decision.state, 'body-tertiary text-body-secondary') }}">
-                        {{ t(owner_decision_label_key(_decision.state)) }}
-                    </span>
-                    {% if _action.state != 'none' %}
-                        <span class="badge bg-{{ 'danger' if _action.state == 'overdue' else 'info' }}">
-                            {{ t(owner_action_label_key(_action.state)) }}
-                        </span>
-                    {% endif %}
+        <details class="mb-3" id="owner-review">
+            <summary class="d-inline-flex flex-wrap align-items-center gap-2" style="cursor: pointer;">
+                <span class="badge bg-{{ _decision_class.get(_decision.state, 'body-tertiary text-body-secondary') }}">
+                    {{ t(owner_decision_label_key(_decision.state)) }}
                 </span>
-            </div>
-            <div class="card-body">
+                {% if _decision.reason %}
+                    <span class="small">{{ _decision.reason|truncate(140, True) }}</span>
+                {% endif %}
+                {% if _action.action %}
+                    <span class="badge bg-{{ 'danger' if _action.state == 'overdue' else 'info' }}">
+                        {{ t(owner_action_label_key(_action.state)) }}{% if _action.due_on %} · {{ _action.due_on.strftime('%Y-%m-%d') }}{% endif %}
+                    </span>
+                    <span class="small text-body-secondary">{{ _action.action|truncate(60, True) }}</span>
+                {% endif %}
+                <span class="small text-body-secondary"><i class="fas fa-pen ms-1"></i> {{ t('edit') }}</span>
+            </summary>
+            <div class="card card-body mt-2">
                 {% if review_history_out_of_sync %}
                     {# A disclosure, not a guarantee: direct SQL is a supported
                        workflow here, and a column written that way leaves no
-                       entry behind. This can see that the newest entry no
-                       longer describes the row; it cannot see a transition
-                       nobody recorded, and it does not claim to. #}
+                       entry behind (services/owner_review.py). #}
                     <div class="alert alert-warning py-2 px-3 small mb-3">
                         <i class="fas fa-triangle-exclamation me-1"></i>
                         {{ t('review_history_out_of_sync') }}
                     </div>
                 {% endif %}
-
-                {% if _decision.decided %}
-                    {% if _decision.reason %}
-                        <p class="mb-2">{{ _decision.reason }}</p>
-                    {% endif %}
-                    {% if _decision.decided_at %}
-                        <p class="text-muted small mb-3">
-                            {{ t('review_decided_at') }}: {{ _decision.decided_at.strftime('%Y-%m-%d') }}
-                        </p>
-                    {% endif %}
-                {% else %}
-                    <p class="text-muted mb-3">{{ t('review_no_verdict') }}</p>
-                {% endif %}
-
-                {% if _action.action %}
-                    <p class="mb-3">
-                        <i class="fas fa-hourglass-half me-1 text-muted"></i>
-                        {{ _action.action }}
-                        {% if _action.due_on %}
-                            <span class="text-muted">
-                                — {{ t('next_action_due') }} {{ _action.due_on.strftime('%Y-%m-%d') }}
-                            </span>
-                        {% endif %}
+                {% if _decision.decided_at %}
+                    <p class="text-muted small mb-2">
+                        {{ t('review_decided_at') }}: {{ _decision.decided_at.strftime('%Y-%m-%d') }}
                     </p>
                 {% endif %}
-
                 <form method="POST" action="{{ url_for('main.set_review', property_id=property.id) }}"
                       class="row g-2 align-items-end">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
@@ -490,344 +466,7 @@
                     </div>
                 </form>
             </div>
-        </div>
-
-        {# The conversation behind the listing (#430). One reverse-chronological
-           feed rather than a notes list beside a contacts list: the material is
-           causally ordered -- asked, answered, promised, decided -- and two
-           lists make the reader re-interleave by date what a feed already
-           says. Verdict entries appear here too, read-only: they are the
-           history of the decision block above, and a control that could edit
-           them could edit the log into disagreement with the state it
-           describes. #}
-        {% set _channel_icons = {'whatsapp': 'fa-brands fa-whatsapp', 'email': 'fas fa-envelope',
-                                 'portal': 'fas fa-comments', 'phone': 'fas fa-phone',
-                                 'visit': 'fas fa-person-walking', 'other': 'fas fa-circle-dot'} %}
-        <div class="card mb-4" id="property-timeline">
-            <div class="card-header py-2">
-                <h2 class="h6 mb-0"><i class="fas fa-clock-rotate-left me-2"></i>{{ t('timeline_title') }}</h2>
-            </div>
-            <div class="card-body">
-                {% if not activity_timeline %}
-                    <p class="text-muted">{{ t('timeline_empty') }}</p>
-                {% else %}
-                    <ul class="list-unstyled mb-3">
-                        {% for entry in activity_timeline %}
-                            <li class="d-flex gap-3 pb-3 mb-3 border-bottom">
-                                <div class="text-muted pt-1" style="min-width: 1.5rem;">
-                                    {% if entry.kind == 'contact' %}
-                                        <i class="{{ _channel_icons.get(entry.channel, 'fas fa-circle-dot') }}"></i>
-                                    {% elif entry.kind == 'verdict' %}
-                                        <i class="fas fa-gavel"></i>
-                                    {% else %}
-                                        <i class="fas fa-pen"></i>
-                                    {% endif %}
-                                </div>
-                                <div class="flex-grow-1">
-                                    <div class="small text-body-secondary mb-1">
-                                        {{ entry.happened_at.strftime('%Y-%m-%d') }}
-                                        {% if entry.kind == 'contact' %}
-                                            · {{ t('channel_' ~ entry.channel ~ '_label') }}
-                                            {%- if entry.counterpart %} · {{ entry.counterpart }}{% endif %}
-                                        {% elif entry.kind == 'verdict' %}
-                                            · {{ t('timeline_verdict_entry') }}
-                                        {% endif %}
-                                        {% if owner_review_was_edited(entry) %}
-                                            <span class="fst-italic">({{ t('timeline_edited') }})</span>
-                                        {% endif %}
-                                    </div>
-
-                                    {% if entry.kind == 'verdict' %}
-                                        {% set _snap = entry.snapshot or {} %}
-                                        <div>
-                                            <span class="badge bg-{{ _decision_class.get(_snap.get('decision'), 'body-tertiary text-body-secondary') }}">
-                                                {{ t(owner_decision_label_key(_snap.get('decision'))) }}
-                                            </span>
-                                            {% if _snap.get('reason') %}<span class="ms-1">{{ _snap.get('reason') }}</span>{% endif %}
-                                        </div>
-                                        {% if _snap.get('action') %}
-                                            <div class="small text-body-secondary">
-                                                {{ _snap.get('action') }}{% if _snap.get('due_on') %} — {{ t('next_action_due') }} {{ _snap.get('due_on') }}{% endif %}
-                                            </div>
-                                        {% endif %}
-                                    {% else %}
-                                        {% if entry.asked %}
-                                            <div class="text-body-secondary">
-                                                <i class="fas fa-arrow-right me-1"></i>{{ entry.asked }}
-                                            </div>
-                                        {% endif %}
-                                        {% if entry.body %}
-                                            <div>{{ entry.body }}</div>
-                                        {% endif %}
-
-                                        {% for file in (attachments_by_entry.get(entry.id) or []) %}
-                                            {# A chip per file. The link goes to the
-                                               row's own id -- never to a path -- and
-                                               the route decides from the SNIFFED type
-                                               whether a browser may draw it or must
-                                               download it (services/attachments.py). #}
-                                            <div class="mt-1">
-                                                <a class="badge bg-body-tertiary text-body text-decoration-none border"
-                                                   href="{{ url_for('main.download_attachment', property_id=property.id, attachment_id=file.id) }}">
-                                                    <i class="fas {{ 'fa-image' if file.kind == 'photo' else 'fa-file-pdf' }} me-1"></i>
-                                                    {{ file.original_filename or ('attachment-' ~ file.id) }}
-                                                    <span class="text-body-secondary ms-1">{{ attachment_size(file.size_bytes) }}</span>
-                                                </a>
-                                                <form method="POST" class="d-inline"
-                                                      action="{{ url_for('main.delete_attachment', property_id=property.id, attachment_id=file.id) }}">
-                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                                                    <button type="submit" class="btn btn-link btn-sm p-0 ms-1 text-body-secondary"
-                                                            title="{{ t('attachment_remove') }}">
-                                                        <i class="fas fa-xmark"></i>
-                                                    </button>
-                                                </form>
-                                            </div>
-                                        {% endfor %}
-
-                                        <details class="mt-1">
-                                            <summary class="small text-body-secondary">{{ t('edit') }}</summary>
-                                            <form method="POST" class="row g-2 mt-1"
-                                                  action="{{ url_for('main.edit_activity', property_id=property.id, entry_id=entry.id) }}">
-                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                                                {% if entry.kind == 'contact' %}
-                                                    <div class="col-6 col-md-3">
-                                                        <select class="form-select form-select-sm" name="channel">
-                                                            {% for _c in activity_channels %}
-                                                                <option value="{{ _c }}" {{ 'selected' if entry.channel == _c }}>{{ t('channel_' ~ _c ~ '_label') }}</option>
-                                                            {% endfor %}
-                                                        </select>
-                                                    </div>
-                                                    <div class="col-6 col-md-4">
-                                                        <input type="text" class="form-control form-control-sm" name="counterpart"
-                                                               value="{{ entry.counterpart or '' }}" placeholder="{{ t('timeline_counterpart') }}"/>
-                                                    </div>
-                                                    <div class="col-12 col-md-5">
-                                                        <input type="text" class="form-control form-control-sm" name="asked"
-                                                               value="{{ entry.asked or '' }}" placeholder="{{ t('timeline_asked') }}"/>
-                                                    </div>
-                                                {% endif %}
-                                                <div class="col-12">
-                                                    <input type="text" class="form-control form-control-sm" name="body"
-                                                           value="{{ entry.body or '' }}"/>
-                                                </div>
-                                                <div class="col-12 d-flex gap-2">
-                                                    <button type="submit" name="action" value="save"
-                                                            class="btn btn-sm btn-primary">{{ t('timeline_save') }}</button>
-                                                    <button type="submit" name="action" value="delete"
-                                                            class="btn btn-sm btn-outline-danger">{{ t('timeline_delete') }}</button>
-                                                </div>
-                                            </form>
-                                        </details>
-                                    {% endif %}
-                                </div>
-                            </li>
-                        {% endfor %}
-                    </ul>
-                {% endif %}
-
-                {# multipart, because this form carries the file too: the ficha
-                   catastral belongs to the exchange that delivered it, not to
-                   the listing in general, so there is one control and not a
-                   second upload box beside it. #}
-                <form method="POST" action="{{ url_for('main.add_activity', property_id=property.id) }}"
-                      class="row g-2 align-items-end" id="add-activity"
-                      enctype="multipart/form-data">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                    <div class="col-6 col-md-2">
-                        <label class="form-label small mb-1" for="activity-kind">&nbsp;</label>
-                        <select class="form-select form-select-sm" id="activity-kind" name="kind">
-                            <option value="note">{{ t('timeline_add_note') }}</option>
-                            <option value="contact">{{ t('timeline_add_contact') }}</option>
-                        </select>
-                    </div>
-                    <div class="col-6 col-md-2">
-                        <label class="form-label small mb-1" for="activity-when">{{ t('timeline_when') }}</label>
-                        <input type="date" class="form-control form-control-sm" id="activity-when" name="happened_on"/>
-                    </div>
-                    <div class="col-6 col-md-2 activity-contact-only">
-                        <label class="form-label small mb-1" for="activity-channel">{{ t('timeline_channel') }}</label>
-                        <select class="form-select form-select-sm" id="activity-channel" name="channel">
-                            {% for _c in activity_channels %}
-                                <option value="{{ _c }}">{{ t('channel_' ~ _c ~ '_label') }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="col-6 col-md-3 activity-contact-only">
-                        <label class="form-label small mb-1" for="activity-counterpart">{{ t('timeline_counterpart') }}</label>
-                        <input type="text" class="form-control form-control-sm" id="activity-counterpart"
-                               name="counterpart" placeholder="{{ t('timeline_counterpart_placeholder') }}"/>
-                    </div>
-                    <div class="col-12 activity-contact-only">
-                        <label class="form-label small mb-1" for="activity-asked">{{ t('timeline_asked') }}</label>
-                        <input type="text" class="form-control form-control-sm" id="activity-asked"
-                               name="asked" placeholder="{{ t('timeline_asked_placeholder') }}"/>
-                    </div>
-                    <div class="col-12 col-md-9">
-                        <label class="form-label small mb-1" for="activity-body">
-                            <span class="activity-contact-only">{{ t('timeline_answer') }}</span>
-                            <span class="activity-note-only">{{ t('timeline_add_note') }}</span>
-                        </label>
-                        <input type="text" class="form-control form-control-sm" id="activity-body" name="body"
-                               placeholder="{{ t('timeline_note_placeholder') }}"/>
-                    </div>
-                    <div class="col-12 col-md-9">
-                        <label class="form-label small mb-1" for="activity-file">{{ t('attachment_add') }}</label>
-                        <input type="file" class="form-control form-control-sm" id="activity-file"
-                               name="attachment" accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.heic"/>
-                        <div class="form-text small">{{ t('attachment_hint') }}</div>
-                    </div>
-                    <div class="col-12 col-md-3">
-                        <button type="submit" class="btn btn-sm btn-primary w-100">{{ t('timeline_add') }}</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-
-        {# The parcel behind the listing (#430). Under the decision block
-           because a cadastral reference is evidence for that decision -- the
-           shape metrics are what rejected 774 -- and above Overview because
-           it is checkable fact rather than advert copy. #}
-        {% set _cad = (property.enrichment or {}).get('cadastre') or {} %}
-        {% set _cad_sources = _cad.get('sources') or {} %}
-        {% set _cad_geom = _cad.get('geometry') or {} %}
-        {% set _cad_attrs = _cad.get('attributes') or {} %}
-        <div class="card mb-4" id="cadastral-parcel">
-            <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
-                <h2 class="h6 mb-0">
-                    <i class="fas fa-vector-square me-2"></i>{{ t('cadastre_section_title') }}
-                </h2>
-                {% if property.cadastral_reference %}
-                    <a class="small" target="_blank" rel="noopener"
-                       href="{{ _cad.get('viewer_url') or ('https://www1.sedecatastro.gob.es/CYCBienInmueble/OVCConCiud.aspx?RefC=' ~ property.cadastral_reference) }}">
-                        <i class="fas fa-up-right-from-square me-1"></i>{{ t('cadastre_viewer') }}
-                    </a>
-                {% endif %}
-            </div>
-            <div class="card-body">
-                {% if not property.cadastral_reference %}
-                    <p class="text-muted mb-3">{{ t('cadastre_none') }}</p>
-                {% else %}
-                    <p class="mb-2">
-                        <code class="user-select-all">{{ property.cadastral_reference }}</code>
-                        {% if _cad_attrs.get('class') %}
-                            <span class="badge bg-{{ 'primary' if _cad_attrs.get('class') == 'UR' else 'secondary' }} ms-2">
-                                {{ t('cadastre_class') }}: {{ 'URBANO' if _cad_attrs.get('class') == 'UR' else 'RÚSTICO' }}
-                            </span>
-                        {% endif %}
-                    </p>
-
-                    {% if _cad_geom %}
-                        <div class="row g-2 mb-2">
-                            <div class="col-6 col-md-3">
-                                <div class="text-muted small">{{ t('cadastre_area') }}</div>
-                                <div class="fw-semibold">{{ '{:,.0f}'.format(_cad_geom.get('declared_area_m2') or _cad_geom.get('area_m2')) }} m²</div>
-                            </div>
-                            <div class="col-6 col-md-3">
-                                <div class="text-muted small">{{ t('cadastre_bbox') }}</div>
-                                <div class="fw-semibold">{{ _cad_geom.get('bbox_m', {}).get('we') }} × {{ _cad_geom.get('bbox_m', {}).get('ns') }} m</div>
-                            </div>
-                            <div class="col-6 col-md-3">
-                                <div class="text-muted small">{{ t('cadastre_fill_ratio') }}</div>
-                                {# The number that rejected 774: a regular plot
-                                   fills most of its own box, an L-shaped one
-                                   does not. #}
-                                <div class="fw-semibold">
-                                    <span class="badge bg-{{ 'success' if (_cad_geom.get('bbox_fill_ratio') or 0) >= 0.7 else ('warning' if (_cad_geom.get('bbox_fill_ratio') or 0) >= 0.5 else 'danger') }}">
-                                        {{ '{:.0%}'.format(_cad_geom.get('bbox_fill_ratio') or 0) }}
-                                    </span>
-                                </div>
-                            </div>
-                            <div class="col-6 col-md-3">
-                                <div class="text-muted small" title="{{ t('cadastre_compactness_hint') }}">
-                                    {{ t('cadastre_compactness') }} <i class="fas fa-circle-info"></i>
-                                </div>
-                                <div class="fw-semibold">
-                                    <span class="badge bg-{{ 'success' if (_cad_geom.get('polsby_popper') or 0) >= 0.6 else ('warning' if (_cad_geom.get('polsby_popper') or 0) >= 0.4 else 'danger') }}">
-                                        {{ '%.2f'|format(_cad_geom.get('polsby_popper') or 0) }}
-                                    </span>
-                                </div>
-                            </div>
-                        </div>
-                        <p class="text-muted small mb-3">
-                            {# The CRS only if the block records one. A metric
-                               measurement is meaningless without the projection
-                               it was taken in, and a block written before this
-                               feature existed -- by hand, through `docker exec`
-                               -- carries the numbers and not the code. Printing
-                               `EPSG:None` there states a CRS nobody recorded,
-                               which is worse than saying it is missing. #}
-                            {% if _cad_geom.get('epsg') %}
-                                {{ t('cadastre_measured_in')|format(_cad_geom.get('epsg')) }},
-                            {% else %}
-                                {{ t('cadastre_crs_not_recorded') }},
-                            {% endif %}
-                            {{ _cad_geom.get('vertices') }} vertices
-                        </p>
-                    {% else %}
-                        <p class="text-muted mb-3">{{ t('cadastre_not_measured') }}</p>
-                    {% endif %}
-
-                    {% if _cad_attrs %}
-                        <dl class="row mb-2 small">
-                            {% if _cad_attrs.get('poligono') %}
-                                <dt class="col-sm-4">{{ t('cadastre_poligono') }}</dt>
-                                <dd class="col-sm-8">{{ _cad_attrs.get('poligono') }} / {{ _cad_attrs.get('parcela') }}</dd>
-                            {% endif %}
-                            {% if _cad_attrs.get('paraje') %}
-                                <dt class="col-sm-4">{{ t('cadastre_paraje') }}</dt>
-                                <dd class="col-sm-8">{{ _cad_attrs.get('paraje') }}</dd>
-                            {% endif %}
-                            {% if _cad_attrs.get('use') %}
-                                <dt class="col-sm-4">{{ t('cadastre_use') }}</dt>
-                                <dd class="col-sm-8">{{ _cad_attrs.get('use') }}</dd>
-                            {% endif %}
-                            {% if _cad_attrs.get('subparcels') %}
-                                <dt class="col-sm-4">{{ t('cadastre_subparcels') }}</dt>
-                                <dd class="col-sm-8">
-                                    {% for sub in _cad_attrs.get('subparcels') %}
-                                        <div>{{ sub.get('code') }} — {{ sub.get('use') }}{% if sub.get('area_m2') %}, {{ '{:,.0f}'.format(sub.get('area_m2')) }} m²{% endif %}</div>
-                                    {% endfor %}
-                                </dd>
-                            {% endif %}
-                        </dl>
-                    {% endif %}
-
-                    {# What each source said, per source. A refusal is not an
-                       absence of parcel: only `not_found` means Catastro
-                       looked and there is nothing (services/cadastre_service.py). #}
-                    {% if _cad_sources %}
-                        <p class="small text-body-secondary mb-3">
-                            {% for _name in ['metric_geometry', 'map_geometry', 'attributes'] %}
-                                {% set _src = _cad_sources.get(_name) or {} %}
-                                {% if _src.get('status') %}
-                                    <span class="me-3">
-                                        {{ t('cadastre_source_' ~ _name) }}:
-                                        <span class="{{ 'text-body-secondary' if _src.get('status') == 'ok' else 'text-warning' }}">
-                                            {{ t('cadastre_state_' ~ _src.get('status')) }}</span>{% if _src.get('kept_previous') %} ({{ t('cadastre_kept_previous') }}){% endif %}
-                                    </span>
-                                {% endif %}
-                            {% endfor %}
-                        </p>
-                    {% endif %}
-                {% endif %}
-
-                <form method="POST" action="{{ url_for('main.set_cadastral_reference', property_id=property.id) }}"
-                      class="row g-2 align-items-end">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                    <div class="col-12 col-md-8">
-                        <label class="form-label small mb-1" for="cadastral-reference">{{ t('cadastre_reference') }}</label>
-                        <input type="text" class="form-control form-control-sm" id="cadastral-reference"
-                               name="cadastral_reference" value="{{ property.cadastral_reference or '' }}"
-                               placeholder="{{ t('cadastre_reference_placeholder') }}"/>
-                    </div>
-                    <div class="col-12 col-md-4">
-                        <button type="submit" class="btn btn-sm btn-primary">
-                            <i class="fas fa-cloud-arrow-down me-1"></i>{{ t('cadastre_fetch') }}
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
+        </details>
 
         <div class="card mb-4">
             <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
@@ -1032,6 +671,205 @@
         </div>
         {% endif %}
 
+
+        {# The conversation behind the listing (#430), below the listing
+           itself: the object -- price, description, measurements -- is what
+           the page is for, and the thread is its margin notes (owner
+           verdict on the first layout, which stacked this above Overview).
+           One reverse-chronological
+           feed rather than a notes list beside a contacts list: the material is
+           causally ordered -- asked, answered, promised, decided -- and two
+           lists make the reader re-interleave by date what a feed already
+           says. Verdict entries appear here too, read-only: they are the
+           history of the decision block above, and a control that could edit
+           them could edit the log into disagreement with the state it
+           describes. #}
+        {% set _channel_icons = {'whatsapp': 'fa-brands fa-whatsapp', 'email': 'fas fa-envelope',
+                                 'portal': 'fas fa-comments', 'phone': 'fas fa-phone',
+                                 'visit': 'fas fa-person-walking', 'other': 'fas fa-circle-dot'} %}
+        <div class="card mb-4" id="property-timeline">
+            <div class="card-header py-2">
+                <h2 class="h6 mb-0"><i class="fas fa-clock-rotate-left me-2"></i>{{ t('timeline_title') }}</h2>
+            </div>
+            <div class="card-body">
+                {% if not activity_timeline %}
+                    <p class="text-muted">{{ t('timeline_empty') }}</p>
+                {% else %}
+                    <ul class="list-unstyled mb-3">
+                        {% for entry in activity_timeline %}
+                            <li class="d-flex gap-3 pb-3 mb-3 border-bottom">
+                                <div class="text-muted pt-1" style="min-width: 1.5rem;">
+                                    {% if entry.kind == 'contact' %}
+                                        <i class="{{ _channel_icons.get(entry.channel, 'fas fa-circle-dot') }}"></i>
+                                    {% elif entry.kind == 'verdict' %}
+                                        <i class="fas fa-gavel"></i>
+                                    {% else %}
+                                        <i class="fas fa-pen"></i>
+                                    {% endif %}
+                                </div>
+                                <div class="flex-grow-1">
+                                    <div class="small text-body-secondary mb-1">
+                                        {{ entry.happened_at.strftime('%Y-%m-%d') }}
+                                        {% if entry.kind == 'contact' %}
+                                            · {{ t('channel_' ~ entry.channel ~ '_label') }}
+                                            {%- if entry.counterpart %} · {{ entry.counterpart }}{% endif %}
+                                        {% elif entry.kind == 'verdict' %}
+                                            · {{ t('timeline_verdict_entry') }}
+                                        {% endif %}
+                                        {% if owner_review_was_edited(entry) %}
+                                            <span class="fst-italic">({{ t('timeline_edited') }})</span>
+                                        {% endif %}
+                                    </div>
+
+                                    {% if entry.kind == 'verdict' %}
+                                        {% set _snap = entry.snapshot or {} %}
+                                        <div>
+                                            <span class="badge bg-{{ _decision_class.get(_snap.get('decision'), 'body-tertiary text-body-secondary') }}">
+                                                {{ t(owner_decision_label_key(_snap.get('decision'))) }}
+                                            </span>
+                                            {% if _snap.get('reason') %}<span class="ms-1">{{ _snap.get('reason') }}</span>{% endif %}
+                                        </div>
+                                        {% if _snap.get('action') %}
+                                            <div class="small text-body-secondary">
+                                                {{ _snap.get('action') }}{% if _snap.get('due_on') %} — {{ t('next_action_due') }} {{ _snap.get('due_on') }}{% endif %}
+                                            </div>
+                                        {% endif %}
+                                    {% else %}
+                                        {% if entry.asked %}
+                                            <div class="text-body-secondary">
+                                                <i class="fas fa-arrow-right me-1"></i>{{ entry.asked }}
+                                            </div>
+                                        {% endif %}
+                                        {% if entry.body %}
+                                            <div>{{ entry.body }}</div>
+                                        {% endif %}
+
+                                        {% for file in (attachments_by_entry.get(entry.id) or []) %}
+                                            {# A chip per file. The link goes to the
+                                               row's own id -- never to a path -- and
+                                               the route decides from the SNIFFED type
+                                               whether a browser may draw it or must
+                                               download it (services/attachments.py). #}
+                                            <div class="mt-1">
+                                                <a class="badge bg-body-tertiary text-body text-decoration-none border"
+                                                   href="{{ url_for('main.download_attachment', property_id=property.id, attachment_id=file.id) }}">
+                                                    <i class="fas {{ 'fa-image' if file.kind == 'photo' else 'fa-file-pdf' }} me-1"></i>
+                                                    {{ file.original_filename or ('attachment-' ~ file.id) }}
+                                                    <span class="text-body-secondary ms-1">{{ attachment_size(file.size_bytes) }}</span>
+                                                </a>
+                                                <form method="POST" class="d-inline"
+                                                      action="{{ url_for('main.delete_attachment', property_id=property.id, attachment_id=file.id) }}">
+                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                                    <button type="submit" class="btn btn-link btn-sm p-0 ms-1 text-body-secondary"
+                                                            title="{{ t('attachment_remove') }}">
+                                                        <i class="fas fa-xmark"></i>
+                                                    </button>
+                                                </form>
+                                            </div>
+                                        {% endfor %}
+
+                                        <details class="mt-1">
+                                            <summary class="small text-body-secondary">{{ t('edit') }}</summary>
+                                            <form method="POST" class="row g-2 mt-1"
+                                                  action="{{ url_for('main.edit_activity', property_id=property.id, entry_id=entry.id) }}">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                                {% if entry.kind == 'contact' %}
+                                                    <div class="col-6 col-md-3">
+                                                        <select class="form-select form-select-sm" name="channel">
+                                                            {% for _c in activity_channels %}
+                                                                <option value="{{ _c }}" {{ 'selected' if entry.channel == _c }}>{{ t('channel_' ~ _c ~ '_label') }}</option>
+                                                            {% endfor %}
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-6 col-md-4">
+                                                        <input type="text" class="form-control form-control-sm" name="counterpart"
+                                                               value="{{ entry.counterpart or '' }}" placeholder="{{ t('timeline_counterpart') }}"/>
+                                                    </div>
+                                                    <div class="col-12 col-md-5">
+                                                        <input type="text" class="form-control form-control-sm" name="asked"
+                                                               value="{{ entry.asked or '' }}" placeholder="{{ t('timeline_asked') }}"/>
+                                                    </div>
+                                                {% endif %}
+                                                <div class="col-12">
+                                                    <input type="text" class="form-control form-control-sm" name="body"
+                                                           value="{{ entry.body or '' }}"/>
+                                                </div>
+                                                <div class="col-12 d-flex gap-2">
+                                                    <button type="submit" name="action" value="save"
+                                                            class="btn btn-sm btn-primary">{{ t('timeline_save') }}</button>
+                                                    <button type="submit" name="action" value="delete"
+                                                            class="btn btn-sm btn-outline-danger">{{ t('timeline_delete') }}</button>
+                                                </div>
+                                            </form>
+                                        </details>
+                                    {% endif %}
+                                </div>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                {% endif %}
+
+                {# The composer is one text box and a button. Everything an
+                   exchange carries beyond its text -- the channel, who, what
+                   was asked, the date, the file -- is real structure and rare
+                   input, so it lives behind one <details> instead of standing
+                   as six controls in front of every quick note (owner verdict
+                   on the first layout: a wall of dropdowns is not usable).
+                   multipart, because the file rides on the entry it arrived
+                   with. #}
+                <form method="POST" action="{{ url_for('main.add_activity', property_id=property.id) }}"
+                      id="add-activity" enctype="multipart/form-data">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <div class="d-flex gap-2 align-items-start">
+                        <textarea class="form-control form-control-sm" id="activity-body" name="body"
+                                  rows="2" placeholder="{{ t('timeline_note_placeholder') }}"></textarea>
+                        <button type="submit" class="btn btn-sm btn-primary">{{ t('timeline_add') }}</button>
+                    </div>
+                    <details class="mt-1">
+                        <summary class="small text-body-secondary" style="cursor: pointer;">
+                            {{ t('timeline_more_fields') }}
+                        </summary>
+                        <div class="row g-2 mt-1">
+                            <div class="col-6 col-md-2">
+                                <label class="form-label small mb-1" for="activity-kind">&nbsp;</label>
+                                <select class="form-select form-select-sm" id="activity-kind" name="kind">
+                                    <option value="note">{{ t('timeline_add_note') }}</option>
+                                    <option value="contact">{{ t('timeline_add_contact') }}</option>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-2">
+                                <label class="form-label small mb-1" for="activity-when">{{ t('timeline_when') }}</label>
+                                <input type="date" class="form-control form-control-sm" id="activity-when" name="happened_on"/>
+                            </div>
+                            <div class="col-6 col-md-2 activity-contact-only">
+                                <label class="form-label small mb-1" for="activity-channel">{{ t('timeline_channel') }}</label>
+                                <select class="form-select form-select-sm" id="activity-channel" name="channel">
+                                    {% for _c in activity_channels %}
+                                        <option value="{{ _c }}">{{ t('channel_' ~ _c ~ '_label') }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-3 activity-contact-only">
+                                <label class="form-label small mb-1" for="activity-counterpart">{{ t('timeline_counterpart') }}</label>
+                                <input type="text" class="form-control form-control-sm" id="activity-counterpart"
+                                       name="counterpart" placeholder="{{ t('timeline_counterpart_placeholder') }}"/>
+                            </div>
+                            <div class="col-12 col-md-3 activity-contact-only">
+                                <label class="form-label small mb-1" for="activity-asked">{{ t('timeline_asked') }}</label>
+                                <input type="text" class="form-control form-control-sm" id="activity-asked"
+                                       name="asked" placeholder="{{ t('timeline_asked_placeholder') }}"/>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small mb-1" for="activity-file">{{ t('attachment_add') }}</label>
+                                <input type="file" class="form-control form-control-sm" id="activity-file"
+                                       name="attachment" accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.heic"/>
+                                <div class="form-text small">{{ t('attachment_hint') }}</div>
+                            </div>
+                        </div>
+                    </details>
+                </form>
+            </div>
+        </div>
 
         <!-- AI Analysis Section (legacy parity) -->
         <div id="ai-analysis-section" class="mb-3">
@@ -1400,6 +1238,152 @@
                 </div>
             </div>
         {% endif %}
+        {# The parcel behind the listing (#430), in the rail with the other
+           measurements: it is checkable fact about the ground, like Environment
+           and Pool beside it, and in the main column it crowded the object off
+           the screen (owner verdict on the first layout). #}
+        {% set _cad = (property.enrichment or {}).get('cadastre') or {} %}
+        {% set _cad_sources = _cad.get('sources') or {} %}
+        {% set _cad_geom = _cad.get('geometry') or {} %}
+        {% set _cad_attrs = _cad.get('attributes') or {} %}
+        <div class="card mb-4" id="cadastral-parcel">
+            <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
+                <h6 class="card-title mb-0 compact-header" title="{{ t('cadastre_section_title') }}">
+                    <i class="fas fa-vector-square me-1"></i>{{ t('cadastre_section_title') }}
+                </h6>
+                {% if property.cadastral_reference %}
+                    <a class="small" target="_blank" rel="noopener"
+                       href="{{ _cad.get('viewer_url') or ('https://www1.sedecatastro.gob.es/CYCBienInmueble/OVCConCiud.aspx?RefC=' ~ property.cadastral_reference) }}">
+                        <i class="fas fa-up-right-from-square me-1"></i>{{ t('cadastre_viewer') }}
+                    </a>
+                {% endif %}
+            </div>
+            <div class="card-body">
+                {% if not property.cadastral_reference %}
+                    <p class="text-muted mb-3">{{ t('cadastre_none') }}</p>
+                {% else %}
+                    <p class="mb-2">
+                        <code class="user-select-all">{{ property.cadastral_reference }}</code>
+                        {% if _cad_attrs.get('class') %}
+                            <span class="badge bg-{{ 'primary' if _cad_attrs.get('class') == 'UR' else 'secondary' }} ms-2">
+                                {{ t('cadastre_class') }}: {{ 'URBANO' if _cad_attrs.get('class') == 'UR' else 'RÚSTICO' }}
+                            </span>
+                        {% endif %}
+                    </p>
+
+                    {% if _cad_geom %}
+                        <div class="row g-2 mb-2">
+                            <div class="col-6">
+                                <div class="text-muted small">{{ t('cadastre_area') }}</div>
+                                <div class="fw-semibold">{{ '{:,.0f}'.format(_cad_geom.get('declared_area_m2') or _cad_geom.get('area_m2')) }} m²</div>
+                            </div>
+                            <div class="col-6">
+                                <div class="text-muted small">{{ t('cadastre_bbox') }}</div>
+                                <div class="fw-semibold">{{ _cad_geom.get('bbox_m', {}).get('we') }} × {{ _cad_geom.get('bbox_m', {}).get('ns') }} m</div>
+                            </div>
+                            <div class="col-6">
+                                <div class="text-muted small">{{ t('cadastre_fill_ratio') }}</div>
+                                {# The number that rejected 774: a regular plot
+                                   fills most of its own box, an L-shaped one
+                                   does not. #}
+                                <div class="fw-semibold">
+                                    <span class="badge bg-{{ 'success' if (_cad_geom.get('bbox_fill_ratio') or 0) >= 0.7 else ('warning' if (_cad_geom.get('bbox_fill_ratio') or 0) >= 0.5 else 'danger') }}">
+                                        {{ '{:.0%}'.format(_cad_geom.get('bbox_fill_ratio') or 0) }}
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="text-muted small" title="{{ t('cadastre_compactness_hint') }}">
+                                    {{ t('cadastre_compactness') }} <i class="fas fa-circle-info"></i>
+                                </div>
+                                <div class="fw-semibold">
+                                    <span class="badge bg-{{ 'success' if (_cad_geom.get('polsby_popper') or 0) >= 0.6 else ('warning' if (_cad_geom.get('polsby_popper') or 0) >= 0.4 else 'danger') }}">
+                                        {{ '%.2f'|format(_cad_geom.get('polsby_popper') or 0) }}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                        <p class="text-muted small mb-3">
+                            {# The CRS only if the block records one. A metric
+                               measurement is meaningless without the projection
+                               it was taken in, and a block written before this
+                               feature existed -- by hand, through `docker exec`
+                               -- carries the numbers and not the code. Printing
+                               `EPSG:None` there states a CRS nobody recorded,
+                               which is worse than saying it is missing. #}
+                            {% if _cad_geom.get('epsg') %}
+                                {{ t('cadastre_measured_in')|format(_cad_geom.get('epsg')) }},
+                            {% else %}
+                                {{ t('cadastre_crs_not_recorded') }},
+                            {% endif %}
+                            {{ _cad_geom.get('vertices') }} vertices
+                        </p>
+                    {% else %}
+                        <p class="text-muted mb-3">{{ t('cadastre_not_measured') }}</p>
+                    {% endif %}
+
+                    {% if _cad_attrs %}
+                        <dl class="row mb-2 small">
+                            {% if _cad_attrs.get('poligono') %}
+                                <dt class="col-sm-4">{{ t('cadastre_poligono') }}</dt>
+                                <dd class="col-sm-8">{{ _cad_attrs.get('poligono') }} / {{ _cad_attrs.get('parcela') }}</dd>
+                            {% endif %}
+                            {% if _cad_attrs.get('paraje') %}
+                                <dt class="col-sm-4">{{ t('cadastre_paraje') }}</dt>
+                                <dd class="col-sm-8">{{ _cad_attrs.get('paraje') }}</dd>
+                            {% endif %}
+                            {% if _cad_attrs.get('use') %}
+                                <dt class="col-sm-4">{{ t('cadastre_use') }}</dt>
+                                <dd class="col-sm-8">{{ _cad_attrs.get('use') }}</dd>
+                            {% endif %}
+                            {% if _cad_attrs.get('subparcels') %}
+                                <dt class="col-sm-4">{{ t('cadastre_subparcels') }}</dt>
+                                <dd class="col-sm-8">
+                                    {% for sub in _cad_attrs.get('subparcels') %}
+                                        <div>{{ sub.get('code') }} — {{ sub.get('use') }}{% if sub.get('area_m2') %}, {{ '{:,.0f}'.format(sub.get('area_m2')) }} m²{% endif %}</div>
+                                    {% endfor %}
+                                </dd>
+                            {% endif %}
+                        </dl>
+                    {% endif %}
+
+                    {# What each source said, per source. A refusal is not an
+                       absence of parcel: only `not_found` means Catastro
+                       looked and there is nothing (services/cadastre_service.py). #}
+                    {% if _cad_sources %}
+                        <p class="small text-body-secondary mb-3">
+                            {% for _name in ['metric_geometry', 'map_geometry', 'attributes'] %}
+                                {% set _src = _cad_sources.get(_name) or {} %}
+                                {% if _src.get('status') %}
+                                    <span class="me-3">
+                                        {{ t('cadastre_source_' ~ _name) }}:
+                                        <span class="{{ 'text-body-secondary' if _src.get('status') == 'ok' else 'text-warning' }}">
+                                            {{ t('cadastre_state_' ~ _src.get('status')) }}</span>{% if _src.get('kept_previous') %} ({{ t('cadastre_kept_previous') }}){% endif %}
+                                    </span>
+                                {% endif %}
+                            {% endfor %}
+                        </p>
+                    {% endif %}
+                {% endif %}
+
+                <form method="POST" action="{{ url_for('main.set_cadastral_reference', property_id=property.id) }}"
+                      class="row g-2 align-items-end">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <div class="col-12">
+                        <label class="form-label small mb-1" for="cadastral-reference">{{ t('cadastre_reference') }}</label>
+                        <input type="text" class="form-control form-control-sm" id="cadastral-reference"
+                               name="cadastral_reference" value="{{ property.cadastral_reference or '' }}"
+                               placeholder="{{ t('cadastre_reference_placeholder') }}"/>
+                    </div>
+                    <div class="col-12">
+                        <button type="submit" class="btn btn-sm btn-primary">
+                            <i class="fas fa-cloud-arrow-down me-1"></i>{{ t('cadastre_fetch') }}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
 
         <div class="card mb-4">
             <div class="card-header">
