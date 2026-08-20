@@ -510,11 +510,34 @@ inflight_processes() {
     # deploys in silence - the exact defect this survey exists to prevent,
     # reproduced inside the survey itself.
     raw="$(docker top "$APP_CONTAINER" 2>/dev/null)" || return 1
-    # It must contain the process this container cannot be without. Shape is
-    # satisfiable by junk; the app's own server is not.
-    if [ -n "$CONTAINER_SENTINEL" ]; then
-        printf '%s\n' "$raw" | awk 'NR > 1' | grep -qF -- "$CONTAINER_SENTINEL" || return 1
-    fi
+    # The table has to be *this container's*, and what establishes that is a
+    # second, independent reading: `docker inspect` knows the container's main
+    # process id on the host, and `docker top` must show it (INFLIGHT-001 in
+    # #265). Measured on the mini 2026-08-20 -- `.State.Pid` is 43139 and the
+    # table's first row is pid 43139.
+    #
+    # It takes that role from the sentinel because the sentinel could not hold
+    # it. `grep -qF gunicorn` matches the token anywhere in any row, so a row
+    # that merely *mentions* the server satisfies it while the real processes
+    # are absent, and the survey then reads "nothing in flight" over live work.
+    # Nor is that only a hostile case: this image starts as
+    # `sh -c "python -m migrations.runner && exec gunicorn ..."` (Dockerfile),
+    # so during migrations there is a real row naming gunicorn before any
+    # gunicorn exists.
+    #
+    # Both fixes the ticket proposed fail against the measurement, which is why
+    # neither is here. "The command's first token" is `python`, not `gunicorn`
+    # -- the venv runs `/app/.venv/bin/python /app/.venv/bin/gunicorn ...` --
+    # so that check would refuse every real table forever. "The PID-1 row" is
+    # not available at all: `docker top` reports host pids and the container's
+    # own pid 1 appears nowhere in it. A pid from an independent source needs
+    # no command line, so it survives the `sh -c` startup form, the venv form,
+    # and whatever CMD becomes next.
+    local main_pid
+    main_pid="$(docker inspect "$APP_CONTAINER" --format '{{.State.Pid}}' 2>/dev/null)" || return 1
+    case "$main_pid" in
+        "" | 0 | *[!0-9]*) return 1 ;;
+    esac
 
     # The layout is read off the header, never assumed. `docker top` renders
     # whatever ps format it is handed, and the previous parse *checked* one
@@ -552,6 +575,26 @@ inflight_processes() {
         # runs the app server, so an empty table means the probe did not work.
         END { if (!seen) exit 1 }
     ')" || return 1
+
+    # The corroboration, against the table the parse actually produced rather
+    # than against `raw`: check and parse have to describe the same table, the
+    # lesson the header-driven parse above already records. A `grep` over the
+    # raw text would match the number anywhere in any column.
+    printf '%s\n' "$rows" | awk -F'\t' -v want="$main_pid" '$1 == want { found = 1 } END { exit !found }' || return 1
+    # The sentinel stays, and what changed is what it can be trusted *for*. A
+    # substring can no longer make a table look truthful, because the pid
+    # corroboration above runs first and does not read a command line at all.
+    # It can still make a truthful table look unreadable: this is a plain
+    # `return 1`, so a sentinel that stops appearing -- a server renamed away
+    # from gunicorn, or `AUTOPILOT_CONTAINER_SENTINEL` left pointing at the old
+    # name -- refuses every table from then on. Unreachable today (every real
+    # row carries the token, the migration form included) and deliberately not
+    # fixed here: telling that failure apart from an unreadable table in the
+    # log needs a side channel out of a function whose stdout *is* its data,
+    # since `log()` writes to stdout through `tee`. Named rather than silent.
+    if [ -n "$CONTAINER_SENTINEL" ]; then
+        printf '%s\n' "$raw" | awk 'NR > 1' | grep -qF -- "$CONTAINER_SENTINEL" || return 1
+    fi
 
     printf '%s\n' "$rows" \
         | grep -E "$INFLIGHT_PATTERN" \
