@@ -2080,6 +2080,29 @@ class TestTheSurfaces:
         assert by_name["Hazards"] == "none_within_radius"
         assert by_name["Hazard Scan Complete"] == "False"
 
+    def test_the_csv_says_a_moved_row_still_holds_a_complete_scan(
+        self, app, client, real_fetch, profile
+    ):
+        """The column is `complete`, the same fact the coverage line counts.
+
+        Gating it on `measured` blanked the cell for a row measured before it
+        moved, so the export disagreed with the number above it (codex review,
+        2026-08-20).
+        """
+        prop = _prop(title="CsvMoved", search_profile_id=profile.id)
+        HazardService(
+            enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
+        ).enrich(prop, commit=True)
+        prop.location_lat = XIVARES[0] + 0.02
+        db.session.commit()
+
+        assert hazard_service.read_verdict(prop)["measured"] is False
+        body = client.get("/properties/export.csv").get_data(as_text=True)
+        header, *rows = list(csv.reader(io.StringIO(body)))
+        by_name = dict(zip(header, rows[0]))
+        assert by_name["Hazards"] == "stale_origin"
+        assert by_name["Hazard Scan Complete"] == "True"
+
 
 class TestOneHomePerRule:
     """No second Overpass client, no second rules table, no second policy.
@@ -2334,7 +2357,7 @@ class TestOneHomePerRule:
             "commit",
             lambda: (
                 order.append("shared commit")
-                if order and order[-1] == "scoring"
+                if order and order[-1] == "advertiser"
                 else None,
                 real_commit(),
             )[1],
@@ -2350,10 +2373,12 @@ class TestOneHomePerRule:
         # older value by its commit (codex review, 2026-08-20). Scoring runs
         # again afterwards, because the first pass could not see this block.
         assert scans == [True]
+        # Measure, then score, with the scan behind the shared commit and
+        # scoring behind the scan -- one scoring pass that has seen every
+        # measurement it reads.
         assert order == [
             "coordinates",
             "advertiser",
-            "scoring",
             "shared commit",
             "hazards",
             "scoring",

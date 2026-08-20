@@ -295,14 +295,6 @@ class PropertyEnrichmentService:
                 "Pool enrichment failed for %s: %s", getattr(prop, "id", None), e
             )
 
-        if recalc_scoring:
-            try:
-                self.scoring_service.calculate_for_property(prop, commit=False)
-            except Exception as e:
-                logger.warning(
-                    "Property scoring failed during enrichment for %s: %s", prop.id, e
-                )
-
         # `enrichment` is a plain JSON column, not a MutableDict: reading the
         # loaded dict, mutating it and assigning the *same object* back leaves
         # the attribute clean and the flush emits no UPDATE. It happened to
@@ -340,28 +332,27 @@ class PropertyEnrichmentService:
         # *other* block in this column -- `sea`, `quality_of_life`,
         # `environment`, `pool` all ride that shared assignment, and closing
         # that is a change to how this method orchestrates all of them.
-        scanned = False
         try:
             self.hazard_service.enrich(prop, commit=True)
-            scanned = True
         except Exception as e:
             logger.warning(
                 "Hazard scan failed for %s: %s", getattr(prop, "id", None), e
             )
             db.session.rollback()
 
-        # The scoring above ran before that block existed. At the shipped
-        # weight of 0 that changes nothing, and the day the owner raises it,
-        # a press that measured a cement works would otherwise leave the score
-        # it had before anybody looked.
-        if scanned and recalc_scoring:
+        # Scoring is **last**, and it moved here from the shared phase for the
+        # same reason the scan did: it has to run after every measurement it
+        # reads, and one of them now lands after that commit. Scoring once,
+        # here, keeps the rule this pass is built on -- measure, then score --
+        # rather than scoring twice or scoring over a block that did not exist
+        # yet. It owns its own transaction, so a failure leaves the
+        # measurements committed and the score stale, which any rescore fixes.
+        if recalc_scoring:
             try:
                 self.scoring_service.calculate_for_property(prop, commit=True)
             except Exception as e:
                 logger.warning(
-                    "Property scoring after the hazard scan failed for %s: %s",
-                    getattr(prop, "id", None),
-                    e,
+                    "Property scoring failed during enrichment for %s: %s", prop.id, e
                 )
                 db.session.rollback()
         return ok
