@@ -42,7 +42,15 @@
                                 {% endif %}
                             </td>
                             <td>
-                                <a class="small text-decoration-none" href="{{ url_for('main.properties', profile_id=p.id) }}">
+                            {# The number IS the link, and it counts every stored
+                               listing (#111 -- a column of counts that sums to less
+                               than the table tells the reader something untrue). So
+                               the link has to name that scope: without it /properties
+                               applies its own default and hides the withdrawn rows,
+                               and the count would overstate the page it opens.
+                               `drilldown_args` states it explicitly for the same
+                               reason (#417). #}
+                                <a class="small text-decoration-none" href="{{ url_for('main.properties', profile_id=p.id, hide_removed='off') }}">
                                     {{ property_counts.get(p.id, 0) }}
                                 </a>
                             </td>
@@ -114,8 +122,10 @@
                         </div>
                     </td>
                     <td>
+                        {# Same as the per-profile count above: unfiltered, so the
+                           link says so. #}
                         <a class="small text-decoration-none"
-                           href="{{ url_for('main.properties', profile_id='unassigned') }}">
+                           href="{{ url_for('main.properties', profile_id='unassigned', hide_removed='off') }}">
                             {{ unassigned_count }}
                         </a>
                     </td>
