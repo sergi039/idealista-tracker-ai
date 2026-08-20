@@ -1224,6 +1224,7 @@
                         ('travel_score', t('component_travel')),
                         ('sea_score', t('component_sea')),
                         ('pool_score', t('component_pool')),
+                        ('hazard_score', t('component_hazard')),
                     ] %}
                     {% for _prof_key, _prof_label in [('investment', t('investment_score')), ('lifestyle', t('lifestyle_score'))] %}
                         {% set _prof = _profiles.get(_prof_key) if _profiles.get(_prof_key) is mapping else {} %}
@@ -1940,6 +1941,105 @@
                 </div>
             </div>
         {% endif %}
+
+        {# Industrial neighbours (#437). Unlike the QoL card above this one is
+           rendered whatever the row holds, and that is the feature rather
+           than an oversight: the question it answers is "is there anything
+           bad near this plot", and a page that simply says nothing reads as
+           "no". A refusal says it refused, a row nobody scanned says so, and
+           only a scan that ran and found nothing may say the neighbourhood
+           is clear. Every distance comes from `hazard_verdict_for`, which
+           restates the stored measurement against the row's *current*
+           accuracy -- a locality centroid gets a range and never a point. #}
+        {% set hazards = hazard_verdict_for(property) %}
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h6 class="card-title mb-0 compact-header" title="{{ t('hazards_title') }}">
+                    <i class="fas fa-industry me-2"></i>{{ t('hazards_title') }}
+                </h6>
+                {% if not hazards.measured %}
+                    <span class="badge bg-warning text-dark">{{ t('hazards_not_measured') }}</span>
+                {% endif %}
+            </div>
+            <div class="card-body">
+                {% if hazards.status == 'unavailable' %}
+                    <div class="small text-body-secondary">{{ t('hazards_unavailable') }}</div>
+                {% elif hazards.status == 'no_coordinates' %}
+                    <div class="small text-body-secondary">{{ t('hazards_no_coordinates') }}</div>
+                {% elif hazards.status == 'stale_origin' %}
+                    <div class="small text-body-secondary">{{ t('hazards_stale_origin') }}</div>
+                {% elif not hazards.measured %}
+                    <div class="small text-body-secondary">{{ t('hazards_missing') }}</div>
+                {% elif not hazards['items'] %}
+                    {# A scan that came back short and found nothing is not a
+                       measured absence, and "Nothing recognised" is exactly
+                       how that reads (codex review, 2026-08-20). #}
+                    <div class="small text-body-secondary">
+                        {{ t('hazards_none') if hazards.complete else t('hazards_none_incomplete') }}
+                    </div>
+                {% else %}
+                    {% for item in hazards['items'] %}
+                        <div class="d-flex justify-content-between align-items-start small mb-2">
+                            <div class="me-2">
+                                <span class="badge {{ 'bg-danger' if item.severity == 'high' else 'bg-secondary' }} fw-normal">
+                                    {{ t('hazard_severity_' ~ item.severity) if item.severity else '' }}
+                                </span>
+                                <span class="fw-bold">{{ item.name or t('hazard_kind_' ~ item.kind) }}</span>
+                                <div class="text-body-secondary">
+                                    {% for kind in item.kinds %}{% if not loop.first %} · {% endif %}{{ t('hazard_kind_' ~ kind) }}{% endfor %}
+                                    {% if item.element_count and item.element_count > 1 %}
+                                        — {{ tn('hazards_elements', item.element_count) }}
+                                    {% endif %}
+                                    {% for element in item.elements %}
+                                        {% if element.type and element.id is not none %}
+                                            <a class="ms-1" target="_blank" rel="noopener"
+                                               href="https://www.openstreetmap.org/{{ element.type }}/{{ element.id }}">{{ element.type[:1]|upper }}{{ element.id }}</a>
+                                        {% endif %}
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            <div class="text-end text-nowrap">
+                                {% if item.distance_m is not none %}
+                                    <span class="fw-bold">{{ (item.distance_m / 1000.0)|round(1) }} km</span>
+                                {% elif item.min_distance_m is not none %}
+                                    <span class="fw-bold">{{ (item.min_distance_m / 1000.0)|round(1) }}–{{ (item.max_distance_m / 1000.0)|round(1) }} km</span>
+                                {% endif %}
+                                {% if item.cardinal %}
+                                    <div class="text-body-secondary">{{ t('hazards_bearing') }} {{ item.bearing_deg }}° {{ item.cardinal }}</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% endfor %}
+                    {% if hazards.item_count and hazards.item_count > hazards['items']|length %}
+                        {% set hidden_items = hazards.item_count - hazards['items']|length %}
+                        <div class="small text-body-secondary">{{ tn('hazards_more', hidden_items) }}</div>
+                    {% endif %}
+                {% endif %}
+
+                {% if hazards.measured %}
+                    {% if hazards.searched_m is not none %}
+                        <div class="small text-body-secondary mt-2">
+                            {{ t('hazards_searched')|format((hazards.searched_m / 1000.0)|round(1)) }}{% if hazards.approximate_origin and hazards.guaranteed_m is not none %},
+                            {{ t('hazards_guaranteed')|format((hazards.guaranteed_m / 1000.0)|round(1)) }}{% endif %}.
+                        </div>
+                    {% endif %}
+                    {% if hazards.approximate_origin %}
+                        <div class="small text-body-secondary">{{ t('hazards_approximate') }}.</div>
+                    {% endif %}
+                    {% if hazards.truncated %}
+                        <div class="small text-warning">{{ t('hazards_truncated') }}.</div>
+                    {% endif %}
+                {% endif %}
+                {# Both lines describe a measurement, so neither is rendered
+                   over a row that has none: "OpenStreetMap says a facility
+                   exists" under "Not scanned yet" is the card asserting the
+                   opposite of what it just said (codex review, 2026-08-20). #}
+                {% if hazards.measured %}
+                    <div class="small text-body-secondary mt-2">{{ t('hazards_straight_line') }}.</div>
+                    <div class="small text-body-secondary mt-1">{{ t('hazards_limits') }}</div>
+                {% endif %}
+            </div>
+        </div>
 
         {# The pool card stands on its own (diff review, 2026-08-14):
            nesting it inside the QoL card hid the pool data — and the
