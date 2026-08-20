@@ -458,3 +458,77 @@ class TestTheWriterHonoursTheColumnContract:
             clear_location_by_hand(row, commit=True)
 
             assert True in seen
+
+
+class TestTheRepairToolSaysWhatItSkipped:
+    """`utils/refresh_property_accuracy.py` is the realistic trigger for this
+    defect -- it is the one thing in the tree that calls
+    `ensure_coordinates(refresh=True)` over a scope -- and adding the refusal
+    changed what its summary means.
+
+    Without this, a hand-set row is reported as `precise -> precise` and
+    counted with the rows that were re-geocoded and came back the same. Nothing
+    was asked about it. That is #98's defect inside a report, and it is the kind
+    a mutation of this branch could not find: the tool is existing code, and a
+    new call to a shared function is a change to that function.
+
+    Tested through `main()` rather than a helper, because a green unit suite
+    over a hook nothing calls is the failure this repository keeps repeating
+    (#309).
+    """
+
+    def _run(self, app, monkeypatch, ids):
+        import app as app_module
+        import utils.refresh_property_accuracy as tool
+
+        monkeypatch.setattr(tool, "create_app", lambda *a, **k: app)
+        monkeypatch.setattr(
+            app_module, "create_app", lambda *a, **k: app, raising=False
+        )
+
+        asked = []
+
+        def _never_reaches_google(self, prop, refresh=False, **kwargs):
+            asked.append(prop.id)
+            return True
+
+        monkeypatch.setattr(
+            tool.PropertyLocationService, "ensure_coordinates", _never_reaches_google
+        )
+
+        records = []
+        monkeypatch.setattr(
+            tool.logger, "info", lambda msg, *a: records.append(msg % a if a else msg)
+        )
+
+        # `main()` reads `sys.argv` rather than taking an argv, so the call is
+        # made the way the shell makes it.
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "refresh_property_accuracy",
+                "--ids",
+                ",".join(str(i) for i in ids),
+                "--sleep",
+                "0",
+            ],
+        )
+        tool.main()
+        return asked, records
+
+    def test_a_hand_set_row_is_skipped_and_named(self, app, monkeypatch):
+        with app.app_context():
+            hand = _row()
+            set_location_by_hand(
+                hand, lat=HAND_LAT, lon=HAND_LON, accuracy="precise", note=NOTE
+            )
+            ordinary = _row(source_email_id="geo002:ordinary")
+
+            asked, records = self._run(app, monkeypatch, [hand.id, ordinary.id])
+
+            assert hand.id not in asked, "the tool asked about a hand-set row"
+            assert ordinary.id in asked, "the tool skipped a row it should re-geocode"
+
+            said = "\n".join(records)
+            assert f"id={hand.id}" in said and "set by hand" in said
+            assert "1 skipped (location set by hand)" in said

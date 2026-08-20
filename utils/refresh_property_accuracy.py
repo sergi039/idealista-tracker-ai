@@ -52,6 +52,7 @@ from typing import Any, Dict, List
 
 from app import create_app, db
 from models import Property
+from services.coordinate_quality import is_hand_set
 from services.property_location_service import PropertyLocationService
 from utils.inflight import inflight
 
@@ -260,6 +261,7 @@ def main() -> None:
         moved = 0
         failed = 0
         refused = 0
+        skipped = 0
 
         # Resumable: each row commits on its own and leaves the scope by gaining
         # an enrichment["geocoding"] record, so a killed run resumes where it
@@ -268,6 +270,27 @@ def main() -> None:
             for index, prop in enumerate(rows, start=1):
                 old = (prop.location_accuracy or "unknown").lower()
                 old_lat, old_lon = prop.location_lat, prop.location_lon
+
+                if is_hand_set(prop):
+                    # `ensure_coordinates` refuses a row whose location a
+                    # person established, and refuses it *before* the request.
+                    # Counted apart for the reason `refused` is: folding these
+                    # into the rows that came back unchanged would report
+                    # "re-geocoded, same answer" for a row nothing was asked
+                    # about, which is an absence of measurement rendered as a
+                    # measurement. `is_hand_set` is imported rather than
+                    # re-derived so the tool cannot disagree with the service
+                    # about which rows those are.
+                    skipped += 1
+                    after[old] += 1
+                    logger.info(
+                        "[%d/%d] id=%s %s -> skipped, location set by hand",
+                        index,
+                        len(rows),
+                        prop.id,
+                        old,
+                    )
+                    continue
 
                 if args.dry_run:
                     # ensure_coordinates writes to the instance; roll it back so
@@ -302,11 +325,13 @@ def main() -> None:
 
         logger.info(
             "Done. %d rows, %d moved, %d refused (coordinates removed), "
-            "%d could not be geocoded. Labels now: %s",
+            "%d could not be geocoded, %d skipped (location set by hand). "
+            "Labels now: %s",
             len(rows),
             moved,
             refused,
             failed,
+            skipped,
             ", ".join(f"{k}={v}" for k, v in sorted(after.items())),
         )
         logger.info(
