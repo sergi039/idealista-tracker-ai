@@ -179,6 +179,9 @@ def _create_historical_schema(engine):
             connection.execute(
                 text(f"ALTER TABLE properties DROP COLUMN {column}")  # noqa: S608
             )
+        # Migration 023 (issue #430) added property_attachment. It references
+        # property_activity, so it goes first.
+        connection.execute(text("DROP TABLE property_attachment"))
         connection.execute(text("DROP TABLE property_activity"))
 
 

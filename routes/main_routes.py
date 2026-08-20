@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 import re
 import uuid
 from datetime import date, datetime, time, timezone
@@ -8,10 +9,12 @@ import hashlib
 
 from flask import (
     Blueprint,
+    abort,
     current_app,
     render_template,
     request,
     redirect,
+    send_from_directory,
     session,
     url_for,
     flash,
@@ -30,6 +33,7 @@ from app import db, limiter
 from services import sea_view_service
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
+from services import attachments as attachments_service
 from services import owner_review
 from services.listing_verification import (
     read_verdict as listing_verdict,
@@ -1633,6 +1637,9 @@ def property_detail(property_id):
             # never asks for this.
             activity_timeline=owner_review.timeline(prop),
             activity_channels=owner_review.CHANNELS,
+            # Grouped by the entry they arrived with, in one query rather than
+            # one per timeline row.
+            attachments_by_entry=attachments_service.for_property(prop),
             sea_view_verdict=sea_view_service.read_verdict(prop),
             # One row, and only on this page: the list would run it per row.
             # It is evidence about the coordinate, next to the coordinate, and
@@ -2858,11 +2865,11 @@ def add_activity(property_id):
 
     try:
         if kind == owner_review_service.KIND_NOTE:
-            owner_review_service.add_note(
+            entry = owner_review_service.add_note(
                 prop, body=request.form.get("body"), happened_at=happened_at
             )
         elif kind == owner_review_service.KIND_CONTACT:
-            owner_review_service.add_contact(
+            entry = owner_review_service.add_contact(
                 prop,
                 channel=request.form.get("channel"),
                 counterpart=request.form.get("counterpart"),
@@ -2876,6 +2883,21 @@ def add_activity(property_id):
     except owner_review_service.ReviewError as exc:
         flash(str(exc), "error")
         return redirect(url_for("main.property_detail", property_id=property_id))
+
+    # The file rides on the entry it arrived with -- the ficha catastral
+    # belongs to the WhatsApp exchange that delivered it, not to the listing in
+    # general. Stored AFTER the entry exists, because the row it links to has
+    # to be there first; a refused file therefore leaves the note behind rather
+    # than losing what was typed with it.
+    upload = request.files.get("attachment")
+    if upload and upload.filename:
+        from services import attachments as attachments_service
+
+        try:
+            attachments_service.attach(prop, upload, activity=entry)
+        except attachments_service.AttachmentError as exc:
+            flash(f"Recorded, but the file was refused: {exc}", "error")
+            return redirect(url_for("main.property_detail", property_id=property_id))
 
     flash("Recorded.", "success")
     return redirect(url_for("main.property_detail", property_id=property_id))
@@ -2924,6 +2946,85 @@ def edit_activity(property_id, entry_id):
     except owner_review_service.ReviewError as exc:
         flash(str(exc), "error")
 
+    return redirect(url_for("main.property_detail", property_id=property_id))
+
+
+@main_bp.route(
+    "/properties/<int:property_id>/attachments/<int:attachment_id>", methods=["GET"]
+)
+@limiter.limit("10 per minute")
+def download_attachment(property_id, attachment_id):
+    """Serve one attachment, addressed by id and never by path.
+
+    The client names a row, not a file: the path comes from the database and
+    was written by us from a hash, so there is nothing here for a `..` to act
+    on. `send_from_directory` is still the primitive rather than `open()` --
+    it is built on Werkzeug's `safe_join` and it handles conditional and range
+    requests, which is what makes a 20 MB PDF resumable instead of restarting.
+
+    Three things about the response are the security of it:
+
+    * the `mimetype` is the **stored, sniffed** type. Left to Werkzeug it
+      would be guessed from `download_name`, which is the name the *client*
+      sent -- so a PDF uploaded as `photo.html` would be served as HTML;
+    * `X-Content-Type-Options: nosniff`, so a browser cannot decide for itself
+      that our declared type is wrong;
+    * `as_attachment` unless the sniffed type is one of the raster formats a
+      browser actually draws. SVG cannot arrive at all, so the question here
+      is never "is this payload safe" -- it is "is this one of five image
+      formats", which is a question with an answer.
+    """
+    from models import PropertyAttachment
+    from services import attachments as attachments_service
+
+    record = PropertyAttachment.query.filter_by(
+        id=attachment_id, property_id=property_id, deleted_at=None
+    ).first_or_404()
+
+    root = attachments_service.attachments_dir()
+    if not os.path.exists(os.path.join(root, record.storage_path)):
+        # The write-then-commit order means this should be impossible. If it
+        # happens anyway -- a restore from a database dump newer than the file
+        # backup -- it must be loud rather than a plain 404, which reads as
+        # "no such attachment".
+        logger.error(
+            "attachment %s has a row but no bytes at %s",
+            record.id,
+            record.storage_path,
+        )
+        abort(410)
+
+    response = send_from_directory(
+        root,
+        record.storage_path,
+        mimetype=record.content_type,
+        as_attachment=not attachments_service.may_render_inline(record.content_type),
+        download_name=record.original_filename or f"attachment-{record.id}",
+        conditional=True,
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+@main_bp.route(
+    "/properties/<int:property_id>/attachments/<int:attachment_id>/delete",
+    methods=["POST"],
+)
+def delete_attachment(property_id, attachment_id):
+    """Take an attachment off the page. Soft, like everything else here.
+
+    The bytes stay until `utils/sweep_attachments.py` finds that no live row
+    references that hash -- because one file can be linked from several rows,
+    and because a document somebody removed by mistake is not recomputable.
+    """
+    from models import PropertyAttachment
+
+    record = PropertyAttachment.query.filter_by(
+        id=attachment_id, property_id=property_id
+    ).first_or_404()
+    record.deleted_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.session.commit()
+    flash("Removed.", "success")
     return redirect(url_for("main.property_detail", property_id=property_id))
 
 

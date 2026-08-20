@@ -1435,6 +1435,78 @@ class PropertyActivity(db.Model):
         return f"<PropertyActivity {self.id} property={self.property_id} {self.kind}>"
 
 
+class PropertyAttachment(db.Model):
+    """A document or photo attached to a listing (issue #430).
+
+    The bytes live under `DATA_DIR`, named by their own sha256; this row is
+    what is known about them. `services/attachments.py` owns the writing and
+    the type policy, and its docstring explains why the bytes are not in the
+    database.
+
+    It points at a property and, optionally, at the exchange it arrived in --
+    through a **composite** foreign key, so an attachment on one property can
+    never reference another property's exchange. That is enforced by the
+    database (migration 023) rather than by whichever writer remembers to
+    check, and it is why `property_activity` carries `UNIQUE (id,
+    property_id)`.
+
+    There is deliberately no unique constraint on (property_id,
+    content_sha256): the same document may be attached to two exchanges, and a
+    soft-deleted row would otherwise hold the key against re-uploading the
+    file it refers to. Deduplication is on disk, one file per hash; a row here
+    is a link.
+    """
+
+    __tablename__ = "property_attachment"
+
+    id = db.Column(db.Integer, primary_key=True)
+    property_id = db.Column(
+        db.Integer,
+        db.ForeignKey("properties.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    activity_id = db.Column(db.Integer, index=True)
+    content_sha256 = db.Column(db.String(64), nullable=False, index=True)
+    storage_path = db.Column(db.String(255), nullable=False)
+    original_filename = db.Column(db.String(255))
+    # The sniffed type, never the client's claim.
+    content_type = db.Column(db.String(64), nullable=False)
+    size_bytes = db.Column(db.Integer, nullable=False)
+    kind = db.Column(db.String(16), nullable=False)
+    uploaded_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+    deleted_at = db.Column(db.DateTime)
+
+    property = db.relationship(
+        "Property", backref=db.backref("attachments", lazy="dynamic")
+    )
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(
+            ["activity_id", "property_id"],
+            ["property_activity.id", "property_activity.property_id"],
+            name="fk_property_attachment_activity",
+            ondelete="SET NULL",
+        ),
+        # All three indexes come from `index=True` on the columns themselves,
+        # the way PropertyAiAnalysisVariant declares its own; repeating them
+        # here is a duplicate CREATE INDEX.
+        CheckConstraint(
+            "kind IN ('document', 'photo')", name="ck_property_attachment_kind"
+        ),
+        CheckConstraint("size_bytes > 0", name="ck_property_attachment_size"),
+        # The PostgreSQL form of this is a regex (migration 023); written here
+        # without one so SQLite executes the same rule, the way migration 021's
+        # blank checks are.
+        CheckConstraint(
+            "LENGTH(content_sha256) = 64", name="ck_property_attachment_sha256"
+        ),
+    )
+
+    def __repr__(self):
+        return f"<PropertyAttachment {self.id} property={self.property_id}>"
+
+
 class BackgroundJob(db.Model):
     """Persists the state `services/background_jobs.py` used to keep only in a
     process-local dict (issue #176).
