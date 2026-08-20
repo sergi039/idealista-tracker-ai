@@ -772,6 +772,68 @@ class TestTextSignal:
         )
 
 
+class TestPhrasingsMeasuredOnProduction:
+    """Sentences that claim a view without the adjacency the list assumed.
+
+    Both are verbatim from listings this deployment holds, and both scored
+    `unknown` before the keywords were added: the coordinate was a village
+    centroid, so the terrain half could not run either, and with the text half
+    silent there was nothing left to decide on. That is honest -- neither row
+    was told the sea is absent -- but it is a miss, and a quiet one.
+
+    The AI is patched to `unavailable` on purpose. It is the *keywords* under
+    test, and on the fallback path a keyword hit is what carries the claim; an
+    available bridge would answer these correctly whatever the list said, which
+    would make this test pass with the list unchanged.
+    """
+
+    @pytest.fixture
+    def no_bridge(self, monkeypatch):
+        monkeypatch.setattr(
+            svc,
+            "classify_text_with_ai",
+            lambda text: {"claim": svc.TEXT_UNAVAILABLE, "error": "bridge down"},
+        )
+
+    def test_sea_and_city_views(self, no_bridge):
+        """idealista 111186983, Castiello - Bernueces, Gijón."""
+        result = svc.evaluate_text(
+            "Land plot for sale in Barrio Castiello Urbano",
+            "Building plot with sea and city views in an exclusive area of Gijón.",
+            True,
+        )
+        assert result["claim"] == svc.TEXT_VIEW
+        assert "sea and city view" in result["view_keywords"]
+
+    def test_the_sea_on_the_horizon(self, no_bridge):
+        """The Villahormes plot: the claim is distant, but it is a claim."""
+        result = svc.evaluate_text(
+            "Terreno en Villahormes",
+            "a lo lejos podemos disfrutar de vistas abiertas y despejadas, "
+            "con presencia del mar en el horizonte",
+            True,
+        )
+        assert result["claim"] == svc.TEXT_VIEW
+        assert "mar en el horizonte" in result["view_keywords"]
+
+    def test_the_plural_is_covered_by_the_singular_substring(self, no_bridge):
+        """`sea and city view` is stored, `...views` is what listings write."""
+        result = svc.evaluate_text("Plot", "with sea and city views", True)
+        assert result["claim"] == svc.TEXT_VIEW
+
+    def test_a_park_view_is_still_not_a_sea_view(self, no_bridge):
+        """The substring is not cut back to `and city views`."""
+        result = svc.evaluate_text("Flat", "with park and city views", True)
+        assert result["claim"] == svc.TEXT_NONE
+
+    def test_a_bare_horizon_claims_nothing(self, no_bridge):
+        """Nor back to `el horizonte`."""
+        result = svc.evaluate_text(
+            "Finca", "la sierra se recorta en el horizonte", True
+        )
+        assert result["claim"] == svc.TEXT_NONE
+
+
 class TestCombination:
     def test_text_and_terrain_agreeing_is_the_only_route_to_yes(self):
         state, source, _ = svc.combine({"claim": svc.TEXT_VIEW}, {"state": svc.LIKELY})
