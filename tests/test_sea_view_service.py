@@ -781,10 +781,19 @@ class TestPhrasingsMeasuredOnProduction:
     silent there was nothing left to decide on. That is honest -- neither row
     was told the sea is absent -- but it is a miss, and a quiet one.
 
-    The AI is patched to `unavailable` on purpose. It is the *keywords* under
-    test, and on the fallback path a keyword hit is what carries the claim; an
-    available bridge would answer these correctly whatever the list said, which
-    would make this test pass with the list unchanged.
+    The AI is patched to `unavailable` on purpose, and it is load bearing for
+    the three tests that expect a claim: on the fallback path a keyword hit is
+    what carries it, while an available bridge would read these sentences
+    correctly whatever the list contained -- which would let them pass with the
+    list unchanged.
+
+    It is *not* load bearing for the last two. `park and city views` and
+    `la sierra se recorta en el horizonte` match no entry in either list, so
+    `evaluate_text` returns at the "nothing is mentioned" branch before the
+    bridge is consulted at all; the patch is inherited from the fixture and
+    never invoked. Those two pin that the substrings were not cut back further,
+    and they stay green when the keywords are removed -- by construction, since
+    removing a keyword cannot make a non-match start matching.
     """
 
     @pytest.fixture
