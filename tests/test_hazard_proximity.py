@@ -461,6 +461,31 @@ class TestTheRulesTable:
             is None
         )
 
+    def test_a_lifecycle_range_and_the_other_prefixes(self):
+        """OSM's date specification allows a range, and reading the whole
+        string as one date failed to parse and therefore read as *active*.
+        `removed:`, `destroyed:`, `proposed:` and `construction:` were missing
+        from the prefix list altogether (codex review, 2026-08-20)."""
+        named = {"landuse": "industrial", "name": "Central termica de Prueba"}
+        for gone in (
+            {"end_date": "2020..2022"},
+            {"end_date": "2020-2022"},
+            {"removed:power": "plant"},
+            {"destroyed:power": "plant"},
+            {"proposed:power": "plant"},
+            {"construction:power": "plant"},
+        ):
+            assert hazard_rules.classify({**named, **gone}) is None, gone
+        # A date still ahead of us is not a closure, and a month is not a
+        # range: `2020-06` must not be read as "2020 to 06".
+        future = hazard_rules.classify({**named, "end_date": "2099"})
+        assert future is not None and future.kind == "power_plant"
+        assert hazard_rules.classify({**named, "end_date": "2020-06"}) is None
+        # And the dates that describe a survey, not an ending, are ignored.
+        for ignored in ({"check_date": "2020-01-01"}, {"start_date": "1990"}):
+            alive = hazard_rules.classify({"landuse": "landfill", **ignored})
+            assert alive is not None and alive.kind == "landfill"
+
     def test_a_closed_power_station_is_not_an_emitting_one(self):
         """Spain shut both of these on 2020-06-30, and both are still mapped.
 
@@ -751,6 +776,42 @@ class TestGroupingBounds:
         with pytest.raises(TypeError):
             hazard_rules.merge_keys(["cantera", "cantera blokdegal s a"])
 
+    def test_two_operators_are_two_facilities(self, app, real_fetch):
+        """`operator=Norte Ambiental` and `operator=Servicios Norte Ambiental`
+        are two companies, and folding one into the other produced a single
+        item wearing the far facility's identity and the near one's distance
+        (codex review, 2026-08-20)."""
+        elements = [
+            {
+                "type": "way",
+                "id": 70_001,
+                "lat": XIVARES[0] + 0.002,
+                "lon": XIVARES[1],
+                "tags": {
+                    "landuse": "quarry",
+                    "operator": "Norte Ambiental",
+                },
+            },
+            {
+                "type": "way",
+                "id": 70_002,
+                "lat": XIVARES[0] + 0.010,
+                "lon": XIVARES[1],
+                "tags": {
+                    "landuse": "landfill",
+                    "operator": "Servicios Norte Ambiental",
+                },
+            },
+        ]
+        measurement = HazardService(
+            enrichment_service=_FakeEnrichment(elements=elements)
+        ).measure(*XIVARES)
+        assert len(measurement["items"]) == 2
+        assert {item["name"] for item in measurement["items"]} == {
+            "Norte Ambiental",
+            "Servicios Norte Ambiental",
+        }
+
     def test_a_generic_name_never_absorbs_a_specific_one(self, app, real_fetch):
         """`way/231335217` is a quarry named *Cantera*; `way/169318445` is a
         different quarry named *Cantera Blokdegal S.A.*
@@ -912,12 +973,11 @@ class TestHonestAbsence:
         verdict = hazard_service.read_verdict(prop)
         assert verdict["status"] == hazard_service.STATUS_STALE_ORIGIN
         assert verdict["measured"] is False
-        counted = (
-            Property.query.filter(Property.id == prop.id)
-            .filter(hazard_service.measured_expression(Property))
-            .count()
-        )
-        assert counted == 0
+        assert verdict["nearest"] is None
+        # It still *carries* a complete scan, which is all the coverage line
+        # claims; that the scan is not about this listing any more is what the
+        # card says, and no badge is drawn either way.
+        assert verdict["complete"] is True
 
     def test_a_half_read_block_still_renders(self, app, client):
         """The page must not raise on a shape an older run could have left.
@@ -1053,16 +1113,19 @@ class TestOneAnswerInTwoLanguages:
 
     A coverage line that disagrees with the badges under it is a third wrong
     number rather than a disclosure (`services/listing_verification.py` wrote
-    that rule down), so the same matrix goes through both readings -- and it
-    carries the origin cases, because the moment one side learned about a
-    moved coordinate the other had to as well.
+    that rule down). What the two share is **`complete`** -- "carries a
+    complete scan" -- and deliberately not `measured`, which additionally asks
+    whether the scan is about the row's *current* coordinate. Answering that
+    second question in SQL means casting stored JSON to a number, and on
+    PostgreSQL one hand-edited `"junk"` then raises and takes the whole
+    coverage query down (codex review, 2026-08-20).
     """
 
     _HERE = {"lat": XIVARES[0], "lon": XIVARES[1]}
     _ELSEWHERE = {"lat": XIVARES[0] + 0.02, "lon": XIVARES[1]}
 
     @pytest.mark.parametrize(
-        "stored,measured",
+        "stored,complete",
         [
             (None, False),
             ({"status": hazard_service.STATUS_OK, "items": []}, True),
@@ -1070,36 +1133,108 @@ class TestOneAnswerInTwoLanguages:
             ({"status": hazard_service.STATUS_UNAVAILABLE}, False),
             ({"status": hazard_service.STATUS_NO_COORDINATES}, False),
             ({"nonsense": 1}, False),
-            # The origin the block was measured from, against the row's own.
-            ({"status": hazard_service.STATUS_OK, "items": [], "origin": _HERE}, True),
+            # A moved coordinate does not make the scan incomplete -- it makes
+            # it a complete scan of somewhere else, which is what the card
+            # says and what keeps this answerable without a cast.
             (
                 {
                     "status": hazard_service.STATUS_OK,
                     "items": [],
                     "origin": _ELSEWHERE,
                 },
-                False,
-            ),
-            # Unreadable on either side is not a move, in both languages.
-            (
-                {"status": hazard_service.STATUS_OK, "items": [], "origin": "junk"},
                 True,
             ),
         ],
     )
-    def test_python_and_sql_read_the_same_matrix(self, app, stored, measured):
-        prop = _prop(title=f"Matrix{measured}{stored}")
+    def test_python_and_sql_read_the_same_matrix(self, app, stored, complete):
+        prop = _prop(title=f"Matrix{complete}{stored}")
         if stored is not None:
             prop.enrichment = {"hazards": stored}
             db.session.commit()
-        assert hazard_service.read_verdict(prop)["measured"] is measured
+        assert hazard_service.read_verdict(prop)["complete"] is complete
 
         counted = (
             Property.query.filter(Property.id == prop.id)
             .filter(hazard_service.measured_expression(Property))
             .count()
         )
-        assert bool(counted) is measured
+        assert bool(counted) is complete
+
+    @pytest.mark.parametrize(
+        "truncated,complete",
+        [
+            ({}, True),
+            ({"truncated": True}, False),
+            ({"truncated": False}, True),
+            # A JSON boolean does not render the same on both backends, and a
+            # hand-edited row can hold anything at all. Everything that is not
+            # plainly "not truncated" reads as truncated, in both languages.
+            ({"truncated": "true"}, False),
+            ({"truncated": "false"}, True),
+            ({"truncated": 1}, False),
+            ({"truncated": 0}, True),
+            ({"truncated": None}, True),
+            ({"truncated": {}}, False),
+            ({"truncated": []}, False),
+            ({"truncated": "junk"}, False),
+        ],
+    )
+    def test_the_truncation_flag_reads_the_same_in_both_languages(
+        self, app, truncated, complete
+    ):
+        """And none of these may raise. On PostgreSQL a Boolean cast over
+        `{}` fails the query outright, which would remove the coverage line --
+        and with it the page -- for every row, over one bad row."""
+        prop = _prop(title=f"Flag{truncated}")
+        prop.enrichment = {
+            "hazards": {
+                "status": hazard_service.STATUS_NONE,
+                "items": [],
+                "item_count": 0,
+                "searched_m": 5984.0,
+                "origin": self._HERE,
+                **truncated,
+            }
+        }
+        db.session.commit()
+        assert hazard_service.read_verdict(prop)["complete"] is complete
+        counted = (
+            Property.query.filter(Property.id == prop.id)
+            .filter(hazard_service.measured_expression(Property))
+            .count()
+        )
+        assert bool(counted) is complete
+
+    def test_an_item_nobody_can_read_costs_the_block_its_completeness(self, app):
+        """Dropping it silently reported the rest as the whole list, with a
+        clean badge and a 100 from the scorer (codex review, 2026-08-20)."""
+        prop = _prop(title="MalformedItem")
+        prop.enrichment = {
+            "hazards": {
+                "status": hazard_service.STATUS_OK,
+                "item_count": 1,
+                "items": ["not a dict"],
+                "truncated": False,
+                "searched_m": 5984.0,
+                "origin": self._HERE,
+            }
+        }
+        db.session.commit()
+        verdict = hazard_service.read_verdict(prop)
+        # Nobody has read this block, so nothing is asserted from it: no
+        # badge, no score, and the card says so. `complete` stays as stored,
+        # because that is what the coverage line counts and SQL cannot see an
+        # item's shape -- the two readings must not diverge over something one
+        # of them is blind to.
+        assert verdict["status"] == hazard_service.STATUS_MISSING
+        assert verdict["measured"] is False
+        assert verdict["flagged"] is False
+        assert verdict["items"] == []
+        score, meta = HousingPropertyScorer()._hazard_score(
+            prop, near_m=1000.0, far_m=5000.0, moderate_factor=0.5
+        )
+        assert score is None
+        assert meta["status"] == hazard_service.STATUS_MISSING
 
 
 class TestTheCriterionShipsWeightless:
@@ -1474,6 +1609,24 @@ class TestTheSurfaces:
         body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
         assert "OpenStreetMap refused" in body
 
+    def test_an_approximate_row_does_not_get_a_parcel_level_badge(
+        self, app, client, real_fetch, profile
+    ):
+        """532 of 725 rows sit on a locality centroid, so "Industry nearby"
+        from one scan would make that claim for every listing in the village
+        (codex review, 2026-08-20)."""
+        prop = _prop(
+            title="CentroidBadge",
+            location_accuracy="approximate",
+            search_profile_id=profile.id,
+        )
+        HazardService(
+            enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
+        ).enrich(prop, commit=True)
+        body = client.get("/properties").get_data(as_text=True)
+        assert "Industry near the locality" in body
+        assert "Industry nearby" not in body
+
     def test_the_list_badges_only_a_flagged_row_and_counts_the_rest(
         self, app, client, real_fetch, profile
     ):
@@ -1682,6 +1835,76 @@ class TestOneHomePerRule:
         service.enrich_free_sources(prop, commit=True, use_ai=False)
         assert prop.enrichment["hazards"]["status"] == hazard_service.STATUS_OK
         assert prop.enrichment["hazards"]["items"]
+
+    def test_the_scan_never_rides_a_transaction_it_cannot_lock(self, app, real_fetch):
+        """`commit=False` takes no lock, so the scan does not run there.
+
+        Reproduced on the ordinary Enrich flow: session B committed a
+        measurement while A was out on the network, and A's refusal -- read
+        from its own unlocked copy -- was committed over it (codex review,
+        2026-08-20). The Enrich path runs the scan on its own beforehand,
+        under its own lock; the free pass skips it rather than doing it twice.
+        """
+        from services.property_enrichment_service import PropertyEnrichmentService
+
+        prop = _prop(title="NoUnlockedScan")
+        service = PropertyEnrichmentService(
+            enrichment_service=_FakeEnrichment(failure="stubbed"),
+            hazard_service=HazardService(
+                enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
+            ),
+            sea_view_calculator=lambda prop, commit, use_ai: None,
+        )
+        service.enrich_free_sources(prop, commit=False, use_ai=False)
+        assert "hazards" not in (prop.enrichment or {})
+
+        # ...and the path that owns its commits still scans.
+        service.enrich_free_sources(prop, commit=True, use_ai=False)
+        assert prop.enrichment["hazards"]["status"] == hazard_service.STATUS_OK
+
+    def test_the_enrich_button_scans_before_its_shared_transaction(
+        self, app, real_fetch, monkeypatch
+    ):
+        """And the scan the Enrich flow does run is the locked one."""
+        from services import property_enrichment_service as pes
+
+        locked = []
+        real_refresh = db.session.refresh
+        monkeypatch.setattr(
+            db.session,
+            "refresh",
+            lambda obj, **kwargs: (
+                locked.append(kwargs.get("with_for_update")),
+                real_refresh(obj, **kwargs),
+            )[1],
+        )
+
+        prop = _prop(title="EnrichLocked")
+        service = pes.PropertyEnrichmentService(
+            enrichment_service=_FakeEnrichment(failure="stubbed"),
+            hazard_service=HazardService(
+                enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
+            ),
+            sea_view_calculator=lambda prop, commit, use_ai: None,
+            location_service=SimpleNamespace(
+                ensure_coordinates=lambda prop, refresh, commit: None
+            ),
+            travel_service=SimpleNamespace(
+                calculate_for_property=lambda prop, commit: True
+            ),
+            scoring_service=SimpleNamespace(
+                calculate_for_property=lambda prop, commit: True
+            ),
+            sea_distance_service=SimpleNamespace(
+                update_property=lambda prop, commit: None
+            ),
+            pool_service=SimpleNamespace(enrich=lambda prop, commit: None),
+        )
+        monkeypatch.setattr(pes, "travel_api_state", lambda prop: "ok")
+        service.enrich_property(prop, recalc_scoring=False)
+
+        assert prop.enrichment["hazards"]["status"] == hazard_service.STATUS_OK
+        assert True in locked, "the scan must take the row under FOR UPDATE"
 
     def test_the_default_construction_wires_the_shared_client(self, app):
         """The test above injects its own service, so a broken default would

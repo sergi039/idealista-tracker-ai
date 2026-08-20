@@ -53,7 +53,7 @@ import math
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import Float, and_, cast, func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm.attributes import flag_modified
 
 from services import hazard_rules
@@ -62,7 +62,7 @@ from services.coordinate_quality import (
     distance_bounds_m,
     normalize_accuracy,
 )
-from services.enrichment_origin import ORIGIN_TOLERANCE_DEG, origin_of, origins_agree
+from services.enrichment_origin import origin_of, origins_agree
 from services.enrichment_write import check_writable, locked_write
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 
@@ -198,6 +198,24 @@ def _safe_float(value: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return None if math.isnan(number) else number
+
+
+# The spellings a stored `truncated` may arrive in that mean "not truncated".
+# Everything else -- `true`, `1`, an object, a string nobody expected -- reads
+# as truncated, which is the fail-closed direction: a scan wrongly called
+# short costs a disclosure, a scan wrongly called complete is the defect this
+# whole feature exists to remove. Both languages read the same list, because
+# a JSON boolean does not render the same on both backends: PostgreSQL's `->>`
+# gives `false` and SQLite's `json_extract` gives `0`.
+_NOT_TRUNCATED_TEXT = ("", "false", "0", "none", "null")
+
+
+def _is_truncated(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().casefold() not in _NOT_TRUNCATED_TEXT
 
 
 def _element_point(element: Dict[str, Any]) -> Optional[Tuple[float, float]]:
@@ -670,6 +688,18 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
     if not isinstance(stored, dict):
         return {**base, "status": STATUS_MISSING}
 
+    # `complete` is a fact about the *scan* -- did the query see everything it
+    # asked for -- and `measured` is a fact about *this point*. They are two
+    # different questions and they get two different answers: a block taken
+    # before the listing was re-located is a complete scan of somewhere else.
+    # Keeping them apart is what lets the coverage line be answerable in SQL
+    # without casting untrusted JSON to a number, which on PostgreSQL raises
+    # `invalid input syntax` and takes the whole page down for one malformed
+    # row (codex review, 2026-08-20).
+    status = stored.get("status")
+    base["truncated"] = _is_truncated(stored.get("truncated"))
+    base["complete"] = status in MEASURED_STATUSES and not base["truncated"]
+
     # The restatement below re-applies the row's *current* slack to a distance
     # measured from a point recorded at scan time -- which is right only while
     # that is still where the listing is. `utils/refresh_property_accuracy.py`
@@ -690,7 +720,6 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
         if origins_agree(stored_origin, origin_of(prop)) is not True:
             return {**base, "status": STATUS_STALE_ORIGIN}
 
-    status = stored.get("status")
     base["updated_at"] = stored.get("updated_at")
     base["last_attempt_status"] = stored.get("last_attempt_status")
     searched = _safe_float(stored.get("searched_m"))
@@ -700,16 +729,23 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
     # For an approximate row that is 1 km, and saying so is the difference
     # between "nothing near this plot" and "nothing near a village centre".
     base["guaranteed_m"] = None if searched is None else max(0.0, searched - slack)
-    base["truncated"] = bool(stored.get("truncated"))
-
     if status not in MEASURED_STATUSES:
         return {**base, "status": status or STATUS_MISSING}
 
     items = []
     high = 0
-    for stored_item in stored.get("items") or []:
+    stored_items = stored.get("items") or []
+    for stored_item in stored_items:
         if not isinstance(stored_item, dict):
-            continue
+            # A stored shape nobody can read is not an item that can be walked
+            # past: the ones beside it would then be presented as the whole
+            # list, with a clean badge and a 100 from the scorer (codex
+            # review, 2026-08-20). Nothing this writer produces looks like
+            # that, so the block is a hand-edit or a shape from some future
+            # version, and the honest reading of a block nobody can read is
+            # that nobody has read it. `complete` is left as stored, because
+            # it is what SQL counts and SQL cannot see this.
+            return {**base, "status": STATUS_MISSING}
         measured = _safe_float(stored_item.get("origin_distance_m"))
         lower, upper = distance_bounds_m(measured, slack)
         item = {
@@ -743,14 +779,20 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
             else float("inf")
         )
     )
+    # `item_count` is what the scan found; `items` is what it stored, capped
+    # at `MAX_ITEMS`. Fewer stored than counted is the ordinary cap and is
+    # handled by the scorer's own bound; *more* counted than were readable
+    # here means something was dropped above, and that is not a complete
+    # answer either.
+    counted = stored.get("item_count")
+    item_count = int(counted) if isinstance(counted, int) else len(items)
     return {
         **base,
         "status": status,
         "measured": True,
-        "complete": not base["truncated"],
         "flagged": bool(items),
         "items": items,
-        "item_count": int(stored.get("item_count") or len(items)),
+        "item_count": item_count,
         "high_count": high,
         "nearest": items[0] if items else None,
     }
@@ -759,47 +801,33 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
 def measured_expression(model):
     """`read_verdict(...)["complete"]` as a SQL predicate over `model`.
 
-    The coverage line beside the result count is drawn from this, and it has
-    to agree with the badges under it row for row -- a header reading "40 of
-    730 scanned" above a table whose badges say otherwise is a third wrong
-    number rather than a disclosure. That is `listing_verification`'s rule,
-    and `tests/test_hazard_proximity.py` runs one matrix through both readings
-    for the same reason.
+    "Carries a complete scan" -- the same question in both languages, and
+    deliberately *not* "is about this coordinate". Those are two facts and
+    `read_verdict` keeps them apart for a reason that only shows up here:
+    answering the second in SQL means casting a stored coordinate to a number,
+    and on PostgreSQL `(… ->> 'lat')::float` on a hand-edited `"junk"` raises
+    `invalid input syntax` and takes the entire `/properties` coverage query
+    down with it (codex review, 2026-08-20). One malformed row must not be
+    able to remove the page.
 
-    Which is why the origin check is here too, awkward as it is in SQL: the
-    moment `read_verdict` learned to answer `stale_origin`, a count that knew
-    only about `status` started disagreeing with the badges it sits above.
-    An unreadable origin on either side is *not* a move, exactly as
-    `origins_agree` has it -- the two sides of one rule, in two languages.
+    So nothing here is cast. The truncation flag is read as text and compared
+    against the same `_NOT_TRUNCATED_TEXT` list the Python side uses -- which
+    is what makes the two agree across a JSON boolean that PostgreSQL renders
+    `false` and SQLite renders `0` -- and everything unrecognised counts as
+    truncated, the fail-closed direction.
+
+    The line this feeds says "fully scanned", which is exactly what it counts.
+    A row whose coordinate has moved since the scan still carries a complete
+    scan; that it is no longer about this point is what the card says, and the
+    badge above it stays silent either way, so no two numbers on that line
+    disagree.
     """
     block = model.enrichment[ENRICHMENT_KEY]
     status = block["status"].as_string()
-    origin_lat = block["origin"]["lat"].as_float()
-    origin_lon = block["origin"]["lon"].as_float()
-    row_lat = cast(model.location_lat, Float)
-    row_lon = cast(model.location_lon, Float)
-    # Only an *unreadable stored origin* is "cannot tell". A row with no
-    # coordinate of its own is a mismatch, not an unknown: nothing can be
-    # asserted about the parcel of a listing that is nowhere.
-    origin_unknown = or_(origin_lat.is_(None), origin_lon.is_(None))
-    origin_matches = and_(
-        model.location_lat.isnot(None),
-        model.location_lon.isnot(None),
-        func.abs(origin_lat - row_lat) <= ORIGIN_TOLERANCE_DEG,
-        func.abs(origin_lon - row_lon) <= ORIGIN_TOLERANCE_DEG,
-    )
-    # An incomplete scan is not a completed one. `as_boolean()` rather than a
-    # string comparison, because a JSON boolean does not read the same on both
-    # backends -- PostgreSQL's `->>` renders `true` and SQLite's
-    # `json_extract` renders the integer `1`, and a string test written for
-    # one of them silently keeps counting incomplete scans on the other.
-    # `IS NOT true` also covers the missing key, which is a scan taken before
-    # this field existed and not a claim that it was short.
-    truncated = block["truncated"].as_boolean()
+    truncated = func.lower(block["truncated"].as_string())
     return and_(
         or_(*[status == value for value in MEASURED_STATUSES]),
-        or_(origin_unknown, origin_matches),
-        truncated.isnot(True),
+        or_(truncated.is_(None), truncated.in_(_NOT_TRUNCATED_TEXT)),
     )
 
 

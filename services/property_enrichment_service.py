@@ -150,19 +150,24 @@ class PropertyEnrichmentService:
                 db.session.rollback()
 
         # The hazard scan (#437) is one more Overpass round trip through the
-        # same client and gate. It goes here rather than into `enrich_property`
-        # for the reason this method exists: ingestion needs it too, and a
-        # listing whose page says nothing about a cement works 1.1 km away
-        # reads as a listing with no cement works near it.
-        try:
-            self.hazard_service.enrich(prop, commit=commit)
-        except Exception as e:
-            logger.warning(
-                "Hazard scan failed for %s: %s",
-                getattr(prop, "id", None),
-                e,
-            )
-            if commit:
+        # same client and gate, and it runs here **only when this pass owns
+        # its commits**. With `commit=False` the caller owns a transaction
+        # this cannot lock inside, and a scan written that way loses a
+        # concurrently committed measurement -- reproduced on the ordinary
+        # Enrich flow (codex review, 2026-08-20), where session B's
+        # `none_within_radius` was overwritten by session A's refusal. So the
+        # Enrich path runs the scan on its own, under its own lock, before its
+        # shared transaction opens; `enrich_property` does that and this skips
+        # it rather than doing it twice.
+        if commit:
+            try:
+                self.hazard_service.enrich(prop, commit=True)
+            except Exception as e:
+                logger.warning(
+                    "Hazard scan failed for %s: %s",
+                    getattr(prop, "id", None),
+                    e,
+                )
                 db.session.rollback()
 
         # Sea view last: with commit=True its writer takes the row under
@@ -215,6 +220,19 @@ class PropertyEnrichmentService:
         self.location_service.ensure_coordinates(
             prop, refresh=refresh_coords, commit=True
         )
+
+        # The hazard scan takes the row under `FOR UPDATE` and commits it, so
+        # it runs while the session is still clean -- `ensure_coordinates`
+        # above owns its own transaction and everything below shares one.
+        # Doing it here rather than inside the free pass is what keeps a
+        # concurrent measurement from being written away (#437, codex review).
+        try:
+            self.hazard_service.enrich(prop, commit=True)
+        except Exception as e:
+            logger.warning(
+                "Hazard scan failed for %s: %s", getattr(prop, "id", None), e
+            )
+            db.session.rollback()
 
         # Who is selling: the owner, or an agency. Free: it reads the listing
         # page the row already links to, and only when the row does not answer

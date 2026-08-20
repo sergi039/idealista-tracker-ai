@@ -380,7 +380,21 @@ _TAG_EVIDENCE: Dict[Tuple[str, str], Tuple[str, str]] = {
 # `disused:plant:source=coal` and `end_date=2020-06-30`, still tagged
 # `landuse=industrial` and still named *Central térmica*. Spain closed them in
 # June 2020; the name rule reported them as emitting power stations.
-_LIFECYCLE_PREFIXES = ("disused", "abandoned", "ruins", "demolished", "razed", "was")
+# `proposed` and `construction` are here for the other direction: a plant that
+# does not exist yet is not a neighbour, and its name is already on the map.
+_LIFECYCLE_PREFIXES = (
+    "disused",
+    "abandoned",
+    "ruins",
+    "demolished",
+    "razed",
+    "removed",
+    "destroyed",
+    "was",
+    "proposed",
+    "construction",
+    "planned",
+)
 
 # The keys a prefix has to be attached to for the prefix to mean the hazard is
 # gone. `name` is deliberately absent -- that is the `was:name` case above.
@@ -441,6 +455,18 @@ def _closed_before_today(tags: Dict[str, Any]) -> bool:
     raw = str(tags.get("end_date") or "").strip()
     if not raw:
         return False
+    # OSM's date specification allows a range, and both spellings turn up:
+    # `2020..2022` and `2020-2022`. The end of the range is the date that
+    # matters, and reading the whole string as one date failed to parse and
+    # therefore read as *active* -- a retired plant back on the map (codex
+    # review, 2026-08-20). The second form is only a range when the tail is a
+    # bare year, or `2020-06` would be split into `2020` and `06`.
+    if ".." in raw:
+        raw = raw.rsplit("..", 1)[-1].strip()
+    else:
+        head, _, tail = raw.rpartition("-")
+        if head and len(tail) == 4 and tail.isdigit():
+            raw = tail
     for pattern, roll in (("%Y-%m-%d", 0), ("%Y-%m", 1), ("%Y", 2)):
         try:
             parsed = datetime.strptime(raw, pattern).date()
@@ -780,6 +806,14 @@ def merge_keys(keys: Iterable[str], absorbing: Iterable[str]) -> Dict[str, str]:
     canonical: Dict[str, str] = {key: key for key in unique}
     token_cache = {key: _tokens(key) for key in unique}
     for index, longer in enumerate(unique):
+        if longer in may_absorb:
+            # An operator is somebody's own claim about who runs a thing, so
+            # it never disappears into another operator. `operator=Norte
+            # Ambiental` and `operator=Servicios Norte Ambiental` are two
+            # companies, and folding the second into the first produced one
+            # item wearing the far facility's identity and the near one's
+            # distance (codex review, 2026-08-20). Only a *name* may fold.
+            continue
         for shorter in unique[:index]:
             if shorter not in may_absorb:
                 continue

@@ -311,6 +311,7 @@ TRANSLATIONS = {
         # rather than letting a list of four facilities read as a survey.
         "hazards_title": "Industrial neighbours",
         "hazards_badge": "Industry nearby",
+        "hazards_badge_centroid": "Industry near the locality",
         "hazards_incomplete_badge": "Scan incomplete",
         "hazards_badge_tooltip": "OpenStreetMap records an industrial or waste facility near this listing",
         "hazards_none": "Nothing recognised within the radius scanned",
@@ -791,6 +792,7 @@ TRANSLATIONS = {
         # Vecindad industrial (#437).
         "hazards_title": "Vecindad industrial",
         "hazards_badge": "Industria cerca",
+        "hazards_badge_centroid": "Industria cerca de la localidad",
         "hazards_incomplete_badge": "Exploración incompleta",
         "hazards_badge_tooltip": "OpenStreetMap registra una instalación industrial o de residuos cerca de este anuncio",
         "hazards_none": "Nada reconocido dentro del radio explorado",
