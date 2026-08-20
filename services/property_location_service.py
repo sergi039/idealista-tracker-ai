@@ -799,6 +799,17 @@ class PropertyLocationService:
         calls this first, before anything else dirties the session -- see the
         note there.
 
+        **A location a person established is never touched, and not even
+        asked about** (GEO-002). `manual_coordinate` reads it; the refusal is
+        in front of the geocode rather than after it, the shape
+        `services/advertiser.enrich` uses for a hand-set seller verdict.
+        Measured on production 2026-08-20: three rows carried a curated
+        location in three ad-hoc shapes and nothing read any of them, while 129
+        of the 130 `precise` rows carry no portal pin and so had no defence at
+        all. `improves_on` is not consulted -- a person outranks a better label,
+        because the label is Google's opinion of its own match and the person
+        looked at the parcel.
+
         One consequence is deliberate and visible: with `refresh=True` the
         columns are no longer cleared *before* the network calls. Clearing them
         eagerly made the `refresh()` under the lock autoflush this run's own
