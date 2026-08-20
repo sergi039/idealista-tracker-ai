@@ -551,6 +551,24 @@ class HazardService:
 
         with locked_write(prop, locked=locked, commit=commit):
             previous = self._stored(prop)
+            # Re-read under the lock. The row can move while the network call
+            # is in flight -- codex reproduced it: A measures from origin A, B
+            # moves the row and stores a B-origin measurement, and A then
+            # refreshes under the lock and writes its stale result over B's
+            # good one. Readers call the result `stale_origin`, so nothing
+            # wrong is *shown*, but a measurement of where the listing
+            # actually is was lost, and only a re-scan brings it back.
+            measured_where_it_is = (
+                origins_agree({"lat": lat, "lon": lon}, origin_of(prop)) is not False
+            )
+            if not measured_where_it_is and previous.get("status") in MEASURED_STATUSES:
+                payload = {
+                    **previous,
+                    "last_attempt_status": STATUS_STALE_ORIGIN,
+                    "last_attempt_at": now_iso,
+                }
+                self._store(prop, payload)
+                return payload
 
             if (
                 measurement["status"] == STATUS_UNAVAILABLE
@@ -632,6 +650,11 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
         "distance_basis": DISTANCE_BASIS,
         "source": SOURCE,
         "measured": False,
+        # A scan that reached Overpass's element cap, or that saw a hazard OSM
+        # could not place, is a short list rather than an answer. `measured`
+        # stays true for it -- something *was* looked at, and the items it did
+        # find are real -- but nothing may count it as a completed scan.
+        "complete": False,
         "flagged": False,
         "items": [],
         "item_count": 0,
@@ -724,6 +747,7 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
         **base,
         "status": status,
         "measured": True,
+        "complete": not base["truncated"],
         "flagged": bool(items),
         "items": items,
         "item_count": int(stored.get("item_count") or len(items)),
@@ -733,7 +757,7 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
 
 
 def measured_expression(model):
-    """`read_verdict(...)["measured"]` as a SQL predicate over `model`.
+    """`read_verdict(...)["complete"]` as a SQL predicate over `model`.
 
     The coverage line beside the result count is drawn from this, and it has
     to agree with the badges under it row for row -- a header reading "40 of
@@ -764,9 +788,18 @@ def measured_expression(model):
         func.abs(origin_lat - row_lat) <= ORIGIN_TOLERANCE_DEG,
         func.abs(origin_lon - row_lon) <= ORIGIN_TOLERANCE_DEG,
     )
+    # An incomplete scan is not a completed one. `as_boolean()` rather than a
+    # string comparison, because a JSON boolean does not read the same on both
+    # backends -- PostgreSQL's `->>` renders `true` and SQLite's
+    # `json_extract` renders the integer `1`, and a string test written for
+    # one of them silently keeps counting incomplete scans on the other.
+    # `IS NOT true` also covers the missing key, which is a scan taken before
+    # this field existed and not a claim that it was short.
+    truncated = block["truncated"].as_boolean()
     return and_(
         or_(*[status == value for value in MEASURED_STATUSES]),
         or_(origin_unknown, origin_matches),
+        truncated.isnot(True),
     )
 
 

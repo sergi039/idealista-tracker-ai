@@ -137,6 +137,15 @@
    badge nobody could read. #}
 {% macro hazard_badge(p) -%}
     {% set verdict = hazard_verdict_for(p) %}
+    {% if verdict.measured and not verdict.complete and not verdict.flagged %}
+        {# A scan that came back short and found nothing is not a clean
+           neighbourhood, and with no badge at all the row was indistinguishable
+           from one (codex review, 2026-08-20). It is the only case where this
+           badge speaks without a facility to name. #}
+        <span class="badge bg-warning text-dark fw-normal" title="{{ t('hazards_truncated') }}">
+            <i class="fas fa-industry me-1"></i>{{ t('hazards_incomplete_badge') }}
+        </span>
+    {% endif %}
     {% if verdict.flagged and verdict.nearest %}
         <span class="badge {{ 'bg-danger' if verdict.high_count else 'bg-secondary' }} fw-normal"
               title="{{ t('hazards_badge_tooltip') }} — {{ verdict.nearest.name or t('hazard_kind_' ~ verdict.nearest.kind) }}{% if verdict.truncated %} — {{ t('hazards_truncated') }}{% endif %}">

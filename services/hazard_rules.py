@@ -298,11 +298,19 @@ _PRODUCT_EVIDENCE: Dict[str, Tuple[str, str]] = {
     # and welds steel sections tags `product=steel` exactly as a mill does,
     # and a real steelworks says so in `industrial=steelmaking` or in its own
     # name. Out for the same reason and by the same measurement.
-    "zinc": ("smelter", SEVERITY_HIGH),
-    "aluminium": ("smelter", SEVERITY_HIGH),
-    "aluminum": ("smelter", SEVERITY_HIGH),
-    "copper": ("smelter", SEVERITY_HIGH),
-    "lead": ("smelter", SEVERITY_HIGH),
+    # **No bare metal is here, and that costs a real facility.** `product=X`
+    # says what comes *out*, never what process made it: `way/1068457365` is
+    # *Balumco*, `man_made=works` + `product=aluminum`, and the Catalan
+    # environmental register describes extrusion and anodising -- not primary
+    # smelting (codex review, 2026-08-20). Nothing structural separates it
+    # from `relation/11519713`, *Asturiana de Zinc*, which really is a
+    # smelter: same `man_made=works`, same bare product tag. OSM cannot answer
+    # "is this a smelter" from `product` alone, so this table does not
+    # pretend to -- a smelter has to say so in `industrial=smelting`, in
+    # `industrial=steelmaking`, or in its own name. The price is that AZSA
+    # classifies as nothing until somebody tags it with a process, and saying
+    # that out loud is the point: the alternative is every aluminium
+    # extruder in Spain reported as a smelter.
     # `metal` and `oil` are deliberately absent, and both were measured.
     # `node/13016693457` is *Alcyon*, `man_made=works` + `product=metal` -- a
     # metal-parts manufacturer on a Basque industrial estate, not a smelter.

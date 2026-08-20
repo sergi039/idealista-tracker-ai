@@ -24,6 +24,8 @@ What must never break:
   no second coordinate-quality policy.
 """
 
+import csv
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,7 +34,7 @@ import pytest
 
 from app import create_app, db
 from models import Property, SearchProfile
-from services import hazard_rules, hazard_service
+from services import coordinate_quality, hazard_rules, hazard_service
 from services.hazard_service import HazardService
 from services.property_scoring_service import (
     HousingPropertyScorer,
@@ -290,27 +292,52 @@ class TestTheRulesTable:
             is None
         )
 
-    def test_a_plant_that_says_what_it_makes_is_read(self):
-        """`product=*` is the most direct claim an industrial plant can make.
+    def test_a_product_that_names_a_process_is_read(self):
+        """`product=*` is a direct claim, but only for the values that name a
+        process nobody runs by accident.
 
-        `relation/11519713` is *Asturiana de Zinc* in San Juan de Nieva -- a
-        zinc smelter and sulfuric-acid plant inside the owner's own search
-        area, `man_made=works` + `product=zinc` + `operator=Glencore`, with a
-        name no industry vocabulary can read. It classified as nothing at all
-        until `product` was read (codex review, 2026-08-20).
+        The issue named it first (*"claims about what the thing is --
+        `plant:source=coal`, `product=cement`"*) and it was missing entirely.
         """
-        verdict = hazard_rules.classify(
-            {
-                "man_made": "works",
-                "name": "Asturiana de Zinc",
-                "operator": "Glencore",
-                "product": "zinc",
-                "type": "multipolygon",
-            }
-        )
+        verdict = hazard_rules.classify({"man_made": "works", "product": "cement"})
         assert verdict is not None
-        assert verdict.severity == hazard_rules.SEVERITY_HIGH
-        assert verdict.evidence == "product=zinc"
+        assert verdict.kind == "cement_works"
+        assert verdict.evidence == "product=cement"
+
+    def test_a_bare_metal_product_is_not_a_smelter(self):
+        """And this one costs a real facility, deliberately.
+
+        `way/1068457365` is *Balumco*, `man_made=works` + `product=aluminum`,
+        and the Catalan environmental register describes extrusion and
+        anodising rather than primary smelting. Nothing structural separates
+        it from `relation/11519713`, *Asturiana de Zinc*, which really is a
+        smelter and carries the same shape. So OSM cannot answer "is this a
+        smelter" from `product` alone and the table does not pretend to --
+        which means AZSA classifies as nothing until somebody tags it with a
+        process (codex review, 2026-08-20).
+        """
+        assert (
+            hazard_rules.classify(
+                {"man_made": "works", "name": "Balumco", "product": "aluminum"}
+            )
+            is None
+        )
+        assert (
+            hazard_rules.classify(
+                {
+                    "man_made": "works",
+                    "name": "Asturiana de Zinc",
+                    "operator": "Glencore",
+                    "product": "zinc",
+                }
+            )
+            is None
+        )
+        # A process claim still qualifies, which is the way back for both.
+        smelting = hazard_rules.classify(
+            {"man_made": "works", "industrial": "smelting"}
+        )
+        assert smelting is not None and smelting.severity == hazard_rules.SEVERITY_HIGH
 
     def test_a_solar_thermal_plant_burns_nothing(self):
         """Spain's concentrated-solar plants are *centrales térmicas solares*.
@@ -380,9 +407,9 @@ class TestTheRulesTable:
             )
             is None
         )
-        # The specific ones stay: nobody smelts zinc by accident, and a real
-        # steelworks says so on a tag about what it does.
-        assert hazard_rules.classify({"man_made": "works", "product": "zinc"})
+        # What survives is a product that names a process, and a tag about
+        # what the place *does*.
+        assert hazard_rules.classify({"man_made": "works", "product": "cement"})
         assert hazard_rules.classify(
             {"landuse": "industrial", "industrial": "steelmaking"}
         )
@@ -402,10 +429,10 @@ class TestTheRulesTable:
         )
         assert chemical is not None and chemical.kind == "chemical_works"
 
-        smelter = hazard_rules.classify(
-            {"man_made": "works", "product": "zinc", "was:product": "lead"}
+        renamed = hazard_rules.classify(
+            {"man_made": "works", "product": "cement", "was:product": "lime"}
         )
-        assert smelter is not None and smelter.kind == "smelter"
+        assert renamed is not None and renamed.kind == "cement_works"
 
         # A prefixed key whose bare form is still there says nothing at all:
         # the bare one is the current state. El Musel's coal yard is mapped
@@ -1052,34 +1079,91 @@ class TestTheCriterionShipsWeightless:
         assert scorer.DEFAULT_INVESTMENT_WEIGHTS["hazard_score"] == 0.0
         assert scorer.DEFAULT_LIFESTYLE_WEIGHTS["hazard_score"] == 0.0
 
-    def test_the_preview_gate_knows_about_it(self):
-        from services.property_scoring_service import WEIGHTLESS_SCORE_KEYS
+    def test_turning_it_on_is_previewed_even_beside_another_live_criterion(
+        self, app, client
+    ):
+        """The gate asked "is *any* weightless criterion on", so with the pool
+        weight already positive the transition read `True -> True` and
+        enabling hazards re-scored the subscription on an ordinary save, with
+        no preview and no confirm (codex review, 2026-08-20)."""
+        profile = SearchProfile(name="Both", is_active=True, is_default=True)
+        db.session.add(profile)
+        db.session.commit()
+        _prop(title="GateRow", search_profile_id=profile.id, price=100000, area=200)
 
-        assert "hazard_score" in WEIGHTLESS_SCORE_KEYS
-        assert "pool_score" in WEIGHTLESS_SCORE_KEYS
-
-    def test_the_editor_offers_the_weight_and_its_thresholds(self):
-        service = PropertyScoringService()
-        assert "hazard_score" in service.WEIGHT_KEYS
-        assert service.EDITABLE_SECTIONS["hazard"] == (
-            "near_m",
-            "far_m",
-            "moderate_factor",
+        # Pool first, confirmed, so it is genuinely stored as positive.
+        client.post(
+            f"/profiles/{profile.id}/edit",
+            data={
+                "action": "save_scoring_weights",
+                "scoring__land__lifestyle__pool_score": "0.2",
+            },
         )
-        assert service.defaults_for("land")["hazard"]["far_m"] == 5000.0
+        client.post(
+            f"/profiles/{profile.id}/edit", data={"action": "confirm_pool_scoring"}
+        )
+        db.session.refresh(profile)
+        stored = (profile.scoring_config or {})["categories"]["land"]["lifestyle"]
+        assert stored["pool_score"] == 0.2
+
+        # Now hazards, beside it. This must not apply on the save.
+        response = client.post(
+            f"/profiles/{profile.id}/edit",
+            data={
+                "action": "save_scoring_weights",
+                "scoring__land__lifestyle__pool_score": "0.2",
+                "scoring__land__lifestyle__hazard_score": "0.3",
+            },
+            follow_redirects=True,
+        )
+        assert "preview" in response.get_data(as_text=True).lower()
+        db.session.refresh(profile)
+        still = (profile.scoring_config or {})["categories"]["land"]["lifestyle"]
+        assert still.get("hazard_score") in (None, 0, 0.0), (
+            "the hazard weight must wait for the confirm, not ride the save"
+        )
+
+        client.post(
+            f"/profiles/{profile.id}/edit", data={"action": "confirm_pool_scoring"}
+        )
+        db.session.refresh(profile)
+        applied = (profile.scoring_config or {})["categories"]["land"]["lifestyle"]
+        assert applied["hazard_score"] == 0.3
+
+    def test_the_editor_really_renders_the_weight_and_its_thresholds(self, app, client):
+        """Asserting the constant passes when the form skips the criterion."""
+        profile = SearchProfile(name="Editor", is_active=True)
+        db.session.add(profile)
+        db.session.commit()
+        body = client.get(f"/profiles/{profile.id}/edit").get_data(as_text=True)
+        assert "scoring__land__lifestyle__hazard_score" in body
+        assert "scoring__land__hazard__far_m" in body
+        assert "scoring__land__hazard__moderate_factor" in body
 
     def test_hazard_data_moves_no_score_at_the_shipped_weight(self, app, real_fetch):
+        """Weightless, and *computed* -- deleting the component would pass a
+        test that only compared the score columns (codex review)."""
         prop = _prop(title="Weightless", property_category="housing")
         scoring = PropertyScoringService()
         scoring.calculate_for_property(prop, commit=True)
         before = (prop.score_investment, prop.score_lifestyle, prop.score_total)
+        coverage_before = prop.scoring["coverage"]["share"]
 
         HazardService(
             enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
         ).enrich(prop, commit=True)
         scoring.calculate_for_property(prop, commit=True)
-        after = (prop.score_investment, prop.score_lifestyle, prop.score_total)
-        assert before == after
+
+        assert (prop.score_investment, prop.score_lifestyle, prop.score_total) == before
+        # ...and the criterion really ran: the component is in both branches
+        # and its meta names the facility it measured.
+        for branch in ("investment", "lifestyle"):
+            components = prop.scoring["profiles"][branch]["components"]
+            assert "hazard_score" in components
+            assert components["hazard_score"] is not None
+        assert prop.scoring["details"]["hazard"]["kind"] == "cement_works"
+        # A weight of 0 must not reach the coverage share either.
+        assert prop.scoring["coverage"]["share"] == coverage_before
 
 
 class TestTheComponent:
@@ -1360,7 +1444,33 @@ class TestTheSurfaces:
         body = client.get("/properties").get_data(as_text=True)
         assert body.count('class="badge bg-danger fw-normal"') >= 1
         assert "Industry nearby" in body
-        assert "1 of 2 listings scanned" in body
+        assert "1 of 2 listings fully scanned" in body
+
+    def test_an_incomplete_scan_is_not_a_clean_row_on_the_list(
+        self, app, client, real_fetch, profile
+    ):
+        """A short scan that found nothing showed no badge at all, which made
+        it indistinguishable from a clean neighbourhood, and the coverage line
+        counted it as scanned (codex review, 2026-08-20)."""
+        filler = [
+            {
+                "type": "node",
+                "id": 60_000 + index,
+                "lat": XIVARES[0] + 0.001,
+                "lon": XIVARES[1] + 0.001,
+                "tags": {"landuse": "industrial"},
+            }
+            for index in range(hazard_rules.ELEMENT_LIMIT)
+        ]
+        prop = _prop(title="ListTruncated", search_profile_id=profile.id)
+        HazardService(enrichment_service=_FakeEnrichment(elements=filler)).enrich(
+            prop, commit=True
+        )
+        assert prop.enrichment["hazards"]["status"] == hazard_service.STATUS_NONE
+
+        body = client.get("/properties").get_data(as_text=True)
+        assert "Scan incomplete" in body
+        assert "0 of 1 listings fully scanned" in body
 
     def test_the_csv_carries_the_verdict(self, app, client, real_fetch, profile):
         prop = _prop(
@@ -1372,11 +1482,13 @@ class TestTheSurfaces:
             enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
         ).enrich(prop, commit=True)
         body = client.get("/properties/export.csv").get_data(as_text=True)
-        header, *rows = [line for line in body.splitlines() if line.strip()]
+        # `csv.reader`, and an explicit length check: splitting on commas
+        # breaks on a title that contains one, and `zip` silently tolerates a
+        # row that is a cell short (codex review, 2026-08-20).
+        header, *rows = list(csv.reader(io.StringIO(body)))
         assert "Nearest Hazard Distance Min (m)" in header
-        columns = header.split(",")
-        values = rows[0].split(",")
-        by_name = dict(zip(columns, values))
+        assert len(rows[0]) == len(header)
+        by_name = dict(zip(header, rows[0]))
         assert by_name["Hazards"] == "ok"
         assert by_name["Hazard Scan Complete"] == "True"
         # Blank on an approximate row, exactly as the page refuses to print it.
@@ -1389,13 +1501,28 @@ class TestOneHomePerRule:
 
     Pinned the way `tests/test_deploy_page_check_shared.py` pins its own shared
     contract: a rule in two places is one that eventually ships half-changed.
+    The textual half of these checks is deliberately kept **and** paired with a
+    behavioural one, because a grep is bypassed by a direct `urllib`, a
+    string-concatenated duplicate rule or an inline `5e3` (codex review,
+    2026-08-20).
     """
 
-    def test_the_hazard_service_owns_no_transport(self):
+    def test_the_scan_goes_through_the_one_overpass_client(self, app, real_fetch):
+        """Behavioural: the transport it uses is the shared method, and the
+        query it hands over is the one the rules table wrote."""
+        seen = {}
+
+        class _Spy:
+            def _overpass_elements(self, query):
+                seen["query"] = query
+                return [], None
+
+        HazardService(enrichment_service=_Spy()).measure(*XIVARES)
+        assert seen["query"] == hazard_rules.overpass_query(*XIVARES)
+
         source = Path(hazard_service.__file__).read_text(encoding="utf-8")
         assert "requests" not in source
         assert "OVERPASS_GATE" not in source
-        assert "_overpass_elements" in source, "it must still go through the one client"
 
     def test_the_rules_table_has_one_home(self):
         import subprocess
@@ -1417,10 +1544,75 @@ class TestOneHomePerRule:
         modules = {Path(path).name for path in hits}
         assert modules <= {"hazard_rules.py"}, modules
 
-    def test_the_coordinate_policy_is_imported_not_rewritten(self):
-        source = Path(hazard_service.__file__).read_text(encoding="utf-8")
-        assert "from services.coordinate_quality import" in source
-        assert "5_000" not in source and "5000" not in source
+    def test_the_coordinate_policy_is_the_shared_one(
+        self, app, real_fetch, monkeypatch
+    ):
+        """Behavioural: change the shared slack and the verdict follows it.
+
+        A grep for `5000` is bypassed by an inline `5e3`; this cannot be.
+        """
+        prop = _prop(title="SharedSlack", location_accuracy="approximate")
+        HazardService(
+            enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
+        ).enrich(prop, commit=True)
+        assert hazard_service.read_verdict(prop)["slack_m"] == 5000.0
+
+        monkeypatch.setattr(coordinate_quality, "APPROXIMATE_COORD_SLACK_M", 250)
+        restated = hazard_service.read_verdict(prop)
+        assert restated["slack_m"] == 250.0
+        assert restated["nearest"]["max_distance_m"] == pytest.approx(
+            restated["nearest"]["origin_distance_m"] + 250.0
+        )
+
+    def test_the_write_is_locked_and_validated_before_the_lookup(
+        self, app, real_fetch, monkeypatch
+    ):
+        """The #339 order: caller validated first, row locked after.
+
+        A sequential test cannot observe a lock, so this observes the calls --
+        `check_writable` before anything reaches Overpass, and the refresh
+        taken `with_for_update` (codex review, 2026-08-20).
+        """
+        order = []
+        real_check = hazard_service.check_writable
+
+        def _check(prop, commit):
+            order.append("check_writable")
+            return real_check(prop, commit)
+
+        def _fetch(service, lat, lon):
+            order.append("fetch")
+            return {"elements": [], "returned": 0}, None
+
+        refreshes = []
+        real_refresh = db.session.refresh
+        monkeypatch.setattr(hazard_service, "check_writable", _check)
+        monkeypatch.setattr(hazard_service, "fetch_elements", _fetch)
+        monkeypatch.setattr(
+            db.session,
+            "refresh",
+            lambda obj, **kwargs: (
+                refreshes.append(kwargs.get("with_for_update")),
+                real_refresh(obj, **kwargs),
+            )[1],
+        )
+
+        prop = _prop(title="LockOrder")
+        HazardService(enrichment_service=_FakeEnrichment(elements=[])).enrich(
+            prop, commit=True
+        )
+        assert order == ["check_writable", "fetch"]
+        assert refreshes == [True]
+
+        # ...and on the path that never reaches the network at all.
+        order.clear()
+        refreshes.clear()
+        nowhere = _prop(title="LockOrderNoCoords", location_lat=None, location_lon=None)
+        HazardService(enrichment_service=_FakeEnrichment(elements=[])).enrich(
+            nowhere, commit=True
+        )
+        assert order == ["check_writable"]
+        assert refreshes == [True]
 
     def test_the_free_pass_really_scans(self, app, real_fetch):
         """The hook, exercised rather than grepped.
@@ -1448,3 +1640,14 @@ class TestOneHomePerRule:
         service.enrich_free_sources(prop, commit=True, use_ai=False)
         assert prop.enrichment["hazards"]["status"] == hazard_service.STATUS_OK
         assert prop.enrichment["hazards"]["items"]
+
+    def test_the_default_construction_wires_the_shared_client(self, app):
+        """The test above injects its own service, so a broken default would
+        pass it (codex review, 2026-08-20)."""
+        from services.property_enrichment_service import PropertyEnrichmentService
+
+        service = PropertyEnrichmentService()
+        assert isinstance(service.hazard_service, HazardService)
+        # One EnrichmentService means one Overpass client and one 5 s gate
+        # across the amenity, quality-of-life, pool and hazard lookups.
+        assert service.hazard_service.enrichment_service is service.enrichment_service

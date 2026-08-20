@@ -1978,14 +1978,22 @@ def edit_profile(profile_id):
             # rescores the table when it is raised belongs here; forgetting to
             # add it is a silent mass rescore that `git log` cannot explain,
             # which is the failure this whole path exists to prevent.
-            def _weightless_criterion_enabled(cats: dict) -> bool:
-                # Every level is isinstance-guarded: `categories` can hold a
-                # hand-written category whose branch is a scalar (#239 keeps
-                # unmanaged keys), and a crash here would take the whole save
-                # down (diff review, 2026-08-14).
+            def _weightless_criteria_enabled(cats: dict) -> set:
+                """Which `(category, branch, key)` are switched on right now.
+
+                A **set**, not a boolean. It was a boolean, and with the pool
+                weight already positive the transition read `True -> True`, so
+                turning the hazard criterion on skipped the preview entirely
+                and re-scored the subscription on an ordinary save (codex
+                review, 2026-08-20). Every level is isinstance-guarded:
+                `categories` can hold a hand-written category whose branch is
+                a scalar (#239 keeps unmanaged keys), and a crash here would
+                take the whole save down (diff review, 2026-08-14).
+                """
+                enabled = set()
                 if not isinstance(cats, dict):
-                    return False
-                for cat_cfg in cats.values():
+                    return enabled
+                for category, cat_cfg in cats.items():
                     if not isinstance(cat_cfg, dict):
                         continue
                     for branch in ("investment", "lifestyle"):
@@ -1999,16 +2007,19 @@ def edit_profile(profile_id):
                                 and not isinstance(weight, bool)
                                 and weight > 0
                             ):
-                                return True
-                return False
+                                enabled.add((category, branch, key))
+                return enabled
 
             stored_before = (
                 profile.scoring_config
                 if isinstance(profile.scoring_config, dict)
                 else {}
             )
-            pool_turning_on = _weightless_criterion_enabled(categories) and not (
-                _weightless_criterion_enabled(stored_before.get("categories") or {})
+            # Anything newly switched on needs the preview, whatever else was
+            # already on.
+            pool_turning_on = bool(
+                _weightless_criteria_enabled(categories)
+                - _weightless_criteria_enabled(stored_before.get("categories") or {})
             )
 
             if pool_turning_on:
