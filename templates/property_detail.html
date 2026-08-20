@@ -749,7 +749,18 @@
                             </div>
                         </div>
                         <p class="text-muted small mb-3">
-                            {{ t('cadastre_measured_in')|format(_cad_geom.get('epsg')) }},
+                            {# The CRS only if the block records one. A metric
+                               measurement is meaningless without the projection
+                               it was taken in, and a block written before this
+                               feature existed -- by hand, through `docker exec`
+                               -- carries the numbers and not the code. Printing
+                               `EPSG:None` there states a CRS nobody recorded,
+                               which is worse than saying it is missing. #}
+                            {% if _cad_geom.get('epsg') %}
+                                {{ t('cadastre_measured_in')|format(_cad_geom.get('epsg')) }},
+                            {% else %}
+                                {{ t('cadastre_crs_not_recorded') }},
+                            {% endif %}
                             {{ _cad_geom.get('vertices') }} vertices
                         </p>
                     {% else %}

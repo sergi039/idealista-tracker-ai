@@ -681,6 +681,56 @@ class TestTheRoute:
         assert "None ×" not in body
         assert "25829" in body  # the CRS the metrics were measured in
 
+    def test_a_block_with_no_crs_says_so_rather_than_printing_none(
+        self, app, client, prop
+    ):
+        """The blocks that predate this feature carry numbers and no CRS.
+
+        Property 774's block was written by hand through `docker exec` before
+        any of this existed: it holds the area, the box and the ratios, and no
+        `epsg`. The page rendered "measured in EPSG:None" for it -- a
+        projection nobody recorded, stated as fact. Found by looking at the
+        production page after the conversion, which is the only place such a
+        block exists.
+        """
+        prop.enrichment = {
+            "cadastre": {
+                "reference": BAYAS,
+                "geometry": {
+                    "area_m2": 6194,
+                    "bbox_m": {"we": 120, "ns": 146},
+                    "bbox_fill_ratio": 0.35,
+                    "polsby_popper": 0.30,
+                    "vertices": 45,
+                },
+            }
+        }
+        prop.cadastral_reference = BAYAS
+        db.session.commit()
+
+        body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
+        assert "EPSG:None" not in body
+        assert "the projection it was measured in was not recorded" in body
+        # The measurements themselves still render -- they are real.
+        assert "6,194" in body
+        assert "35%" in body
+
+    def test_a_measured_block_still_names_its_crs(self, app, client, prop):
+        fake_get, _ = _responses()
+        with (
+            patch.object(cadastre_service, "_get", side_effect=fake_get),
+            patch.object(cadastre_service, "_cache_get", return_value=None),
+            patch.object(cadastre_service, "_cache_set"),
+        ):
+            client.post(
+                f"/properties/{prop.id}/cadastre", data={"cadastral_reference": BAYAS}
+            )
+
+        body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
+        assert "EPSG:25829" in body
+        # The phrase itself, not a substring another block also uses.
+        assert "the projection it was measured in was not recorded" not in body
+
     def test_the_sixth_press_in_a_minute_is_refused(self, app, prop):
         """It reaches a third party that bans an IP for ten days on abuse.
 
