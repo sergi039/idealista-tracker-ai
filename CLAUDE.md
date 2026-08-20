@@ -794,7 +794,9 @@ match and timestamps under two different names, 774 under
 161 and 792 both carry a `precise` their own `enrichment["geocoding"]` record
 contradicts, the fingerprint of a write made outside the geocoder; 161 survives
 today only by accident, because it also happens to carry a portal pin, and 129
-of the 130 `precise` rows carry none.
+of the 130 `precise` rows carry none. **Re-measure rather than quoting those
+two**, the way the `location_accuracy` paragraph above says: four hours later
+the same query answered 130 of 132, because the set grows with every ingest.
 
 The reason those blocks were ad-hoc is that there was no hand-set path for a
 coordinate at all -- the only writers of `location_accuracy` are the geocoder,
