@@ -669,6 +669,17 @@ class TestTheRoute:
         assert 'id="cadastral-parcel"' in body
         assert BAYAS in body
         assert "TRUEVANO" in body
+        # Every measured number the block claims to show, by value. The first
+        # version of this test asserted the block was *present* and passed
+        # while the bounding box rendered "None × None m" -- the template read
+        # `bbox` and the service writes `bbox_m`, which no assertion about
+        # substrings of the section could see. Found by looking at the page.
+        assert "6,193" in body  # the declared area
+        assert "121.8" in body and "145.5" in body  # the bounding box, in metres
+        assert "35%" in body  # how much of that box it fills
+        assert "0.30" in body  # Polsby-Popper
+        assert "None ×" not in body
+        assert "25829" in body  # the CRS the metrics were measured in
 
     def test_the_sixth_press_in_a_minute_is_refused(self, app, prop):
         """It reaches a third party that bans an IP for ten days on abuse.
