@@ -532,3 +532,51 @@ class TestTheRepairToolSaysWhatItSkipped:
             said = "\n".join(records)
             assert f"id={hand.id}" in said and "set by hand" in said
             assert "1 skipped (location set by hand)" in said
+
+
+class TestTheToolNamesADisagreement:
+    """The block is provenance; the columns are the value; the score reads the
+    columns. Nothing inside the app can move the columns of a hand-set row any
+    more, but an out-of-band script still can -- the boundary
+    `services/ingest_policy.py` records as uncloseable -- and this tool is the
+    only window onto the result.
+    """
+
+    def test_a_moved_coordinate_is_called_out(self, app):
+        from utils.set_property_location import _describe
+
+        with app.app_context():
+            row = _row()
+            set_location_by_hand(
+                row, lat=HAND_LAT, lon=HAND_LON, accuracy="precise", note=NOTE
+            )
+
+            assert "DISAGREES" not in _describe(row)
+
+            row.location_lat = 43.9
+            db.session.commit()
+
+            assert "DISAGREES" in _describe(row)
+
+    def test_a_changed_accuracy_is_called_out(self, app):
+        from utils.set_property_location import _describe
+
+        with app.app_context():
+            row = _row()
+            set_location_by_hand(
+                row, lat=HAND_LAT, lon=HAND_LON, accuracy="precise", note=NOTE
+            )
+            row.location_accuracy = "approximate"
+            db.session.commit()
+
+            said = _describe(row)
+            assert "DISAGREES" in said and "'approximate'" in said
+
+    def test_a_row_with_no_block_says_a_refresh_may_overwrite_it(self, app):
+        from utils.set_property_location import _describe
+
+        with app.app_context():
+            said = _describe(_row())
+
+            assert "hand-set      no" in said
+            assert "DISAGREES" not in said

@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 
 def _describe(prop) -> str:
-    from services.coordinate_quality import manual_coordinate
+    from services.coordinate_quality import manual_coordinate, normalize_accuracy
 
     hand = manual_coordinate(prop)
     lines = [
@@ -65,6 +65,29 @@ def _describe(prop) -> str:
         lines.append(
             f"  hand-set      {hand.source} at {hand.set_at}: {hand.note[:60]}"
         )
+        # The block is provenance and the columns are the value, and the design
+        # permits them to disagree: nothing inside the app can move the columns
+        # of a hand-set row any more, but an out-of-band script still can, and
+        # that boundary is the one `services/ingest_policy.py` records as
+        # uncloseable. The score reads the *columns*, so a disagreement means
+        # the row is being measured from a point its own provenance does not
+        # describe. Say so here, because this is the only window onto it.
+        moved = (
+            prop.location_lat is None
+            or prop.location_lon is None
+            or abs(float(prop.location_lat) - hand.lat) > 1e-7
+            or abs(float(prop.location_lon) - hand.lon) > 1e-7
+        )
+        if moved:
+            lines.append(
+                f"  DISAGREES     the block says {hand.lat}, {hand.lon} -- "
+                "something moved the columns since. The score reads the columns."
+            )
+        if normalize_accuracy(prop.location_accuracy) != hand.accuracy:
+            lines.append(
+                f"  DISAGREES     the block says accuracy {hand.accuracy!r}, "
+                f"the column says {normalize_accuracy(prop.location_accuracy)!r}"
+            )
     return "\n".join(lines)
 
 
