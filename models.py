@@ -162,6 +162,7 @@ class Property(db.Model):
         db.Index("ix_properties_score_lifestyle", "score_lifestyle"),
         db.Index("ix_properties_owner_verdict", "owner_verdict"),
         db.Index("ix_properties_next_action_due_on", "next_action_due_on"),
+        db.Index("ix_properties_cadastral_reference", "cadastral_reference"),
         # Data integrity constraints
         CheckConstraint(
             "price IS NULL OR price >= 0", name="ck_properties_price_non_negative"
@@ -301,6 +302,13 @@ class Property(db.Model):
     next_action = db.Column(db.Text)
     next_action_due_on = db.Column(db.Date)
 
+    # The parcel this listing sits on, as the cadastre names it (issue #430).
+    # Typed by a human off a document, so it is a column rather than a key
+    # inside `enrichment`: it is what every later check keys on, and it is
+    # looked up. The measurement it unlocks lives in `enrichment["cadastre"]`,
+    # written under the same lock (services/cadastre_service.py).
+    cadastral_reference = db.Column(db.String(20))
+
     created_at = db.Column(db.DateTime, default=utcnow)
     email_date = db.Column(db.DateTime)
     updated_at = db.Column(db.DateTime, default=utcnow, onupdate=utcnow)
@@ -404,6 +412,7 @@ class Property(db.Model):
             if self.next_action_due_on
             else None,
             "next_action_state": review_action["state"],
+            "cadastral_reference": self.cadastral_reference,
             "email_date": self.email_date.isoformat() if self.email_date else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
