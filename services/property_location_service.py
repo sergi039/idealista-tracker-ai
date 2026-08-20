@@ -1,13 +1,19 @@
 import logging
 import re
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from sqlalchemy.orm.attributes import flag_modified
 
 from services.coordinate_quality import (
+    KNOWN_ACCURACIES,
+    SOURCE_MANUAL,
+    clear_manual_coordinate,
     improves_on,
+    manual_coordinate,
     normalize_accuracy,
     portal_coordinate,
+    record_manual_coordinate,
+    validate_hand_set,
 )
 
 from models import Property
@@ -428,6 +434,18 @@ def _build_geocoding_queries(prop: Property) -> List[str]:
     return out
 
 
+def _has_coordinate(prop) -> bool:
+    """Does this row have a coordinate at all?
+
+    `is None`, never truthiness: `0, 0` is a real place in the Gulf of Guinea,
+    which this repository already says twice -- `record_portal_coordinate`
+    refuses to write it as a stand-in for "no pin", and
+    `PropertyEnrichmentService.enrich_property` reads these columns with an
+    explicit `is None` for the same reason. A row on the equator is located.
+    """
+    return prop.location_lat is not None and prop.location_lon is not None
+
+
 class PropertyLocationService:
     def __init__(self, geocoding_service: Optional[GeocodingService] = None):
         self.geocoding_service = geocoding_service or GeocodingService()
@@ -558,8 +576,8 @@ class PropertyLocationService:
             except Exception:
                 continue
 
-            accuracy = str(geo.get("accuracy") or "").strip().lower() or "unknown"
-            if accuracy not in {"precise", "approximate", "unknown"}:
+            accuracy = normalize_accuracy(geo.get("accuracy"))
+            if accuracy not in KNOWN_ACCURACIES:
                 accuracy = "unknown"
 
             if portal_pin is not None and not improves_on(accuracy, previous_accuracy):
@@ -614,6 +632,22 @@ class PropertyLocationService:
         the geocode ran must not have it replaced by a candidate that was only
         an improvement on what the row said before.
         """
+        # Re-read under the lock, the way `portal_pin` is two lines below and
+        # for the same reason -- and this one first, because it outranks the
+        # pin. The pre-lock check in `ensure_coordinates` read the row as it was
+        # before the geocode, which the #400 note in this file measures in
+        # minutes; a location a person established inside that window would
+        # otherwise lose to a candidate chosen against a row that did not yet
+        # have one. That is #339 and #400 again, in the mechanism added to
+        # outrank them, and it is not hypothetical: it was reproduced before
+        # this guard existed.
+        #
+        # Nothing is written and nothing is recorded, exactly as the pre-lock
+        # refusal writes nothing: the geocode's own record would describe a
+        # coordinate this row does not have.
+        if manual_coordinate(prop) is not None:
+            return _has_coordinate(prop)
+
         portal_pin = portal_coordinate(prop) if refresh else None
         previous_accuracy = normalize_accuracy(prop.location_accuracy)
         kind = outcome.get("kind")
@@ -793,6 +827,18 @@ class PropertyLocationService:
         calls this first, before anything else dirties the session -- see the
         note there.
 
+        **A location a person established is never touched, and not even
+        asked about** (GEO-002). `manual_coordinate` reads it; the refusal is
+        in front of the geocode rather than after it, the shape
+        `services/advertiser.enrich` uses for a hand-set seller verdict.
+        Measured on production 2026-08-20: three rows carried a curated
+        location in three ad-hoc shapes and nothing read any of them, while
+        130 of the 132 `precise` rows carry no portal pin and so have no
+        defence at all (15:02Z -- the set grows with every ingest, so
+        re-measure rather than quoting this). `improves_on` is not consulted -- a person outranks a better label,
+        because the label is Google's opinion of its own match and the person
+        looked at the parcel.
+
         One consequence is deliberate and visible: with `refresh=True` the
         columns are no longer cleared *before* the network calls. Clearing them
         eagerly made the `refresh()` under the lock autoflush this run's own
@@ -807,6 +853,21 @@ class PropertyLocationService:
         # should cost a raise, not a round of billed Google lookups.
         locked = check_writable(prop, commit)
 
+        # A location a person established is never overwritten, and the geocode
+        # is not even attempted -- the shape `services/advertiser.enrich` uses
+        # for a hand-set seller verdict, and for the same reason: the answer is
+        # already on the row, and asking again spends money to be told
+        # something worse. Placed before the `refresh` branch so the rule reads
+        # on its own rather than depending on the one under it.
+        #
+        # The return value is what this method's return value has always meant
+        # -- does the row have a coordinate -- rather than an unconditional
+        # `True`. A hand-set block whose columns have since been nulled by some
+        # other writer is a row with no coordinate, and saying otherwise would
+        # be the kind of claim this file exists to refuse.
+        if manual_coordinate(prop) is not None:
+            return _has_coordinate(prop)
+
         # `refresh` used to reach this by clearing the columns first; it says so
         # directly now, for the reason in the docstring.
         if not refresh and prop.location_lat and prop.location_lon:
@@ -816,3 +877,120 @@ class PropertyLocationService:
 
         with locked_write(prop, locked=locked, commit=commit):
             return self._apply_geocode_outcome(prop, outcome, refresh=refresh)
+
+
+def set_location_by_hand(
+    prop: Property,
+    *,
+    lat: Any,
+    lon: Any,
+    accuracy: str,
+    note: str,
+    source: str = SOURCE_MANUAL,
+    commit: bool = True,
+) -> dict:
+    """Record the location a person established, and defend it from the geocoder.
+
+    This is the writer `manual_coordinate` reads and `ensure_coordinates`
+    refuses in front of. It exists because the app had **no** hand-set path for
+    a coordinate at all: measured 2026-08-20, the only writers of
+    `location_accuracy` in the tree are the geocoder, the fotocasa import, the
+    `Land` migration and the restore half of `utils/refresh_property_accuracy.py`.
+    Everything else that ever set one -- three production rows, in three
+    different shapes -- was an ad-hoc script run through `docker exec`, which is
+    exactly the boundary `services/ingest_policy.py` records as the one a flag
+    cannot close.
+
+    It is two functions rather than `advertiser.set_by_hand`'s one, which takes
+    `None` to clear. A verdict is a single value and a sentinel reads fine in
+    its place; a location is five keyword-only arguments, and a `None` among
+    them that silently ignores the other four is a worse interface than a
+    second name.
+
+    `displaced` is read from the **locked** row, not from the copy the caller
+    loaded -- the #400 rule, which applies here for the same reason it applies
+    to the geocode: what this row said before is only knowable once nobody else
+    can be writing it.
+
+    What it must not become is a bulk path. One row, one finding, one note.
+    """
+    from services.enrichment_write import check_writable, locked_write
+
+    if not prop:
+        raise ValueError("no property")
+
+    # Both validations before the lock: the caller's ability to commit
+    # (`enrichment_write`'s own rule) and then the arguments themselves. An
+    # argument that cannot be stored should cost a raise, not a row lock and a
+    # rollback -- the same reason `check_writable` runs ahead of the geocode.
+    locked = check_writable(prop, commit)
+    validate_hand_set(lat=lat, lon=lon, accuracy=accuracy, note=note)
+
+    with locked_write(prop, locked=locked, commit=commit):
+        displaced = None
+        if prop.location_lat is not None and prop.location_lon is not None:
+            displaced = {
+                "lat": str(prop.location_lat),
+                "lon": str(prop.location_lon),
+                "accuracy": normalize_accuracy(prop.location_accuracy),
+            }
+
+        # Validated inside the lock, before anything is assigned: a bad
+        # accuracy label or an out-of-range coordinate must leave the row as it
+        # was, not half-written.
+        enrichment = record_manual_coordinate(
+            prop.enrichment,
+            lat=lat,
+            lon=lon,
+            accuracy=accuracy,
+            note=note,
+            source=source,
+            displaced=displaced,
+        )
+
+        prop.location_lat = float(lat)
+        prop.location_lon = float(lon)
+        prop.location_accuracy = normalize_accuracy(accuracy)
+        prop.enrichment = enrichment
+        flag_modified(prop, "enrichment")
+
+    return {
+        "stored": True,
+        "accuracy": normalize_accuracy(accuracy),
+        "displaced": displaced,
+    }
+
+
+def clear_location_by_hand(prop: Property, *, commit: bool = True) -> dict:
+    """Take the hand-set block off, putting the row back on the computed path.
+
+    The coordinate columns are **left alone**. Clearing does not restore what
+    the block displaced, and that is deliberate: the block is not guaranteed to
+    be newer than the columns -- a later script may have moved the point
+    without touching it -- so putting the old coordinate back could undo a
+    deliberate act rather than the one being cleared. The displaced values stay
+    in the returned record so a person can put them back on purpose.
+    """
+    from services.enrichment_write import check_writable, locked_write
+
+    if not prop:
+        raise ValueError("no property")
+
+    locked = check_writable(prop, commit)
+    with locked_write(prop, locked=locked, commit=commit):
+        previous = manual_coordinate(prop)
+        if previous is None:
+            return {"cleared": False, "previous": None}
+        prop.enrichment = clear_manual_coordinate(prop.enrichment) or None
+        flag_modified(prop, "enrichment")
+
+    return {
+        "cleared": True,
+        "previous": {
+            "lat": previous.lat,
+            "lon": previous.lon,
+            "accuracy": previous.accuracy,
+            "note": previous.note,
+            "source": previous.source,
+        },
+    }
