@@ -355,8 +355,12 @@ class TestProfilesPageCountsThem:
             ("alpha_id", "alpha_props"),
             ("beta_id", "beta_props"),
         ):
+            # The id has to end at a boundary: `profile_id=1[^"]*` would also
+            # match `profile_id=10`. The link carries more than the id now --
+            # it states `hide_removed` too, because this count is unfiltered
+            # and the page it opens would otherwise apply its own default.
             match = re.search(
-                r'href="[^"]*profile_id=%d"[^>]*>\s*(\d+)\s*</a>'
+                r'href="[^"]*profile_id=%d(?:&[^"]*)?"[^>]*>\s*(\d+)\s*</a>'
                 % listings[profile_key],
                 body,
             )
