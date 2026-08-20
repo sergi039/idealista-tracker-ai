@@ -267,16 +267,16 @@ class TestOneDateForTheWholeRequest:
             body = _rendered(client.get("/properties?action=pending"))
             assert "Plot due today" in body
 
-    def test_every_collection_endpoint_asks_for_the_date_once(self, client, rows, profile):
+    def test_every_collection_endpoint_asks_for_the_date_once(
+        self, client, rows, profile
+    ):
         """Not once per row, and not once per serializer within the request."""
         for url in (
             f"/api/properties?profile_id={profile.id}&{BOTH}",
             f"/api/properties?profile_id={profile.id}&{BOTH}&full=true",
             f"/properties/export.csv?{BOTH}",
         ):
-            with patch.object(
-                owner_review, "today", wraps=owner_review.today
-            ) as spy:
+            with patch.object(owner_review, "today", wraps=owner_review.today) as spy:
                 assert client.get(url).status_code == 200
             assert spy.call_count == 1, url
 
@@ -302,18 +302,33 @@ class TestTheOverdueLink:
         assert 'id="overdue-count-link"' in body
         assert "3 overdue" in body
 
-    def test_it_is_absent_when_nothing_is_late(self, client, profile):
+    def test_it_is_absent_when_something_is_outstanding_but_nothing_is_late(
+        self, client, profile
+    ):
+        """The row that distinguishes "no overdue" from "no actions at all".
+
+        A fixture with nothing outstanding leaves the whole option list empty,
+        so a template that lost its `and choice.count` guard would still render
+        nothing and the test would pass over the defect. This one has a real
+        pending action with a date in the future: the dropdown offers `pending`
+        and not `overdue`, and only a link keyed on the overdue count stays
+        away.
+        """
         db.session.add(
             Property(
                 source_email_id="calm",
                 title="Plot calm",
                 search_profile_id=profile.id,
-                owner_verdict="interested",
+                owner_verdict="waiting",
+                next_action="condiciones de edificabilidad",
+                next_action_due_on=date(2099, 1, 1),
             )
         )
         db.session.commit()
         body = _rendered(client.get("/properties"))
-        # A standing "0 overdue" would be a line about nothing.
+        # The option exists, so the loop has something to iterate over...
+        assert "Outstanding (1)" in body
+        # ...and a standing "0 overdue" would still be a line about nothing.
         assert 'id="overdue-count-link"' not in body
 
     def test_the_link_carries_the_filters_already_applied(self, client, rows):
