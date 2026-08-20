@@ -11,6 +11,7 @@ from services.coordinate_quality import (
 )
 
 from models import Property
+from services.enrichment_write import check_writable, locked_write
 from utils.geocoding import GeocodingService
 from utils.municipality_codes import load_name_index
 from utils.municipality_codes import match as match_municipality
@@ -475,61 +476,28 @@ class PropertyLocationService:
         prop.enrichment = enrichment
         flag_modified(prop, "enrichment")
 
-    def ensure_coordinates(self, prop: Property, refresh: bool = False) -> bool:
-        """Best-effort: populate property.location_lat/lon from title/municipality.
+    def _geocode_outcome(self, prop: Property, *, refresh: bool) -> dict:
+        """Ask Google, and decide nothing that touches the row.
 
-        `Property.enrichment` is a plain `db.Column(JSON)`, so SQLAlchemy tracks
-        *assignment*, not mutation -- and `prop.enrichment or {}` hands back the
-        very object already on the instance, so mutating it and assigning it
-        back is not a change at all. On a fresh row that is invisible, because
-        the column is NULL and the `or {}` builds a new dict; on an already
-        enriched row the write is silently dropped.
+        Split out of `ensure_coordinates` for #400: every write this method
+        used to perform happened *after* minutes of network calls, against the
+        copy of the row its own session loaded before them. Measured on
+        property 733 (2026-08-17): an operator wrote the portal's pin and a
+        provenance record at 15:36 while this chain was blocked on Overpass,
+        and the chain's commit at 15:44 replaced both without trace.
 
-        Measured 2026-08-15: a re-geocode of 168 production rows wrote every
-        scalar column -- coordinates and `location_accuracy` both correct -- and
-        not one `enrichment["geocoding"]` record. The tool that ran it reads
-        that record to decide which rows are still unmeasured, so it would have
-        re-geocoded, and re-paid for, all 168 on the next run while reporting
-        itself resumable.
+        So the loop is pure. It reads `prop` -- the title and municipality the
+        queries are built from, and the row's own accuracy for the even-trade
+        comparison -- and returns what it found. Nothing is applied until the
+        row is held; see `_apply_geocode_outcome`.
 
-        `flag_modified` is the idiom already used for this column in
-        `services/sea_distance_service.py`, `services/quality_of_life_service.py`
-        and `services/pool_service.py`.
+        The pre-lock reading of `portal_pin` and `previous_accuracy` is
+        deliberately *provisional*: it decides which candidate this pass
+        prefers, and the same comparison is made again under the lock against
+        whatever the row says then.
         """
-        if not prop:
-            return False
-
-        # What the row is being asked to give up, remembered before `refresh`
-        # throws it away. Two separate hazards, and the clearing below creates
-        # both:
-        #
-        # * the geocode answers, no better than what was there. Measured on
-        #   property 733 (2026-08-17): a fotocasa pin placed for that advert
-        #   was replaced by the Llaranes district centroid 2447 m away, still
-        #   `approximate`, so nothing was unlocked and the listing-specific
-        #   point was gone. Issue #393.
-        # * the geocode answers *nothing*. Every candidate query is refused,
-        #   the method returns False, and the row is left with no coordinate at
-        #   all -- worse than the one it started with, and not what anybody
-        #   pressing "refresh" is asking for.
-        #
-        # Only a portal pin is defended. A coordinate this same geocoder wrote
-        # last month has no better claim than the one it writes today.
         portal_pin = portal_coordinate(prop) if refresh else None
         previous_accuracy = normalize_accuracy(prop.location_accuracy)
-
-        if refresh:
-            prop.location_lat = None
-            prop.location_lon = None
-            prop.location_accuracy = "unknown"
-            enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
-            if isinstance(enrichment, dict):
-                enrichment.pop("geocoding", None)
-                prop.enrichment = enrichment or None
-                flag_modified(prop, "enrichment")
-
-        if prop.location_lat and prop.location_lon:
-            return True
 
         refused = None
         for query in _build_geocoding_queries(prop):
@@ -595,56 +563,19 @@ class PropertyLocationService:
                 accuracy = "unknown"
 
             if portal_pin is not None and not improves_on(accuracy, previous_accuracy):
-                # An even trade is not a trade: see the note at the top of this
-                # method. The attempt is recorded on the row so the next reader
-                # -- or the next press of the button -- knows it was made and
-                # what it answered, rather than trying it again for the same
-                # money and the same result.
-                self._keep_portal_pin(
-                    prop,
-                    portal_pin,
-                    previous_accuracy,
-                    query=query,
-                    answered=geo.get("formatted_address"),
-                    answered_accuracy=accuracy,
-                )
-                return True
+                # An even trade is not a trade: see the note on
+                # `ensure_coordinates`. The attempt is recorded on the row so
+                # the next reader -- or the next press of the button -- knows
+                # it was made and what it answered, rather than trying it again
+                # for the same money and the same result.
+                return {
+                    "kind": "keep_pin",
+                    "query": query,
+                    "answered": geo.get("formatted_address"),
+                    "answered_accuracy": accuracy,
+                }
 
-            prop.location_lat = new_lat
-            prop.location_lon = new_lon
-            prop.location_accuracy = accuracy
-
-            enrichment = prop.enrichment or {}
-            enrichment["geocoding"] = {
-                "query": query,
-                "formatted_address": geo.get("formatted_address"),
-                "accuracy": accuracy,
-                # Two checks, each under the name of what it compares
-                # (GEO-001). Recorded rather than assumed: most of these
-                # values mean the coordinate was accepted *unchecked*, and a
-                # row that reads "agreed" is a stronger claim than one that
-                # reads "row_unmatched". Same reason `sea_view_service` stamps
-                # `origin_unverified` instead of quietly treating unverified
-                # provenance as verified.
-                #
-                # `province_check` is the one that refuses, and it is the
-                # comparison this key held under the other name until now.
-                # `municipality_check` now compares municipalities, so a
-                # record carrying both is a stronger statement than one
-                # carrying only the first -- which is how
-                # `read_geocoding_checks` tells them apart.
-                "province_check": agreement,
-                "municipality_check": municipality_state,
-            }
             if municipality_state == "contradicted":
-                # The codes, so a reader can act on the row without
-                # re-geocoding it. Only on the interesting outcome: the
-                # province check already stores its two codes only when it
-                # refuses.
-                enrichment["geocoding"]["row_municipality"] = row_municipality
-                enrichment["geocoding"]["result_municipalities"] = sorted(
-                    result_municipalities
-                )
                 logger.info(
                     "Municipality check disagrees for %r: row %r is %s, Google "
                     "matched %r in %s",
@@ -654,15 +585,109 @@ class PropertyLocationService:
                     geo.get("formatted_address"),
                     sorted(result_municipalities),
                 )
+
+            return {
+                "kind": "found",
+                "lat": new_lat,
+                "lon": new_lon,
+                "accuracy": accuracy,
+                "query": query,
+                "formatted_address": geo.get("formatted_address"),
+                "province_check": agreement,
+                "municipality_check": municipality_state,
+                "row_municipality": row_municipality,
+                "result_municipalities": result_municipalities,
+            }
+
+        return {"kind": "nothing", "refused": refused}
+
+    def _apply_geocode_outcome(
+        self, prop: Property, outcome: dict, *, refresh: bool
+    ) -> bool:
+        """Write what the geocode found, against the row as it is *now*.
+
+        Called with the row held (`services/enrichment_write.locked_write`), so
+        everything the decision rests on is re-read here rather than carried
+        across the network calls: `portal_coordinate` and the row's accuracy
+        both come off the refreshed instance. The even-trade comparison is made
+        again for the same reason -- an operator who wrote a better pin while
+        the geocode ran must not have it replaced by a candidate that was only
+        an improvement on what the row said before.
+        """
+        portal_pin = portal_coordinate(prop) if refresh else None
+        previous_accuracy = normalize_accuracy(prop.location_accuracy)
+        kind = outcome.get("kind")
+
+        if kind == "found" and portal_pin is not None:
+            # Re-decided under the lock. The pre-lock pass preferred this
+            # candidate against a row that may since have changed.
+            if not improves_on(outcome["accuracy"], previous_accuracy):
+                kind = "keep_pin"
+                outcome = {
+                    "kind": "keep_pin",
+                    "query": outcome["query"],
+                    "answered": outcome["formatted_address"],
+                    "answered_accuracy": outcome["accuracy"],
+                }
+
+        if kind == "found":
+            prop.location_lat = outcome["lat"]
+            prop.location_lon = outcome["lon"]
+            prop.location_accuracy = outcome["accuracy"]
+
+            enrichment = dict(prop.enrichment or {})
+            record = {
+                "query": outcome["query"],
+                "formatted_address": outcome["formatted_address"],
+                "accuracy": outcome["accuracy"],
+                # Two checks, each under the name of what it compares
+                # (GEO-001). Recorded rather than assumed: most of these
+                # values mean the coordinate was accepted *unchecked*, and a
+                # row that reads "agreed" is a stronger claim than one that
+                # reads "row_unmatched". Same reason `sea_view_service` stamps
+                # `origin_unverified` instead of quietly treating unverified
+                # provenance as verified.
+                #
+                # `province_check` is the one that refuses, and it is the
+                # comparison this key held under the other name until GEO-001.
+                # `municipality_check` now compares municipalities, so a
+                # record carrying both is a stronger statement than one
+                # carrying only the first -- which is how
+                # `read_geocoding_checks` tells them apart.
+                "province_check": outcome["province_check"],
+                "municipality_check": outcome["municipality_check"],
+            }
+            if outcome["municipality_check"] == "contradicted":
+                # The codes, so a reader can act on the row without
+                # re-geocoding it. Only on the interesting outcome: the
+                # province check already stores its two codes only when it
+                # refuses.
+                record["row_municipality"] = outcome["row_municipality"]
+                record["result_municipalities"] = sorted(
+                    outcome["result_municipalities"]
+                )
+            enrichment["geocoding"] = record
             prop.enrichment = enrichment
             flag_modified(prop, "enrichment")
             return True
 
+        if kind == "keep_pin":
+            self._keep_portal_pin(
+                prop,
+                portal_pin,
+                previous_accuracy,
+                query=outcome.get("query"),
+                answered=outcome.get("answered"),
+                answered_accuracy=outcome.get("answered_accuracy"),
+                refused_reason=outcome.get("refused_reason", ""),
+            )
+            return True
+
+        refused = outcome.get("refused")
         if portal_pin is not None:
-            # Nothing answered, and the row had a pin before this method threw
-            # it away. Putting it back is not undoing the refresh -- the refusal
-            # is still recorded below, on the row -- it is refusing to make the
-            # row *less* located than it was.
+            # Nothing answered, and the row has a pin. Putting it back is not
+            # undoing the refresh -- the refusal is recorded with it -- it is
+            # refusing to make the row *less* located than it was.
             self._keep_portal_pin(
                 prop,
                 portal_pin,
@@ -673,6 +698,17 @@ class PropertyLocationService:
                 refused_reason=(refused or {}).get("reason") or "no_result",
             )
             return True
+
+        if refresh:
+            # Only a portal pin is defended (#393). A row without one is left
+            # unlocated by a refresh that answered nothing, which is the
+            # behaviour this method has always had -- it is applied here, under
+            # the lock, rather than eagerly before the network calls. Doing it
+            # eagerly is what made a `refresh()` under the lock autoflush this
+            # run's own clearing and read it straight back as the "fresh" row.
+            prop.location_lat = None
+            prop.location_lon = None
+            prop.location_accuracy = "unknown"
 
         if refused is not None:
             # No coordinates, and the row says why. An empty travel block is an
@@ -696,5 +732,87 @@ class PropertyLocationService:
             enrichment["geocoding"] = record
             prop.enrichment = enrichment
             flag_modified(prop, "enrichment")
+        elif refresh:
+            # A refresh that found nothing and had nothing to say: the old
+            # record described a coordinate this row no longer has.
+            enrichment = dict(prop.enrichment or {})
+            if enrichment.pop("geocoding", None) is not None:
+                prop.enrichment = enrichment or None
+                flag_modified(prop, "enrichment")
 
         return False
+
+    def ensure_coordinates(
+        self, prop: Property, refresh: bool = False, *, commit: bool = False
+    ) -> bool:
+        """Best-effort: populate property.location_lat/lon from title/municipality.
+
+        `Property.enrichment` is a plain `db.Column(JSON)`, so SQLAlchemy tracks
+        *assignment*, not mutation -- and `prop.enrichment or {}` hands back the
+        very object already on the instance, so mutating it and assigning it
+        back is not a change at all. On a fresh row that is invisible, because
+        the column is NULL and the `or {}` builds a new dict; on an already
+        enriched row the write is silently dropped.
+
+        Measured 2026-08-15: a re-geocode of 168 production rows wrote every
+        scalar column -- coordinates and `location_accuracy` both correct -- and
+        not one `enrichment["geocoding"]` record. The tool that ran it reads
+        that record to decide which rows are still unmeasured, so it would have
+        re-geocoded, and re-paid for, all 168 on the next run while reporting
+        itself resumable.
+
+        `flag_modified` is the idiom already used for this column in
+        `services/sea_distance_service.py`, `services/quality_of_life_service.py`
+        and `services/pool_service.py`.
+
+
+        **The write happens with the row held** (#400). Every write this method
+        performs used to land after minutes of Google and Overpass calls,
+        against the copy of the row this session loaded before them. Measured
+        on property 733 (2026-08-17): an operator, concluding the request had
+        died, wrote the portal's own pin and a provenance record at 15:36 and
+        committed; the still-running chain committed its own view at 15:44 and
+        both were gone without trace. That is #339 in the scalar columns.
+
+        The shape is `services/enrichment_write.py`'s, which owns this rule for
+        the `enrichment` column and is column-agnostic in fact -- neither
+        `check_writable` nor `locked_write` names a column:
+
+        * the caller is validated **before** the measurement, so an unwritable
+          caller costs a raise rather than a round of billed lookups;
+        * the geocode runs **unlocked** -- holding a row across those seconds is
+          the cost #196 refused, and the loop writes nothing;
+        * the row is locked, re-read, and only then decided and written. The
+          even-trade comparison is made again there, because a pin an operator
+          wrote while the geocode ran must not lose to a candidate that only
+          improved on what the row said before.
+
+        `commit=False` is the default and takes **no** lock, per that module's
+        contract: the caller owns a transaction whose end this code cannot see.
+        `PropertyEnrichmentService.enrich_property` passes `commit=True` and
+        calls this first, before anything else dirties the session -- see the
+        note there.
+
+        One consequence is deliberate and visible: with `refresh=True` the
+        columns are no longer cleared *before* the network calls. Clearing them
+        eagerly made the `refresh()` under the lock autoflush this run's own
+        `None`s and read them straight back as the "fresh" row, defeating the
+        re-read entirely. The clearing now happens in the locked tail, on the
+        same paths as before.
+        """
+        if not prop:
+            return False
+
+        # Before the measurement, never after: a caller that cannot commit here
+        # should cost a raise, not a round of billed Google lookups.
+        locked = check_writable(prop, commit)
+
+        # `refresh` used to reach this by clearing the columns first; it says so
+        # directly now, for the reason in the docstring.
+        if not refresh and prop.location_lat and prop.location_lon:
+            return True
+
+        outcome = self._geocode_outcome(prop, refresh=refresh)
+
+        with locked_write(prop, locked=locked, commit=commit):
+            return self._apply_geocode_outcome(prop, outcome, refresh=refresh)
