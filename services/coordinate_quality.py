@@ -25,6 +25,8 @@ repairing the rows is `utils/refresh_property_accuracy.py`, which needs the
 owner to ask because Google Geocoding is billed.
 """
 
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, List, Optional, Tuple
 
 from services.population import Population
@@ -33,6 +35,22 @@ from services.population import Population
 # else -- `approximate`, `unknown`, an empty column -- means a centroid until
 # proven otherwise, which is the reading `sea_view_service` has always used.
 PRECISE = "precise"
+
+# Every label this column is allowed to carry. `services/property_location_service.py`
+# narrowed a geocoder's answer to exactly these three and kept the set inline;
+# it lives here because a hand-set accuracy has to be validated against the
+# same three, and two copies of a whitelist is one copy that eventually
+# accepts a label the rest of the app reads as `unknown`.
+KNOWN_ACCURACIES = (PRECISE, "approximate", "unknown")
+
+# The block a person's own finding is written to, and the `source` that says a
+# person wrote it. It is deliberately **not** `enrichment["import"]["coordinate"]`
+# -- that key means "the pin the source portal published", and putting a
+# conclusion drawn from the cadastre there would pass an inference off as a
+# portal's published fact, which is the mistake
+# `utils/repair_import_status_source.py` exists to undo (STATUS-002 in #265).
+MANUAL_LOCATION_KEY = "location"
+SOURCE_MANUAL = "manual"
 
 # How far the real parcel may sit from an approximate coordinate. A locality
 # centroid is kilometres from the edges of the locality it names; 5 km is the
@@ -142,6 +160,182 @@ def record_portal_coordinate(
             "lon": str(lon),
         }
     block["import"] = imported
+    return block
+
+
+@dataclass(frozen=True)
+class HandSetLocation:
+    """A location a person established, and what they were looking at."""
+
+    lat: float
+    lon: float
+    accuracy: str
+    note: str
+    source: str
+    set_at: Optional[str] = None
+
+
+def manual_coordinate(record: Any) -> Optional[HandSetLocation]:
+    """The location a person established for this listing, if any.
+
+    Read from `enrichment["location"]`, whose one writer is
+    `record_manual_coordinate`. It exists because the geocoder is not the only
+    thing that can locate a listing and is frequently the worst of them:
+    `_build_geocoding_queries` reads the text after "in", which for a plot is a
+    village or a district, so a re-geocode answers with a centroid however many
+    hours somebody spent in the cadastre establishing the parcel.
+
+    Measured on production, 2026-08-20. Three rows carry a location a person
+    established, in three different shapes, and **nothing in this repository
+    read any of them**: 161 (`coordinate_provenance.method =
+    cadastre_by_address`, recording the coordinate 3.45 km away that it
+    replaced), 792 (`cadastre_barrio_verified`, which raised the accuracy to
+    `precise` over a verified barrio without moving the point) and 774 (a
+    `cadastre` block from the Catastro WFS). Two of those three carry a
+    `precise` their own `enrichment["geocoding"]` record contradicts, which is
+    the fingerprint of a write made outside the geocoder.
+
+    Returns None for a block that does not parse, for the reason
+    `portal_coordinate` does: this is provenance, and a row with a malformed
+    one should still be geocodable rather than raising in the middle of an
+    enrichment run.
+    """
+    enrichment = getattr(record, "enrichment", None)
+    if not isinstance(enrichment, dict):
+        return None
+    block = enrichment.get(MANUAL_LOCATION_KEY)
+    if not isinstance(block, dict):
+        return None
+    try:
+        lat = float(block["lat"])
+        lon = float(block["lon"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    accuracy = normalize_accuracy(block.get("accuracy"))
+    if accuracy not in KNOWN_ACCURACIES:
+        return None
+    note = str(block.get("note") or "").strip()
+    if not note:
+        # A hand-set location with no reason is provenance that says nothing.
+        # `record_manual_coordinate` refuses to write one, so a block without a
+        # note did not come from that writer and is not read as one.
+        return None
+    set_at = block.get("set_at")
+    return HandSetLocation(
+        lat=lat,
+        lon=lon,
+        accuracy=accuracy,
+        note=note,
+        source=str(block.get("source") or SOURCE_MANUAL),
+        set_at=str(set_at) if set_at else None,
+    )
+
+
+def is_hand_set(record: Any) -> bool:
+    """Did a person establish this row's location?
+
+    The question `services/property_location_service.ensure_coordinates` asks
+    before it geocodes, exactly as `services/advertiser.enrich` asks
+    `is_hand_set` before it fetches a page.
+    """
+    return manual_coordinate(record) is not None
+
+
+def validate_hand_set(
+    *, lat: Any, lon: Any, accuracy: Any, note: Any
+) -> Tuple[float, float, str, str]:
+    """Check a hand-set location, and raise rather than store half of one.
+
+    Separate from `record_manual_coordinate` so a caller can run it **before it
+    locks the row**. That is `services/enrichment_write.py`'s own rule applied
+    one argument further out: it validates the caller ahead of the measurement
+    so an impossible write costs a raise instead of a billed round of lookups,
+    and an argument that cannot be stored should likewise cost a raise instead
+    of a row lock and a rollback.
+
+    Returns the parsed `(lat, lon, accuracy, note)`, so the writer parses once.
+    """
+    text = str(note or "").strip()
+    if not text:
+        raise ValueError("a hand-set location needs a note saying what was checked")
+
+    # An empty accuracy is a missing argument, not a person saying `unknown`.
+    # `normalize_accuracy` maps silence to `unknown` because that is the honest
+    # *reading* of a column nobody filled; a writer being told what a finding
+    # supports has to have it spelled, and `unknown` is a word one can type.
+    if accuracy is None or not str(accuracy).strip():
+        raise ValueError("a hand-set location needs an accuracy, `unknown` included")
+    label = normalize_accuracy(accuracy)
+    if label not in KNOWN_ACCURACIES:
+        raise ValueError(f"not an accuracy this column carries: {accuracy!r}")
+
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+    except (TypeError, ValueError):
+        raise ValueError(f"not a coordinate: {lat!r}, {lon!r}")
+    if not (-90.0 <= lat_f <= 90.0) or not (-180.0 <= lon_f <= 180.0):
+        raise ValueError(f"coordinate out of range: {lat_f}, {lon_f}")
+
+    return lat_f, lon_f, label, text
+
+
+def record_manual_coordinate(
+    enrichment: Optional[dict],
+    *,
+    lat: Any,
+    lon: Any,
+    accuracy: Any,
+    note: str,
+    source: str = SOURCE_MANUAL,
+    displaced: Optional[dict] = None,
+    now: Optional[datetime] = None,
+) -> dict:
+    """Write the block `manual_coordinate` reads back, and return it.
+
+    The writer lives beside the reader for the reason
+    `record_portal_coordinate` does, and validates for a reason that one does
+    not have to: this block **stops a re-geocode**, so a malformed one would
+    silently pin a row to a coordinate nothing can correct.
+
+    `note` is required and must say something. The advertiser's hand-set
+    verdict needs no note because `owner` and `agency` describe themselves; a
+    coordinate is two numbers, and "why here" is the entire content of the
+    record. The three blocks already on production are all notes -- a parcel
+    reference, a barrio, a sight line -- written because whoever wrote them
+    knew that.
+
+    `displaced` records what the row said before, so clearing this block is a
+    decision somebody can act on rather than a value that is simply gone. It
+    is a *record* and not an automatic undo: see `set_location_by_hand`.
+
+    `lat`/`lon` are stored as strings, per `record_portal_coordinate` -- the
+    coordinate columns are `Numeric(10, 7)` and a float round-trips through a
+    JSON column with whatever precision the encoder feels like.
+    """
+    _lat, _lon, label, text = validate_hand_set(
+        lat=lat, lon=lon, accuracy=accuracy, note=note
+    )
+    stamp = (now or datetime.now(timezone.utc)).isoformat()
+    block = dict(enrichment or {})
+    entry = {
+        "source": str(source or SOURCE_MANUAL),
+        "lat": str(lat),
+        "lon": str(lon),
+        "accuracy": label,
+        "note": text,
+        "set_at": stamp,
+    }
+    if displaced:
+        entry["displaced"] = displaced
+    block[MANUAL_LOCATION_KEY] = entry
+    return block
+
+
+def clear_manual_coordinate(enrichment: Optional[dict]) -> dict:
+    """Take the hand-set block off, putting the row back on the computed path."""
+    block = dict(enrichment or {})
+    block.pop(MANUAL_LOCATION_KEY, None)
     return block
 
 

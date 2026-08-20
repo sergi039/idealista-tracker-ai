@@ -2103,6 +2103,7 @@ def manual_property_enrichment(property_id: int):
             TRAVEL_STATE_UNAVAILABLE,
             travel_api_state,
         )
+        from services.coordinate_quality import is_hand_set
 
         prop = db.get_or_404(Property, property_id)
 
@@ -2112,6 +2113,16 @@ def manual_property_enrichment(property_id: int):
             refresh_coords = bool(payload.get("refresh_coords"))
         if request.args.get("refresh_coords") in ("1", "true", "yes", "on"):
             refresh_coords = True
+
+        # A refresh asked for on a row whose location a person established is
+        # refused by `ensure_coordinates`, before any request goes out. Saying
+        # so is the same disclosure `utils/refresh_property_accuracy.py` makes
+        # when it skips such a row: a caller told nothing reads the silence as
+        # "done". The enrichment itself still runs -- travel, sea and the
+        # amenities all read the coordinate the row already has.
+        hand_set = refresh_coords and is_hand_set(prop)
+        if hand_set:
+            refresh_coords = False
 
         def _run():
             prop_local = db.session.get(Property, property_id)
@@ -2166,6 +2177,17 @@ def manual_property_enrichment(property_id: int):
         # that inside the request, and the API is unauthenticated.
         if _should_run_sync(allow_request_override=False):
             result = _run()
+            if hand_set:
+                # Both exits carry the disclosure. The synchronous path is the
+                # one the suite and `?sync=1` take, so a refusal announced only
+                # on the queued branch is one the tests cannot see.
+                result = dict(result)
+                result["coordinate_refresh"] = "refused_hand_set"
+                result["message"] = (
+                    f"{result.get('message', '').rstrip('.')}; the coordinate "
+                    "was not refreshed because this listing's location was set "
+                    "by hand"
+                )
             return jsonify(result), 200
 
         job_id = _enqueue(
@@ -2185,7 +2207,13 @@ def manual_property_enrichment(property_id: int):
                 "success": True,
                 "status": "queued",
                 "job_id": job_id,
-                "message": "Enrichment queued",
+                "message": (
+                    "Enrichment queued; the coordinate was not refreshed "
+                    "because this listing's location was set by hand"
+                    if hand_set
+                    else "Enrichment queued"
+                ),
+                "coordinate_refresh": "refused_hand_set" if hand_set else None,
             }
         ), 202
     except HTTPException:
