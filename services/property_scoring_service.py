@@ -1094,6 +1094,17 @@ class HousingPropertyScorer(BasePropertyScorer):
         if not verdict.get("measured"):
             return None, {**bounds, "status": status or "missing_hazard_data"}
 
+        if verdict.get("truncated"):
+            # The scan reached Overpass's element cap, so what came back is a
+            # statement about the elements it saw and not about the radius --
+            # and the elements it did not see could be anywhere, including
+            # nearer than everything it did. That is true with items and
+            # without them: the first version of this guard sat inside the
+            # empty branch, and a truncated scan carrying one distant facility
+            # still scored 100 (codex review, 2026-08-20). The card discloses
+            # it; the number must not answer over it.
+            return None, {**bounds, "status": "scan_truncated"}
+
         items = verdict.get("items") or []
         if not items:
             guaranteed = verdict.get("guaranteed_m")
@@ -1103,13 +1114,6 @@ class HousingPropertyScorer(BasePropertyScorer):
                     "status": "searched_radius_too_small",
                     "guaranteed_m": guaranteed,
                 }
-            if verdict.get("truncated"):
-                # The scan reached Overpass's element cap, so "nothing
-                # qualified" is a statement about the elements it saw and not
-                # about the radius. The card already says so; a clean 100
-                # here would be the same absence rendered as a measurement,
-                # one layer down (review, 2026-08-20).
-                return None, {**bounds, "status": "scan_truncated"}
             return 100.0, {
                 **bounds,
                 "status": status,
@@ -1138,7 +1142,16 @@ class HousingPropertyScorer(BasePropertyScorer):
                 factor=factor,
             )
             if low is None or high is None:
-                continue
+                # An item whose distance cannot be read is not an item that
+                # can be walked past: the remaining ones would then be
+                # reported as the whole picture, which is #98's shape inside
+                # one listing. Skipping it scored 100 for a block whose
+                # nearest facility was unreadable (codex review, 2026-08-20).
+                return None, {
+                    **bounds,
+                    "status": "unreadable_item",
+                    "item": item.get("name") or item.get("kind"),
+                }
             if low != high:
                 # The slack can move this one, and the exemption is asked of
                 # the *listing*, not of the items that happen to be safe: a
@@ -1157,6 +1170,30 @@ class HousingPropertyScorer(BasePropertyScorer):
 
         if worst_score is None:
             return None, {**bounds, "status": "no_scorable_item"}
+
+        # The stored list is capped, so a facility may have been left out --
+        # but only ones further away than every item here. Their score is
+        # therefore at least the score of the farthest kept item taken at full
+        # severity, and while the worst kept item is at or below that bound,
+        # nothing dropped can beat it. When it is not, the answer is not
+        # knowable from what was stored.
+        stored_count = verdict.get("item_count") or len(items)
+        if stored_count > len(items):
+            farthest = max(
+                (_finite_float(item.get("max_distance_m")) for item in items),
+                default=None,
+            )
+            bound = _hazard_proximity_score(
+                farthest, near_m=near_m, far_m=far_m, factor=1.0
+            )
+            if bound is None or worst_score > bound:
+                return None, {
+                    **bounds,
+                    "status": "list_truncated",
+                    "items": len(items),
+                    "item_count": stored_count,
+                }
+
         return worst_score, {
             **bounds,
             "status": status,

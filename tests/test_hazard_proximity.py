@@ -915,6 +915,108 @@ class TestTheComponent:
         assert score is None
         assert meta["status"] == "scan_truncated"
 
+    def test_a_truncated_scan_carrying_items_still_abstains(self, app):
+        """The elements a capped scan did not see could be anywhere.
+
+        The first version of this guard sat inside the "no items" branch, so a
+        truncated scan carrying one distant facility still scored 100 (codex
+        review, 2026-08-20).
+        """
+        prop = _prop(title="ComponentTruncatedWithItems")
+        prop.enrichment = {
+            "hazards": {
+                "status": hazard_service.STATUS_OK,
+                "searched_m": 6000,
+                "truncated": True,
+                "item_count": 1,
+                "items": [
+                    {
+                        "kind": "landfill",
+                        "severity": "high",
+                        "origin_distance_m": 5000,
+                    }
+                ],
+                "origin": {"lat": XIVARES[0], "lon": XIVARES[1]},
+            }
+        }
+        db.session.commit()
+        score, meta = self._score(prop)
+        assert score is None
+        assert meta["status"] == "scan_truncated"
+
+    def test_an_unreadable_item_is_not_walked_past(self, app):
+        """Dropping it reports the rest as the whole picture -- #98 inside one
+        listing. Measured: the block below scored 100 (codex review)."""
+        prop = _prop(title="ComponentUnreadableItem")
+        prop.enrichment = {
+            "hazards": {
+                "status": hazard_service.STATUS_OK,
+                "searched_m": 6000,
+                "item_count": 2,
+                "items": [
+                    {
+                        "kind": "landfill",
+                        "severity": "high",
+                        "origin_distance_m": "bad",
+                    },
+                    {
+                        "kind": "landfill",
+                        "severity": "high",
+                        "origin_distance_m": 5000,
+                    },
+                ],
+                "origin": {"lat": XIVARES[0], "lon": XIVARES[1]},
+            }
+        }
+        db.session.commit()
+        score, meta = self._score(prop)
+        assert score is None
+        assert meta["status"] == "unreadable_item"
+
+    def test_a_cut_list_scores_only_while_the_cut_cannot_matter(self, app):
+        """Everything dropped is further away than everything kept.
+
+        So the worst a dropped item can score is the farthest kept item's
+        distance at full severity -- and while the worst kept item is at or
+        under that bound, the answer is safe. When it is not, it is not
+        knowable from what was stored.
+        """
+        block = {
+            "status": hazard_service.STATUS_OK,
+            "searched_m": 6000,
+            "item_count": 25,
+            "origin": {"lat": XIVARES[0], "lon": XIVARES[1]},
+        }
+        safe = _prop(title="ComponentCutSafe")
+        safe.enrichment = {
+            "hazards": {
+                **block,
+                "items": [
+                    {"kind": "landfill", "severity": "high", "origin_distance_m": 500}
+                ],
+            }
+        }
+        db.session.commit()
+        assert self._score(safe)[0] == 0.0
+
+        unsafe = _prop(title="ComponentCutUnsafe")
+        unsafe.enrichment = {
+            "hazards": {
+                **block,
+                "items": [
+                    {
+                        "kind": "quarry",
+                        "severity": "moderate",
+                        "origin_distance_m": 1000,
+                    }
+                ],
+            }
+        }
+        db.session.commit()
+        score, meta = self._score(unsafe)
+        assert score is None
+        assert meta["status"] == "list_truncated"
+
     def test_a_stale_origin_scores_none(self, app, real_fetch):
         prop = _prop(title="ComponentMoved")
         HazardService(
