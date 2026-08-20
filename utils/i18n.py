@@ -269,6 +269,11 @@ TRANSLATIONS = {
         "channel_phone_label": "Phone",
         "channel_visit_label": "Visit",
         "channel_other_label": "Other",
+        # Attached documents and photos (services/attachments.py).
+        "attachment_add": "Attach a file",
+        "attachment_hint": "PDF or photo, up to 25 MB. The type is read from the file itself, not from its name.",
+        "attachment_remove": "Remove this file",
+        "attachment_refused": "The file was refused",
         # Quick scope switches on the properties toolbar
         "favorites": "Favorites",
         "hide_removed": "Hide removed",
@@ -788,6 +793,10 @@ TRANSLATIONS = {
         "channel_phone_label": "Teléfono",
         "channel_visit_label": "Visita",
         "channel_other_label": "Otro",
+        "attachment_add": "Adjuntar un archivo",
+        "attachment_hint": "PDF o foto, hasta 25 MB. El tipo se lee del propio archivo, no de su nombre.",
+        "attachment_remove": "Quitar este archivo",
+        "attachment_refused": "El archivo fue rechazado",
         "favorites": "Favoritos",
         "hide_removed": "Ocultar retirados",
         "price": "Precio",
