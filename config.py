@@ -217,6 +217,15 @@ class Config:
     INGESTION_TIMES = ["07:00", "19:00"]  # 7 AM and 7 PM CET
     LISTING_STATUS_CHECK_TIME = os.environ.get("LISTING_STATUS_CHECK_TIME", "10:00")
 
+    # A routing engine on this machine, replacing the Distance Matrix leg --
+    # the last billed call an enrichment makes (~$0.13 a listing). Empty means
+    # Google answers, exactly as before: this is opt-in because OSRM's car
+    # profile is measurably slower than Google on motorway runs (+26% to +34%
+    # over five airport measurements against the durations already stored),
+    # so turning it on decides what the numbers in the table mean, not only
+    # what they cost. See services/osrm_routing.py.
+    OSRM_URL = os.environ.get("OSRM_URL", "").strip()
+
     # OSM Overpass API
     OSM_OVERPASS_URL = "https://overpass-api.de/api/interpreter"
     # And where to go when that one will not talk to this machine. Measured

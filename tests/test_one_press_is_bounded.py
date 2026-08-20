@@ -1114,6 +1114,19 @@ class TestTheAnalysisDoesNotDependOnATabStayingOpen:
         assert "runClaudeAnalysis(propertyId, queued.claude)" in detail
         assert "generateChatGPTAnalysis(propertyId, queued.openai)" in detail
 
+        # And when the poller gives up there are no ids to attach to, so the
+        # page must not post either: its own jobs would finish, free the
+        # live-only dedupe keys, and the still-running enrichment would then
+        # queue a second pair. Reproduced in review round 4 -- one press,
+        # both providers charged twice.
+        assert "if (enrichment.stillRunning) {" in detail
+        chain = detail[detail.index("async function runEnrichAndAnalyze") :]
+        chain = chain[: chain.index("async function runClaudeAnalysis")]
+        guard = chain.index("if (enrichment.stillRunning) {")
+        assert guard < chain.index("runClaudeAnalysis(propertyId, queued.claude)"), (
+            "the analyses are dispatched before the give-up is checked"
+        )
+
     def test_a_query_string_cannot_ask_for_the_spend(
         self, app, prop_id, queued, monkeypatch
     ):

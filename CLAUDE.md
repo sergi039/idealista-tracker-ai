@@ -782,6 +782,69 @@ pins by that script's own docstring, but the row does not say so, and writing
 an inference into a provenance field is the STATUS-002 mistake in a new
 column.
 
+**And a coordinate a *person* established outranks the geocoder, in its own
+key** (GEO-002). Only a portal pin was defended, so a `precise` somebody
+curated returned to `approximate` on the next refresh and the components that
+label unlocks went with it. The curation is not hypothetical and neither was
+the exposure: measured 2026-08-20, three production rows carried a
+hand-established location in **three different ad-hoc shapes** -- 161 and 792
+under `enrichment["coordinate_provenance"]` with `method` values that do not
+match and timestamps under two different names, 774 under
+`enrichment["cadastre"]` -- and **nothing in the repository read any of them**.
+161 and 792 both carry a `precise` their own `enrichment["geocoding"]` record
+contradicts, the fingerprint of a write made outside the geocoder; 161 survives
+today only by accident, because it also happens to carry a portal pin, and 130
+of the 132 `precise` rows carry none. **Re-measure rather than quoting those
+two**, the way the `location_accuracy` paragraph above says: the morning's
+answer was 129 of 130, because the set grows with every ingest.
+
+**And within the same afternoon the pressure this creates produced the wrong
+write.** By 15:02Z rows 161 and 792 both carried
+`enrichment["import"]["coordinate"]` -- `source: cadastre_manual` and
+`cadastre_parcel` -- put there by hand-run scripts. That field means *the
+coordinate the source portal published*, and a cadastral parcel centroid is not
+that. It works, because `_apply_geocode_outcome` defends the portal pin, which
+is precisely why it is the STATUS-002 mistake and not merely untidy: the row now
+answers "the portal placed this pin" to anyone who asks, and no reader can tell
+those two rows from the 57 fotocasa ones. Nobody was being careless -- there was
+nowhere honest to put it, which is the hole this section closes. Moving them is
+one `utils/set_property_location.py --source cadastre` per row, by the person
+who established them, and is deliberately not done here.
+
+The reason those blocks were ad-hoc is that there was no hand-set path for a
+coordinate at all -- the only writers of `location_accuracy` are the geocoder,
+the fotocasa import, the `Land` migration and the restore half of
+`utils/refresh_property_accuracy.py`, so everything else went through
+`docker exec`, the boundary `services/ingest_policy.py` records as the one a
+flag cannot close. So the defence ships with its writer:
+`enrichment["location"]`, read by `manual_coordinate` and written by
+`record_manual_coordinate` in `services/coordinate_quality.py`, set by
+`utils/set_property_location.py`. `ensure_coordinates` refuses in front of it
+**before the geocode**, making no request at all, the shape `advertiser.enrich`
+uses for a hand-set seller verdict; `improves_on` is not consulted, because a
+person outranks a better label.
+
+Five things about it are deliberate. It is **not** written where
+`portal_coordinate` looks -- a conclusion drawn from the cadastre stored under
+"the pin the portal published" is the STATUS-002 mistake above, in a new
+column, and that is why the three rows are **not backfilled**: no column
+distinguishes a curated `precise` from a Google one, so a person converts them
+with the note their own block already holds, or nobody does. A **malformed
+block does not stop a geocode**, since the alternative is a row pinned to a
+coordinate nothing can correct and nothing can explain, and a **note is
+required** for the same reason -- `owner`/`agency` describe themselves, two
+numbers do not. **Clearing leaves the coordinate columns alone**: the block is
+not guaranteed to be newer than them, so restoring what it displaced could undo
+a later deliberate act rather than the one being cleared. And
+`utils/refresh_property_accuracy.py` **counts and names what it skipped** --
+it is the one caller that runs `refresh=True` over a scope, and folding a
+hand-set row into the rows that came back unchanged would report
+`precise -> precise` for a row Google was never asked about, which is #98's
+defect inside a report. That last one is worth more than its size: it is a
+defect of *existing* code that only review could find, because a new call to a
+shared function is a change to that function and neither side's mutation can
+see it. `tests/test_hand_set_location_survives_a_refresh.py` pins all of it.
+
 **The import reads, shows, and only then writes, because this app cannot delete
 a property.** There is no delete route and no `db.session.delete` on `Property`
 anywhere in the tree, so a row built from a misread page stays in the table, in

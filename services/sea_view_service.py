@@ -158,6 +158,21 @@ GEOMETRY_CACHE_TIMEOUT_S = 60 * 60 * 24 * 7
 # --- text signals -----------------------------------------------------------
 
 # An unambiguous claim of a *view*. Used directly when the AI bridge is down.
+#
+# This is a list of literal substrings, so it recognises a phrasing and not an
+# idea: every entry is a form somebody actually wrote. The two at the end were
+# added after they were measured missing on production rows -- listing 111186983
+# offers "Building plot with sea and city views" and the Villahormes plot
+# "vistas abiertas y despejadas, con presencia del mar en el horizonte", and
+# both scored `unknown` because "sea view" and "vistas al mar" require an
+# adjacency neither sentence has. Nothing read them as "no sea": an absent
+# keyword leaves the text saying nothing, which is why the miss was quiet.
+#
+# Both are cut back to the part that carries the claim, so they generalise as
+# far as a substring can -- "sea and city view" also matches the plural, and
+# "mar en el horizonte" matches "se ve el mar en el horizonte" as well as the
+# sentence above. Neither is cut back further: "and city views" would match a
+# park, and "el horizonte" says nothing about the sea.
 VIEW_KEYWORDS = (
     "vista al mar",
     "vistas al mar",
@@ -174,6 +189,8 @@ VIEW_KEYWORDS = (
     "ocean views",
     "views of the sea",
     "view of the sea",
+    "sea and city view",
+    "mar en el horizonte",
 )
 
 # Mentions the sea without claiming a view. "primera línea" and "frente al mar"

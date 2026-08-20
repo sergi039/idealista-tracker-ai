@@ -19,6 +19,9 @@
    `advertiser` were added: `?advertiser=owner` found 70 listings and the Next
    link it drew found 470, while the Export CSV button on that same page
    carried the filter and exported the 70. Nothing said the set had changed. #}
+{# `verdict` and `action` arrived together and belong here together: a link
+   that keeps one and drops the other widens the page in the same silent way,
+   and the two are edited as one control pair (services/owner_review.py). #}
 {% set base_args = {
     'profile_id': current_filters.profile_id,
     'category': current_filters.category or None,
@@ -30,6 +33,8 @@
     'inv_metr': current_filters.inv_metr or None,
     'sea_view': current_filters.sea_view or None,
     'measured': current_filters.measured or None,
+    'verdict': current_filters.verdict or None,
+    'action': current_filters.action or None,
     'favorites': 'on' if current_filters.favorites else None,
     'hide_removed': 'on' if current_filters.hide_removed else None,
     'mode': current_filters.mode,
@@ -119,6 +124,36 @@
     {% if verdict.state == 'owner' %}
         <span class="badge bg-primary fw-normal" title="{{ verdict.note }}">
             <i class="fas fa-user me-1"></i>{{ t('advertiser_owner') }}
+        </span>
+    {% endif %}
+{%- endmacro %}
+
+{# What the owner decided, and whether something on this listing is late.
+   Every *decided* state is badged, unlike the seller badge above, and for the
+   opposite reason: a decision is rare here and each one is the whole point of
+   the row being on screen -- a rejected listing has to say so before its score
+   does. `undecided` gets nothing, because it is most of the table and a badge
+   on most of the table marks nothing (services/owner_review.py).
+
+   `overdue` is a separate marker rather than a fifth verdict: an outstanding
+   action is legal under any decision, and folding the two would lose
+   "interested; call the architect on Friday". It needs the page's one date --
+   never its own, or this badge and the filter that selected the row would
+   disagree at midnight. #}
+{% macro owner_review_badges(p, review_today) -%}
+    {% set _d = owner_decision_for(p) %}
+    {% set _classes = {'interested': 'success', 'waiting': 'warning', 'rejected': 'danger'} %}
+    {% if _d.decided %}
+        <span class="badge bg-{{ _classes.get(_d.state, 'secondary') }} fw-normal"
+              {% if _d.reason %}title="{{ _d.reason }}"{% endif %}>
+            {{ t(owner_decision_label_key(_d.state)) }}
+        </span>
+    {% endif %}
+    {% set _a = owner_action_for(p, review_today) %}
+    {% if _a.state == 'overdue' %}
+        <span class="badge bg-danger fw-normal"
+              title="{{ _a.action }}{% if _a.due_on %} — {{ t('next_action_due') }} {{ _a.due_on.strftime('%Y-%m-%d') }}{% endif %}">
+            <i class="fas fa-hourglass-end me-1"></i>{{ t('next_action_overdue') }}
         </span>
     {% endif %}
 {%- endmacro %}
@@ -434,7 +469,7 @@
             {# The map has to be reachable *with the current selection* --
                left to itself it resolves a subscription of its own. #}
             <a class="btn btn-outline-secondary btn-sm"
-               href="{{ url_for('main.map_view', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None) }}"
+               href="{{ url_for('main.map_view', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None) }}"
                title="View properties on map">
                 <i class="fas fa-map me-1"></i>Map
             </a>
@@ -794,6 +829,47 @@
                         <input type="hidden" name="advertiser" value="{{ current_filters.advertiser }}"/>
                     {% endif %}
 
+                    {# What the owner decided. `undecided` is offered like any
+                       other state -- it is most of this table, and leaving it
+                       out would make the three decided counts read as a tally
+                       of the whole page rather than of the part somebody has
+                       judged. Same reading as the badge, so an option's count
+                       and the badges it selects cannot disagree
+                       (services/owner_review.py). #}
+                    {% if verdicts|length > 1 %}
+                    <select class="form-select form-select-sm properties-filter-select" id="verdict" name="verdict"
+                            aria-label="{{ t('owner_verdict') }}">
+                        <option value="">{{ t('owner_verdict_all') }}</option>
+                        {% for choice in verdicts %}
+                            <option value="{{ choice.value }}"
+                                    {{ 'selected' if current_filters.verdict == choice.value }}>
+                                {{ t(choice.label_key) }}{% if choice.count %} ({{ choice.count }}){% endif %}
+                            </option>
+                        {% endfor %}
+                    </select>
+                    {% elif current_filters.verdict %}
+                        <input type="hidden" name="verdict" value="{{ current_filters.verdict }}"/>
+                    {% endif %}
+
+                    {# Whether something is still outstanding, and whether it is
+                       late. `none` is not offered: it is every row nobody owes
+                       anything on, so an option selecting it selects nothing
+                       anyone is looking for. #}
+                    {% if actions %}
+                    <select class="form-select form-select-sm properties-filter-select" id="action" name="action"
+                            aria-label="{{ t('next_action') }}">
+                        <option value="">{{ t('next_action_all') }}</option>
+                        {% for choice in actions %}
+                            <option value="{{ choice.value }}"
+                                    {{ 'selected' if current_filters.action == choice.value }}>
+                                {{ t(choice.label_key) }}{% if choice.count %} ({{ choice.count }}){% endif %}
+                            </option>
+                        {% endfor %}
+                    </select>
+                    {% elif current_filters.action %}
+                        <input type="hidden" name="action" value="{{ current_filters.action }}"/>
+                    {% endif %}
+
                     {# Sea view is a four-state verdict, not a flag: `yes` needs the
                        listing text and the terrain to agree, `likely` is one source
                        unopposed, and `unknown` -- an approximate coordinate, or a
@@ -935,6 +1011,25 @@
                             <i class="fas fa-circle-info me-1"></i>{{ t('listing_status_coverage')|format(listing_verified_count, pagination.total) }}
                         </span>
                     {% endif %}
+                    {# How many listings are waiting on something that is now
+                       late. It is a link and not only a dropdown option,
+                       because a reminder nobody opens a menu to find is not a
+                       reminder -- the ticket's own case is a promise due in a
+                       month that "in a month nobody will remember to ask"
+                       about. Counted over the subscriptions on screen with the
+                       page's one date, so it agrees with the badges under it.
+                       Absent when nothing is late: a zero here would be a
+                       standing line about nothing. #}
+                    {% if actions is defined and actions %}
+                        {% for choice in actions if choice.value == 'overdue' and choice.count %}
+                            <span id="overdue-count-note" class="small">
+                                <a id="overdue-count-link" class="text-danger"
+                                   href="{{ url_for('main.properties', **dict(base_args, action='overdue', page=1, sort=current_filters.sort_by, order=current_filters.order)) }}">
+                                    <i class="fas fa-hourglass-end me-1"></i>{{ tn('review_overdue_link', choice.count) }}
+                                </a>
+                            </span>
+                        {% endfor %}
+                    {% endif %}
                     {% if not selected_profile_id and profile_selection.withholds_profile_travel %}
                         <span class="small text-body-secondary" id="profile-travel-notice">
                             <i class="fas fa-circle-info me-1"></i>{{ profile_selection.travel_notice }}
@@ -977,8 +1072,15 @@
                             <i class="fas fa-th-large"></i>
                         </a>
                     </div>
+                    {# This link is the export's own copy of the filter set, and a
+                       key missing from it is a filter the CSV silently drops:
+                       `measured` was, so a page finding 72 listings exported 471 rows
+                       (measured against production 2026-08-20). `hide_removed` is
+                       stated in both directions -- 'off' as well as 'on' -- so the
+                       export never re-derives a default the page has already
+                       resolved. #}
                     <a class="btn btn-success btn-sm"
-                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort=current_filters.sort_by, order=current_filters.order) }}"
+                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, measured=current_filters.measured or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else 'off', sort=current_filters.sort_by, order=current_filters.order) }}"
                        title="Download filtered data as CSV">
                         <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
                     </a>
@@ -1087,6 +1189,7 @@
                                                     {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
                                     {{ source_badge(p) }}
                                                     {{ advertiser_badge(p) }}
+                                                    {{ owner_review_badges(p, review_today) }}
                                                     {{ sea_view_badge(p) }}
                                                     {{ plot_badges(p) }}
                                                 </div>
@@ -1186,7 +1289,7 @@
                                                     {% if p.location_lat and p.location_lon %}
                                                         {# Carry the selection: /map auto-selects a different
                                                            profile, and the focused listing may not be in it. #}
-                                                        <a href="{{ url_for('main.map_view', focus=p.id, profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None) }}"
+                                                        <a href="{{ url_for('main.map_view', focus=p.id, profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None) }}"
                                                            class="btn btn-info btn-sm" aria-label="Show on map" title="Show on Map">
                                                             <i class="fas fa-map-marker-alt"></i>
                                                         </a>
@@ -1268,6 +1371,7 @@
                                     {% if show_subscription %}{{ subscription_badge(p, profile_names) }}{% endif %}
                                     {{ source_badge(p) }}
                                     {{ advertiser_badge(p) }}
+                                                    {{ owner_review_badges(p, review_today) }}
                                     {{ sea_view_badge(p) }}
                                                     {{ plot_badges(p) }}
                                 </div>
@@ -1339,7 +1443,7 @@
                                     {% if p.location_lat and p.location_lon %}
                                         {# Same as the table view: `focus` alone is not enough,
                                            /map would resolve its own profile. #}
-                                        <a href="{{ url_for('main.map_view', focus=p.id, profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None) }}"
+                                        <a href="{{ url_for('main.map_view', focus=p.id, profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None) }}"
                                            class="btn btn-outline-info btn-sm" title="Show on Map">
                                             <i class="fas fa-map"></i>
                                         </a>
