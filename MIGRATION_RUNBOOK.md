@@ -12,6 +12,15 @@ Merge `feature/properties-universal` into `main` and promote Universal as the pr
 
 ## Step 1: Backup Legacy
 
+> **A `pg_dump` alone stopped being a backup of this app on 2026-08-20.**
+> Attachments (#430) are files under `data/attachments/`, named by their own
+> sha256, and nothing recomputes them -- so a dump restores rows that point at
+> bytes nobody kept. `tools/backup_attachments.sh <destination>` takes both, in
+> the order that matters: **the database first, the bytes second**. The other
+> way round puts a row in the dump whose file is in no archive, which after a
+> restore is a download that 404s and that nothing can tell from a file
+> somebody deleted. The commands below still stand for the database half.
+
 ```bash
 # 1a. Backup Legacy database
 docker exec idealista-db pg_dump -U idealista -d idealista > ~/backups/idealista_legacy_$(date +%Y%m%d).sql
