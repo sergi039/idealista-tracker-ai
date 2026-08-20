@@ -1522,8 +1522,10 @@
                                         — {{ tn('hazards_elements', item.element_count) }}
                                     {% endif %}
                                     {% for element in item.elements %}
-                                        <a class="ms-1" target="_blank" rel="noopener"
-                                           href="https://www.openstreetmap.org/{{ element.type }}/{{ element.id }}">{{ element.type[:1]|upper }}{{ element.id }}</a>
+                                        {% if element.type and element.id is not none %}
+                                            <a class="ms-1" target="_blank" rel="noopener"
+                                               href="https://www.openstreetmap.org/{{ element.type }}/{{ element.id }}">{{ element.type[:1]|upper }}{{ element.id }}</a>
+                                        {% endif %}
                                     {% endfor %}
                                 </div>
                             </div>
@@ -1546,10 +1548,12 @@
                 {% endif %}
 
                 {% if hazards.measured %}
-                    <div class="small text-body-secondary mt-2">
-                        {{ t('hazards_searched')|format((hazards.searched_m / 1000.0)|round(1)) }}{% if hazards.approximate_origin and hazards.guaranteed_m is not none %},
-                        {{ t('hazards_guaranteed')|format((hazards.guaranteed_m / 1000.0)|round(1)) }}{% endif %}.
-                    </div>
+                    {% if hazards.searched_m is not none %}
+                        <div class="small text-body-secondary mt-2">
+                            {{ t('hazards_searched')|format((hazards.searched_m / 1000.0)|round(1)) }}{% if hazards.approximate_origin and hazards.guaranteed_m is not none %},
+                            {{ t('hazards_guaranteed')|format((hazards.guaranteed_m / 1000.0)|round(1)) }}{% endif %}.
+                        </div>
+                    {% endif %}
                     {% if hazards.approximate_origin %}
                         <div class="small text-body-secondary">{{ t('hazards_approximate') }}.</div>
                     {% endif %}

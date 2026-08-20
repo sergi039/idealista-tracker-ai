@@ -280,6 +280,69 @@ class TestGrouping:
             assert item["origin_distance_m"] <= hazard_rules.SEARCH_RADIUS_M
 
 
+class TestTruncationIsDisclosed:
+    """The one way this feature can quietly show a short list."""
+
+    def test_a_scan_that_reached_the_cap_says_so(self, app, client, real_fetch):
+        # `out ... N` truncates in the server's own order, so the elements we
+        # get are not the nearest N -- they are simply not all of them.
+        filler = [
+            {
+                "type": "node",
+                "id": 10_000 + index,
+                "lat": XIVARES[0] + 0.001,
+                "lon": XIVARES[1] + 0.001,
+                "tags": {"landuse": "industrial"},
+            }
+            for index in range(hazard_rules.ELEMENT_LIMIT)
+        ]
+        prop = _prop(title="Truncated")
+        HazardService(enrichment_service=_FakeEnrichment(elements=filler)).enrich(
+            prop, commit=True
+        )
+        assert prop.enrichment["hazards"]["truncated"] is True
+        body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
+        assert response_is_the_card(body)
+        assert "element limit" in body
+
+    def test_an_element_with_no_readable_centre_does_not_shorten_the_count(
+        self, app, real_fetch
+    ):
+        """Trimming happens after the count, so it cannot fake a full scan."""
+        elements = [
+            {"type": "node", "id": 1, "tags": {"landuse": "landfill"}}
+        ] * hazard_rules.ELEMENT_LIMIT
+        service = HazardService(enrichment_service=_FakeEnrichment(elements=elements))
+        measurement = service.measure(*XIVARES)
+        assert measurement["truncated"] is True
+        assert measurement["items"] == []
+
+
+def response_is_the_card(body):
+    return "Industrial neighbours" in body
+
+
+class TestGroupingBounds:
+    def test_a_keyless_cluster_is_a_disc_and_not_a_chain(self, app, real_fetch):
+        """Three tanks 400 m apart in a line are not one 800 m facility."""
+        points = [0.0, 0.0036, 0.0072]  # ~0 m, ~400 m, ~800 m north
+        elements = [
+            {
+                "type": "way",
+                "id": 20_000 + index,
+                "lat": XIVARES[0] + offset,
+                "lon": XIVARES[1],
+                "tags": {"man_made": "storage_tank", "content": "LNG"},
+            }
+            for index, offset in enumerate(points)
+        ]
+        measurement = HazardService(
+            enrichment_service=_FakeEnrichment(elements=elements)
+        ).measure(*XIVARES)
+        assert len(measurement["items"]) == 2
+        assert [item["element_count"] for item in measurement["items"]] == [2, 1]
+
+
 class TestHonestAbsence:
     def test_a_refusal_is_unavailable_and_not_an_empty_list(self, app, real_fetch):
         service = HazardService(
@@ -319,6 +382,31 @@ class TestHonestAbsence:
             enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
         ).enrich(prop, commit=True)
         assert payload["status"] == hazard_service.STATUS_NO_COORDINATES
+
+    def test_a_half_read_block_still_renders(self, app, client):
+        """The page must not raise on a shape an older run could have left.
+
+        `routes/main_routes.py` turns a render error into a flash and a second
+        render with nothing, so a raising template looks like an empty page
+        rather than a failure -- which is why this asserts the card is there
+        and not merely that the response was 200.
+        """
+        prop = _prop(title="HalfRead")
+        prop.enrichment = {
+            "hazards": {
+                "status": hazard_service.STATUS_OK,
+                "items": [
+                    {"kind": "a_kind_with_no_translation", "severity": "high"},
+                    "not even a dict",
+                ],
+            }
+        }
+        db.session.commit()
+        response = client.get(f"/properties/{prop.id}")
+        assert response.status_code == 200
+        body = response.get_data(as_text=True)
+        assert response_is_the_card(body)
+        assert " km" not in body.split("Industrial neighbours", 1)[1].split("</div>")[0]
 
     def test_an_unscanned_row_is_not_a_clean_one(self, app):
         prop = _prop(title="NeverScanned")

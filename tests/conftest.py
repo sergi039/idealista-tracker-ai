@@ -139,7 +139,10 @@ def pytest_runtest_setup(item) -> None:
     # `[]` is "Overpass replied and there is nothing here", never a refusal.
     import services.hazard_service as _hazard_service
 
-    _hazard_service.fetch_elements = lambda service, lat, lon: ([], None)
+    _hazard_service.fetch_elements = lambda service, lat, lon: (
+        {"elements": [], "returned": 0},
+        None,
+    )
 
 
 @pytest.hookimpl(wrapper=True)

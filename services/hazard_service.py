@@ -204,7 +204,7 @@ def fetch_elements(
     refusal exists to prevent.
     """
     cached = get_cached_enrichment_data(lat, lon, _CACHE_KEY)
-    if isinstance(cached, list):
+    if isinstance(cached, dict) and isinstance(cached.get("elements"), list):
         return cached, None
 
     query = hazard_rules.overpass_query(lat, lon)
@@ -229,11 +229,18 @@ def fetch_elements(
                 "tags": tags if isinstance(tags, dict) else {},
             }
         )
+    # `returned` is the count Overpass *answered with*, not the count that
+    # survived the trim above -- an element with no readable centre is dropped
+    # here, and counting after that would let a scan that hit the server-side
+    # cap read as one that did not. The cap is the only way this feature can
+    # quietly show a short list, so the number that detects it has to be the
+    # raw one, and it has to survive into the cache.
+    payload = {"elements": trimmed, "returned": len(elements or [])}
     try:
-        cache_enrichment_data(lat, lon, _CACHE_KEY, trimmed, timeout=_CACHE_TTL_S)
+        cache_enrichment_data(lat, lon, _CACHE_KEY, payload, timeout=_CACHE_TTL_S)
     except Exception:
         logger.warning("Could not cache hazard scan for %s,%s", lat, lon, exc_info=True)
-    return trimmed, None
+    return payload, None
 
 
 class HazardService:
@@ -258,7 +265,7 @@ class HazardService:
         `read_verdict`. That split is what lets a re-geocoded row be restated
         without a second Overpass call.
         """
-        elements, failure = fetch_elements(self.enrichment_service, lat, lon)
+        answer, failure = fetch_elements(self.enrichment_service, lat, lon)
         if failure is not None:
             return {
                 "status": STATUS_UNAVAILABLE,
@@ -266,11 +273,12 @@ class HazardService:
                 "searched_m": hazard_rules.SEARCH_RADIUS_M,
             }
 
+        elements = answer.get("elements") or []
         # `out ... N` truncates in whatever order the server produced, so a
         # scan that reached the cap has not necessarily seen the nearest
         # things last -- it has simply not seen everything. Saying so is the
         # only honest option; silently shortening the list is the defect.
-        truncated = len(elements) >= hazard_rules.ELEMENT_LIMIT
+        truncated = int(answer.get("returned") or 0) >= hazard_rules.ELEMENT_LIMIT
 
         qualifying: List[Dict[str, Any]] = []
         for element in elements:
@@ -305,7 +313,7 @@ class HazardService:
             "truncated": truncated,
             "item_count": len(items),
             "items": items[:MAX_ITEMS],
-            "candidates_seen": len(elements),
+            "candidates_seen": int(answer.get("returned") or 0),
             "qualifying_elements": len(qualifying),
         }
 
@@ -340,14 +348,20 @@ class HazardService:
         clusters: List[List[Dict[str, Any]]] = []
         for candidate in sorted(keyless, key=lambda c: c["distance_m"]):
             for cluster in clusters:
-                if cluster[0]["kind"] != candidate["kind"]:
+                anchor = cluster[0]
+                if anchor["kind"] != candidate["kind"]:
                     continue
-                if any(
+                # Measured against the *anchor* and never against any member:
+                # chaining member to member would let a line of tanks 400 m
+                # apart walk a "facility" across several kilometres, and the
+                # distance the item then reports would describe one end of it.
+                # A disc of `CLUSTER_M` around the nearest member is a bound;
+                # a chain is not.
+                if (
                     haversine_m(
-                        member["lat"], member["lon"], candidate["lat"], candidate["lon"]
+                        anchor["lat"], anchor["lon"], candidate["lat"], candidate["lon"]
                     )
                     <= CLUSTER_M
-                    for member in cluster
                 ):
                     cluster.append(candidate)
                     break
@@ -411,9 +425,13 @@ class HazardService:
             ),
             "lat": nearest["lat"],
             "lon": nearest["lon"],
+            # Only elements that can actually be linked back to OSM: a
+            # missing type or id would render as a broken URL, and the
+            # template's job is not to guess what a half-read element was.
             "elements": [
-                {"type": member["osm_type"], "id": member["osm_id"]}
+                {"type": str(member["osm_type"]), "id": member["osm_id"]}
                 for member in members[:MAX_ELEMENTS_PER_ITEM]
+                if member.get("osm_type") and member.get("osm_id") is not None
             ],
             "element_count": len(members),
         }
@@ -606,7 +624,7 @@ def measured_expression(model):
     to agree with the badges under it row for row -- a header reading "40 of
     730 scanned" above a table whose badges say otherwise is a third wrong
     number rather than a disclosure. That is `listing_verification`'s rule,
-    and `tests/test_hazard_service.py` runs one matrix through both readings
+    and `tests/test_hazard_proximity.py` runs one matrix through both readings
     for the same reason.
     """
     status = model.enrichment[ENRICHMENT_KEY]["status"].as_string()
