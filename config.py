@@ -336,7 +336,7 @@ class Config:
     # ENRICH_LOOKUP_BUDGET_S below; this bounds the callers that have no run
     # around them, which is every backfill.
     OSM_OVERPASS_WALK_BUDGET_S = float(
-        os.environ.get("OSM_OVERPASS_WALK_BUDGET_S") or "210"
+        os.environ.get("OSM_OVERPASS_WALK_BUDGET_S") or "275"
     )
     # The ceiling on *all* the free lookups one Enrich press may wait for --
     # every Overpass walk and every elevation query in the run, together.
@@ -362,7 +362,7 @@ class Config:
     # costs an unlucky press is paid only when every instance is down, and
     # `enrich_budget` hands the number to both clients so nothing has to be
     # told the ceiling moved.
-    ENRICH_LOOKUP_BUDGET_S = float(os.environ.get("ENRICH_LOOKUP_BUDGET_S") or "240")
+    ENRICH_LOOKUP_BUDGET_S = float(os.environ.get("ENRICH_LOOKUP_BUDGET_S") or "305")
     # What the rest of one run may take: the paid Google steps plus the one
     # free HTTP fetch that is neither Google nor an OSM lookup. Not a deadline
     # -- nothing enforces it, and nothing should, since abandoning a billed
