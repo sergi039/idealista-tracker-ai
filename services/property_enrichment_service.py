@@ -231,7 +231,13 @@ class PropertyEnrichmentService:
             # `use_ai=True` because this method is the Enrich button: the
             # text signal runs before the coordinate check, so it is the one
             # part of the pass a coordinate-less row still gets in full.
-            self._advisory_pass(prop, use_ai=True)
+            # Without the pool step, which the old shape did not run here
+            # either. `PoolService._compute` answers `no_coordinates` -- free,
+            # no network -- but that status is not one of the two its "a
+            # refusal never overwrites an answer" guard defends against, so a
+            # re-geocode that lost a coordinate would write it over a pool
+            # somebody had measured when the row still had one.
+            self._advisory_pass(prop, use_ai=True, with_pool=False)
             return False
 
         # Enrichment does not touch `search_profile_id` (owner decision,
@@ -279,7 +285,7 @@ class PropertyEnrichmentService:
         db.session.commit()
 
         # -- the advisory pass ------------------------------------------------
-        self._advisory_pass(prop, use_ai=True)
+        self._advisory_pass(prop, use_ai=True, with_pool=True)
 
         if recalc_scoring:
             try:
@@ -292,7 +298,7 @@ class PropertyEnrichmentService:
                 )
         return ok
 
-    def _advisory_pass(self, prop: Property, *, use_ai: bool) -> None:
+    def _advisory_pass(self, prop: Property, *, use_ai: bool, with_pool: bool) -> None:
         """The score-neutral steps, each owning its own write.
 
         They commit for themselves rather than riding a shared transaction at
@@ -327,6 +333,8 @@ class PropertyEnrichmentService:
         # weight 0 -- which is exactly why it may not hold the paid steps up.
         # It runs on whatever is left of the run's lookup budget, and records
         # `unavailable` when there is none.
+        if not with_pool:
+            return
         try:
             self.pool_service.enrich(prop, commit=True)
         except Exception as e:

@@ -766,3 +766,99 @@ class TestTheClientIsToldTheCeilingRatherThanGuessingIt:
         # And the sequel is declared once, up front, rather than driven from
         # the tab step by step.
         assert "analyze: true" in detail
+
+
+class TestARowWithNoCoordinateKeepsWhatWasMeasured:
+    """The re-ordering must not hand the pool step a row it never used to see.
+
+    `PoolService._compute` answers `no_coordinates` without a network call --
+    but that status is not one of the two its "a refusal never overwrites an
+    answer" guard defends against, so running it on the coordinate-less path
+    would write it over a measurement taken when the row still had one.
+    """
+
+    @pytest.fixture
+    def app(self):
+        setup_test_environment()
+        app = create_app()
+        app.config["TESTING"] = True
+        with app.app_context():
+            db.create_all()
+            yield app
+            db.drop_all()
+
+    def test_the_pool_step_is_not_run_without_a_coordinate(self, app, monkeypatch):
+        from services import property_enrichment_service as module
+
+        ran = []
+
+        class _Location:
+            def ensure_coordinates(self, prop, refresh=False, *, commit=False):
+                return False
+
+        class _Pool:
+            def enrich(self, prop, commit=False):
+                ran.append("pool")
+                return {"status": "no_coordinates"}
+
+        service = module.PropertyEnrichmentService(
+            location_service=_Location(), pool_service=_Pool()
+        )
+        monkeypatch.setattr(service, "enrich_free_sources", lambda p, **kw: None)
+        monkeypatch.setattr(
+            module.advertiser, "enrich", lambda prop, *, commit=False: {}
+        )
+
+        prop = Property(source_email_id="no-coords", title="Plot")
+        db.session.add(prop)
+        db.session.commit()
+
+        assert service.enrich_property(prop) is False
+        assert ran == [], "the pool step ran on a row with no coordinate"
+
+    def test_it_is_run_when_there_is_one(self, app, monkeypatch):
+        """The control: without it the assertion above passes on a pool step
+        that was simply never wired at all."""
+        from services import property_enrichment_service as module
+
+        ran = []
+
+        class _Location:
+            def ensure_coordinates(self, prop, refresh=False, *, commit=False):
+                return True
+
+        class _Pool:
+            def enrich(self, prop, commit=False):
+                ran.append("pool")
+                return {}
+
+        class _Travel:
+            def calculate_for_property(self, prop, commit=False):
+                return True
+
+        class _Sea:
+            def update_property(self, prop, *, commit=False):
+                return None
+
+        service = module.PropertyEnrichmentService(
+            location_service=_Location(),
+            pool_service=_Pool(),
+            travel_service=_Travel(),
+            sea_distance_service=_Sea(),
+        )
+        monkeypatch.setattr(service, "enrich_free_sources", lambda p, **kw: None)
+        monkeypatch.setattr(
+            module.advertiser, "enrich", lambda prop, *, commit=False: {}
+        )
+
+        prop = Property(
+            source_email_id="with-coords",
+            title="Plot",
+            location_lat=43.5,
+            location_lon=-6.0,
+        )
+        db.session.add(prop)
+        db.session.commit()
+
+        service.enrich_property(prop, recalc_scoring=False)
+        assert ran == ["pool"]
