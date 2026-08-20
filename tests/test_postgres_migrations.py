@@ -62,6 +62,7 @@ LAND_TRAVEL_MIGRATION = "018_add_land_travel_provenance"
 PRICE_AT_ANALYSIS_MIGRATION = "019_add_price_at_analysis"
 HIDDEN_SUBSCRIPTION_MIGRATION = "020_add_search_profile_is_hidden"
 OWNER_REVIEW_MIGRATION = "021_add_property_review_and_activity"
+CADASTRAL_MIGRATION = "022_add_property_cadastral_reference"
 PROPERTY_VARIANT_UNIQUE_CONSTRAINT = (
     "ux_property_ai_analysis_variants_property_provider"
 )
@@ -276,6 +277,7 @@ def test_013_frees_the_label_on_a_database_that_already_holds_rows(
             PRICE_AT_ANALYSIS_MIGRATION,
             HIDDEN_SUBSCRIPTION_MIGRATION,
             OWNER_REVIEW_MIGRATION,
+            CADASTRAL_MIGRATION,
         ]
 
         # Two *identified* subscriptions may now share the label...
@@ -1498,6 +1500,7 @@ def test_017_deduplicates_existing_rows_and_adds_the_unique_constraint(
             PRICE_AT_ANALYSIS_MIGRATION,
             HIDDEN_SUBSCRIPTION_MIGRATION,
             OWNER_REVIEW_MIGRATION,
+            CADASTRAL_MIGRATION,
         ]
 
         with engine.begin() as connection:
@@ -1684,6 +1687,7 @@ def test_017_deduplicates_existing_land_variants_and_adds_the_unique_constraint(
             PRICE_AT_ANALYSIS_MIGRATION,
             HIDDEN_SUBSCRIPTION_MIGRATION,
             OWNER_REVIEW_MIGRATION,
+            CADASTRAL_MIGRATION,
         ]
 
         with engine.begin() as connection:
