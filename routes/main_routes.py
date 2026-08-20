@@ -26,7 +26,7 @@ from sqlalchemy import or_, case, func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from models import Land, Property, SearchProfile
-from app import db
+from app import db, limiter
 from services import sea_view_service
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
@@ -2822,6 +2822,75 @@ def set_review(property_id):
         flash("Recorded.", "success")
     else:
         flash("Cleared: this listing is undecided again.", "success")
+    return redirect(url_for("main.property_detail", property_id=property_id))
+
+
+@main_bp.route("/properties/<int:property_id>/cadastre", methods=["POST"])
+@limiter.limit("5 per minute")
+def set_cadastral_reference(property_id):
+    """Record the parcel this listing sits on, and fetch what Catastro says.
+
+    The first rate limit in this module, and it is here rather than in the
+    idiom because this route reaches a third party. Catastro publishes no
+    numeric limit and does publish an ~10-day IP ban for abuse, so the
+    arithmetic has to be bounded at the door: three outbound requests per
+    uncached press (`services/cadastre_service.py` runs them with no retries
+    for exactly this reason), five presses a minute, fifteen requests a minute
+    at the very worst. The same 5/minute the listing-status check carries, and
+    for the same reason -- there is no authentication in front of any of it.
+
+    Clearing is a separate action and makes no request: a reference typed
+    wrongly has to be removable without a fetch.
+    """
+    from services import cadastre_service
+
+    prop = db.get_or_404(Property, property_id)
+    raw = (request.form.get("cadastral_reference") or "").strip()
+
+    if not raw:
+        # Clearing the field clears the column AND the block: leaving a
+        # measurement of a parcel this listing no longer claims would be a
+        # description of somewhere else.
+        prop.cadastral_reference = None
+        enrichment = dict(prop.enrichment or {})
+        enrichment.pop(cadastre_service.ENRICHMENT_KEY, None)
+        prop.enrichment = enrichment
+        db.session.commit()
+        flash("Cleared: no cadastral reference for this listing.", "success")
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    normalized = cadastre_service.normalize_reference(raw)
+    if not normalized:
+        flash(
+            "That is not a cadastral reference — it should be 14, 18 or 20 "
+            "letters and digits.",
+            "error",
+        )
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    try:
+        block = cadastre_service.apply_to_property(prop, normalized, commit=True)
+    except cadastre_service.CadastreError as exc:
+        # A refusal is not a crash and not a silent success: the reference is
+        # still worth storing, because the parcel it names is a fact about the
+        # listing whether or not Catastro answered this minute.
+        prop.cadastral_reference = normalized
+        db.session.commit()
+        flash(
+            f"Recorded the reference; Catastro did not answer ({exc.state}).", "error"
+        )
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    run_state = block.get("run_state")
+    if run_state == cadastre_service.RUN_OK:
+        message = "Recorded, and the parcel was measured."
+    elif run_state == cadastre_service.RUN_DEGRADED:
+        message = "Recorded, and the parcel was measured — some details are missing."
+    else:
+        message = "Recorded; the parcel could not be measured this time."
+    flash(
+        message, "success" if run_state != cadastre_service.RUN_UNAVAILABLE else "error"
+    )
     return redirect(url_for("main.property_detail", property_id=property_id))
 
 

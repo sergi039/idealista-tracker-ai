@@ -492,6 +492,141 @@
             </div>
         </div>
 
+        {# The parcel behind the listing (#430). Under the decision block
+           because a cadastral reference is evidence for that decision -- the
+           shape metrics are what rejected 774 -- and above Overview because
+           it is checkable fact rather than advert copy. #}
+        {% set _cad = (property.enrichment or {}).get('cadastre') or {} %}
+        {% set _cad_sources = _cad.get('sources') or {} %}
+        {% set _cad_geom = _cad.get('geometry') or {} %}
+        {% set _cad_attrs = _cad.get('attributes') or {} %}
+        <div class="card mb-4" id="cadastral-parcel">
+            <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
+                <h2 class="h6 mb-0">
+                    <i class="fas fa-vector-square me-2"></i>{{ t('cadastre_section_title') }}
+                </h2>
+                {% if property.cadastral_reference %}
+                    <a class="small" target="_blank" rel="noopener"
+                       href="{{ _cad.get('viewer_url') or ('https://www1.sedecatastro.gob.es/CYCBienInmueble/OVCConCiud.aspx?RefC=' ~ property.cadastral_reference) }}">
+                        <i class="fas fa-up-right-from-square me-1"></i>{{ t('cadastre_viewer') }}
+                    </a>
+                {% endif %}
+            </div>
+            <div class="card-body">
+                {% if not property.cadastral_reference %}
+                    <p class="text-muted mb-3">{{ t('cadastre_none') }}</p>
+                {% else %}
+                    <p class="mb-2">
+                        <code class="user-select-all">{{ property.cadastral_reference }}</code>
+                        {% if _cad_attrs.get('class') %}
+                            <span class="badge bg-{{ 'primary' if _cad_attrs.get('class') == 'UR' else 'secondary' }} ms-2">
+                                {{ t('cadastre_class') }}: {{ 'URBANO' if _cad_attrs.get('class') == 'UR' else 'RÚSTICO' }}
+                            </span>
+                        {% endif %}
+                    </p>
+
+                    {% if _cad_geom %}
+                        <div class="row g-2 mb-2">
+                            <div class="col-6 col-md-3">
+                                <div class="text-muted small">{{ t('cadastre_area') }}</div>
+                                <div class="fw-semibold">{{ '{:,.0f}'.format(_cad_geom.get('declared_area_m2') or _cad_geom.get('area_m2')) }} m²</div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="text-muted small">{{ t('cadastre_bbox') }}</div>
+                                <div class="fw-semibold">{{ _cad_geom.get('bbox', {}).get('we') }} × {{ _cad_geom.get('bbox', {}).get('ns') }} m</div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="text-muted small">{{ t('cadastre_fill_ratio') }}</div>
+                                {# The number that rejected 774: a regular plot
+                                   fills most of its own box, an L-shaped one
+                                   does not. #}
+                                <div class="fw-semibold">
+                                    <span class="badge bg-{{ 'success' if (_cad_geom.get('bbox_fill_ratio') or 0) >= 0.7 else ('warning' if (_cad_geom.get('bbox_fill_ratio') or 0) >= 0.5 else 'danger') }}">
+                                        {{ '{:.0%}'.format(_cad_geom.get('bbox_fill_ratio') or 0) }}
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="text-muted small" title="{{ t('cadastre_compactness_hint') }}">
+                                    {{ t('cadastre_compactness') }} <i class="fas fa-circle-info"></i>
+                                </div>
+                                <div class="fw-semibold">
+                                    <span class="badge bg-{{ 'success' if (_cad_geom.get('polsby_popper') or 0) >= 0.6 else ('warning' if (_cad_geom.get('polsby_popper') or 0) >= 0.4 else 'danger') }}">
+                                        {{ '%.2f'|format(_cad_geom.get('polsby_popper') or 0) }}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                        <p class="text-muted small mb-3">
+                            {{ t('cadastre_measured_in')|format(_cad_geom.get('epsg')) }},
+                            {{ _cad_geom.get('vertices') }} vertices
+                        </p>
+                    {% else %}
+                        <p class="text-muted mb-3">{{ t('cadastre_not_measured') }}</p>
+                    {% endif %}
+
+                    {% if _cad_attrs %}
+                        <dl class="row mb-2 small">
+                            {% if _cad_attrs.get('poligono') %}
+                                <dt class="col-sm-4">{{ t('cadastre_poligono') }}</dt>
+                                <dd class="col-sm-8">{{ _cad_attrs.get('poligono') }} / {{ _cad_attrs.get('parcela') }}</dd>
+                            {% endif %}
+                            {% if _cad_attrs.get('paraje') %}
+                                <dt class="col-sm-4">{{ t('cadastre_paraje') }}</dt>
+                                <dd class="col-sm-8">{{ _cad_attrs.get('paraje') }}</dd>
+                            {% endif %}
+                            {% if _cad_attrs.get('use') %}
+                                <dt class="col-sm-4">{{ t('cadastre_use') }}</dt>
+                                <dd class="col-sm-8">{{ _cad_attrs.get('use') }}</dd>
+                            {% endif %}
+                            {% if _cad_attrs.get('subparcels') %}
+                                <dt class="col-sm-4">{{ t('cadastre_subparcels') }}</dt>
+                                <dd class="col-sm-8">
+                                    {% for sub in _cad_attrs.get('subparcels') %}
+                                        <div>{{ sub.get('code') }} — {{ sub.get('use') }}{% if sub.get('area_m2') %}, {{ '{:,.0f}'.format(sub.get('area_m2')) }} m²{% endif %}</div>
+                                    {% endfor %}
+                                </dd>
+                            {% endif %}
+                        </dl>
+                    {% endif %}
+
+                    {# What each source said, per source. A refusal is not an
+                       absence of parcel: only `not_found` means Catastro
+                       looked and there is nothing (services/cadastre_service.py). #}
+                    {% if _cad_sources %}
+                        <p class="small text-body-secondary mb-3">
+                            {% for _name in ['metric_geometry', 'map_geometry', 'attributes'] %}
+                                {% set _src = _cad_sources.get(_name) or {} %}
+                                {% if _src.get('status') %}
+                                    <span class="me-3">
+                                        {{ t('cadastre_source_' ~ _name) }}:
+                                        <span class="{{ 'text-body-secondary' if _src.get('status') == 'ok' else 'text-warning' }}">
+                                            {{ t('cadastre_state_' ~ _src.get('status')) }}</span>{% if _src.get('kept_previous') %} ({{ t('cadastre_kept_previous') }}){% endif %}
+                                    </span>
+                                {% endif %}
+                            {% endfor %}
+                        </p>
+                    {% endif %}
+                {% endif %}
+
+                <form method="POST" action="{{ url_for('main.set_cadastral_reference', property_id=property.id) }}"
+                      class="row g-2 align-items-end">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <div class="col-12 col-md-8">
+                        <label class="form-label small mb-1" for="cadastral-reference">{{ t('cadastre_reference') }}</label>
+                        <input type="text" class="form-control form-control-sm" id="cadastral-reference"
+                               name="cadastral_reference" value="{{ property.cadastral_reference or '' }}"
+                               placeholder="{{ t('cadastre_reference_placeholder') }}"/>
+                    </div>
+                    <div class="col-12 col-md-4">
+                        <button type="submit" class="btn btn-sm btn-primary">
+                            <i class="fas fa-cloud-arrow-down me-1"></i>{{ t('cadastre_fetch') }}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <div class="card mb-4">
             <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
                 <h2 class="h6 mb-0">

@@ -164,6 +164,7 @@ def _create_historical_schema(engine):
         for index in (
             "ix_properties_owner_verdict",
             "ix_properties_next_action_due_on",
+            "ix_properties_cadastral_reference",
         ):
             connection.execute(text(f"DROP INDEX {index}"))  # noqa: S608
         for column in (
@@ -172,6 +173,8 @@ def _create_historical_schema(engine):
             "owner_verdict_at",
             "next_action",
             "next_action_due_on",
+            # Migration 022 (issue #430) added the cadastral reference.
+            "cadastral_reference",
         ):
             connection.execute(
                 text(f"ALTER TABLE properties DROP COLUMN {column}")  # noqa: S608
