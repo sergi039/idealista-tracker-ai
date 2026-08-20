@@ -243,11 +243,17 @@ def drilldown_args(
     3. **the favorites mode** the aggregate was computed under;
     4. **the listing-status scope** -- `archived` here and `hide_removed`
        there are the same fact under two names, and it is passed even when it
-       agrees with the target's default, because `/properties` decides that
-       default from *whether any filter parameter is present at all*: a link
-       carrying `municipality` and no `hide_removed` reads as a submitted
-       form with the box unticked, and quietly shows the removed listings
-       this page had excluded.
+       agrees with the target's default. `/properties` used to decide that
+       default from *whether any filter parameter is present at all*, so a
+       link carrying `municipality` and no `hide_removed` read as a submitted
+       form with the box unticked and quietly showed the removed listings this
+       page had excluded. That heuristic is gone -- `utils/listing_status_scope.py`
+       now keys on `mode`/`view_type`, which a link built here does not carry,
+       so the same link would get the hide-removed *default* instead. Either
+       way it is the target's guess rather than this page's scope, which is why
+       the parameter is still stated outright: a number here and the page its
+       link opens are one statement, and the only way to keep them one is to
+       say which listings the number counted.
 
     The `profile_id` encoding is `services/profile_selection.py`'s, not a
     second spelling of it, so a selection this builds and a selection the URL

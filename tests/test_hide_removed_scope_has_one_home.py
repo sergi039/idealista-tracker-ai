@@ -144,6 +144,11 @@ def listings(app):
                     ),
                     search_profile_id=profile.id,
                     listing_status="removed" if withdrawn else "active",
+                    # `/map` plots only rows that have a coordinate, so without
+                    # these it draws nothing and a test comparing its marker
+                    # count to its own link would compare 0 with 0.
+                    location_lat=43.55 + index / 1000,
+                    location_lon=-6.83 - index / 1000,
                     scoring=(
                         {"coverage": {"share": 1.0}}
                         if index % 2 == 0
@@ -179,6 +184,19 @@ class TestTheDefaultDependsOnWhereTheRequestCameFrom:
             "/properties?mode=combined&view_type=list&hide_removed=on"
         ).get_data(as_text=True)
         assert _count(body) == LIVE
+
+    @pytest.mark.parametrize("marker", ["mode=combined", "view_type=list"])
+    def test_either_marker_alone_is_enough(self, client, listings, marker):
+        """`FORM_MARKERS` is an `any`, and nothing else exercises it as one.
+
+        Every real link and every other test sends `mode` and `view_type`
+        together, so the suite could not tell the pair from either one
+        hardcoded: replacing the whole check with `bool(args.get("mode"))`
+        passed all of it. That is an equivalent mutant today and a live defect
+        the moment a link carries one marker and not the other.
+        """
+        body = client.get(f"/properties?{marker}").get_data(as_text=True)
+        assert _count(body) == LIVE + GONE
 
     def test_a_cross_page_link_gets_the_default(self, client, listings):
         """/profiles, /map and /profiles/<id>/edit link in with `profile_id`.
@@ -226,6 +244,57 @@ class TestTheDefaultDependsOnWhereTheRequestCameFrom:
 
         again = client.get(_hide_removed_toggle(pressed)).get_data(as_text=True)
         assert _count(again) == LIVE
+
+
+class TestAPageAgreesWithThePageItLinksTo:
+    """A number on one page and the page its link opens are one statement.
+
+    This is #417's rule -- the reason `drilldown_args` states `hide_removed`
+    outright -- applied to the two surfaces that were relying on the deleted
+    heuristic to get it right by accident. Measured before the links were
+    fixed: `/profiles` printed 8 and its own link opened on 5.
+    """
+
+    def test_the_profiles_count_opens_on_what_it_counted(self, client, listings):
+        """The count on /profiles IS the link, and it counts every stored row.
+
+        `/profiles` counts with no `listing_status` filter on purpose (#111:
+        per-profile counts that sum to less than the table tell the reader
+        something untrue), so the link has to name that scope rather than let
+        `/properties` apply its own default.
+        """
+        body = client.get("/profiles").get_data(as_text=True)
+        match = re.search(
+            r'href="(/properties\?[^"]*profile_id=\d+[^"]*)"[^>]*>\s*(\d+)\s*</a>',
+            body,
+        )
+        assert match, "the /profiles count link is not where this test expects it"
+        href, counted = unescape(match.group(1)), int(match.group(2))
+        assert counted == LIVE + GONE, "the count should be unfiltered (#111)"
+        opened = client.get(href).get_data(as_text=True)
+        assert _count(opened) == counted
+
+    def test_the_map_agrees_with_the_list_it_links_to(self, client, listings):
+        """`/map` drops the delisted listings unconditionally, so its own
+        "list view" link has to open on the same set.
+
+        This one was wrong in the other direction before the change: the map
+        plotted the live listings and its link opened on all of them. The count
+        comes off the badge the map renders from `markers|length` -- the map
+        builds its markers server-side and never calls `/api/properties`, so a
+        test asserting against that endpoint would be checking a claim the map
+        does not make.
+        """
+        body = client.get("/map").get_data(as_text=True)
+        badge = re.search(r'<span class="badge bg-secondary">(\d+)</span>', body)
+        assert badge, "the map printed no marker count"
+        plotted = int(badge.group(1))
+        assert plotted == LIVE, "the map should plot the live listings only"
+
+        match = re.search(r'href="(/properties\?[^"]*)"', body)
+        assert match, "the map drew no list-view link"
+        opened = client.get(unescape(match.group(1))).get_data(as_text=True)
+        assert _count(opened) == plotted
 
 
 class TestTheExportAgreesWithThePage:
@@ -320,8 +389,16 @@ class TestTheExportAgreesWithThePage:
 
 
 class TestTheRuleHasOneHome:
-    def test_neither_route_keeps_its_own_list_of_filter_names(self):
-        """The two lists are what drifted; a third would drift the same way."""
+    def test_the_old_name_does_not_come_back(self):
+        """A tripwire on the name, and only that -- read it as one.
+
+        It cannot see a duplicate list under another name, and it is not what
+        guarantees the rule has one home: `test_both_routes_read_the_shared_rule`
+        below is, because a route computing its own answer would not move when
+        the shared reading is forced. What this adds is reach -- it covers the
+        whole file, including a third route that grows a copy and is not in the
+        wiring test.
+        """
         from pathlib import Path
 
         source = Path("routes/main_routes.py").read_text()
