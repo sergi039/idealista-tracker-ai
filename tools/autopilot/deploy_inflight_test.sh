@@ -680,6 +680,93 @@ grep -q "UNKNOWN, not empty" "${WORK}/watcher.log" \
 built && fail "scenario 20f deployed on a table corroborated by a coincidence"
 printf 'OK: the main pid is corroborated from the pid column, not from the text\n'
 
+# --- scenario 20g: four refusals, four causes, one verdict ------------------
+# INFLIGHT-002 in #265. Every way the probe can refuse used to arrive as
+# "'docker top' gave no readable process list", which is true of exactly one of
+# them. For the other three it names the wrong place to look: the table was
+# readable, and for two of them it had already been proven to be this
+# container's. An operator debugging a renamed app server was sent to docker.
+#
+# The verdict is deliberately unchanged -- all four are UNKNOWN and all four
+# block, which is what the scenarios above pin. What is asserted here is only
+# that the log says which one happened, and that it does not say the other
+# three.
+
+sentinel_table() {
+    # A readable table, this container's main pid present, no `gunicorn` in it.
+    {
+        printf 'UID PID PPID C STIME TTY TIME CMD\n'
+        printf 'appuser 7 1 0 12:00 ? 00:00:00 /app/.venv/bin/python -m uvicorn main:app\n'
+        printf 'appuser 41 7 0 12:00 ? 00:00:00 python -m utils.backfill_pool --snapshot data/x.json\n'
+    } >"$TOP_FILE"
+}
+
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+rm -f "${INFLIGHT_DIR}"/*.json 2>/dev/null || true
+sentinel_table
+DOCKER_MAIN_PID=7 DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+grep -q "carries no 'gunicorn' row" "${WORK}/watcher.log" \
+    || fail "scenario 20g did not name the sentinel as the thing that did not match"
+grep -q "AUTOPILOT_CONTAINER_SENTINEL" "${WORK}/watcher.log" \
+    || fail "scenario 20g did not name the variable an operator would have to change"
+grep -q "gave no readable process list" "${WORK}/watcher.log" \
+    && fail "scenario 20g blamed docker for a table docker rendered perfectly well"
+grep -q "UNKNOWN, not empty" "${WORK}/watcher.log" \
+    || fail "scenario 20g changed the verdict; only the cause was supposed to change"
+built && fail "scenario 20g deployed although the sentinel could not vouch for the table"
+printf 'OK: a sentinel that does not match is reported as the sentinel, not as docker\n'
+
+# --- scenario 20h: an inspect that cannot answer says so -------------------
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_inflight "python -m utils.backfill_pool --snapshot data/x.json"
+DOCKER_INSPECT_RC=1 DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+grep -q "could not name the container's main process id" "${WORK}/watcher.log" \
+    || fail "scenario 20h did not name inspect as the source that failed"
+grep -q "carries no 'gunicorn' row" "${WORK}/watcher.log" \
+    && fail "scenario 20h blamed the sentinel for a missing corroborating source"
+grep -q "UNKNOWN, not empty" "${WORK}/watcher.log" \
+    || fail "scenario 20h changed the verdict"
+built && fail "scenario 20h deployed without corroborating its process table"
+printf 'OK: a corroborating source that cannot answer is reported as itself\n'
+
+# --- scenario 20i: a table that is not this container's says that ----------
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+rm -f "${INFLIGHT_DIR}"/*.json 2>/dev/null || true
+{
+    printf 'UID PID PPID C STIME TTY TIME CMD\n'
+    printf 'junk 123 1 0 12:00 ? 00:00:00 /bin/echo gunicorn\n'
+} >"$TOP_FILE"
+DOCKER_MAIN_PID=7 DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+# Asserted on the stable half of the sentence: the harness never sets the
+# container name, so matching it here would pin a default rather than the
+# message.
+grep -q "own main process id" "${WORK}/watcher.log" \
+    || fail "scenario 20i did not say the table belongs to something else"
+grep -q "gave no readable process list" "${WORK}/watcher.log" \
+    && fail "scenario 20i called an attributable-but-foreign table unreadable"
+built && fail "scenario 20i deployed on a table it could not attribute"
+printf 'OK: a foreign table is reported as foreign, not as unreadable\n'
+
+# --- scenario 20j: docker top failing still blames docker ------------------
+# The one case the old message was right about has to keep it.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_inflight "python -m utils.backfill_pool --snapshot data/x.json"
+DOCKER_TOP_RC=1 DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+grep -q "gave no readable process list" "${WORK}/watcher.log" \
+    || fail "scenario 20j lost the message for the case it was written for"
+grep -q "carries no 'gunicorn' row" "${WORK}/watcher.log" \
+    && fail "scenario 20j blamed the sentinel for a docker failure"
+built && fail "scenario 20j deployed when docker top could not answer"
+printf 'OK: docker failing is still reported as docker failing\n'
+
 # --- scenario 20e: the real shape is accepted, and it is not the obvious one -
 # Both fixes INFLIGHT-001 proposed fail here, which is why neither is in the
 # watcher. Measured on the mini 2026-08-20, the app server runs as
