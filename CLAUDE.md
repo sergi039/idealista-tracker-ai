@@ -1182,6 +1182,109 @@ and TODO.md; respect it if you ever run both side by side.
   handled in `EnrichmentService._fetch_osm_amenities` and pinned by
   `tests/test_overpass_user_agent_and_refusal.py`; this rule exists so the
   next Overpass caller does not have to rediscover them.
+- **An advisory step may not hold a paid one hostage, and every free lookup
+  runs on a clock** (#434, measured on the mini 2026-08-20 on property 793).
+  The owner pressed **Enrich**, saw nothing, pressed three more times, and
+  sixteen minutes later the travel block filled in; the AI analysis never ran
+  at all. One Overpass lookup spent **888 s** without completing a single
+  request -- three instances x four attempts at a scalar 60 s timeout plus
+  8+16+32 s of backoff each -- and the step spending it was
+  `PoolService.enrich`, whose criterion ships at weight 0. Meanwhile the
+  Distance Matrix request billed at 12:59 sat in an uncommitted session until
+  13:12:55, behind it.
+
+  **The retry policy splits by whether the server spoke, not by connect
+  versus read.** `429` and `504` mean the instance is alive and busy, and
+  #144's patient 8-16-32 budget is still right for them. Silence means the
+  host is unreachable or hung, and a caller with a fallback list says
+  `silence_max_attempts=1` and moves on. It is not a connect-only rule and the
+  measurement is why: on the mini, overpass-api.de refused the connection
+  outright but kumi.systems **connected in 0.109 s and then sent nothing for
+  30 s**, so a connect-only rule would have walked straight past the instance
+  that cost the most. `utils/http._is_silence` therefore reads
+  `ConnectionError` and `Timeout` alike.
+
+  **The budgets are `utils/http.lookup_budget`, and only the free transports
+  read them.** `OSM_OVERPASS_WALK_BUDGET_S` (210 s) bounds one walk across
+  every instance; `ENRICH_LOOKUP_BUDGET_S` (240 s) bounds every free lookup of
+  one Enrich press together, because a run makes up to eleven of them. 210 is
+  derived rather than chosen -- #144's patient budget on the first instance
+  (~76 s with the gate) plus one complete attempt on each fallback (2 x 65 s)
+  -- and the guarantee it buys is conditional and says so where the number
+  lives: *a prompt refusal on the primary* leaves a complete attempt for each
+  fallback, while a primary spending 30 s per `504` leaves the first fallback
+  a clamped read. Making it unconditional costs seven and a half minutes for
+  one lookup, and the price of the gap is a retry, never a wrong answer.
+  Google's paid transports are deliberately outside all of it: abandoning a
+  billed Distance Matrix request because a free source spent the clock is the
+  same defect with the roles swapped, and the owner pays for a measurement
+  nobody receives (#178).
+
+  **A budget refusal is nobody's fault but the clock's**, and three places
+  have to know it. It is not in `_OVERPASS_TRY_ELSEWHERE` -- the next instance
+  would answer the same one gate wait later. It is not counted against
+  #438's `OVERPASS_BREAKERS`, in the amenity client or the coastline one
+  (`SeaViewBudgetExceeded` exists for that and for nothing else), or five
+  minutes of silence gets armed against a healthy host on the strength of
+  somebody else's slow run. And **a silence produced by a clamped attempt is
+  the budget's too**: review reproduced three calls with a 0.1 s clamped read
+  arming the breaker against a host never given the 60 s it is configured for.
+  Conversely a server that already answered outranks the clock -- a `504`
+  observed on an earlier attempt is returned rather than replaced by a budget
+  error, because it is what the caller classifies the host by.
+
+  **`enrich_property` has two passes and the boundary between them is a
+  commit.** The decisive pass -- the coordinate, the sea distance, the travel
+  times -- runs first and is committed on its own, so a container recreated
+  mid-run (#283) cannot take a paid measurement with it. The advisory pass
+  runs after, each step owning its write. Three of its four take the row under
+  `FOR UPDATE` (`services/enrichment_write.py`); `enrich_osm_amenities` does
+  not, which is #352's open gap and is not made worse here -- the old
+  shared-transaction form lost a concurrently written block just as
+  thoroughly. Order is a budget decision as much as a commit one: the free
+  lookup the *paid* call depends on is `services/osm_places.py`, and no
+  destinations means no Distance Matrix request, so the decisive steps must
+  hold the clock while there is any. The pool step stays off the
+  coordinate-less path, because `no_coordinates` is not one of the two
+  statuses its "a refusal never overwrites an answer" guard defends against.
+
+  **`dedupe_key` holds only while a job is *active*, and that is a trap that
+  bit three times.** `property_enrich:<id>` is keyed on the property alone --
+  keying on `(property, refresh_coords)` would let a `refresh=True` press race
+  an ordinary one, which is #339. The AI sequel is where the trap lives: the
+  enrichment job queues `property_ai_analysis` itself, so the analyses survive
+  the tab, and it **returns the ids in its result** so the page attaches to
+  them. A page that POSTs instead pays twice whenever the server's own job
+  finished first and freed the key -- including on the path where the poller
+  gave up and there are no ids to attach to, which is why the page does not
+  dispatch there at all. The flag asking for the sequel is read from the JSON
+  body only: these blueprints are CSRF-exempt and unauthenticated, and a
+  simple cross-origin form POST cannot set `Content-Type: application/json`.
+
+  **The client's poll budget is for silence, not duration.** No constant can
+  be a run's worst case -- the executor's queue is unbounded, a `FOR UPDATE`
+  can wait on a database with no statement timeout, and `requests` measures
+  its read timeout *between* reads -- so `JOB_POLL_TIMEOUTS.enrichment` went
+  stale the moment the fallback list was added and nobody re-derived it, which
+  is #178. `services/enrich_budget.py` states what the server allows and the
+  202 carries it as `poll_timeout_ms`; `pollJob` spends that on the gap
+  between two answers, resetting whenever the server confirms the job is
+  alive, with a backstop at four budgets because "still running" is not "will
+  finish". Read the AI term from the transport the caller actually reaches:
+  `classify_text_with_ai` passes no `timeout=`, so it takes
+  `subscription_transport.DEFAULT_TIMEOUT_SECONDS` (300) and not
+  `AI_ANALYSIS_TIMEOUT_SECONDS`.
+
+  One thing the deadline does **not** promise, measured against a loopback
+  server rather than assumed: it bounds when an attempt may *start* and what
+  its socket timeouts are, not how long one attempt may run. A server dripping
+  a byte often enough held a request open for 0.63 s under a 0.20 s deadline.
+  That is stated rather than fixed because the outage this bounds is the
+  opposite one -- instances that connect and say nothing -- and a total-time
+  bound needs a streamed body with its own clock, which the coastline client
+  already has. `tests/test_one_press_is_bounded.py` pins all of the above on a
+  virtual clock, so what it asserts is the arithmetic and not how the machine
+  felt on the day.
 - **Google Places Nearby Search reaches 50 km, whatever `radius=` asks for.**
   Measured 2026-08-11 at 43.551663,-6.831426 (property 360, La Caridad):
   `radius=50000`, `radius=100000` and `radius=200000` returned the *identical*
