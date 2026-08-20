@@ -86,6 +86,16 @@ case "$1" in
         fi
         cat "${DOCKER_TOP_FILE:-/dev/null}" 2>/dev/null || true
         ;;
+    inspect)
+        # The second, independent reading the survey corroborates its table
+        # against (INFLIGHT-001). A scenario sets the main pid it wants; the
+        # default is the pid every fixture below gives the app server.
+        if [ "${DOCKER_INSPECT_RC:-0}" != "0" ]; then
+            echo "stub docker: inspect failed" >&2
+            exit "${DOCKER_INSPECT_RC}"
+        fi
+        printf '%s\n' "${DOCKER_MAIN_PID-7}"
+        ;;
 esac
 exit 0
 STUB
@@ -241,6 +251,8 @@ run_watcher() {
     DOCKER_LOG="${WORK}/docker.log" \
     DOCKER_TOP_FILE="$TOP_FILE" \
     DOCKER_TOP_RC="${DOCKER_TOP_RC:-0}" \
+    DOCKER_INSPECT_RC="${DOCKER_INSPECT_RC:-0}" \
+    DOCKER_MAIN_PID="${DOCKER_MAIN_PID-7}" \
     DOCKER_PS_OUTPUT="idealista-app" \
     AUTOPILOT_REPO_DIR="$REPO" \
     AUTOPILOT_DEPLOYED_MARKER="$MARKER" \
@@ -585,6 +597,111 @@ grep -q "UNKNOWN, not empty" "${WORK}/watcher.log" \
     || fail "scenario 20 accepted a well-shaped junk row as a real process list"
 built && fail "scenario 20 deployed on a process table that never saw the container"
 printf 'OK: a process list without the app server is a probe that did not look\n'
+
+# --- scenario 20b: a row that merely NAMES the server is not the server -----
+# INFLIGHT-001 in #265. The sentinel was `grep -qF gunicorn` over the whole
+# table, which matches the token anywhere in any row -- so this decoy passed
+# it, the survey read "nothing in flight", and the deploy recreated the
+# container over live work: the fail-open reached through the check added to
+# close the previous fail-open.
+#
+# What refuses it now is not a cleverer reading of the command but a second,
+# independent source. `docker inspect` knows the container's main pid on the
+# host and `docker top` has to show it. A decoy can write any command it
+# likes; it cannot hold a pid it does not have.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+rm -f "${INFLIGHT_DIR}"/*.json 2>/dev/null || true
+{
+    printf 'UID PID PPID C STIME TTY TIME CMD\n'
+    printf 'junk 123 1 0 12:00 ? 00:00:00 /bin/echo gunicorn\n'
+} >"$TOP_FILE"
+DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+grep -q "UNKNOWN, not empty" "${WORK}/watcher.log" \
+    || fail "scenario 20b accepted a row that only mentions the server"
+built && fail "scenario 20b deployed on a table the container never produced"
+printf 'OK: a row that only names the app server does not vouch for the table\n'
+
+# --- scenario 20c: the corroborating source failing is not a pass -----------
+# A probe that could not be corroborated is a third answer, and folding it
+# into either real one is the defect family this survey exists for.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+set_inflight "python -m utils.backfill_pool --snapshot data/x.json"
+DOCKER_INSPECT_RC=1 DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+grep -q "UNKNOWN, not empty" "${WORK}/watcher.log" \
+    || fail "scenario 20c treated an unreadable inspect as a readable table"
+built && fail "scenario 20c deployed without corroborating its process table"
+printf 'OK: a docker inspect that cannot answer leaves the table unknown\n'
+
+# --- scenario 20d: a container that is not running has no table ------------
+# `.State.Pid` is 0 for a stopped container, and a table claiming otherwise
+# describes something else.
+#
+# The table below carries a row whose pid IS 0, deliberately. Without it the
+# guard is untestable through this harness: the corroboration would refuse a
+# main pid of 0 anyway, for want of a matching row, and dropping the guard
+# would change nothing any scenario could see. With it, dropping the guard
+# lets a stopped container's table be accepted -- which is the thing the guard
+# is for.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+rm -f "${INFLIGHT_DIR}"/*.json 2>/dev/null || true
+{
+    printf 'UID PID PPID C STIME TTY TIME CMD\n'
+    printf 'appuser 0 0 0 12:00 ? 00:00:00 /app/.venv/bin/python /app/.venv/bin/gunicorn --bind 0.0.0.0:5001\n'
+} >"$TOP_FILE"
+DOCKER_MAIN_PID=0 DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+grep -q "UNKNOWN, not empty" "${WORK}/watcher.log" \
+    || fail "scenario 20d accepted a table for a container with no main process"
+built && fail "scenario 20d deployed on a table it could not attribute"
+printf 'OK: a main pid of zero is not a container whose table can be trusted\n'
+
+# --- scenario 20f: the pid is looked for in the PID column, not in the text -
+# A number is a number wherever it appears. `grep` over the raw table would
+# find the main pid inside a command, a timestamp or a path and call the table
+# corroborated -- so the check reads the pid column of the table the parse
+# produced, which is the same rule the header-driven parse above already
+# follows: check and parse describe one table or they describe two.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+rm -f "${INFLIGHT_DIR}"/*.json 2>/dev/null || true
+{
+    printf 'UID PID PPID C STIME TTY TIME CMD\n'
+    printf 'junk 123 1 0 12:00 ? 00:00:00 /bin/echo gunicorn 9999\n'
+} >"$TOP_FILE"
+DOCKER_MAIN_PID=9999 DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+grep -q "UNKNOWN, not empty" "${WORK}/watcher.log" \
+    || fail "scenario 20f accepted a table whose main pid appears only in a command"
+built && fail "scenario 20f deployed on a table corroborated by a coincidence"
+printf 'OK: the main pid is corroborated from the pid column, not from the text\n'
+
+# --- scenario 20e: the real shape is accepted, and it is not the obvious one -
+# Both fixes INFLIGHT-001 proposed fail here, which is why neither is in the
+# watcher. Measured on the mini 2026-08-20, the app server runs as
+# `/app/.venv/bin/python /app/.venv/bin/gunicorn ...`: the command's FIRST
+# token is `python`, so a first-token check would refuse every real table
+# forever. And `docker top` reports host pids -- the container's own pid 1
+# appears nowhere -- so there is no "pid 1 row" to single out. This scenario
+# is the guard against reintroducing either.
+: >"${WORK}/watcher.log"
+rm -f "$DEFER_STATE"
+rm -f "${INFLIGHT_DIR}"/*.json 2>/dev/null || true
+{
+    printf 'UID PID PPID C STIME TTY TIME CMD\n'
+    printf 'appuser 43139 43116 0 05:55 ? 00:00:00 /app/.venv/bin/python /app/.venv/bin/gunicorn --bind 0.0.0.0:5001 --workers 1 --threads 4 main:app\n'
+    printf 'appuser 43175 43139 0 05:55 ? 00:00:02 /app/.venv/bin/python /app/.venv/bin/gunicorn --bind 0.0.0.0:5001 --workers 1 --threads 4 main:app\n'
+} >"$TOP_FILE"
+DOCKER_MAIN_PID=43139 DEFER_ON_INFLIGHT=1 DEFER_BUDGET=2 run_watcher
+
+grep -q "UNKNOWN, not empty" "${WORK}/watcher.log" \
+    && fail "scenario 20e refused the process table production actually has"
+built || fail "scenario 20e did not deploy over an idle, corroborated container"
+printf 'OK: the table production really produces is accepted, python first token and all\n'
 
 # --- scenario 6: healthz green, page broken ---------------------------------
 # The 15-minute incident: the route turns a TemplateSyntaxError into a redirect
