@@ -1072,8 +1072,15 @@
                             <i class="fas fa-th-large"></i>
                         </a>
                     </div>
+                    {# This link is the export's own copy of the filter set, and a
+                       key missing from it is a filter the CSV silently drops:
+                       `measured` was, so a page finding 72 listings exported 471 rows
+                       (measured against production 2026-08-20). `hide_removed` is
+                       stated in both directions -- 'off' as well as 'on' -- so the
+                       export never re-derives a default the page has already
+                       resolved. #}
                     <a class="btn btn-success btn-sm"
-                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else None, sort=current_filters.sort_by, order=current_filters.order) }}"
+                       href="{{ url_for('main.export_properties_csv', profile_id=current_filters.profile_id, category=current_filters.category, subtype=current_filters.subtype, municipality=current_filters.municipality, source=current_filters.source or None, advertiser=current_filters.advertiser or None, verdict=current_filters.verdict or None, action=current_filters.action or None, search=current_filters.search, inv_metr=current_filters.inv_metr, sea_view=current_filters.sea_view or None, measured=current_filters.measured or None, favorites='on' if current_filters.favorites else None, hide_removed='on' if current_filters.hide_removed else 'off', sort=current_filters.sort_by, order=current_filters.order) }}"
                        title="Download filtered data as CSV">
                         <i class="fas fa-download me-1"></i>{{ t('export_csv') }}
                     </a>
