@@ -45,7 +45,15 @@ own block already contains, or not at all.
         --note "cadastre_barrio_verified: Barrio del Medio, Quintes; 13 parcels,
                 spread 341 m, row 24 m from centre"
 
-Prints what it would do and exits. `--apply` writes. `--clear` takes the block
+`--id` on its own prints the row -- what it is located at, what the geocode
+last said, whether a person set it, and whether that block still agrees with
+the columns -- and exits. That is the only window onto a hand-set location that
+has drifted from its own provenance, so it costs no arguments to look. A
+*partial* set of arguments is still an error naming what is missing: a
+forgotten `--note` must not quietly become "looked and did nothing".
+
+With the four arguments and no `--apply` it prints what it would do and exits.
+`--apply` writes. `--clear` takes the block
 off and puts the row back on the computed path, leaving the coordinate columns
 alone -- see `clear_location_by_hand` for why it does not restore what the block
 displaced.
@@ -134,7 +142,28 @@ def main(argv=None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    if not args.clear:
+    setting = [
+        name for name in ("lat", "lon", "accuracy", "note") if getattr(args, name)
+    ]
+    # Three intents, told apart by how much was given rather than by a flag.
+    #
+    # **Nothing** means "show me this row" -- the mode this tool shipped without
+    # and was described as having. `_describe` is the only window onto a hand-set
+    # block whose columns have drifted from it, and requiring the caller to
+    # invent the coordinate they are not setting in order to look at the one
+    # that is there made that window unreachable.
+    #
+    # **Some but not all** stays an error naming what is missing. Folding it
+    # into the looking mode would turn a forgotten `--note` into "looked and did
+    # nothing" -- a refusal wearing the clothes of a completed action, which is
+    # the defect this repository files under #98.
+    inspect_only = not args.clear and not setting
+    if inspect_only and args.apply:
+        parser.error(
+            "--apply needs something to apply: give --lat/--lon/--accuracy/--note, "
+            "or --clear. Without them this prints the row and exits."
+        )
+    if not args.clear and setting:
         missing = [
             name
             for name in ("lat", "lon", "accuracy", "note")
@@ -158,6 +187,10 @@ def main(argv=None) -> int:
         if prop is None:
             logger.error("No such property: %s", args.id)
             return 1
+
+        if inspect_only:
+            logger.info("%s", _describe(prop))
+            return 0
 
         logger.info("Before:\n%s", _describe(prop))
 

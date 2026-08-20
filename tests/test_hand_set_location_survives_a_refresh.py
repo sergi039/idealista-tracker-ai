@@ -842,3 +842,91 @@ class TestTheApiSaysWhenItRefusedTheRefresh:
 
         assert body.get("coordinate_refresh") is None
         assert seen.get("refresh_coords") is True
+
+
+class TestTheToolCanJustLook:
+    """`--id` on its own describes the row.
+
+    The tool shipped without this and was described in a message to another
+    session as having it. Running the command that message gave answered
+    `error: --lat, --lon, --accuracy, --note required` -- caught only by
+    running it on production instead of rereading the code that had just been
+    written.
+
+    It matters beyond the embarrassment: `_describe` is the only window onto a
+    hand-set block whose columns have drifted from it, and requiring the caller
+    to invent the coordinate they are *not* setting in order to look at the one
+    that is there made the window unreachable.
+    """
+
+    def _run(self, app, monkeypatch, argv, records=None):
+        import app as app_module
+        import utils.set_property_location as tool
+
+        # `main()` imports `create_app` from `app` when it runs, so the patch
+        # goes on the source module rather than on the tool.
+        monkeypatch.setattr(app_module, "create_app", lambda *a, **k: app)
+        said = records if records is not None else []
+        monkeypatch.setattr(
+            tool.logger, "info", lambda msg, *a: said.append(msg % a if a else msg)
+        )
+        code = tool.main(argv)
+        return code, "\n".join(said)
+
+    def test_a_bare_id_describes_the_row_and_writes_nothing(self, app, monkeypatch):
+        with app.app_context():
+            row = _row()
+            set_location_by_hand(
+                row, lat=HAND_LAT, lon=HAND_LON, accuracy="precise", note=NOTE
+            )
+            prop_id = row.id
+
+            code, said = self._run(app, monkeypatch, ["--id", str(prop_id)])
+
+            assert code == 0
+            assert "hand-set" in said and NOTE[:20] in said
+            assert "Would set" not in said and "Would clear" not in said
+
+            stored = db.session.get(Property, prop_id)
+            assert float(stored.location_lat) == pytest.approx(HAND_LAT)
+            assert stored.location_accuracy == "precise"
+
+    def test_it_names_a_drift_the_row_cannot_report_itself(self, app, monkeypatch):
+        with app.app_context():
+            row = _row()
+            set_location_by_hand(
+                row, lat=HAND_LAT, lon=HAND_LON, accuracy="precise", note=NOTE
+            )
+            row.location_lat = 43.9
+            db.session.commit()
+
+            _, said = self._run(app, monkeypatch, ["--id", str(row.id)])
+
+            assert "DISAGREES" in said
+
+    def test_a_partial_set_of_arguments_is_still_an_error(self, app, monkeypatch):
+        with app.app_context():
+            prop_id = _row().id
+
+        with pytest.raises(SystemExit):
+            self._run(
+                app,
+                monkeypatch,
+                ["--id", str(prop_id), "--lat", str(HAND_LAT), "--lon", str(HAND_LON)],
+            )
+
+    def test_apply_with_nothing_to_apply_is_an_error(self, app, monkeypatch):
+        with app.app_context():
+            prop_id = _row().id
+
+        with pytest.raises(SystemExit):
+            self._run(app, monkeypatch, ["--id", str(prop_id), "--apply"])
+
+    def test_a_row_with_no_block_still_describes(self, app, monkeypatch):
+        with app.app_context():
+            prop_id = _row().id
+
+            code, said = self._run(app, monkeypatch, ["--id", str(prop_id)])
+
+            assert code == 0
+            assert "hand-set      no" in said
