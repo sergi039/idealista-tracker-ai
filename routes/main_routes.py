@@ -3244,6 +3244,58 @@ def map_view():
                     }
                 )
 
+        # "List View" has to land on the set this map is drawing. It carried
+        # `profile_id` alone, so every other filter was dropped on the way
+        # back: a map of the 70 listings sold by their owners had a button
+        # that opened a list of 470, with nothing saying the set had changed.
+        # That is #435's defect in the seam between the two surfaces rather
+        # than inside one of them -- the three links that lead *to* this page
+        # have carried the full set all along.
+        #
+        # Built here, beside the filters themselves, rather than in the
+        # template: a filter added to this route and forgotten in the link is
+        # then one screenful away instead of one file away. The keys are in
+        # `current_filters`' order for the same reason /properties keeps them
+        # that way.
+        #
+        # Two of them are not simply copied from the request, and both would
+        # be wrong if they were:
+        #
+        # * `hide_removed` is not read here at all. The map excludes delisted
+        #   listings unconditionally (the `notin_` above), whatever the caller
+        #   asked for, so 'on' is what this map is actually showing, and
+        #   reading the parameter would send the reader to a list holding rows
+        #   the map refused to plot.
+        #
+        #   It is *stated* rather than left absent for the reason
+        #   `utils/listing_status_scope.py` gives (#439, merged the same day
+        #   as this): a link should say what it means instead of relying on
+        #   the reading at the far end, which is why the Export CSV link
+        #   spells out `on` and `off` too. Note what this is no longer: until
+        #   #439 the value was load bearing, because an absent `hide_removed`
+        #   alongside any other filter read as an unticked box and widened the
+        #   list. That mechanism is gone -- a cross-page link like this one
+        #   carries neither form marker and now gets the default, which is
+        #   `on` -- so measured today the far end agrees either way. Keep the
+        #   statement; do not restore the old reasoning for it.
+        # * `measured` is absent on purpose. This page never applied it, and a
+        #   link that carries a filter its origin did not apply would narrow
+        #   the list below the map it came from -- an absence of filtering
+        #   rendered as filtering.
+        list_view_args = {
+            "profile_id": list(profile_selection.link_values),
+            "category": category_filter or None,
+            "subtype": subtype_filter or None,
+            "municipality": municipality_filter or None,
+            "source": source_filter or None,
+            "advertiser": advertiser_filter or None,
+            "search": search_query or None,
+            "inv_metr": investment_metrics_filter or None,
+            "sea_view": sea_view_filter or None,
+            "favorites": "on" if favorites_filter else None,
+            "hide_removed": "on",
+        }
+
         markers = []
         for prop in props:
             markers.append(
@@ -3277,7 +3329,7 @@ def map_view():
             profiles=profiles,
             selected_profile_id=selected_profile_id,
             profile_selection=profile_selection,
-            list_view_profile_id=list(profile_selection.link_values),
+            list_view_args=list_view_args,
             travel_display_targets=travel_display_targets,
             focus_notice=focus_notice,
             # The map drops a hidden subscription's markers exactly as the
@@ -3296,7 +3348,7 @@ def map_view():
             profiles=[],
             selected_profile_id=None,
             profile_selection=empty_profile_selection(),
-            list_view_profile_id=None,
+            list_view_args={},
             travel_display_targets=[],
             focus_notice=None,
             # It failed before it could ask; "0 hidden" would be a claim.
