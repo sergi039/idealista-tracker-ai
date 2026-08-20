@@ -201,18 +201,36 @@ class TestOneDateForTheWholeRequest:
         # reading a UTC date of the 20th.
         madrid_now = datetime(2026, 6, 21, 0, 30)
 
-        with patch.object(owner_review, "today", return_value=madrid_now.date()):
+        # The clock answers ONCE per request with the real date and gives a
+        # different, earlier one to anybody who asks again. A single fixed
+        # return value cannot tell "the request's date was threaded through"
+        # from "every consumer recomputed it" -- measured: removing
+        # `review_today=` from the API serializer left this test green until
+        # the second answer was made to differ.
+        def _clock_that_moves():
+            return patch.object(
+                owner_review,
+                "today",
+                side_effect=[madrid_now.date()] + [date(2026, 6, 1)] * 20,
+            )
+
+        with _clock_that_moves():
             body = _rendered(client.get("/properties?action=overdue"))
             assert "Plot due today" in body
 
+        with _clock_that_moves():
             payload = json.loads(
                 client.get(
                     f"/api/properties?profile_id={profile.id}&action=overdue"
                 ).get_data(as_text=True)
             )
             assert [p["title"] for p in payload["properties"]] == ["Plot due today"]
+            # If the compact serializer asked the clock itself it would get
+            # 1 June, and this row would come back `pending` while the filter
+            # that selected it read `overdue`.
             assert payload["properties"][0]["next_action_state"] == "overdue"
 
+        with _clock_that_moves():
             payload = json.loads(
                 client.get(
                     f"/api/properties?profile_id={profile.id}&action=overdue&full=true"
@@ -220,10 +238,14 @@ class TestOneDateForTheWholeRequest:
             )
             assert payload["properties"][0]["next_action_state"] == "overdue"
 
+        with _clock_that_moves():
             csv_text = client.get("/properties/export.csv?action=overdue").get_data(
                 as_text=True
             )
             assert "Plot due today" in csv_text
+            # Same trap on the export: the row's own state column must be the
+            # one the filter used.
+            assert ",overdue," in csv_text
 
     def test_the_same_day_reads_as_pending_everywhere(self, client, profile):
         due = date(2026, 6, 20)
@@ -244,6 +266,19 @@ class TestOneDateForTheWholeRequest:
             assert "Plot due today" not in body
             body = _rendered(client.get("/properties?action=pending"))
             assert "Plot due today" in body
+
+    def test_every_collection_endpoint_asks_for_the_date_once(self, client, rows, profile):
+        """Not once per row, and not once per serializer within the request."""
+        for url in (
+            f"/api/properties?profile_id={profile.id}&{BOTH}",
+            f"/api/properties?profile_id={profile.id}&{BOTH}&full=true",
+            f"/properties/export.csv?{BOTH}",
+        ):
+            with patch.object(
+                owner_review, "today", wraps=owner_review.today
+            ) as spy:
+                assert client.get(url).status_code == 200
+            assert spy.call_count == 1, url
 
     def test_the_view_asks_for_the_date_once(self, client, rows):
         """Not once per row, and not once per surface within the request."""
