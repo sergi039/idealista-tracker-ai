@@ -830,6 +830,48 @@ class TestHonestAbsence:
         assert measurement["status"] == hazard_service.STATUS_NONE
         assert measurement["items"] == []
 
+    def test_a_stale_measurement_does_not_overwrite_a_current_one(
+        self, app, real_fetch
+    ):
+        """The row can move while the network call is in flight.
+
+        Codex reproduced it: A measures from origin A, B moves the row and
+        stores a B-origin measurement, and A then refreshes under the lock and
+        writes its stale result over B's good one. Readers call the result
+        `stale_origin`, so nothing wrong is shown -- but a measurement of
+        where the listing actually is was lost, and only a re-scan brings it
+        back. Simulated here by moving the row *during* the lookup.
+        """
+        prop = _prop(title="MovedMidFlight")
+        moved_to = (XIVARES[0] + 0.02, XIVARES[1])
+
+        class _MovesTheRowMidLookup:
+            """Stands in for the other session, committing while A is out."""
+
+            def _overpass_elements(self, query):
+                prop.location_lat = moved_to[0]
+                prop.enrichment = {
+                    "hazards": {
+                        "status": hazard_service.STATUS_NONE,
+                        "searched_m": 5984.0,
+                        "truncated": False,
+                        "item_count": 0,
+                        "items": [],
+                        "origin": {"lat": moved_to[0], "lon": moved_to[1]},
+                    }
+                }
+                db.session.commit()
+                return FIXTURE["elements"], None
+
+        payload = HazardService(enrichment_service=_MovesTheRowMidLookup()).enrich(
+            prop, commit=True
+        )
+        # B's measurement survives; A's says only that it tried.
+        assert payload["status"] == hazard_service.STATUS_NONE
+        assert payload["items"] == []
+        assert payload["origin"]["lat"] == pytest.approx(moved_to[0])
+        assert payload["last_attempt_status"] == hazard_service.STATUS_STALE_ORIGIN
+
     def test_a_row_with_no_coordinate_says_so(self, app, real_fetch):
         prop = _prop(title="NoCoordinate", location_lat=None, location_lon=None)
         payload = HazardService(
