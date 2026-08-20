@@ -13,7 +13,15 @@ jobs:
   test:
     name: pytest
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Measured 2026-08-20 across four consecutive runs on `main`: 397s, 413s,
+    # 420s, 474s -- 66% to 79% of the old 10-minute ceiling, on a suite that
+    # gained three features that day. The run that hit the ceiling was
+    # cancelled at 99% of its tests with nothing failing, which is the worst
+    # shape a limit can have: it reads as a red PR and names no defect. Raised
+    # so the ordinary run has room, not so a slow one is hidden -- if this
+    # starts being approached again, the answer is to look at what got slower
+    # rather than to move it a second time.
+    timeout-minutes: 20
 
     # Everything in migrations/ is PostgreSQL-only and multi-statement, which
     # pysqlite refuses outright, so the SQLite tests can only cover migrations
