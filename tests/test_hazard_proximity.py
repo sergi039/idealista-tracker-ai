@@ -312,6 +312,63 @@ class TestTheRulesTable:
         assert verdict.severity == hazard_rules.SEVERITY_HIGH
         assert verdict.evidence == "product=zinc"
 
+    def test_a_generic_product_is_not_a_hazardous_process(self):
+        """`product=metal` is a parts maker; `product=oil` is often olive oil.
+
+        `node/13016693457` is *Alcyon* (`man_made=works`, `product=metal`) on
+        a Basque industrial estate, and `way/485376150` is *Molino aceitero*
+        (`man_made=works`, `product=oil`) -- an oil mill. Both were read as
+        high-severity plants (codex review, 2026-08-20).
+        """
+        assert (
+            hazard_rules.classify(
+                {"man_made": "works", "name": "Alcyon", "product": "metal"}
+            )
+            is None
+        )
+        assert (
+            hazard_rules.classify(
+                {"man_made": "works", "name": "Molino aceitero", "product": "oil"}
+            )
+            is None
+        )
+        # The specific ones stay: nobody smelts zinc by accident.
+        assert hazard_rules.classify({"man_made": "works", "product": "zinc"})
+
+    def test_a_retired_process_does_not_retire_the_rest_of_the_element(self):
+        """A lifecycle prefix refuses the *name*, never a live bare tag.
+
+        Two real shapes it got wrong (codex review): a chemical works with a
+        dead power plant on site, and a smelter that changed what it makes.
+        """
+        chemical = hazard_rules.classify(
+            {
+                "industrial": "chemical",
+                "name": "Quimica Activa",
+                "disused:power": "plant",
+            }
+        )
+        assert chemical is not None and chemical.kind == "chemical_works"
+
+        smelter = hazard_rules.classify(
+            {"man_made": "works", "product": "zinc", "was:product": "lead"}
+        )
+        assert smelter is not None and smelter.kind == "smelter"
+
+        # And the case the rule exists for still refuses: the name is all the
+        # evidence there is, and the process behind it is under `disused:`.
+        assert (
+            hazard_rules.classify(
+                {
+                    "disused:power": "plant",
+                    "disused:plant:source": "coal",
+                    "landuse": "industrial",
+                    "name": "Central termica del Narcea",
+                }
+            )
+            is None
+        )
+
     def test_a_closed_power_station_is_not_an_emitting_one(self):
         """Spain shut both of these on 2020-06-30, and both are still mapped.
 

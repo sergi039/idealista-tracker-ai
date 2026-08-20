@@ -290,7 +290,13 @@ _PRODUCT_EVIDENCE: Dict[str, Tuple[str, str]] = {
     "aluminum": ("smelter", SEVERITY_HIGH),
     "copper": ("smelter", SEVERITY_HIGH),
     "lead": ("smelter", SEVERITY_HIGH),
-    "metal": ("smelter", SEVERITY_HIGH),
+    # `metal` and `oil` are deliberately absent, and both were measured.
+    # `node/13016693457` is *Alcyon*, `man_made=works` + `product=metal` -- a
+    # metal-parts manufacturer on a Basque industrial estate, not a smelter.
+    # `way/485376150` is *Molino aceitero*, `man_made=works` + `product=oil` --
+    # an olive-oil mill, because in Spanish OSM *aceite* is oil too. Only the
+    # products that name a process nobody runs by accident are here; the
+    # specific metals stay, `petroleum` carries the refinery sense.
     "coke": ("coking_plant", SEVERITY_HIGH),
     "paper": ("paper_mill", SEVERITY_HIGH),
     "pulp": ("paper_mill", SEVERITY_HIGH),
@@ -303,7 +309,6 @@ _PRODUCT_EVIDENCE: Dict[str, Tuple[str, str]] = {
     "asphalt": ("asphalt_plant", SEVERITY_HIGH),
     "bitumen": ("asphalt_plant", SEVERITY_HIGH),
     "gypsum": ("cement_works", SEVERITY_MODERATE),
-    "oil": ("refinery", SEVERITY_HIGH),
     "petroleum": ("refinery", SEVERITY_HIGH),
 }
 
@@ -430,6 +435,13 @@ def _closed_before_today(tags: Dict[str, Any]) -> bool:
 
 
 def _is_disused(tags: Dict[str, Any]) -> bool:
+    """Is the whole element gone?
+
+    Only a claim about the element itself counts here: a bare `disused=yes`,
+    a `historic` value that means preserved rather than running, or an
+    `end_date` already past. A lifecycle *prefix* is not that -- see
+    `_retired_evidence` for what it really says.
+    """
     if _closed_before_today(tags):
         return True
     for key, value in tags.items():
@@ -438,12 +450,38 @@ def _is_disused(tags: Dict[str, Any]) -> bool:
             return True
         if name == "historic" and fold(value) in _HISTORIC_DISUSED_VALUES:
             return True
+    return False
+
+
+def _retired_evidence(tags: Dict[str, Any]) -> bool:
+    """Has a key that *would* have been evidence been moved under a prefix?
+
+    `disused:power=plant` says the power plant is not one any more, and that
+    is what makes *Central térmica del Narcea* -- still `landuse=industrial`,
+    still named *Central térmica* -- not a hazard. But it says nothing about
+    the rest of the element, and reading it as if it did was wrong twice on
+    real data (codex review, 2026-08-20): `way/485376150`-style
+    `{'industrial': 'chemical', 'name': 'Química Activa',
+    'disused:power': 'plant'}` is a live chemical works with a dead power
+    plant on site, and `{'product': 'zinc', 'was:product': 'lead'}` is a
+    smelter that changed what it makes.
+
+    So this refuses the **name** only -- the name describes what the thing was
+    called, and a retired process is exactly what makes the name stale -- and
+    a bare tag saying what the element *is* now always outranks it. A prefixed
+    key whose bare form is still present says nothing at all: the bare one is
+    the current state.
+    """
+    for key in tags:
+        name = str(key).strip().casefold()
         prefix, _, rest = name.partition(":")
-        if prefix in _LIFECYCLE_PREFIXES and rest:
-            # `disused:plant:source` counts as `plant`, so the first segment
-            # after the prefix is what decides.
-            if rest.partition(":")[0] in _EVIDENCE_KEYS:
-                return True
+        if prefix not in _LIFECYCLE_PREFIXES or not rest:
+            continue
+        # `disused:plant:source` counts as `plant`, so the first segment after
+        # the prefix is what decides.
+        bare = rest.partition(":")[0]
+        if bare in _EVIDENCE_KEYS and bare not in tags:
+            return True
     return False
 
 
@@ -503,7 +541,7 @@ def classify(tags: Optional[Dict[str, Any]]) -> Optional[HazardVerdict]:
     if _is_disused(tags):
         return None
 
-    by_name = _name_verdict(tags)
+    by_name = None if _retired_evidence(tags) else _name_verdict(tags)
     by_tag = _tag_verdict(tags)
     # The **more severe** of the two wins, and a tie goes to the name. That
     # keeps every reason the name is read at all -- the cement works carries no
