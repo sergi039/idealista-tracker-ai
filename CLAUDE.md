@@ -680,26 +680,56 @@ industriales* and a lorry park. So `services/hazard_rules.py` is the sibling of
 `services/place_rules.py` and the rule is that **a hazard has to say what it
 is**: `plant:source=coal`, `content=gas`, `industrial=steelmaking`,
 `landuse=landfill`, or the word *cementos* in its name. `landuse=industrial`
-and `man_made=works` never qualify alone. The name is read *first*, because OSM
-is sometimes coarser in its tags than in its labels -- El Musel's coal yard is
-mapped `landuse=quarry` and the cement works carries no `product` tag at all.
-Do not copy the table into a second caller; import it.
+and `man_made=works` never qualify alone. The name has to be read at all
+because OSM is sometimes coarser in its tags than in its labels -- El Musel's
+coal yard is mapped `landuse=quarry` and the cement works carries no `product`
+tag -- but it is read as **words** and the **more severe** of the two verdicts
+wins. Both halves of that are review findings with a reproduction behind them:
+substring matching read *Bioquímica* as a chemical works and *La Cantera* (the
+ordinary Spanish word for a club's youth academy) as a quarry, and letting the
+name win outright reported an LPG tank on *Polígono La Cantera* as a moderate
+quarry over its own `content=gas` -- understating a real hazard, which is
+strictly worse than reporting a spurious one. In the same family, a lifecycle
+*prefix* is not a closure: `was:name=Ensidesa` on
+*Acería de Veriña - ArcelorMittal* records that plant's renaming history, and
+reading it as "gone" erased the one hazard the feature exists to catch, so only
+bare `disused`/`abandoned`/`ruins`/`demolished`/`razed` refuse, and `historic`
+refuses by value (`monument`, never `archaeological_site`, which describes what
+is *under* a working landfill). Do not copy the table into a second caller;
+import it.
 
 **Sibling elements collapse into their facility**, which is #325's
 hospital-indexed-room-by-room in a new place: `facility_key` takes the operator
 before the name, and `merge_keys` folds a name that *contains* an operator into
 it, so *Turbina A*, *Turbina B*, two stacks, *Vertedero ArcelorMittal* and
 *Acería de Veriña - ArcelorMittal* are one entry and not six. Elements with
-neither operator nor name cluster by position at 500 m. The direction of the
-guards matters: two rows for one plant over-reports, one row for two plants
-hides one.
+neither operator nor name cluster by position at 500 m. But **a key says who
+runs it and never where it is**: keyed members are split again by
+`FACILITY_SPAN_M` (2 km), because `operator=Enagás` names a national gas
+transporter and two of its installations 5.6 km apart collapsed into one item
+wearing the near one's distance and bearing. 2 km is measured, not chosen --
+the widest real facility in the fixture, ArcelorMittal's tip, acería, turbines
+and stacks, spans 1346 m. A cluster is a disc around its anchor and never a
+chain, or a line of tanks 400 m apart walks a "facility" across kilometres.
+The direction of the guards matters: two rows for one plant over-reports, one
+row for two plants hides one.
 
 Four more things are load bearing. **An approximate coordinate cannot support
 "1.1 km"** -- `read_verdict` restates the stored block against the row's
 *current* accuracy exactly as `sea_distance_service.parcel_measurement` does,
 so a centroid gets a band (0.0-6.1 km) and never a point, and the block reports
 `guaranteed_m` -- the 6 km scan around the point guarantees only 1 km around the
-parcel. **The bearing is recorded and never interpreted**: whether 1.1 km
+parcel. A coordinate that has *moved* since the scan is worse than an
+imprecise one and gets no restatement at all: `read_verdict` compares the
+stored `origin` through `services/enrichment_origin.py` and answers
+`stale_origin`, because re-applying today's slack to yesterday's point printed
+a centroid's 1.1 km as an exact measurement. For the same reason a row that
+*loses* its coordinate keeps its measurement rather than having it replaced by
+`no_coordinates` -- that status is not retryable, so overwriting took the row
+out of the backfill's scope for good. And the scorer reads `truncated`: a scan
+that hit Overpass's element cap and found nothing qualifying is not a clean
+neighbourhood, it is a short list, and scoring it 100 was #98 one layer under
+a card that disclosed it correctly. **The bearing is recorded and never interpreted**: whether 1.1 km
 matters depends on the wind, there is no free per-listing wind rose here, and
 writing "downwind" into a measurement field would be the STATUS-002 mistake.
 **The criterion ships weightless**, `hazard_score: 0.0` in all six scorers, and
