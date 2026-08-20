@@ -236,14 +236,41 @@ class Config:
     # Overpass consumer on 2026-08-18 -- one endpoint is a single point of
     # failure for a feature that now has no paid path behind it.
     #
-    # Order matters and is not alphabetical: the primary above stays first
-    # because it is the reference instance, and these are tried only after it
-    # refuses. Comma-separated in the environment to add or reorder without a
-    # deploy.
+    # **Two fallbacks were not enough, measured 2026-08-20 at 22:30 CEST**:
+    # from the mini, all three of the above were unusable *at once* --
+    # overpass-api.de timed out on connect, kumi.systems answered 502,
+    # private.coffee timed out -- while the laptop got overpass-api.de in
+    # 0.6 s. A list whose every entry can be down together is the single point
+    # of failure it was written to remove, just with more names on it. The
+    # openstreetmap.fr instance answered the mini in 0.24 s throughout that
+    # window and the laptop in 4.3 s, and it goes *first* among the fallbacks
+    # because it is the only one that answered either machine that day. The
+    # primary above still leads the walk: it is the reference instance, and
+    # these are tried only after it refuses.
+    #
+    # It was added on evidence rather than on availability, because an
+    # instance that merely answers is the more dangerous kind of failure. A
+    # thin or regional mirror returns `200` with an empty `elements` list, and
+    # this project would write that down as a *measured* absence -- "nothing
+    # hazardous nearby" for a plot beside a cement works, which is #98's
+    # defect arriving through a spare tyre. One was caught doing exactly that
+    # the same afternoon (overpass.osm.ch, in another session's hand-run
+    # override). So openstreetmap.fr was checked against a known answer before
+    # it was written down: the hazard query for property 793's own coordinate
+    # returned the **same 144 elements with the same tags** as overpass-api.de
+    # and as the committed fixture in `tests/data/`, zero differences, and a
+    # dense unrelated query (`shop=supermarket` over central Gijon) returned
+    # the same national chains in the same counts. Do not add an instance to
+    # this list on a `200` alone.
+    #
+    # Comma-separated in the environment to add or reorder without a deploy --
+    # which is the escape hatch when the next one goes down, and is how the
+    # mini was kept working while this landed.
     OSM_OVERPASS_FALLBACK_URLS = [
         url.strip()
         for url in os.environ.get(
             "OSM_OVERPASS_FALLBACK_URLS",
+            "https://overpass.openstreetmap.fr/api/interpreter,"
             "https://overpass.kumi.systems/api/interpreter,"
             "https://overpass.private.coffee/api/interpreter",
         ).split(",")
@@ -278,8 +305,16 @@ class Config:
     #   #144's patient budget on the first instance -- both per-IP slots are
     #   busy and one frees up in about a minute, so 8+16+32 s of backoff plus
     #   four 5 s gate waits, ~76 s
-    # + one full attempt on each of the two fallbacks, 5 s gate + 60 s read
-    # = ~206 s, rounded to 210.
+    # + one full attempt on each of the three fallbacks, 5 s gate + 60 s read
+    # = ~271 s, rounded to 275.
+    #
+    # It was 210 for two fallbacks. A third instance was added on 2026-08-20
+    # and this number moves with the count -- deliberately, and it is the one
+    # place a new instance is not free. Leaving it at 210 would have bought
+    # the shorter walk by clamping the *last* fallback's read leg, and that
+    # afternoon the last fallback was the only one answering the mini at all.
+    # `tests/test_one_press_is_bounded.py` derives this from
+    # `len(OSM_OVERPASS_FALLBACK_URLS)` and goes red if the two drift.
     #
     # What that does **not** guarantee, because review reproduced it: a
     # primary whose four `504`s each take 30 s of the read allowance spends
@@ -314,11 +349,19 @@ class Config:
     # hostage, and when the clock is gone it records `unavailable` and the run
     # goes on.
     #
-    # 240 s is a little over one full walk, so a total outage costs the press
-    # about four minutes: one lookup that learns the instances are down, a
+    # 305 s is a little over one full walk, so a total outage costs the press
+    # about five minutes: one lookup that learns the instances are down, a
     # second that spends what is left, and every one after that refusing
     # before it opens a socket. Measured on the mini 2026-08-20, one lookup
     # alone cost 888 s and the run made eleven.
+    #
+    # It was 240 against a 210 s walk, and it moved with the walk rather than
+    # for a reason of its own: this has to stay *above* the walk ceiling or
+    # the second lookup of a run is starved on a merely-degraded day, which is
+    # the outage's symptom appearing when there is no outage. The minute it
+    # costs an unlucky press is paid only when every instance is down, and
+    # `enrich_budget` hands the number to both clients so nothing has to be
+    # told the ceiling moved.
     ENRICH_LOOKUP_BUDGET_S = float(os.environ.get("ENRICH_LOOKUP_BUDGET_S") or "240")
     # What the rest of one run may take: the paid Google steps plus the one
     # free HTTP fetch that is neither Google nor an OSM lookup. Not a deadline
