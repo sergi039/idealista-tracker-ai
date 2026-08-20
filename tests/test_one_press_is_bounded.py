@@ -375,6 +375,45 @@ class TestTheWalkAcrossInstancesHasACeiling:
         service._overpass_elements("[out:json];out;")
         assert calls[:4] == [1, 1, 1, 1], "the primary was abandoned after one try"
 
+    def test_the_whole_press_is_bounded_by_the_run_budget(
+        self, service, clock, monkeypatch
+    ):
+        """The number the owner actually feels.
+
+        One walk is bounded by `OSM_OVERPASS_WALK_BUDGET_S`, but an enrichment
+        run makes up to eleven of them -- so what a total outage costs a press
+        is this, not that. The first lookup learns the instances are down, the
+        second spends what is left, and every one after it refuses before it
+        opens a socket.
+        """
+        import services.enrichment_service as enrichment_module
+
+        monkeypatch.setattr(Config, "OSM_OVERPASS_WALK_BUDGET_S", 210.0)
+        call = _hung_after_handshake(clock)
+        sockets = []
+
+        def _call(*args, **kwargs):
+            sockets.append(1)
+            return call(*args, **kwargs)
+
+        monkeypatch.setattr(
+            enrichment_module,
+            "request_with_retries",
+            lambda fn, *a, **kw: request_with_retries(_call, *a, **kw),
+        )
+
+        with lookup_budget(240.0):
+            for _ in range(11):
+                elements, failure = service._overpass_elements("[out:json];out;")
+                assert elements is None
+
+        assert clock.elapsed <= 241.0, f"the press waited {clock.elapsed:.0f}s"
+        # Before #434 this shape cost 888 s for *one* of those eleven lookups.
+        assert clock.elapsed < 888.0
+        # And the tail of the run stopped opening sockets rather than paying a
+        # gate wait per instance to be told the same thing.
+        assert len(sockets) <= 6, sockets
+
     def test_a_spent_run_budget_stops_the_walk_without_a_request(
         self, service, clock, monkeypatch
     ):

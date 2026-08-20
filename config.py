@@ -264,15 +264,24 @@ class Config:
     )
     # The ceiling on one lookup's walk across every instance above.
     #
-    # Derived, not chosen. The walk must still be able to spend #144's patient
-    # budget on the first instance -- a `504` means both per-IP slots are busy
-    # and one frees up in about a minute, so 8+16+32 s of backoff plus four
-    # 5 s gate waits, about 76 s, has to fit or a busy-but-alive instance would
-    # be abandoned for a fallback it did not need. 120 s fits that and leaves
-    # room to try one more instance, while capping the three-dead-instance case
-    # that cost 888 s on the mini on 2026-08-20 (#434).
+    # Derived, and the derivation is "no instance is ever denied a complete
+    # attempt because an earlier one was busy":
+    #
+    #   #144's patient budget on the first instance -- a `504` means both
+    #   per-IP slots are busy and one frees up in about a minute, so
+    #   8+16+32 s of backoff plus four 5 s gate waits, ~76 s
+    # + one full attempt on each of the two fallbacks, 5 s gate + 60 s read
+    # = ~206 s, rounded to 210.
+    #
+    # A tighter number would clamp a real query's read leg, and the presets
+    # query asks Overpass for up to `[timeout:90]` of computation. That would
+    # not break #98 -- a spent budget is recorded as `budget_exhausted`, a
+    # refusal and never an absence -- but it would buy latency with retries
+    # nobody asked for. What actually bounds one Enrich press is
+    # ENRICH_LOOKUP_BUDGET_S below; this bounds the callers that have no run
+    # around them, which is every backfill.
     OSM_OVERPASS_WALK_BUDGET_S = float(
-        os.environ.get("OSM_OVERPASS_WALK_BUDGET_S") or "120"
+        os.environ.get("OSM_OVERPASS_WALK_BUDGET_S") or "210"
     )
     # The ceiling on *all* the free lookups one Enrich press may wait for --
     # every Overpass walk and every elevation query in the run, together.
@@ -284,6 +293,12 @@ class Config:
     # the point: an advisory, score-neutral step must not hold a paid one
     # hostage, and when the clock is gone it records `unavailable` and the run
     # goes on.
+    #
+    # 240 s is a little over one full walk, so a total outage costs the press
+    # about four minutes: one lookup that learns the instances are down, a
+    # second that spends what is left, and every one after that refusing
+    # before it opens a socket. Measured on the mini 2026-08-20, one lookup
+    # alone cost 888 s and the run made eleven.
     ENRICH_LOOKUP_BUDGET_S = float(os.environ.get("ENRICH_LOOKUP_BUDGET_S") or "240")
     # What the paid Google steps of one run may take: geocoding, the Places
     # wide-search fallback and one Distance Matrix request, each with its own
