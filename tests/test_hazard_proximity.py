@@ -645,14 +645,29 @@ class TestOneHomePerRule:
         assert "from services.coordinate_quality import" in source
         assert "5_000" not in source and "5000" not in source
 
-    def test_the_free_pass_runs_it(self):
-        """A green unit suite over a dead hook is the defect #309 names."""
+    def test_the_free_pass_really_scans(self, app, real_fetch):
+        """The hook, exercised rather than grepped.
+
+        A green unit suite over a dead hook is the defect #309 names, and a
+        substring assertion on the call site is what #309 was actually about
+        -- so this runs the free pass and looks at the row afterwards. The
+        other free steps are allowed to fail here; the point is that a failure
+        in one of them does not take the scan with it.
+        """
         from services.property_enrichment_service import PropertyEnrichmentService
 
-        source = Path(
-            PropertyEnrichmentService.__module__.replace(".", "/") + ".py"
-        ).read_text(encoding="utf-8")
-        free_pass = source.split("def enrich_free_sources", 1)[1].split(
-            "def enrich_property", 1
-        )[0]
-        assert "self.hazard_service.enrich(prop, commit=commit)" in free_pass
+        prop = _prop(title="FreePass")
+        service = PropertyEnrichmentService(
+            # The amenity and quality-of-life halves reach Overpass through
+            # this instance; a stub that answers neither method leaves them
+            # failing and logging, which is what the free pass is built to
+            # survive -- and keeps `tests/network_guard.py` out of it.
+            enrichment_service=_FakeEnrichment(failure="stubbed"),
+            hazard_service=HazardService(
+                enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
+            ),
+            sea_view_calculator=lambda prop, commit, use_ai: None,
+        )
+        service.enrich_free_sources(prop, commit=True, use_ai=False)
+        assert prop.enrichment["hazards"]["status"] == hazard_service.STATUS_OK
+        assert prop.enrichment["hazards"]["items"]
