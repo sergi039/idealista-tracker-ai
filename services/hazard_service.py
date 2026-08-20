@@ -62,6 +62,7 @@ from services.coordinate_quality import (
     distance_bounds_m,
     normalize_accuracy,
 )
+from services.enrichment_origin import origin_of, origins_agree
 from services.enrichment_write import check_writable, locked_write
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 
@@ -73,9 +74,14 @@ STATUS_OK = "ok"
 STATUS_NONE = "none_within_radius"
 STATUS_UNAVAILABLE = "unavailable"
 STATUS_NO_COORDINATES = "no_coordinates"
-# Not a stored value: the row has no hazard block at all. Named with the rest
-# so every state `read_verdict` can return is findable in one place.
+# Not stored values: two things `read_verdict` can answer that no writer ever
+# writes. Named with the rest so every state it can return is findable in one
+# place. `STATUS_MISSING` is "there is no block"; `STATUS_STALE_ORIGIN` is
+# "there is one, and it describes a point this listing has since moved away
+# from" -- a scan is cheap and a measurement of the wrong place is not a
+# measurement of this one.
 STATUS_MISSING = "missing_hazards"
+STATUS_STALE_ORIGIN = "stale_origin"
 
 # A status the data can be trusted for. It survives a later refusal as
 # last-known-good, for the reason `sea_distance_service` keeps its own: a
@@ -121,6 +127,17 @@ MAX_ELEMENTS_PER_ITEM = 6
 # ~400 m. Anything wider would start merging neighbours in a *polígono*, which
 # is the direction that hides a hazard rather than duplicating one.
 CLUSTER_M = 500
+
+# How far apart two elements of the *same operator* may be and still be one
+# plant. A key on its own is not a place: `operator=Enagás` names a national
+# gas transporter, and two of its installations 5.6 km apart in different
+# directions are two hazards, not one with a misleadingly near distance
+# (review, 2026-08-20). Measured on the committed fixture, the real facilities
+# span far less than this: ArcelorMittal's tip, acería, turbines and stacks
+# sit within 1346 m of each other, the Parque de Carbones within 1255 m,
+# Exolum's Musel terminals within 722 m, Repsol's fifteen elements within
+# 336 m. 2 km keeps every one of them whole with room to spare.
+FACILITY_SPAN_M = 2_000
 
 _CARDINALS = (
     "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
@@ -243,6 +260,37 @@ def fetch_elements(
     return payload, None
 
 
+def _clustered(
+    members: List[Dict[str, Any]], radius_m: float, *, same_kind: bool
+) -> List[List[Dict[str, Any]]]:
+    """Split elements into discs of `radius_m`, nearest to the property first.
+
+    Membership is measured against the cluster's **anchor** and never against
+    any member: chaining member to member would let a line of tanks 400 m
+    apart walk a "facility" across several kilometres, and the distance the
+    item then reports would describe one end of it. A disc is a bound; a chain
+    is not. Running nearest-first is what makes the anchor the member closest
+    to the property, which is the distance the block goes on to report.
+    """
+    clusters: List[List[Dict[str, Any]]] = []
+    for candidate in sorted(members, key=lambda member: member["distance_m"]):
+        for cluster in clusters:
+            anchor = cluster[0]
+            if same_kind and anchor["kind"] != candidate["kind"]:
+                continue
+            if (
+                haversine_m(
+                    anchor["lat"], anchor["lon"], candidate["lat"], candidate["lon"]
+                )
+                <= radius_m
+            ):
+                cluster.append(candidate)
+                break
+        else:
+            clusters.append([candidate])
+    return clusters
+
+
 class HazardService:
     """Scans for hazardous neighbours and stores `enrichment["hazards"]`."""
 
@@ -343,33 +391,19 @@ class HazardService:
         for key, members in keyed.items():
             groups.setdefault(canonical.get(key, key), []).extend(members)
 
-        # Clustering runs nearest-first so a cluster is anchored on the member
-        # closest to the property, which is the distance the block reports.
         clusters: List[List[Dict[str, Any]]] = []
-        for candidate in sorted(keyless, key=lambda c: c["distance_m"]):
-            for cluster in clusters:
-                anchor = cluster[0]
-                if anchor["kind"] != candidate["kind"]:
-                    continue
-                # Measured against the *anchor* and never against any member:
-                # chaining member to member would let a line of tanks 400 m
-                # apart walk a "facility" across several kilometres, and the
-                # distance the item then reports would describe one end of it.
-                # A disc of `CLUSTER_M` around the nearest member is a bound;
-                # a chain is not.
-                if (
-                    haversine_m(
-                        anchor["lat"], anchor["lon"], candidate["lat"], candidate["lon"]
-                    )
-                    <= CLUSTER_M
-                ):
-                    cluster.append(candidate)
-                    break
-            else:
-                clusters.append([candidate])
+        # A shared key says who runs it, never where it is, so each key group
+        # is still split by distance -- one operator's two sites are two
+        # hazards, and reporting them as one would give the far one the near
+        # one's distance and bearing.
+        for members in groups.values():
+            clusters.extend(_clustered(members, FACILITY_SPAN_M, same_kind=False))
+        # A keyless element has said what it holds and nothing about who
+        # holds it, so position is all there is to group it by -- and a
+        # tighter radius, since nothing but proximity connects them.
+        clusters.extend(_clustered(keyless, CLUSTER_M, same_kind=True))
 
-        items = [HazardService._item(members, lat, lon) for members in groups.values()]
-        items.extend(HazardService._item(cluster, lat, lon) for cluster in clusters)
+        items = [HazardService._item(cluster, lat, lon) for cluster in clusters]
         items.sort(key=lambda item: item["origin_distance_m"])
         return items
 
@@ -454,24 +488,38 @@ class HazardService:
         now_iso = datetime.now(timezone.utc).isoformat()
 
         if lat is None or lon is None:
-            payload = {
-                "status": STATUS_NO_COORDINATES,
-                "source": SOURCE,
-                "distance_basis": DISTANCE_BASIS,
-                "updated_at": now_iso,
-                "last_attempt_status": STATUS_NO_COORDINATES,
-                "last_attempt_at": now_iso,
-            }
             with locked_write(prop, locked=locked, commit=commit):
+                previous = self._stored(prop)
+                # A row can lose its coordinate: `refresh=True` clears it
+                # before geocoding and a refusal leaves it cleared (#393), and
+                # `enrich_property` then runs the free pass on a row with no
+                # point at all. Overwriting here would delete a measurement
+                # that cost a round trip -- and, because `no_coordinates` is
+                # not retryable, take the row out of the backfill's scope for
+                # good. So it is kept, exactly as a network refusal is
+                # (review, 2026-08-20).
+                if previous.get("status") in MEASURED_STATUSES:
+                    payload = {
+                        **previous,
+                        "last_attempt_status": STATUS_NO_COORDINATES,
+                        "last_attempt_at": now_iso,
+                    }
+                else:
+                    payload = {
+                        "status": STATUS_NO_COORDINATES,
+                        "source": SOURCE,
+                        "distance_basis": DISTANCE_BASIS,
+                        "updated_at": now_iso,
+                        "last_attempt_status": STATUS_NO_COORDINATES,
+                        "last_attempt_at": now_iso,
+                    }
                 self._store(prop, payload)
             return payload
 
         measurement = self.measure(lat, lon)
 
         with locked_write(prop, locked=locked, commit=commit):
-            enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
-            previous = enrichment.get(ENRICHMENT_KEY)
-            previous = previous if isinstance(previous, dict) else {}
+            previous = self._stored(prop)
 
             if (
                 measurement["status"] == STATUS_UNAVAILABLE
@@ -500,6 +548,13 @@ class HazardService:
                 }
             self._store(prop, payload)
         return payload
+
+    @staticmethod
+    def _stored(prop: Any) -> Dict[str, Any]:
+        """The block as the *locked* row holds it. Never read before the lock."""
+        enrichment = prop.enrichment if isinstance(prop.enrichment, dict) else {}
+        block = enrichment.get(ENRICHMENT_KEY)
+        return block if isinstance(block, dict) else {}
 
     @staticmethod
     def _store(prop: Any, payload: Dict[str, Any]) -> None:
@@ -560,6 +615,17 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
 
     if not isinstance(stored, dict):
         return {**base, "status": STATUS_MISSING}
+
+    # The restatement below re-applies the row's *current* slack to a distance
+    # measured from a point recorded at scan time -- which is right only while
+    # that is still where the listing is. `utils/refresh_property_accuracy.py`
+    # and a `refresh=True` enrich both move the coordinate without touching
+    # this block, and an approximate row upgraded to `precise` that way had
+    # its centroid-measured distance printed as an exact one (review,
+    # 2026-08-20). `origins_agree` answers None when either side is
+    # unreadable, and None is not a move -- only an explicit disagreement is.
+    if origins_agree(stored.get("origin"), origin_of(prop)) is False:
+        return {**base, "status": STATUS_STALE_ORIGIN}
 
     status = stored.get("status")
     base["updated_at"] = stored.get("updated_at")
@@ -642,4 +708,9 @@ def needs_hazards(prop: Any) -> bool:
     stored = enrichment.get(ENRICHMENT_KEY)
     if not isinstance(stored, dict):
         return True
-    return stored.get("status") in RETRYABLE_STATUSES
+    if stored.get("status") in RETRYABLE_STATUSES:
+        return True
+    # A block measured from a point the listing has since moved away from is
+    # not an answer about this listing, and the surfaces already refuse to
+    # read it as one. Re-scanning is one free Overpass query.
+    return origins_agree(stored.get("origin"), origin_of(prop)) is False

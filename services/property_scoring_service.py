@@ -1103,6 +1103,13 @@ class HousingPropertyScorer(BasePropertyScorer):
                     "status": "searched_radius_too_small",
                     "guaranteed_m": guaranteed,
                 }
+            if verdict.get("truncated"):
+                # The scan reached Overpass's element cap, so "nothing
+                # qualified" is a statement about the elements it saw and not
+                # about the radius. The card already says so; a clean 100
+                # here would be the same absence rendered as a measurement,
+                # one layer down (review, 2026-08-20).
+                return None, {**bounds, "status": "scan_truncated"}
             return 100.0, {
                 **bounds,
                 "status": status,

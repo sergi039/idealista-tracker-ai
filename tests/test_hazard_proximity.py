@@ -204,6 +204,71 @@ class TestTheRulesTable:
         verdict = hazard_rules.classify({"power": "plant", "plant:source": "coal"})
         assert verdict is not None and verdict.severity == hazard_rules.SEVERITY_HIGH
 
+    def test_an_incidental_place_name_never_downgrades_a_tag(self):
+        """A name match must not outrank what the element's own tag states.
+
+        Reproduced in review: the same LPG tank came back `quarry`/moderate
+        instead of `lpg_storage`/high because its address happened to contain
+        *La Cantera*. Understating a real hazard is strictly worse than
+        reporting a spurious one.
+        """
+        tank = {
+            "man_made": "storage_tank",
+            "content": "gas",
+            "operator": "Repsol Butano",
+            "name": "Deposito GLP - Poligono La Cantera",
+        }
+        verdict = hazard_rules.classify(tank)
+        assert verdict is not None
+        assert verdict.kind == "lpg_storage"
+        assert verdict.severity == hazard_rules.SEVERITY_HIGH
+
+    def test_a_name_is_read_as_words_and_not_as_a_substring(self):
+        """`quimica` inside *Bioquímica* is a different word."""
+        assert (
+            hazard_rules.classify(
+                {
+                    "landuse": "industrial",
+                    "industrial": "laboratory",
+                    "name": "Laboratorio de Bioquimica Analitica S.L.",
+                }
+            )
+            is None
+        )
+        # The plural still counts, which is what the stems are for.
+        verdict = hazard_rules.classify(
+            {"landuse": "industrial", "name": "Industrias Quimicas del Norte"}
+        )
+        assert verdict is not None and verdict.kind == "chemical_works"
+
+    def test_a_rename_is_not_a_closure(self):
+        """`was:name` records a former name, not a former plant.
+
+        The steelworks in the fixture has been Ensidesa, Aceralia, Arcelor and
+        ArcelorMittal in turn, so a contributor recording that on this very
+        object is entirely plausible -- and used to erase it.
+        """
+        verdict = hazard_rules.classify(
+            {
+                "landuse": "industrial",
+                "industrial": "steelmaking",
+                "name": "Aceria de Verina - ArcelorMittal",
+                "was:name": "Ensidesa",
+            }
+        )
+        assert verdict is not None and verdict.kind == "steelworks"
+
+    def test_history_underneath_is_not_history_on_top(self):
+        """`historic=archaeological_site` describes the ground, not the tip."""
+        verdict = hazard_rules.classify(
+            {"landuse": "landfill", "historic": "archaeological_site"}
+        )
+        assert verdict is not None and verdict.kind == "landfill"
+        assert (
+            hazard_rules.classify({"landuse": "landfill", "historic": "monument"})
+            is None
+        )
+
     def test_a_listed_chimney_is_history_not_combustion(self):
         tags = _tagged("Antigua chimenea de Cristasa")
         assert tags and tags[0].get("historic")
@@ -323,6 +388,47 @@ def response_is_the_card(body):
 
 
 class TestGroupingBounds:
+    def test_one_operator_two_sites_is_two_hazards(self, app, real_fetch):
+        """A key says who runs it, never where it is.
+
+        Reproduced in review: two `operator=ArcelorMittal` elements 5.6 km
+        apart collapsed into one item, and the far one then wore the near
+        one's distance and bearing.
+        """
+        elements = [
+            {
+                "type": "way",
+                "id": 30_001,
+                "lat": XIVARES[0] + 0.010,
+                "lon": XIVARES[1],
+                "tags": {
+                    "landuse": "industrial",
+                    "industrial": "steelmaking",
+                    "operator": "Enagas",
+                },
+            },
+            {
+                "type": "way",
+                "id": 30_002,
+                "lat": XIVARES[0] + 0.045,
+                "lon": XIVARES[1],
+                "tags": {"landuse": "landfill", "operator": "Enagas Transporte SAU"},
+            },
+        ]
+        measurement = HazardService(
+            enrichment_service=_FakeEnrichment(elements=elements)
+        ).measure(*XIVARES)
+        assert len(measurement["items"]) == 2
+        assert [item["element_count"] for item in measurement["items"]] == [1, 1]
+
+    def test_one_plant_mapped_in_parts_is_still_one_hazard(self, app, real_fetch):
+        """And the bound must not undo what the acceptance criteria ask for."""
+        measurement = _measure(app, real_fetch)
+        arcelor = [
+            item for item in measurement["items"] if item["name"] == "ArcelorMittal"
+        ]
+        assert len(arcelor) == 1 and arcelor[0]["element_count"] == 6
+
     def test_a_keyless_cluster_is_a_disc_and_not_a_chain(self, app, real_fetch):
         """Three tanks 400 m apart in a line are not one 800 m facility."""
         points = [0.0, 0.0036, 0.0072]  # ~0 m, ~400 m, ~800 m north
@@ -382,6 +488,32 @@ class TestHonestAbsence:
             enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
         ).enrich(prop, commit=True)
         assert payload["status"] == hazard_service.STATUS_NO_COORDINATES
+
+    def test_losing_the_coordinate_does_not_delete_the_measurement(
+        self, app, real_fetch
+    ):
+        """`refresh=True` clears the coordinate before geocoding (#393).
+
+        A refusal leaves it cleared, the free pass then runs on a row with no
+        point, and overwriting here would delete an answer that cost a round
+        trip -- and, since `no_coordinates` is not retryable, take the row out
+        of the backfill's scope for good (review, 2026-08-20).
+        """
+        prop = _prop(title="LostItsCoordinate")
+        service = HazardService(
+            enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
+        )
+        service.enrich(prop, commit=True)
+        before = list(prop.enrichment["hazards"]["items"])
+
+        prop.location_lat = None
+        prop.location_lon = None
+        db.session.commit()
+        payload = service.enrich(prop, commit=True)
+
+        assert payload["status"] == hazard_service.STATUS_OK
+        assert payload["items"] == before
+        assert payload["last_attempt_status"] == hazard_service.STATUS_NO_COORDINATES
 
     def test_a_half_read_block_still_renders(self, app, client):
         """The page must not raise on a shape an older run could have left.
@@ -460,11 +592,12 @@ class TestApproximateOrigin:
             float(hazard_rules.SEARCH_RADIUS_M)
         )
 
-    def test_a_regeocode_restates_the_stored_block_without_a_rescan(
+    def test_a_relabelled_coordinate_is_restated_without_a_rescan(
         self, app, real_fetch
     ):
-        """The row's *current* accuracy decides, not the one it was measured at."""
-        prop = _prop(title="Regeocoded", location_accuracy="approximate")
+        """The row's *current* accuracy decides, not the one it was measured
+        at -- as long as the point itself has not moved."""
+        prop = _prop(title="Relabelled", location_accuracy="approximate")
         service = HazardService(
             enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
         )
@@ -476,6 +609,36 @@ class TestApproximateOrigin:
         restated = hazard_service.read_verdict(prop)
         assert restated["approximate_origin"] is False
         assert restated["nearest"]["distance_m"] is not None
+
+    def test_a_moved_coordinate_is_not_restated_at_all(self, app, client, real_fetch):
+        """A measurement of the old point is not a measurement of this one.
+
+        `utils/refresh_property_accuracy.py` and a `refresh=True` enrich both
+        move the coordinate without touching this block. Restating the old
+        distance against the new accuracy printed a centroid's 1.1 km as an
+        exact one (review, 2026-08-20).
+        """
+        prop = _prop(title="Moved", location_accuracy="approximate")
+        HazardService(
+            enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
+        ).enrich(prop, commit=True)
+
+        prop.location_lat = XIVARES[0] + 0.02
+        prop.location_accuracy = "precise"
+        db.session.commit()
+
+        verdict = hazard_service.read_verdict(prop)
+        assert verdict["status"] == hazard_service.STATUS_STALE_ORIGIN
+        assert verdict["measured"] is False
+        assert verdict["nearest"] is None
+        # And it goes back into the backfill's scope, because a rescan is one
+        # free query and the row currently has no answer about where it is.
+        assert hazard_service.needs_hazards(prop) is True
+
+        body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
+        assert response_is_the_card(body)
+        assert "re-located since the scan" in body
+        assert "1.1 km" not in body
 
 
 class TestOneAnswerInTwoLanguages:
@@ -592,6 +755,38 @@ class TestTheComponent:
         score, meta = self._score(prop)
         assert score == 100.0
         assert meta["status"] == hazard_service.STATUS_NONE
+
+    def test_a_truncated_empty_scan_is_not_a_clean_neighbourhood(self, app, real_fetch):
+        """The card discloses `truncated`; the score has to read it too."""
+        filler = [
+            {
+                "type": "node",
+                "id": 40_000 + index,
+                "lat": XIVARES[0] + 0.001,
+                "lon": XIVARES[1] + 0.001,
+                "tags": {"landuse": "industrial"},
+            }
+            for index in range(hazard_rules.ELEMENT_LIMIT)
+        ]
+        prop = _prop(title="ComponentTruncated")
+        HazardService(enrichment_service=_FakeEnrichment(elements=filler)).enrich(
+            prop, commit=True
+        )
+        assert prop.enrichment["hazards"]["status"] == hazard_service.STATUS_NONE
+        score, meta = self._score(prop)
+        assert score is None
+        assert meta["status"] == "scan_truncated"
+
+    def test_a_stale_origin_scores_none(self, app, real_fetch):
+        prop = _prop(title="ComponentMoved")
+        HazardService(
+            enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
+        ).enrich(prop, commit=True)
+        prop.location_lat = XIVARES[0] + 0.02
+        db.session.commit()
+        score, meta = self._score(prop)
+        assert score is None
+        assert meta["status"] == hazard_service.STATUS_STALE_ORIGIN
 
     def test_a_measured_absence_from_a_centroid_scores_none(self, app, real_fetch):
         """The 6 km scan guarantees 1 km around the parcel, and `far_m` is 5."""

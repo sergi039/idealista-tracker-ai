@@ -191,6 +191,12 @@ _NAME_EVIDENCE: Tuple[Tuple[str, str, str], ...] = (
     ("regasificadora", "lng_terminal", SEVERITY_HIGH),
     ("butano", "lpg_storage", SEVERITY_HIGH),
     ("propano", "lpg_storage", SEVERITY_HIGH),
+    # `cantera` is deliberately absent. It is the ordinary Spanish word for a
+    # club's youth academy as well as for a quarry, and on the measured data it
+    # earns nothing: both canteras at property 793 are tagged `landuse=quarry`
+    # and qualify on the tag alone. A name entry that catches nothing the tags
+    # miss and misfires on an everyday word is a cost with no measurement
+    # behind it (review, 2026-08-20).
     ("carbones", "coal_yard", SEVERITY_HIGH),
     ("carbonera", "coal_yard", SEVERITY_HIGH),
     ("coal yard", "coal_yard", SEVERITY_HIGH),
@@ -200,7 +206,6 @@ _NAME_EVIDENCE: Tuple[Tuple[str, str, str], ...] = (
     ("coquer", "coking_plant", SEVERITY_HIGH),
     ("vertedero", "landfill", SEVERITY_HIGH),
     ("escombrera", "landfill", SEVERITY_HIGH),
-    ("cantera", "quarry", SEVERITY_MODERATE),
     ("depuradora", "wastewater_plant", SEVERITY_MODERATE),
     ("edar ", "wastewater_plant", SEVERITY_MODERATE),
 )
@@ -286,19 +291,30 @@ _TAG_EVIDENCE: Dict[Tuple[str, str], Tuple[str, str]] = {
     ("amenity", "waste_transfer_station"): ("waste_transfer", SEVERITY_MODERATE),
 }
 
-# Prefixes and keys that mean the thing is not there any more, or is there as
-# a monument. `Antigua chimenea de Cristasa` carries `historic=monument` and
-# is a listed brick stack in the middle of Gijón; recording it as a combustion
-# source would be a measurement of the nineteenth century.
-_DISUSED_KEYS = (
-    "disused",
-    "abandoned",
-    "ruins",
-    "demolished",
-    "razed",
-    "was",
-    "historic",
+# Keys that mean the thing is not there any more. **Bare keys only**, and that
+# is the whole of the rule: OSM's lifecycle *prefixes* (`disused:`,
+# `abandoned:`, `was:`) apply to the tag they prefix, and an element that
+# reached this function carries the bare candidate tag -- `man_made=works`,
+# not `disused:man_made=works` -- so a prefixed key on it is about something
+# else entirely. `disused:railway=rail` on a live steelworks is a siding, and
+# `was:name=Ensidesa` on `Acería de Veriña - ArcelorMittal` is the plant's own
+# renaming history through Ensidesa -> Aceralia -> Arcelor -> ArcelorMittal.
+# Reading either as "gone" erased the one hazard this feature was written to
+# catch (review, 2026-08-20).
+_DISUSED_KEYS = ("disused", "abandoned", "ruins", "demolished", "razed")
+
+# `historic` is a claim about significance, not about status, so it refuses
+# only on the values that say the thing is preserved rather than running.
+# `Antigua chimenea de Cristasa` carries `historic=monument` and is a listed
+# brick stack in the middle of Gijón; `historic=archaeological_site` sits on
+# land whose *significance* is underground and says nothing about the landfill
+# on top of it.
+_HISTORIC_DISUSED_VALUES = frozenset(
+    {"monument", "memorial", "ruins", "heritage", "industrial", "mine"}
 )
+
+# Values that read as "no" on a bare lifecycle key.
+_NEGATIVE_VALUES = frozenset({"no", "false", "0"})
 
 
 def fold(text: Any) -> str:
@@ -319,9 +335,49 @@ def fold(text: Any) -> str:
 
 
 def _is_disused(tags: Dict[str, Any]) -> bool:
-    for key in tags:
-        head = str(key).split(":", 1)[0].strip().casefold()
-        if head in _DISUSED_KEYS:
+    for key, value in tags.items():
+        name = str(key).strip().casefold()
+        if name in _DISUSED_KEYS and fold(value) not in _NEGATIVE_VALUES:
+            return True
+        if name == "historic" and fold(value) in _HISTORIC_DISUSED_VALUES:
+            return True
+    return False
+
+
+def _name_tokens(name: str) -> Tuple[str, ...]:
+    return tuple(
+        token
+        for token in "".join(ch if ch.isalnum() else " " for ch in name).split()
+        if token
+    )
+
+
+def _name_says(tokens: Tuple[str, ...], needle: str) -> bool:
+    """Does this name contain the needle as whole words?
+
+    Substring matching was the first version and it is not safe on a single
+    ordinary word. Measured against the entries this table actually carries:
+    `cantera` is the standard Spanish word for a club's youth academy, so
+    *Escuela de Fútbol La Cantera* read as a quarry; and `quimica` matched
+    inside *Bioquímica*, so a laboratory the table deliberately refuses came
+    back as a chemical works (review, 2026-08-20). Worse than either, a name
+    match wins over tag evidence, so an LPG tank on *Polígono La Cantera* was
+    reported as a moderate quarry rather than the high-severity `content=gas`
+    the tag on it stated.
+
+    The last token may be a prefix of the name's own, which is what keeps the
+    deliberate stems working -- `incinerad` inside *incineradora*, `siderur`
+    inside *siderúrgica*, `cemento` inside *Cementos* -- while `quimica` no
+    longer reaches inside *bioquímica*, because that is a prefix in the other
+    direction.
+    """
+    parts = _name_tokens(needle)
+    if not parts:
+        return False
+    span = len(parts)
+    for start in range(len(tokens) - span + 1):
+        window = tokens[start : start + span]
+        if window[:-1] == parts[:-1] and window[-1].startswith(parts[-1]):
             return True
     return False
 
@@ -329,27 +385,53 @@ def _is_disused(tags: Dict[str, Any]) -> bool:
 def classify(tags: Optional[Dict[str, Any]]) -> Optional[HazardVerdict]:
     """What this OSM element is, or None when it has not said.
 
-    Order matters and is deliberate. The name is read **first**, because it is
-    the most specific claim available and because OSM's own tagging is
-    sometimes coarser than its labelling: at property 793 the coal yard of El
-    Musel is mapped `landuse=quarry` and named *Parque de carbones*, and the
-    cement works is `man_made=works` with no `product` tag at all -- only its
-    name says cement. Reading the tag first would report a quarry and an
-    unclassified works.
+    Both kinds of evidence are read and the **more severe** wins. The name has
+    to be read at all because OSM's tagging is sometimes coarser than its
+    labelling: at property 793 the coal yard of El Musel is mapped
+    `landuse=quarry` and named *Parque de carbones*, and the cement works is
+    `man_made=works` with no `product` tag -- reading tags alone would report a
+    quarry and an unclassified works. But letting the name win *outright* is
+    how an LPG tank at *Polígono La Cantera* came back as a moderate quarry
+    over its own `content=gas` (review, 2026-08-20), and understating a real
+    hazard is strictly worse than reporting a spurious one.
     """
     if not isinstance(tags, dict) or not tags:
         return None
     if _is_disused(tags):
         return None
 
-    name = fold(tags.get("name"))
-    if name:
-        for needle, kind, severity in _NAME_EVIDENCE:
-            if needle in name:
-                return HazardVerdict(
-                    kind=kind, severity=severity, evidence=f"name:{needle.strip()}"
-                )
+    by_name = _name_verdict(tags)
+    by_tag = _tag_verdict(tags)
+    # The **more severe** of the two wins, and a tie goes to the name. That
+    # keeps every reason the name is read at all -- the cement works carries no
+    # `product` tag, and El Musel's coal yard is mapped `landuse=quarry` -- and
+    # removes the way that ordering used to bite back: an incidental
+    # place-name fragment must never *downgrade* a hazard whose own tag says
+    # what it holds.
+    if by_name is None:
+        return by_tag
+    if by_tag is None:
+        return by_name
+    return (
+        by_tag
+        if severity_rank(by_tag.severity) < severity_rank(by_name.severity)
+        else by_name
+    )
 
+
+def _name_verdict(tags: Dict[str, Any]) -> Optional[HazardVerdict]:
+    tokens = _name_tokens(fold(tags.get("name")))
+    if not tokens:
+        return None
+    for needle, kind, severity in _NAME_EVIDENCE:
+        if _name_says(tokens, needle):
+            return HazardVerdict(
+                kind=kind, severity=severity, evidence=f"name:{needle.strip()}"
+            )
+    return None
+
+
+def _tag_verdict(tags: Dict[str, Any]) -> Optional[HazardVerdict]:
     industrial = fold(tags.get("industrial"))
     if industrial in _INDUSTRIAL_EVIDENCE:
         kind, severity = _INDUSTRIAL_EVIDENCE[industrial]

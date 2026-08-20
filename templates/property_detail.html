@@ -1504,6 +1504,8 @@
                     <div class="small text-body-secondary">{{ t('hazards_unavailable') }}</div>
                 {% elif hazards.status == 'no_coordinates' %}
                     <div class="small text-body-secondary">{{ t('hazards_no_coordinates') }}</div>
+                {% elif hazards.status == 'stale_origin' %}
+                    <div class="small text-body-secondary">{{ t('hazards_stale_origin') }}</div>
                 {% elif not hazards.measured %}
                     <div class="small text-body-secondary">{{ t('hazards_missing') }}</div>
                 {% elif not hazards['items'] %}
