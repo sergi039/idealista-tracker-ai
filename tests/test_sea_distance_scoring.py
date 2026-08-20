@@ -578,7 +578,7 @@ def test_manual_enrichment_measures_before_it_scores(app, monkeypatch):
     order = []
 
     class StubLocation:
-        def ensure_coordinates(self, prop, refresh=False):
+        def ensure_coordinates(self, prop, refresh=False, *, commit=False):
             return True
 
     class StubTravel:

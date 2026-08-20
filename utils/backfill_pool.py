@@ -24,7 +24,7 @@ from app import create_app, db
 from models import Property
 from services.pool_service import PoolService
 from services.property_scoring_service import PropertyScoringService
-from utils.enrich_scope import scoped_properties
+from utils.enrich_scope import log_scope, scoped_properties, window_note
 from utils import score_snapshot
 from utils.inflight import inflight
 
@@ -80,7 +80,16 @@ def main() -> None:
         properties = scoped_properties(
             days=args.days, include_all=args.all, needs=needs_pool
         )
-        logger.info("Scope: %s properties (days=%s)", len(properties), args.days)
+        log_scope(
+            logger,
+            properties,
+            label="pool_backfill_queue",
+            notes=(
+                window_note(args.days, args.all),
+                "profile-agnostic on purpose (#410): a hidden subscription keeps ingesting",
+                f"worst case: <={len(properties) * 3} Distance Matrix elements + <={len(properties)} Places Text Search",
+            ),
+        )
         if args.dry_run:
             logger.info(
                 "Dry run. Worst-case: ≤%s DM elements + ≤%s Text Search "

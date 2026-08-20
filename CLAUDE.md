@@ -1634,6 +1634,78 @@ and TODO.md; respect it if you ever run both side by side.
   the tail says, and saying so costs one re-run. Where a mutation is expected to
   stay green because another line already covers it, say that too rather than
   presenting the green as evidence.
+
+  **CI now asks the same question and does not rely on you asking it**
+  (MUT-001, `tools/ci/mutation_check.py`). On every pull request it removes the
+  diff's production hunks in a worktree of its own and re-runs only the tests
+  the diff touched: `CAUGHT` when at least one of them goes red, `ESCAPED` and
+  red when none do, `NOOP` for a docs- or tests-only diff, `WARN` when
+  production changed and no test did, and `TOOLING-ERROR` — exit 2, neither
+  pass nor fail — when it could not run. Four to nine seconds on the real PRs
+  of 2026-08-19, against the suite's six minutes. An `ESCAPED` that is right —
+  a refactor, a revert, a test written for behaviour that already existed —
+  is answered with a `Mutation-Waiver: <reason>` trailer on any commit in the
+  branch. That friction is the point, the way `tests/skip_guard.py`'s `ALLOWED`
+  is — but it is weaker than `ALLOWED`, and the difference is worth knowing: a
+  skip exemption is a line in a reviewed file that stays there, while a trailer
+  is free text in a commit message, visible in the PR and nowhere afterwards.
+  Nothing checks that the reason is a good one.
+
+  **It answers "can these tests fail", never "is what they assert correct."**
+  Reverting cannot redden a test for a bug the revert removes, and that is two
+  cases wearing one face: the diff *introduced* the defect, so the code without
+  it never had one — or the defect already lived in shared code and the diff
+  only *brought a new consumer to it*, in which case the revert removes the
+  consumer and leaves the bug. The second is the one worth carrying: **a new
+  call to an existing shared function is a change to that function**, and has
+  to be read as one. Measured on #427 the day the check shipped — an
+  independent review of that diff found three real wrong answers (a guard that
+  was a no-op whenever the geocoder named no province, a fallback the check was
+  blind to, and an alias table that had always been wrong in one direction and
+  had simply never been asked), and neither that PR's own six mutations nor
+  this check could have seen any of them. Its author: *"I mutated what I wrote,
+  not what I missed."* Review is what catches those.
+
+  **The two find different classes, and neither is the safe one.** Mutation
+  finds defects of the *tests* — measured 2026-08-19, it caught a test that
+  reached its feature by a road the mutated flag never touched, a test that
+  passed when the tool under test was deleted outright, and a missing case;
+  review finds defects of the *code*, and found eleven the same day that no
+  mutation on either side could have seen. Neither substitutes.
+
+  Two things about the review half are worth the words, because both cost
+  something when skipped. It is not "read the diff" — it is **asking the code
+  the specific question you are afraid of the answer to** ("can this emit a
+  false `contradicted`?", "how can this checker itself lie?"). A lens without
+  a question returns nothing: of the four pointed at #427, one came back
+  empty. And review **invents findings at about the rate it finds them** —
+  #426's raised 19 and 8 survived reproduction, #427's raised 7 and 5 did — so
+  a finding is worth acting on after an attempt to refute it, not before. Both
+  of those numbers are a third to a half wrong, and acting on the wrong half
+  means fixing something that is not there.
+
+  **The refuter must not be the finding's author**, and that is the part doing
+  the work — not the count. An author defends their own wording, and the claims
+  that died on both sides were the confidently written ones: coherent, specific,
+  and false only once somebody tried to reproduce them. "Three refuters" is a
+  number, and a number buys nothing when the refuter is the same agent. Give
+  them the opposite instruction as well — default to refuted, reproduce before
+  believing.
+
+  **Keep doing it by hand anyway**, because the check cannot see the case that
+  cost the most today. A test can execute the mutated line without asserting on
+  its effect — measured 2026-08-19, a mutation flipped `include_hidden=True` to
+  `False` while the test reached the feature through a different argument
+  entirely, and 59 tests passed. That is mutation testing's equivalent-mutant
+  problem and nothing solves it; what the tool removes is the *other* two
+  failure modes, both of which are about the mutation not happening at all: a
+  text substitution that stopped matching after `ruff format` rewrapped the
+  line, and a captured patch that came out empty because zsh does not
+  word-split. Both read as `26 passed` and `59 passed`. **Revert real hunks
+  with git, in a worktree, never a string in a file** — and never
+  `git checkout -- <path>` over an uncommitted fix, which on the same day
+  deleted one and was caught only by reading `git show --stat` afterwards and
+  noticing a file missing from the commit.
 - **UI and timing behaviour is proven by measurement on a built image**, never
   by a unit test or a template's static text. The bar #302 arrived at and #309
   was measured against: repeated *loads* (the race resolves once at init, so

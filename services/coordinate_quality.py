@@ -27,6 +27,8 @@ owner to ask because Google Geocoding is billed.
 
 from typing import Any, List, Optional, Tuple
 
+from services.population import Population
+
 # The one accuracy label that means "this point is the property". Everything
 # else -- `approximate`, `unknown`, an empty column -- means a centroid until
 # proven otherwise, which is the reading `sea_view_service` has always used.
@@ -160,8 +162,9 @@ def distance_bounds_m(
     return max(0.0, measured_m - slack_m), measured_m + slack_m
 
 
-def shared_coordinate_peers(prop: Any, limit: int = 25) -> List[int]:
-    """Ids of other listings stored at exactly this coordinate.
+def shared_coordinate_peers(prop: Any, limit: int = 25) -> Tuple[List[int], Population]:
+    """Ids of other listings stored at exactly this coordinate, and how many
+    there really are.
 
     Computed rather than stored: it is a fact about the *set* of rows, so it
     changes whenever any other row is geocoded, and a column would need a
@@ -173,24 +176,54 @@ def shared_coordinate_peers(prop: Any, limit: int = 25) -> List[int]:
     to the reader, who can see the addresses, rather than used to refuse a
     measurement. What refuses a measurement is `location_accuracy`, and 39 of
     the 229 rows sharing a point are labelled `precise`.
+
+    The population is the **whole table** and stays that way (decision #410):
+    exact-coordinate multiplicity is a fact about every row, so filtering
+    hidden or retired subscriptions out of it would present an incomplete
+    measurement as a complete one, and hidden is not confidentiality.
+
+    What it did not do until UNIVERSE-001 is say how many it was showing. The
+    list is capped at `limit`, and a capped list that does not name its own
+    cap reads as the whole cluster -- `utils/report_coordinate_quality.py`
+    wrote that rule down for the same clusters. The largest group on
+    production is 21 against a cap of 25 (2026-08-19), so nothing is hidden
+    today; the count is taken anyway, because "nothing is hidden today" is a
+    measurement and not a design. It costs one `COUNT(*)` on an indexed
+    equality, and only for a row that has a coordinate at all.
     """
     lat = getattr(prop, "location_lat", None)
     lon = getattr(prop, "location_lon", None)
     prop_id = getattr(prop, "id", None)
+    empty = Population(
+        label="shared_coordinate_class",
+        total=None,
+        returned=None,
+        cap=limit,
+        basis="exact equality on the stored coordinate",
+        notes=("every subscription, hidden and retired included",),
+    )
     if lat is None or lon is None or prop_id is None:
-        return []
+        # No coordinate is not an empty cluster: nobody looked, and a `total`
+        # of 0 here would be the #98 defect in a disclosure.
+        return [], empty
 
     from models import Property
 
-    rows = (
-        Property.query.with_entities(Property.id)
-        .filter(
-            Property.location_lat == lat,
-            Property.location_lon == lon,
-            Property.id != prop_id,
-        )
-        .order_by(Property.id)
-        .limit(limit)
-        .all()
+    same_point = Property.query.filter(
+        Property.location_lat == lat,
+        Property.location_lon == lon,
+        Property.id != prop_id,
     )
-    return [row[0] for row in rows]
+    total = same_point.count()
+    rows = (
+        same_point.with_entities(Property.id).order_by(Property.id).limit(limit).all()
+    )
+    ids = [row[0] for row in rows]
+    return ids, Population(
+        label="shared_coordinate_class",
+        total=total,
+        returned=len(ids),
+        cap=limit,
+        basis="exact equality on the stored coordinate",
+        notes=("every subscription, hidden and retired included",),
+    )

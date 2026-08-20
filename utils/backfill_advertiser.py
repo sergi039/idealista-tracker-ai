@@ -36,6 +36,7 @@ from collections import Counter
 from app import create_app, db
 from models import Property
 from services import advertiser
+from utils.enrich_scope import log_scope
 from utils.inflight import inflight
 from utils.listing_source import source_of
 
@@ -125,6 +126,15 @@ def main() -> None:
         rows = _scope(args.profiles, args.ids, args.limit)
         total = len(rows)
         logger.info("%s listings with no established seller in scope", total)
+        log_scope(
+            logger,
+            rows,
+            label="advertiser_backfill_queue",
+            notes=(
+                "rows whose seller nothing else can answer for",
+                "free: the listing page itself, paced at 30 s",
+            ),
+        )
 
         if args.dry_run:
             sites = Counter()

@@ -11,16 +11,40 @@
    30 listings is a different claim from one over 30 of 30, so the page
    never hides the denominator. #}
 
-{% macro sort_link(key, label, tooltip='') -%}
-    {% set is_active = sort_by == key %}
-    {% set next_order = 'asc' if (is_active and order == 'desc') else ('desc' if key != 'municipality' else 'asc') %}
-    {% if is_active %}{% set next_order = 'asc' if order == 'desc' else 'desc' %}{% endif %}
-    <a href="{{ url_for('main.municipalities', sort=key, order=next_order,
-                        archived='on' if include_archived else none,
-                        favorites='on' if favorites_only else none) }}"
+{# Every in-page link is rebuilt from this one dict, the way
+   templates/properties.html rebuilds its own from `base_args`. It used to be
+   three hand-written parameter lists -- the sort macro and the two toggle
+   buttons -- and each of them had to remember every filter the page carries.
+   A link that forgets one does not fail: it silently shows a wider set and
+   looks like it is working, which is the cheapest kind of defect to ship and
+   the hardest to notice. Adding a filter to this page means adding it here,
+   once. #}
+{# "Nothing is narrowing the subscriptions" -- the page's own default
+   population. Read by the control above the table and by the Scope line under
+   it, so hoisted here rather than set beside one of them. `filter_ids is none`
+   is `services/profile_selection.py`'s own way of saying "apply no filter at
+   all", deliberately distinct from `()`, which is an explicit selection that
+   matches nothing. #}
+{% set is_everything = profile_selection.filter_ids is none and not profile_selection.include_unassigned %}
+{% set base_args = {
+    'sort': sort_by,
+    'order': order,
+    'archived': 'on' if include_archived else none,
+    'favorites': 'on' if favorites_only else none,
+    'profile_id': profile_selection.link_values | list
+} %}
+
+{# `base_args` is passed in rather than read from the enclosing template: a
+   Jinja macro does not see a `{% set %}` made outside it, and the one in
+   properties.html takes it as a parameter for the same reason. #}
+{% macro sort_link(key, label, base_args, tooltip='') -%}
+    {% set is_active = base_args.sort == key %}
+    {% set next_order = 'asc' if (is_active and base_args.order == 'desc') else ('desc' if key != 'municipality' else 'asc') %}
+    {% if is_active %}{% set next_order = 'asc' if base_args.order == 'desc' else 'desc' %}{% endif %}
+    <a href="{{ url_for('main.municipalities', **dict(base_args, sort=key, order=next_order)) }}"
        class="text-decoration-none text-body"
        {% if tooltip %}title="{{ tooltip }}"{% endif %}>
-        {{ label }}{% if is_active %}<i class="fas fa-sort-{{ 'down' if order == 'desc' else 'up' }} ms-1"></i>{% endif %}
+        {{ label }}{% if is_active %}<i class="fas fa-sort-{{ 'down' if base_args.order == 'desc' else 'up' }} ms-1"></i>{% endif %}
     </a>
 {%- endmacro %}
 
@@ -50,32 +74,125 @@
             </h1>
             <div class="d-flex flex-wrap gap-2">
                 <a class="btn btn-sm {{ 'btn-warning' if favorites_only else 'btn-outline-secondary' }}"
-                   href="{{ url_for('main.municipalities', sort=sort_by, order=order,
-                                    archived='on' if include_archived else none,
-                                    favorites=none if favorites_only else 'on') }}">
+                   href="{{ url_for('main.municipalities', **dict(base_args, favorites=none if favorites_only else 'on')) }}">
                     <i class="fas fa-star me-1"></i>{{ t('favorites') }}
                 </a>
                 <a class="btn btn-sm {{ 'btn-secondary' if include_archived else 'btn-outline-secondary' }}"
-                   href="{{ url_for('main.municipalities', sort=sort_by, order=order,
-                                    favorites='on' if favorites_only else none,
-                                    archived=none if include_archived else 'on') }}"
+                   href="{{ url_for('main.municipalities', **dict(base_args, archived=none if include_archived else 'on')) }}"
                    title="{{ t('municipalities_archived_tooltip') }}">
                     <i class="fas fa-box-archive me-1"></i>{{ t('municipalities_archived') }}
                 </a>
+                {# Which subscriptions the table is taken over (MUNIC-002).
+                   A menu of links rather than a form of checkboxes: every
+                   option is one URL, so it needs no JavaScript and no hidden
+                   fallback field, and `base_args` carries the choice through
+                   every sort and toggle on the page. A hand-written URL naming
+                   several ids still works -- `services/profile_selection.py`
+                   parses it -- and the toggle says how many are on screen, so
+                   a selection the menu cannot offer is still described rather
+                   than misreported. #}
+                <div class="dropdown" id="municipalities-scope-control">
+                    <button class="btn btn-sm {{ 'btn-outline-secondary' if is_everything else 'btn-secondary' }} dropdown-toggle"
+                            type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-layer-group me-1"></i>{{ t('municipalities_scope_control') }}:
+                        {% if is_everything %}{{ t('municipalities_scope_every') }}
+                        {%- elif profile_selection.state == 'all' %}{{ t('municipalities_scope_live_only') }}
+                        {%- else %}{{ profile_selection.label }}{% endif %}
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <li><a class="dropdown-item {{ 'active' if is_everything }}"
+                               href="{{ url_for('main.municipalities', **dict(base_args, profile_id=none)) }}">
+                            {{ t('municipalities_scope_every') }}
+                        </a></li>
+                        <li><a class="dropdown-item {{ 'active' if profile_selection.state == 'all' }}"
+                               href="{{ url_for('main.municipalities', **dict(base_args, profile_id='all')) }}">
+                            {{ t('municipalities_scope_live_only') }}
+                        </a></li>
+                        {% if scope_options %}<li><hr class="dropdown-divider"></li>{% endif %}
+                        {% for option in scope_options %}
+                            <li><a class="dropdown-item {{ 'active' if option.id in profile_selection.checked_ids }}"
+                                   href="{{ url_for('main.municipalities', **dict(base_args, profile_id=option.id)) }}">
+                                {{ option.name }}
+                                <span class="text-body-secondary small">{{ option.count }}</span>
+                                {% if not option.is_active %}<span class="badge bg-light text-dark border ms-1">{{ t('archive') }}</span>{% endif %}
+                                {% if option.is_hidden %}<span class="badge bg-light text-dark border ms-1">{{ t('hidden_badge') }}</span>{% endif %}
+                            </a></li>
+                        {% endfor %}
+                        {% if unassigned_available %}
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item {{ 'active' if profile_selection.include_unassigned }}"
+                                   href="{{ url_for('main.municipalities', **dict(base_args, profile_id='unassigned')) }}">
+                                {{ t('no_subscription') }}
+                                <span class="text-body-secondary small">{{ unassigned_available }}</span>
+                            </a></li>
+                        {% endif %}
+                    </ul>
+                </div>
             </div>
         </div>
 
-        <div class="alert alert-light border small d-flex flex-wrap gap-3 py-2">
-            <span>
-                <i class="fas fa-landmark me-1 text-primary"></i>
-                <strong>{{ t('municipalities_facts_label') }}</strong>
-                — {{ t('municipalities_facts_note') }}
-            </span>
-            <span>
-                <i class="fas fa-list me-1 text-primary"></i>
-                <strong>{{ t('municipalities_medians_label') }}</strong>
-                — {{ t('municipalities_medians_note') }}
-            </span>
+        {# What the two kinds of column are, what the table is a comparison
+           OF, and what its one derived ratio is a ratio of. The last two are
+           UNIVERSE-001: this page spans every subscription -- 311 of
+           production's 772 listings sit in retired ones -- and said so
+           nowhere, so "87 · 772 listings" read as the owner's live searches.
+           The composition is tallied off the rows the medians were computed
+           from, never from a second query (#417). #}
+        <div class="alert alert-light border small py-2">
+            <div class="d-flex flex-wrap gap-3">
+                <span>
+                    <i class="fas fa-landmark me-1 text-primary"></i>
+                    <strong>{{ t('municipalities_facts_label') }}</strong>
+                    — {{ t('municipalities_facts_note') }}
+                </span>
+                <span>
+                    <i class="fas fa-list me-1 text-primary"></i>
+                    <strong>{{ t('municipalities_medians_label') }}</strong>
+                    — {{ t('municipalities_medians_note') }}
+                </span>
+            </div>
+            {% if population and population.subscriptions %}
+                {% set mix = population.subscriptions %}
+                <div class="mt-1" id="municipalities-scope">
+                    <i class="fas fa-layer-group me-1 text-primary"></i>
+                    <strong>{{ t('municipalities_scope_label') }}</strong>
+                    {# The leading phrase is the page's whole claim, and it
+                       stops being true the moment the subscription menu
+                       narrows anything -- a disclosure that lies is worse
+                       than none, which is the point of the line existing. #}
+                    — {{ t('municipalities_scope_note') if is_everything else t('municipalities_scope_selected') }}:
+                    {{ tn('subscriptions_count', mix.subscriptions) }}
+                    {{ t('holding') }} {{ tn('listings_count', mix.listings) }} &mdash;
+                    {# Each kind counts its subscriptions, with its listings in
+                       brackets. Live and retired are always named, zero
+                       included: that is the axis #417 was on, and an omitted
+                       "0 retired" reads as "not told" rather than as "none".
+                       The other three appear only when they hold something --
+                       a permanent "0 hidden" is noise on a deployment that has
+                       never hidden a subscription. The last of them names its
+                       noun (#420's phrase, kept): it is a count of *listings*
+                       standing among counts of subscriptions, and a bare
+                       "1 with no subscription" reads as one subscription
+                       without a subscription. #}
+                    {{ tn('municipalities_scope_live', mix.active) }} ({{ mix.listings_active }})
+                    · {{ tn('municipalities_scope_retired', mix.retired) }} ({{ mix.listings_retired }}){%
+                        if mix.hidden %} · {{ tn('municipalities_scope_hidden', mix.hidden) }} ({{ mix.listings_hidden }}){% endif %}{%
+                        if mix.unknown %} · {{ tn('municipalities_scope_unknown', mix.unknown) }} ({{ mix.listings_unknown }}){% endif %}{%
+                        if mix.listings_unassigned %} · {{ tn('municipalities_unassigned_listings', mix.listings_unassigned) }}{% endif %};
+                    {{ t('municipalities_scope_delisted_included') if include_archived else t('municipalities_scope_delisted_excluded') }}{%
+                        if favorites_only %}; {{ t('municipalities_scope_favorites') }}{% endif %}
+                    {# #419's sentence, kept: it is the fact that the number
+                       and the page behind it are now one scope, and it belongs
+                       beside the composition rather than in a second line
+                       repeating the same counts. #}
+                    · {{ t('municipalities_scope_suffix') }}.
+                </div>
+                <div class="mt-1" id="municipalities-basis">
+                    <i class="fas fa-calculator me-1 text-primary"></i>
+                    <strong>{{ t('municipalities_basis_label') }}</strong>
+                    — {{ t('municipalities_basis_note') }}.
+                </div>
+            {% endif %}
         </div>
 
         <div class="table-responsive">
@@ -87,28 +204,49 @@
                         <th class="text-center" colspan="9">{{ t('municipalities_medians_label') }}</th>
                     </tr>
                     <tr>
-                        <th>{{ sort_link('municipality', t('municipality')) }}</th>
-                        <th class="text-end">{{ sort_link('renta', t('qol_renta'), t('qol_renta_tooltip')) }}</th>
-                        <th class="text-end">{{ sort_link('renta_index', t('municipalities_index'), t('qol_vs_province_tooltip')) }}</th>
-                        <th class="text-end">{{ sort_link('population', t('qol_population'), t('qol_population_tooltip')) }}</th>
-                        <th class="text-end">{{ sort_link('unemployment', t('municipalities_unemployment'), t('municipalities_unemployment_tooltip')) }}</th>
-                        <th class="text-end">{{ sort_link('listings', t('municipalities_listings')) }}</th>
-                        <th class="text-end">{{ sort_link('price_per_m2', '€/m²') }}</th>
-                        <th class="text-end">{{ sort_link('score', t('municipalities_score')) }}</th>
-                        <th class="text-end">{{ sort_link('sea_km', t('distance_to_sea')) }}</th>
-                        <th class="text-end">{{ sort_link('beach_min', t('beach_distance')) }}</th>
-                        <th class="text-end">{{ sort_link('pool_min', t('pool_title')) }}</th>
-                        <th class="text-end">{{ sort_link('hospital_general_km', t('qol_hospital_general'), t('qol_hospital_grouping_note')) }}</th>
-                        <th class="text-end">{{ sort_link('supermarket_km', t('qol_supermarkets')) }}</th>
-                        <th class="text-end">{{ sort_link('airport_min', t('nearest_airport')) }}</th>
+                        <th>{{ sort_link('municipality', t('municipality'), base_args) }}</th>
+                        <th class="text-end">{{ sort_link('renta', t('qol_renta'), base_args, t('qol_renta_tooltip')) }}</th>
+                        <th class="text-end">{{ sort_link('renta_index', t('municipalities_index'), base_args, t('qol_vs_province_tooltip')) }}</th>
+                        <th class="text-end">{{ sort_link('population', t('qol_population'), base_args, t('qol_population_tooltip')) }}</th>
+                        <th class="text-end">{{ sort_link('unemployment', t('municipalities_unemployment'), base_args, t('municipalities_unemployment_tooltip')) }}</th>
+                        <th class="text-end">{{ sort_link('listings', t('municipalities_listings'), base_args) }}</th>
+                        <th class="text-end">{{ sort_link('price_per_m2', '€/m²', base_args) }}</th>
+                        <th class="text-end">{{ sort_link('score', t('municipalities_score'), base_args) }}</th>
+                        <th class="text-end">{{ sort_link('sea_km', t('distance_to_sea'), base_args) }}</th>
+                        <th class="text-end">{{ sort_link('beach_min', t('beach_distance'), base_args) }}</th>
+                        <th class="text-end">{{ sort_link('pool_min', t('pool_title'), base_args) }}</th>
+                        <th class="text-end">{{ sort_link('hospital_general_km', t('qol_hospital_general'), base_args, t('qol_hospital_grouping_note')) }}</th>
+                        <th class="text-end">{{ sort_link('supermarket_km', t('qol_supermarkets'), base_args) }}</th>
+                        <th class="text-end">{{ sort_link('airport_min', t('nearest_airport'), base_args) }}</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for row in rows %}
                         <tr>
                             <td>
-                                <a href="{{ url_for('main.properties', municipality=row.name, profile_id='all') }}"
+                                {# The link opens exactly the listings this row
+                                   counted: the subscriptions that carried it
+                                   (retired and hidden ones by id, since an id
+                                   is the only thing that reaches those), the
+                                   unassigned rows, and this page's favorites
+                                   and listing-status scope. Built by
+                                   `drilldown_args`, so the number and the page
+                                   behind it cannot be taken under two
+                                   different scopes (#417). #}
+                                <a href="{{ url_for('main.properties', **row.drilldown) }}"
+                                   data-drilldown="{{ row.key }}"
                                    class="text-decoration-none fw-semibold">{{ row.name }}</a>
+                                {# More subscriptions carry this row than one
+                                   `profile_id` can name, so the link will show
+                                   fewer listings than the count beside it.
+                                   /properties says so once the reader has
+                                   clicked; this ticket is about saying it
+                                   before. #}
+                                {% if row.drilldown_truncated %}
+                                    <i class="fas fa-triangle-exclamation text-warning ms-1"
+                                       data-drilldown-truncated="{{ row.key }}"
+                                       title="{{ t('municipalities_drilldown_truncated') }}"></i>
+                                {% endif %}
                                 {% if row.favorites %}
                                     <span class="badge bg-warning text-dark ms-1" title="{{ t('favorites') }}">
                                         <i class="fas fa-star"></i> {{ row.favorites }}

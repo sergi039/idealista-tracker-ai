@@ -21,6 +21,7 @@ from models import Property
 from services.property_scoring_service import PropertyScoringService
 from services.sea_distance_service import SeaDistanceService
 from utils import score_snapshot
+from utils.enrich_scope import log_scope
 from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
@@ -106,6 +107,14 @@ def main() -> None:
 
         total = len(properties)
         logger.info("Selected %s properties", total)
+        log_scope(
+            logger,
+            properties,
+            label="sea_distance_recalc_queue",
+            notes=(
+                "free: the coastline comes from the sea-view client's cached cells",
+            ),
+        )
         if not total:
             return
 

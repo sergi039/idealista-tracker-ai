@@ -22,6 +22,7 @@ import requests
 from app import create_app, db
 from models import Property
 from services import sea_view_service
+from utils.enrich_scope import log_scope
 from utils.inflight import inflight
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,15 @@ def main() -> None:
             total,
             not args.no_ai,
             args.dry_run,
+        )
+        log_scope(
+            logger,
+            properties,
+            label="sea_view_backfill_queue",
+            notes=(
+                "every stored row, not the auto-enrich window",
+                "free: OpenStreetMap coastline and EU-DEM through OpenTopoData",
+            ),
         )
 
         states = Counter()

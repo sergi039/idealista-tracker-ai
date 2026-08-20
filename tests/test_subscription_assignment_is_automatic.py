@@ -92,7 +92,7 @@ def property_from_the_far_subscription(app):
 
 
 class _NoopLocationService:
-    def ensure_coordinates(self, prop, refresh=False):
+    def ensure_coordinates(self, prop, refresh=False, *, commit=False):
         return True
 
 

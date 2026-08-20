@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from flask import Blueprint, Response, current_app, jsonify, request
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 # get_or_404 raises HTTPException, and the blanket `except Exception` handlers
@@ -1637,9 +1638,24 @@ def get_properties():
     """Get universal Properties with filtering and sorting (defaults to the default SearchProfile)."""
     try:
         from models import Property
+        from services.population import (
+            BASIS_RAW_ROWS,
+            Population,
+            subscription_mix,
+        )
         from services.search_profile_service import SearchProfileService
 
-        # Query params
+        # Query params. The raw spelling is kept as well as the coerced one:
+        # `type=int` swallows anything that is not a number, so `profile_id=all`
+        # -- the spelling that means "every active subscription" on /properties
+        # -- silently arrives here as *omission* and is answered with the
+        # Default subscription, which holds nothing. Measured 2026-08-19: the
+        # bare endpoint and `profile_id=all` both returned `count: 0` while
+        # bare /properties showed 461 listings. The contract is deliberately
+        # left as it is (decision #410 -- redefining the spelling cannot be
+        # done safely); what changes is that the payload now says so
+        # (UNIVERSE-001).
+        raw_profile_id = request.args.get("profile_id")
         profile_id = request.args.get("profile_id", type=int)
         category_filter = (request.args.get("category") or "").strip()
         subtype_filter = (request.args.get("subtype") or "").strip()
@@ -1733,6 +1749,24 @@ def get_properties():
         else:
             query = query.order_by(sort_column.desc().nullslast())
 
+        # The population, before the page is cut out of it. `count` below is
+        # the size of the page and cannot express the set it came from -- with
+        # the default limit of 100 a caller reading `count` learns the page
+        # size and nothing about the answer (UNIVERSE-001).
+        total = query.order_by(None).count()
+        # Which subscriptions that population is made of, over the whole of it
+        # rather than over the page: a mix tallied from `props` would describe
+        # the first 100 rows and wear the name of the answer.
+        mix = subscription_mix(
+            {
+                profile: count
+                for profile, count in query.order_by(None)
+                .with_entities(Property.search_profile_id, func.count(Property.id))
+                .group_by(Property.search_profile_id)
+                .all()
+            }
+        )
+
         props = query.offset(offset).limit(limit).all()
 
         if full:
@@ -1774,11 +1808,70 @@ def get_properties():
                     }
                 )
 
+        # Three states, not two. "Nothing was sent" and "something was sent
+        # that could not be read" are the distinction #410 is about, and a
+        # single boolean collapses them back together.
+        if request.args.get("profile_id", type=int) is not None:
+            profile_id_source = "requested"
+        elif raw_profile_id is None or not raw_profile_id.strip():
+            profile_id_source = "omitted"
+        else:
+            profile_id_source = "unrecognized"
+
+        notes = []
+        if profile_id_source == "unrecognized":
+            notes.append(
+                f"profile_id={raw_profile_id!r} is not a subscription id; it was "
+                "ignored and the default subscription was used instead. This "
+                "endpoint takes one integer id -- there is no spelling here for "
+                "'every subscription'."
+            )
+        elif (
+            profile_id_source == "requested"
+            and str(profile_id) != str(raw_profile_id).strip()
+        ):
+            # A number that parsed and was still replaced: `if not profile_id`
+            # is falsy for `0`, so `profile_id=0` reaches the same substitution
+            # as `all` and used to arrive labelled `requested` with no note --
+            # indistinguishable from a request for a subscription that really
+            # is the default. `/properties` refuses such an id outright rather
+            # than falling back, "because falling back would quietly answer a
+            # different question and look like a working filter"
+            # (services/profile_selection.py); this endpoint keeps its
+            # fallback and says so.
+            notes.append(
+                f"profile_id={raw_profile_id!r} names no subscription; the "
+                f"default subscription ({profile_id}) was used instead."
+            )
+        population = Population(
+            label="one_subscription"
+            if profile_id is not None
+            else "every_subscription",
+            total=total,
+            returned=len(properties_data),
+            cap=limit,
+            basis=BASIS_RAW_ROWS,
+            subscriptions=mix,
+            notes=tuple(notes),
+        )
+
         return jsonify(
             {
                 "success": True,
+                # Kept as it was -- the size of the page. `scope.total` is the
+                # size of the answer.
                 "count": len(properties_data),
                 "selected_profile_id": profile_id,
+                "scope": {
+                    **population.as_dict(),
+                    "profile_id_requested": raw_profile_id,
+                    "profile_id_applied": profile_id,
+                    "profile_id_source": profile_id_source,
+                    # `offset` only: the page size is already here as `cap`,
+                    # and one fact under two names in one object is what this
+                    # block exists to stop happening between objects.
+                    "offset": offset,
+                },
                 "properties": properties_data,
             }
         )

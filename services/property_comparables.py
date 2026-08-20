@@ -100,6 +100,15 @@ def collect_comparables(
     `band=False` is for a caller ranking by area itself, where a band would be
     circular: the size component asks "how big is this against the others",
     which is not a question a band around its own area can answer.
+
+    `meta` also names the **population** the answer came from (UNIVERSE-001):
+    `peers_used` is what the caller can average, `peers_matched` is what the
+    winning scope really holds, `peers_cap` is the ceiling the query stopped
+    at, and `profile_scope` says that the pool is the subject's own
+    subscription (decision #410 -- a hidden or retired subject keeps its
+    same-profile pool, and nothing leaks across subscriptions). Only a capped
+    result costs a second query: `peers_matched` is the fetched length unless
+    the ceiling was actually reached, so the ordinary path is unchanged.
     """
     scopes: List[Tuple[str, Dict[str, bool]]] = []
     # Strict -> relaxed: municipality+subtype -> subtype -> category-only.
@@ -116,8 +125,21 @@ def collect_comparables(
         passes.append((bounds, "+area_band"))
     passes.append((None, ""))
 
+    profile_scope = (
+        "own_subscription"
+        if prop.search_profile_id is not None
+        else "every_subscription"
+    )
+
     best_rows: List[Property] = []
-    best_meta: Dict[str, Any] = {"comparable_scope": None, "size_comparable": False}
+    best_meta: Dict[str, Any] = {
+        "comparable_scope": None,
+        "size_comparable": False,
+        "peers_used": 0,
+        "peers_matched": 0,
+        "peers_cap": limit,
+        "profile_scope": profile_scope,
+    }
 
     for pass_bounds, suffix in passes:
         for scope_name, cfg in scopes:
@@ -143,16 +165,25 @@ def collect_comparables(
                     Property.area >= pass_bounds[0], Property.area <= pass_bounds[1]
                 )
 
+            fetched = q.limit(limit).all()
             rows = [
                 p
-                for p in q.limit(limit).all()
+                for p in fetched
                 if _safe_float(p.area) not in (None, 0)
                 and (not require_price or _safe_float(p.price) is not None)
             ]
+            # What the scope really holds, so a capped pool can say it was
+            # capped. The count is asked for only when the ceiling was
+            # reached -- otherwise the fetched length *is* the total.
+            matched = q.count() if len(fetched) == limit else len(fetched)
 
             meta: Dict[str, Any] = {
                 "comparable_scope": f"{scope_name}{suffix}",
                 "size_comparable": pass_bounds is not None,
+                "peers_used": len(rows),
+                "peers_matched": matched,
+                "peers_cap": limit,
+                "profile_scope": profile_scope,
             }
             if pass_bounds is not None:
                 meta["area_band_m2"] = [

@@ -38,6 +38,9 @@ TRANSLATIONS = {
         "hidden_subscriptions_count_other": "%s hidden subscriptions",
         "listings_count_one": "%s listing",
         "listings_count_other": "%s listings",
+        "holding": "holding",
+        "subscriptions_count_one": "%s subscription",
+        "subscriptions_count_other": "%s subscriptions",
         "unassigned_not_shown_one": "%s listing with no subscription not shown",
         "unassigned_not_shown_other": "%s listings with no subscription not shown",
         "unassigned_included_one": "includes %s listing with no subscription",
@@ -251,6 +254,9 @@ TRANSLATIONS = {
             "Another listing is stored at exactly this point. Two homes in one "
             "building can share one legitimately; separate plots cannot."
         ),
+        # The list is capped, and a capped list that does not name its own cap
+        # reads as the whole cluster (UNIVERSE-001, #265).
+        "shared_coordinate_more": "and %s more",
         "beaches_within": "Beaches ≤",
         "minutes_drive": "min by car",
         "nearest_beach": "Nearest beach",
@@ -368,7 +374,63 @@ TRANSLATIONS = {
         "municipalities_archived_tooltip": "Also count removed and sold listings",
         "municipalities_pool_indoor_tooltip": "Median to the nearest pool with indoor evidence",
         "municipalities_unnamed_note": "listings carry no municipality and are not compared",
+        "municipalities_unassigned_listings_one": "%s listing with no subscription",
+        "municipalities_unassigned_listings_other": (
+            "%s listings with no subscription"
+        ),
+        "municipalities_scope_suffix": (
+            "each row opens exactly the listings behind its number"
+        ),
+        "municipalities_drilldown_truncated": (
+            "More subscriptions carry this municipality than one link can name, "
+            "so its list shows fewer listings than the count here"
+        ),
         "municipalities_empty": "No listings to compare yet.",
+        # What the whole table is a comparison *of* (UNIVERSE-001, #265).
+        # The page spans every subscription, retired ones included, and said
+        # so nowhere. Nouns rather than counted phrases on purpose: "live 461
+        # · retired 311" needs no plural agreement in either language, while
+        # a sentence around the numbers would need four of them.
+        "municipalities_scope_label": "Scope",
+        # MUNIC-002. The control's own name is `Subscriptions`, and its two
+        # standing options are worded so that neither reads as the other:
+        # "every" is this page's own population (the archive included) and
+        # "live only" is `profile_id=all`, which means "active and not hidden"
+        # here exactly as it does on /properties, /map, the CSV export and the
+        # JSON API. This is the one surface where `all` is *narrower* than the
+        # bare URL, so the labels carry the distinction the tokens cannot.
+        "municipalities_scope_control": "Subscriptions",
+        "municipalities_scope_every": "every",
+        "municipalities_scope_live_only": "live only",
+        "municipalities_scope_selected": "only the subscriptions selected above",
+        "municipalities_scope_note": (
+            "every stored listing, whatever subscription it is in"
+        ),
+        # Counted phrases, through `tn()`: each of these modifies an elided
+        # "subscription", and Spanish inflects the adjective with it -- "1
+        # suscripcion activa" against "2 suscripciones activas" -- so a single
+        # string with a number dropped into it is wrong in one of the two
+        # cases. English does not inflect them, and both forms are written out
+        # anyway rather than sharing one key, because a pair that happens to
+        # be identical in one language is not the same thing as a phrase that
+        # does not need a pair.
+        "municipalities_scope_live_one": "%s live",
+        "municipalities_scope_live_other": "%s live",
+        "municipalities_scope_retired_one": "%s retired",
+        "municipalities_scope_retired_other": "%s retired",
+        "municipalities_scope_hidden_one": "%s hidden",
+        "municipalities_scope_hidden_other": "%s hidden",
+        "municipalities_scope_unknown_one": "%s whose subscription is gone",
+        "municipalities_scope_unknown_other": "%s whose subscriptions are gone",
+        "municipalities_scope_delisted_excluded": "removed and sold excluded",
+        "municipalities_scope_delisted_included": "removed and sold included",
+        "municipalities_scope_favorites": "favorites only",
+        "municipalities_basis_label": "Basis",
+        "municipalities_basis_note": (
+            "\u20ac/m\u00b2 is the unadjusted median of asking price \u00f7 area across "
+            "every type, subtype and size \u2014 it describes the inventory mix, not a "
+            "size-adjusted price for the municipality"
+        ),
         "pool_unroutable": "no road route",
         "pool_unroutable_tooltip": "Google answered: no driving route to this pool",
         "pool_owner_absence": "Owner confirmed: no usable pool",
@@ -434,6 +496,9 @@ TRANSLATIONS = {
         "hidden_subscriptions_count_other": "%s suscripciones ocultas",
         "listings_count_one": "%s anuncio",
         "listings_count_other": "%s anuncios",
+        "holding": "con",
+        "subscriptions_count_one": "%s suscripción",
+        "subscriptions_count_other": "%s suscripciones",
         "unassigned_not_shown_one": "%s anuncio sin suscripción sin mostrar",
         "unassigned_not_shown_other": "%s anuncios sin suscripción sin mostrar",
         "unassigned_included_one": "incluye %s anuncio sin suscripción",
@@ -619,6 +684,7 @@ TRANSLATIONS = {
             "viviendas de un mismo edificio pueden compartirlo; dos parcelas "
             "distintas no."
         ),
+        "shared_coordinate_more": "y %s más",
         "beaches_within": "Playas ≤",
         "minutes_drive": "min en coche",
         "nearest_beach": "Playa más cercana",
@@ -735,7 +801,41 @@ TRANSLATIONS = {
         "municipalities_archived_tooltip": "Contar también retirados y vendidos",
         "municipalities_pool_indoor_tooltip": "Mediana a la piscina más cercana con indicios de cubierta",
         "municipalities_unnamed_note": "anuncios no llevan municipio y no se comparan",
+        "municipalities_unassigned_listings_one": "%s anuncio sin suscripción",
+        "municipalities_unassigned_listings_other": "%s anuncios sin suscripción",
+        "municipalities_scope_suffix": (
+            "cada fila abre exactamente los anuncios que hay detrás de su número"
+        ),
+        "municipalities_drilldown_truncated": (
+            "Este municipio lo sostienen más suscripciones de las que un enlace "
+            "puede nombrar, así que su lista muestra menos anuncios que este recuento"
+        ),
         "municipalities_empty": "Aún no hay anuncios que comparar.",
+        "municipalities_scope_label": "Alcance",
+        "municipalities_scope_control": "Suscripciones",
+        "municipalities_scope_every": "todas",
+        "municipalities_scope_live_only": "solo activas",
+        "municipalities_scope_selected": "solo las suscripciones seleccionadas arriba",
+        "municipalities_scope_note": (
+            "todos los anuncios almacenados, sea cual sea su suscripción"
+        ),
+        "municipalities_scope_live_one": "%s activa",
+        "municipalities_scope_live_other": "%s activas",
+        "municipalities_scope_retired_one": "%s retirada",
+        "municipalities_scope_retired_other": "%s retiradas",
+        "municipalities_scope_hidden_one": "%s oculta",
+        "municipalities_scope_hidden_other": "%s ocultas",
+        "municipalities_scope_unknown_one": "%s cuya suscripción ya no existe",
+        "municipalities_scope_unknown_other": "%s cuyas suscripciones ya no existen",
+        "municipalities_scope_delisted_excluded": "sin retirados ni vendidos",
+        "municipalities_scope_delisted_included": "con retirados y vendidos",
+        "municipalities_scope_favorites": "solo favoritos",
+        "municipalities_basis_label": "Base",
+        "municipalities_basis_note": (
+            "\u20ac/m\u00b2 es la mediana sin ajustar del precio pedido \u00f7 superficie "
+            "sobre todos los tipos, subtipos y tamaños \u2014 describe la composición del "
+            "inventario, no un precio del municipio ajustado por tamaño"
+        ),
         "pool_unroutable": "sin ruta por carretera",
         "pool_unroutable_tooltip": "Google respondió: sin ruta en coche a esta piscina",
         "pool_owner_absence": "Confirmado por el propietario: sin piscina útil",

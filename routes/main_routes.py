@@ -605,7 +605,7 @@ def _listing_counts_by_profile():
     }
 
 
-def _profile_dropdown_options(profiles, resolved, counts=None):
+def _profile_dropdown_options(profiles, resolved, counts=None, include_hidden=False):
     """Rows for the subscription filter: the live subscriptions first, the
     retired ones after them, each with how many listings it holds.
 
@@ -615,6 +615,15 @@ def _profile_dropdown_options(profiles, resolved, counts=None):
     a hidden id named in the URL still gets its checkbox, for the same reason
     an unknown id does, and it renders under its own heading rather than
     under `Archive`, which would say something false about why it is there.
+
+    `include_hidden` is that exception made general, for a caller whose own
+    population already contains the hidden subscriptions (MUNIC-002). Hiding
+    takes a subscription off the screens that *offer* it; `/municipalities`
+    does not offer subscriptions, it compares municipalities over every stored
+    listing, and its Scope line already counts the hidden ones. A menu that
+    left them out there would disclose a population its own control could not
+    reach -- which is the defect this control exists to remove, one axis
+    along. It defaults to `False` so `/properties` is untouched.
 
     The owner has exactly two saved searches on idealista.com; everything else
     in `search_profiles` is a subscription that stopped (the Alicante ones), a
@@ -645,10 +654,10 @@ def _profile_dropdown_options(profiles, resolved, counts=None):
     from services.search_profile_service import SearchProfileService
 
     known = {profile.id: profile for profile in profiles}
-    for profile in SearchProfile.query.filter(
-        SearchProfile.is_active.isnot(True),
-        SearchProfileService.visible_clause(),
-    ).all():
+    archived = SearchProfile.query.filter(SearchProfile.is_active.isnot(True))
+    if not include_hidden:
+        archived = archived.filter(SearchProfileService.visible_clause())
+    for profile in archived.all():
         known.setdefault(profile.id, profile)
     for profile in SearchProfile.query.filter(
         SearchProfile.id.in_(selected - set(known))
@@ -1509,6 +1518,10 @@ def property_detail(property_id):
         except Exception:
             travel_display_targets = []
 
+        shared_coordinate_ids, shared_coordinate_population = shared_coordinate_peers(
+            prop
+        )
+
         return render_template(
             "property_detail.html",
             property=prop,
@@ -1532,10 +1545,12 @@ def property_detail(property_id):
             ),
             travel_display_targets=travel_display_targets,
             sea_view_verdict=sea_view_service.read_verdict(prop),
-            # One row, one query, and only on this page: the list would run it
-            # per row. It is evidence about the coordinate, next to the
-            # coordinate, and nothing scores on it.
-            shared_coordinate_ids=shared_coordinate_peers(prop),
+            # One row, and only on this page: the list would run it per row.
+            # It is evidence about the coordinate, next to the coordinate, and
+            # nothing scores on it. The population travels with the ids
+            # because the list is capped -- see UNIVERSE-001.
+            shared_coordinate_ids=shared_coordinate_ids,
+            shared_coordinate_population=shared_coordinate_population,
         )
     except HTTPException:
         raise
@@ -2723,9 +2738,18 @@ def municipalities():
         DEFAULT_SORT,
         SORT_KEYS,
         MunicipalityComparisonService,
+        drilldown_args,
+        drilldown_truncates,
+    )
+    from services.population import (
+        Population,
+        listings_by_profile,
+        subscription_mix,
     )
 
     try:
+        from services.search_profile_service import SearchProfileService
+
         include_archived = request.args.get("archived") == "on"
         favorites_only = request.args.get("favorites") == "on"
         sort_by = request.args.get("sort") or DEFAULT_SORT
@@ -2735,6 +2759,29 @@ def municipalities():
             "asc" if sort_by == "municipality" else "desc"
         )
 
+        # `profile_id` is the codebase's one spelling of "which subscriptions",
+        # parsed by the module that owns it (MUNIC-002). What differs here is
+        # the *fallback*, which is what `auto_profile_id` exists for: a bare
+        # /properties is rewritten to `all` and a bare /map resolves to one
+        # profile, while a bare /municipalities filters by nothing at all --
+        # this page compares municipalities, not saved searches, so its own
+        # population is every stored listing, retired and hidden subscriptions
+        # included.
+        #
+        # That makes this the one surface where `all` is *narrower* than the
+        # bare URL: `all` means "active and not hidden" here exactly as it does
+        # on /properties, /map, the CSV export and the JSON API, and
+        # redefining it to mean "everything" would be one spelling with two
+        # meanings across four surfaces -- silently, since the token would look
+        # identical. Measured on production 2026-08-19, adding `?profile_id=all`
+        # to a bare /municipalities narrows it by 311 of 772 listings.
+        offered_profiles = SearchProfileService.list_visible_profiles(active_only=True)
+        profile_selection = resolve_profile_selection(
+            parse_profile_selection(request.args),
+            [profile.id for profile in offered_profiles],
+            auto_profile_id=None,
+        )
+
         query = Property.query
         if not include_archived:
             query = query.filter(
@@ -2742,11 +2789,69 @@ def municipalities():
             )
         if favorites_only:
             query = query.filter(Property.is_favorite.is_(True))
+
+        # How many listings each subscription holds *in this page's other
+        # scopes* -- counted off the query with the status and favorites
+        # filters applied and the subscription filter not yet, so the number
+        # beside a name in the menu is the number picking it would show. Same
+        # order, and the same reason, as `unassigned_count` on /properties:
+        # SQLAlchemy queries are immutable, so the two branches cannot drift.
+        listing_counts = {
+            profile_id: count
+            for profile_id, count in query.with_entities(
+                Property.search_profile_id, func.count(Property.id)
+            ).group_by(Property.search_profile_id)
+        }
+
+        # The filter goes on the rows *entering* `build_rows`, never on the
+        # rows leaving it. Everything the table says about a municipality --
+        # its medians, every coverage count, `row["scope"]` and therefore the
+        # drill-down link -- is derived from what that function was handed, so
+        # filtering afterwards would leave all of it describing the
+        # unfiltered set while the page claimed otherwise. That is #417
+        # exactly, on a new axis.
+        query = apply_profile_filter(
+            query, Property.search_profile_id, profile_selection
+        )
         properties = query.all()
+
+        # The menu's rows, from the helper /properties builds its own from --
+        # live first, the archive after it, a hidden one only when the URL
+        # names it, and nothing that holds no listings here. `counts` is the
+        # pre-filter tally above, so the number beside a name says what
+        # picking it would show rather than what is on screen now.
+        # The menu lists the hidden subscriptions as well, unlike
+        # /properties': this page's own population already contains them and
+        # its Scope line already counts them, so leaving them out of the
+        # control would disclose rows the reader cannot reach. `all` is
+        # resolved against `offered_profiles` and stays "active and not
+        # hidden", which is what it means on every other surface.
+        scope_options = _profile_dropdown_options(
+            SearchProfileService.list_profiles(active_only=True, include_hidden=True),
+            profile_selection,
+            counts=listing_counts,
+            include_hidden=True,
+        )
+        unassigned_available = listing_counts.get(None, 0)
 
         service = MunicipalityComparisonService()
         rows = service.build_rows(properties)
         rows = service.sort_rows(rows, sort_by, descending=(order == "desc"))
+
+        # The link beside each number opens exactly the listings that number
+        # was taken over -- the subscriptions that carried it, retired and
+        # hidden ones included, the unassigned rows, this page's favorites
+        # mode and its listing-status scope (#417). The scope travels with the
+        # row from `build_rows`; nothing here asks the database a second
+        # question about it, because a second query is how the two numbers
+        # came to disagree in the first place.
+        for row in rows:
+            row["drilldown"] = drilldown_args(
+                row,
+                favorites_only=favorites_only,
+                include_archived=include_archived,
+            )
+            row["drilldown_truncated"] = drilldown_truncates(row)
 
         # Truncated email artifacts ("Ovi...", issue #298) count with the
         # unnamed listings: build_rows skips both, for the same reason -- a
@@ -2754,13 +2859,37 @@ def municipalities():
         # sides ask `group_key`, so the footnote cannot drift from the table
         # it is explaining.
         unnamed = sum(1 for p in properties if group_key(p.municipality) is None)
+
+        # What the whole table is a comparison *of* (UNIVERSE-001). This page
+        # spans every subscription -- 311 of production's 772 listings sit in
+        # retired ones -- and said so nowhere, which left "87 municipalities ·
+        # 772 listings" reading as the owner's live searches. The mix is
+        # tallied off the rows the medians were computed from, the same rule
+        # the drill-down link follows (#417).
+        population = Population(
+            label="stored_inventory",
+            total=len(properties),
+            returned=len(properties),
+            # No `basis` here on purpose. This page states its adjustment
+            # basis in the reader's own language, from `municipalities_basis_note`
+            # -- a second, English, machine-readable copy of the same sentence
+            # would be one more thing to keep in agreement and nothing renders
+            # it. `basis` is for the surfaces whose reader is a machine or a
+            # log.
+            subscriptions=subscription_mix(listings_by_profile(properties)),
+        )
+
         return render_template(
             "municipalities.html",
             rows=rows,
+            population=population,
             sort_by=sort_by,
             order=order,
             include_archived=include_archived,
             favorites_only=favorites_only,
+            profile_selection=profile_selection,
+            scope_options=scope_options,
+            unassigned_available=unassigned_available,
             listing_total=len(properties),
             unnamed_listings=unnamed,
             sources=service.qol_service.reference_sources(),

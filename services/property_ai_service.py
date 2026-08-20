@@ -354,6 +354,14 @@ class PropertyAIService:
             "sample_size": len(ppm2_values),
             "comparable_scope": peer_meta.get("comparable_scope"),
             "size_comparable": bool(peer_meta.get("size_comparable")),
+            # The population the average is an average over (UNIVERSE-001).
+            # `sample_size` above counts the peers that had a usable price and
+            # area; these say what set those came out of, which is a different
+            # number and a different claim.
+            "peers_used": peer_meta.get("peers_used"),
+            "peers_matched": peer_meta.get("peers_matched"),
+            "peers_cap": peer_meta.get("peers_cap"),
+            "profile_scope": peer_meta.get("profile_scope"),
         }
         if peer_meta.get("area_band_m2"):
             snapshot["area_band_m2"] = peer_meta["area_band_m2"]
@@ -419,6 +427,23 @@ class PropertyAIService:
         the same face as a measured one.
         """
         lines: List[str] = []
+        # What set the average is over, before what it was adjusted for
+        # (UNIVERSE-001). A model handed "avg €26/m²" reads it as the local
+        # market; it is the average of one subscription's listings inside one
+        # scope of a ladder, and on a capped pool not even all of those.
+        matched = market.get("peers_matched")
+        cap = market.get("peers_cap")
+        used = market.get("peers_used")
+        if used is not None:
+            pool = f"Pool: {used} peers"
+            if market.get("profile_scope") == "own_subscription":
+                pool += " from this listing's own subscription only"
+            else:
+                pool += " from every subscription (this listing has none)"
+            if matched is not None and cap is not None and matched > cap:
+                pool += f", capped at {cap} of {matched} matching"
+            lines.append(pool + ".")
+
         scope = market.get("comparable_scope")
         band = market.get("area_band_m2")
         if market.get("size_comparable") and band:
@@ -508,7 +533,21 @@ class PropertyAIService:
             ]
 
         if similar:
-            parts += ["", "Similar properties in our database (nearest in size):"]
+            # "3 of N", never a bare three: a list that does not name what it
+            # was chosen out of reads as the whole comparison (UNIVERSE-001).
+            pool_size = (market or {}).get("peers_used")
+            matched = (market or {}).get("peers_matched")
+            cap = (market or {}).get("peers_cap")
+            header = "Similar properties in our database (nearest in size"
+            if pool_size:
+                header += f", {len(similar)} of {pool_size} peers"
+                # When the pool itself was capped, the three were chosen out of
+                # the cap and not out of the matching set -- and saying "3 of
+                # 600" while 5,000 matched is the truncation defect one layer
+                # further in.
+                if matched is not None and cap is not None and matched > cap:
+                    header += f" drawn from a pool capped at {cap} of {matched}"
+            parts += ["", header + "):"]
             for idx, s in enumerate(similar, start=1):
                 score = s.get("score_total")
                 # "Score: 0.0/100" for a row nobody has scored is a judgement
