@@ -1510,6 +1510,41 @@ and TODO.md; respect it if you ever run both side by side.
   The lesson underneath is worth more than the list: **this project can get
   itself blocked by its own backfills**, and the moment a free source becomes
   load bearing that stops being an inconvenience.
+
+  **Two fallbacks were not enough, and a list whose entries fail together is
+  the single point of failure with more names on it** (2026-08-20). Measured
+  at 22:30 CEST from the mini: overpass-api.de timed out on connect,
+  kumi.systems answered `502`, private.coffee timed out -- all three, at once,
+  while the laptop got overpass-api.de in 0.6 s. So it is the same IP-level
+  refusal as 2026-08-19 and the spares did not cover it.
+  `overpass.openstreetmap.fr` answered the mini in 0.24 s throughout and is
+  now first among the fallbacks, ahead of the two that were down, because it
+  is the only one that answered either machine that day.
+
+  **An instance is added on evidence, never on a `200`.** The dangerous
+  failure is not the one that refuses -- it is a thin or regional mirror that
+  answers `200` with an empty `elements` list, which this project writes down
+  as a *measured* absence: "nothing hazardous nearby" for a plot beside a
+  cement works, #98's defect arriving through the spare tyre. That is not
+  hypothetical and it is not rare: `overpass.osm.ch` was caught doing exactly
+  it the same afternoon, in another session's hand-run override. So a
+  candidate is checked against a **known answer** first. openstreetmap.fr
+  returned the same 144 elements with the same tags as overpass-api.de and as
+  the committed fixture for property 793's coordinate -- zero differences --
+  and the same national chains in the same counts for a dense unrelated query
+  over central Gijon. Two sources agreeing on an answer somebody already had
+  is the check; "it responded" is not.
+
+  **A new instance is not free, and the one place it costs is
+  `OSM_OVERPASS_WALK_BUDGET_S`.** The ceiling is derived from the *number* of
+  instances -- one patient attempt on the primary plus a complete attempt on
+  each fallback -- so a third fallback moved it from 210 s to 275 s, and
+  `ENRICH_LOOKUP_BUDGET_S` from 240 to 305 to stay above it. Leaving the
+  ceiling alone would have bought the shorter walk by clamping the *last*
+  fallback's read leg, and on the day this was measured the last fallback was
+  the only one answering. `tests/test_one_press_is_bounded.py` derives both
+  from `len(OSM_OVERPASS_FALLBACK_URLS)` and goes red if a future instance
+  arrives without them.
 - **Every Overpass caller reads three refusals, not one** (#144, all measured
   against the live instance): the `406` above, which also fires for a UA
   carrying a parenthetical comment; the `504` above, which needs a backoff in
