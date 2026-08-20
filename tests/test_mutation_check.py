@@ -532,3 +532,154 @@ class TestItRevertsWhatTheDiffDid:
         assert _git(repo, "worktree", "list").count("\n") == 1, (
             "the worktree it made must be gone"
         )
+
+
+class TestTheShellHarnesses:
+    """MUT-002 in #265: the check could not see this repository's other tests.
+
+    Three shell harnesses cover the deploy watcher -- the one part of the tree
+    pytest does not reach -- and `classify()` counted them as production. A
+    diff that added five scenarios to one of them was reported as "no test file
+    was touched, so there is nothing to re-run", every clause defensible
+    against the tool's own definitions and the sentence false about the diff.
+
+    The synthetic harness below is the real ones' shape and nothing more: a
+    `fail` that prints `FAIL:` and exits, and scenarios that read the watcher
+    beside them through `BASH_SOURCE`. That last part is what makes running one
+    inside the check's disposable worktree work at all.
+    """
+
+    HARNESS = (
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        "fail() { printf 'FAIL: %s\\n' \"$*\" >&2; exit 1; }\n"
+        'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
+        'WATCHER="${SCRIPT_DIR}/deploy_watcher.sh"\n'
+    )
+
+    def _shell_repo(self, root, scenarios, watcher_body):
+        (root / "tools" / "autopilot").mkdir(parents=True, exist_ok=True)
+        (root / "tools" / "autopilot" / "deploy_watcher.sh").write_text(
+            "#!/bin/bash\n" + watcher_body
+        )
+        (root / "tools" / "autopilot" / "deploy_probe_test.sh").write_text(
+            self.HARNESS + scenarios
+        )
+
+    def test_a_scenario_the_diff_wrote_going_red_is_caught(self, repo):
+        """The verdict MUT-002 exists to make reachable."""
+        self._shell_repo(repo, "printf 'OK\\n'\n", "echo old\n")
+        _commit(repo, "harness base")
+        self._shell_repo(
+            repo,
+            'grep -q "brand new behaviour" "$WATCHER" \\\n'
+            '    || fail "the watcher lost its brand new behaviour"\n'
+            "printf 'OK\\n'\n",
+            "echo old\n# brand new behaviour\n",
+        )
+        _commit(repo, "add behaviour and a scenario for it")
+
+        code, out = _run(repo)
+        assert "CAUGHT" in out, out
+        assert "deploy_probe_test.sh went red on a scenario this diff wrote" in out
+        assert "brand new behaviour" in out
+        assert code == 0
+
+    def test_a_scenario_that_survives_the_revert_escapes(self, repo):
+        self._shell_repo(repo, "printf 'OK\\n'\n", "echo old\n")
+        _commit(repo, "harness base")
+        self._shell_repo(
+            repo,
+            'grep -q "echo old" "$WATCHER" \\\n'
+            '    || fail "a scenario asserting what was already true"\n'
+            "printf 'OK\\n'\n",
+            "echo old\n# something new nobody checks\n",
+        )
+        _commit(repo, "a scenario that does not depend on the change")
+
+        code, out = _run(repo)
+        assert "ESCAPED" in out, out
+        assert "stayed green" in out
+        assert "Mutation-Waiver" in out
+        assert code == 1
+
+    def test_a_harness_that_stops_early_is_unproven_not_escaped(self, repo):
+        """`fail` exits, so a harness stops at its FIRST red scenario.
+
+        If that one is not the diff's own, the diff's scenarios never ran. That
+        is neither a catch nor an escape, and calling it either would be this
+        check's own defect class: a probe that did not run, read as an answer.
+        """
+        self._shell_repo(
+            repo,
+            'grep -q "token=one" "$WATCHER" \\\n'
+            '    || fail "the token scenario"\n'
+            "printf 'OK\\n'\n",
+            "token=one\n",
+        )
+        _commit(repo, "harness base")
+        # The first scenario's `grep` line changes and its `fail` line does
+        # not, which is what keeps it a scenario the diff does not own -- the
+        # real harnesses put the assertion on its own continuation line, and
+        # that is the shape this depends on. It now fails first, before the
+        # scenario the diff wrote.
+        self._shell_repo(
+            repo,
+            'grep -q "token=two" "$WATCHER" \\\n'
+            '    || fail "the token scenario"\n'
+            'grep -q "extra line" "$WATCHER" \\\n'
+            '    || fail "the scenario this diff actually wrote"\n'
+            "printf 'OK\\n'\n",
+            "token=two\nextra line\n",
+        )
+        _commit(repo, "rename the token and add a scenario")
+
+        code, out = _run(repo)
+        assert "WARN" in out, out
+        assert "stopped at a scenario this diff did not write" in out
+        assert "never ran" in out
+        assert "ESCAPED" not in out
+        assert "CAUGHT" not in out
+        assert code == 0
+
+    def test_a_watcher_change_alone_still_says_what_it_looked_for(self, repo):
+        """The residual WARN names both kinds of test, not "no test file"."""
+        self._shell_repo(repo, "printf 'OK\\n'\n", "echo old\n")
+        _commit(repo, "harness base")
+        self._shell_repo(repo, "printf 'OK\\n'\n", "echo old\n# unchecked\n")
+        _commit(repo, "change the watcher and nothing else")
+
+        code, out = _run(repo)
+        assert "WARN" in out, out
+        assert "pytest module under tests/" in out
+        assert "shell harness under tools/autopilot/" in out
+        assert "no test file was touched" not in out
+        assert code == 0
+
+    def test_the_watcher_itself_is_production_and_is_reverted(self, repo):
+        """Only `*_test.sh` under tools/autopilot is a test.
+
+        If `deploy_watcher.sh` were classified as one it would never be
+        reverted, and every diff touching it would report that its tests
+        survived a mutation that never happened.
+        """
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("mutation_check", TOOL)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        production, tests, shell = module.classify(
+            [
+                "tools/autopilot/deploy_watcher.sh",
+                "tools/autopilot/lib/render_check.sh",
+                "tools/autopilot/deploy_inflight_test.sh",
+                "tests/test_app.py",
+            ]
+        )
+        assert shell == ["tools/autopilot/deploy_inflight_test.sh"]
+        assert tests == ["tests/test_app.py"]
+        assert production == [
+            "tools/autopilot/deploy_watcher.sh",
+            "tools/autopilot/lib/render_check.sh",
+        ]

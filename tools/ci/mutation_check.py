@@ -98,6 +98,27 @@ SourceReader = Callable[[str], str]
 # check is concerned: reverting it should break something.
 TEST_FILE = re.compile(r"^tests/test_[^/]+\.py$")
 
+# The other kind of test this repository has. Three shell harnesses cover the
+# deploy watcher -- the one part of the tree pytest does not reach -- and to
+# `classify()` they used to be production, so a diff that added five scenarios
+# to one of them was reported as "no test file was touched, so there is nothing
+# to re-run" (MUT-002 in #265, measured on #429). Every clause of that was
+# defensible against the tool's own definitions and the sentence was false
+# about the diff.
+#
+# Matched by shape rather than listed by name, so a fourth harness is covered
+# the day it is written; `deploy_watcher.sh` and `lib/*.sh` do not end in
+# `_test.sh` and stay production, which is what makes the revert still revert
+# them.
+SHELL_TEST_FILE = re.compile(r"^tools/autopilot/[^/]+_test\.sh$")
+
+# A scenario in those harnesses ends in `fail "<why>"`, and that string is the
+# closest thing they have to a test function's name: it is what the diff wrote
+# and what the harness prints when the scenario it belongs to goes red. Matched
+# up to the first shell expansion, because anything after one is not a literal
+# the output can be compared against.
+SHELL_ASSERTION = re.compile(r"\bfail\s+[\"']([^\"'$]{12,})")
+
 # Files whose reversion proves nothing about a test.
 DOC_SUFFIXES = (".md", ".txt", ".rst")
 
@@ -181,8 +202,12 @@ def _parse_name_status(raw: str) -> List[Tuple[str, str]]:
     return parsed
 
 
-def classify(paths: Sequence[str]) -> Tuple[List[str], List[str]]:
+def classify(paths: Sequence[str]) -> Tuple[List[str], List[str], List[str]]:
     """Split the diff's files into what is reverted and what is re-run.
+
+    Three lists, because this repository has two kinds of test and they are
+    re-run by different commands: pytest modules, shell harnesses, and
+    everything else, which is reverted.
 
     A file under `tests/` that is not itself a `test_*.py` module counts as
     production: `conftest.py`, `skip_guard.py` and the fixture modules are
@@ -190,14 +215,65 @@ def classify(paths: Sequence[str]) -> Tuple[List[str], List[str]]:
     """
     production: List[str] = []
     tests: List[str] = []
+    shell_tests: List[str] = []
     for path in paths:
         if TEST_FILE.match(path):
             tests.append(path)
+        elif SHELL_TEST_FILE.match(path):
+            shell_tests.append(path)
         elif path.endswith(DOC_SUFFIXES):
             continue
         else:
             production.append(path)
-    return production, tests
+    return production, tests, shell_tests
+
+
+def touched_assertions(diff: str) -> List[str]:
+    """The `fail "<why>"` messages this diff wrote into a shell harness.
+
+    The shell analogue of `touched_tests`, and it exists for the same reason:
+    a harness the diff touched holds forty other scenarios, and one of those
+    going red under the revert says nothing about whether the new one can fail.
+
+    Read from the diff's added lines rather than from the file. A harness is a
+    linear script with no structure to walk -- there is no `ast` here -- and
+    the added line *is* the assertion, which is why this needs no equivalent of
+    the enclosing-function problem `touched_tests` had to solve.
+    """
+    names: List[str] = []
+    for line in diff.splitlines():
+        if not line.startswith("+") or line.startswith("+++"):
+            continue
+        for message in SHELL_ASSERTION.findall(line[1:]):
+            text = message.strip()
+            if text and text not in names:
+                names.append(text)
+    return names
+
+
+def run_harness(path: str, worktree: Path) -> Tuple[int, str]:
+    """`bash <harness>` inside the reverted worktree; `(rc, output)`.
+
+    Run from the worktree's own directory so the harness's `SCRIPT_DIR`
+    (`BASH_SOURCE`) resolves to *that* copy of the watcher rather than to the
+    checkout this process was started in -- which is the whole point, and was
+    the one thing about this shape the ticket recorded as untried. Measured
+    2026-08-20 in a disposable worktree: 31.8 s for a clean pass, 6.4 s when a
+    scenario fails, because `fail` exits at the first one.
+    """
+    try:
+        result = subprocess.run(
+            ["bash", path],
+            cwd=str(worktree),
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        # Same rule as pytest failing to spawn: a harness that will not run is
+        # a probe that did not run, and must not exit through the ESCAPED code
+        # with no verdict line.
+        raise ToolingError(f"could not run {path}: {error}") from error
+    return result.returncode, _plain(result.stdout + result.stderr)
 
 
 def changed_lines(diff: str) -> List[Tuple[str, int, int]]:
@@ -325,7 +401,7 @@ def run(base: str, head: str, repo: Path) -> Tuple[str, str, int]:
     # is deleted and the old one restored. A deleted *test* file must not reach
     # pytest at all -- it does not exist at head, and pytest answers a missing
     # path with a usage error that parses as no tests at all.
-    production, tests = classify([path for _, path in status])
+    production, tests, shell_tests = classify([path for _, path in status])
     added = {path for kind, path in status if kind == "A"}
     # A test file the diff deleted must not reach pytest: it does not exist at
     # head, and pytest answers a missing path with a usage error that parses as
@@ -333,16 +409,18 @@ def run(base: str, head: str, repo: Path) -> Tuple[str, str, int]:
     # line quoting the usage error as if it were a pytest result.
     removed_tests = {path for kind, path in status if kind == "D"}
     tests = [path for path in tests if path not in removed_tests]
+    shell_tests = [path for path in shell_tests if path not in removed_tests]
 
     if not production:
         return "NOOP", f"no production hunks in {base}..{head}", 0
-    if not tests:
+    if not tests and not shell_tests:
         return (
             "WARN",
-            f"{len(production)} production file(s) changed and no test file was "
-            "touched, so there is nothing to re-run. This check does not decide "
-            "whether that is acceptable; it reports that the diff was not "
-            "verified by mutation.",
+            f"{len(production)} production file(s) changed and neither a pytest "
+            "module under tests/ nor a shell harness under tools/autopilot/ was "
+            "touched, so there is nothing this check knows how to re-run. It does "
+            "not decide whether that is acceptable; it reports that the diff was "
+            "not verified by mutation, and names what it looked for.",
             0,
         )
 
@@ -350,12 +428,20 @@ def run(base: str, head: str, repo: Path) -> Tuple[str, str, int]:
     # runs past the change and into whatever sits above it, so a test appended
     # under `test_price_after_discount` named that function too -- and an
     # unrelated neighbour going red then counted as the diff's own test.
-    test_diff = _git("diff", "-U0", f"{base}..{head}", "--", *tests, cwd=repo)
-
     def source_of(path: str) -> str:
         return _git("show", f"{head}:{path}", cwd=repo)
 
-    wanted = touched_tests(test_diff, source_of)
+    wanted: List[str] = []
+    if tests:
+        test_diff = _git("diff", "-U0", f"{base}..{head}", "--", *tests, cwd=repo)
+        wanted = touched_tests(test_diff, source_of)
+
+    wanted_shell: List[str] = []
+    if shell_tests:
+        shell_diff = _git(
+            "diff", "-U0", f"{base}..{head}", "--", *shell_tests, cwd=repo
+        )
+        wanted_shell = touched_assertions(shell_diff)
 
     # Everything below happens in a worktree this process owns.
     holder = Path(tempfile.mkdtemp(prefix="mutation-check."))
@@ -403,36 +489,24 @@ def run(base: str, head: str, repo: Path) -> Tuple[str, str, int]:
                 "that reverts nothing must never read as a test that survived"
             )
 
-        try:
-            result = subprocess.run(
-                [
-                    *pytest_command(),
-                    *tests,
-                    "-q",
-                    "--no-header",
-                    "--color=no",
-                    # Without this a single file that cannot be imported
-                    # *interrupts the whole session* -- pytest reports
-                    # `1 error` and runs nothing, in any file. Measured
-                    # 2026-08-19 on the first external diff this check saw
-                    # (#427): four test files touched, one of them new and
-                    # importing symbols the revert removes, and the verdict
-                    # rested entirely on that import while the other three
-                    # were never exercised at all.
-                    "--continue-on-collection-errors",
-                    "-p",
-                    "no:randomly",
-                ],
-                cwd=str(worktree),
-                capture_output=True,
-                text=True,
-            )
-        except OSError as error:
-            # A pytest that will not spawn is a probe that did not run. Without
-            # this the OSError escapes to the interpreter, which exits 1 -- the
-            # ESCAPED code -- and prints no verdict at all.
-            raise ToolingError(f"could not run pytest: {error}") from error
-        output = _plain(result.stdout + result.stderr)
+        output = ""
+        if tests:
+            result = _run_pytest(tests, worktree)
+            output = _plain(result.stdout + result.stderr)
+
+        # A harness costs 31.8 s when it passes (measured 2026-08-20), so it is
+        # skipped once pytest has already shown the diff to be load bearing:
+        # one red test is enough, which is the rule the pytest path above
+        # already follows. A shell-only diff -- #429, #431 -- reaches this with
+        # no pytest verdict at all, which is the case MUT-002 is about.
+        shell_runs: List[Tuple[str, int, str]] = []
+        already_caught = bool(
+            tests and _pytest_verdict(output, wanted, production, tests)[0] == "CAUGHT"
+        )
+        if shell_tests and not already_caught:
+            for harness in shell_tests:
+                code, harness_output = run_harness(harness, worktree)
+                shell_runs.append((harness, code, harness_output))
     finally:
         subprocess.run(
             ["git", "worktree", "remove", "--force", str(worktree)],
@@ -441,6 +515,54 @@ def run(base: str, head: str, repo: Path) -> Tuple[str, str, int]:
         )
         shutil.rmtree(holder, ignore_errors=True)
 
+    return _combine(output, wanted, production, tests, shell_runs, wanted_shell)
+
+
+def _run_pytest(tests: Sequence[str], worktree: Path):
+    """The re-run itself, lifted so `run()` can skip it when there is none."""
+    try:
+        return subprocess.run(
+            [
+                *pytest_command(),
+                *tests,
+                "-q",
+                "--no-header",
+                "--color=no",
+                # Without this a single file that cannot be imported
+                # *interrupts the whole session* -- pytest reports
+                # `1 error` and runs nothing, in any file. Measured
+                # 2026-08-19 on the first external diff this check saw
+                # (#427): four test files touched, one of them new and
+                # importing symbols the revert removes, and the verdict
+                # rested entirely on that import while the other three
+                # were never exercised at all.
+                "--continue-on-collection-errors",
+                "-p",
+                "no:randomly",
+            ],
+            cwd=str(worktree),
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        # A pytest that will not spawn is a probe that did not run. Without
+        # this the OSError escapes to the interpreter, which exits 1 -- the
+        # ESCAPED code -- and prints no verdict at all.
+        raise ToolingError(f"could not run pytest: {error}") from error
+
+
+def _pytest_verdict(
+    output: str,
+    wanted: Sequence[str],
+    production: Sequence[str],
+    tests: Sequence[str],
+) -> Tuple[str, str, int]:
+    """The verdict the pytest half reaches, on its own.
+
+    Lifted out of `run()` unchanged so that "did pytest already catch this"
+    has exactly one answer. A second predicate saying when a run counts as
+    CAUGHT is the shape this repository keeps finding drifted.
+    """
     summary = _pytest_summary(output)
     failed, collect_errors = _failed_nodeids(output)
 
@@ -495,6 +617,112 @@ def run(base: str, head: str, repo: Path) -> Tuple[str, str, int]:
         "'Mutation-Waiver: <reason>' trailer on any commit in the branch.",
         1,
     )
+
+
+def _harness_failure(output: str) -> str:
+    """The `FAIL:` line a harness printed, or "".
+
+    One line, because `fail` exits: a harness stops at its first red scenario,
+    which is exactly why the caller has to know whether that scenario is the
+    diff's own.
+    """
+    for line in output.splitlines():
+        if line.startswith("FAIL:"):
+            return line[len("FAIL:") :].strip()
+    return ""
+
+
+def _shell_verdict(
+    shell_runs: Sequence[Tuple[str, int, str]], wanted_shell: Sequence[str]
+) -> Tuple[str, str]:
+    """`(kind, message)` for the harnesses -- caught, escaped or unproven.
+
+    `unproven` is the state a shell harness has and pytest does not, and it is
+    the reason this is not simply "did it exit non-zero". `fail` exits at the
+    first red scenario, so a harness that stops on somebody else's scenario
+    never reaches the diff's own: that is neither a catch nor an escape, and
+    reporting it as either would be this check's own defect class -- a probe
+    that did not run, read as an answer.
+    """
+    caught: List[str] = []
+    unproven: List[str] = []
+    green: List[str] = []
+    for harness, code, output in shell_runs:
+        if code == 0:
+            green.append(harness)
+            continue
+        failure = _harness_failure(output)
+        if not wanted_shell:
+            caught.append(
+                f"{harness} went red ({failure or 'no FAIL line'}); no assertion "
+                "could be named from the diff, so this fell back to 'any "
+                "scenario in the touched harness'"
+            )
+        elif any(message in failure for message in wanted_shell):
+            caught.append(
+                f"{harness} went red on a scenario this diff wrote: {failure}"
+            )
+        else:
+            unproven.append(
+                f"{harness} stopped at a scenario this diff did not write "
+                f"({failure or 'no FAIL line'}), so the "
+                f"{len(wanted_shell)} it did write never ran"
+            )
+    if caught:
+        return "caught", "; ".join(caught)
+    if unproven:
+        return "unproven", "; ".join(unproven)
+    if green and wanted_shell:
+        return (
+            "escaped",
+            f"every scenario in {', '.join(green)} stayed green with the diff "
+            f"removed, including the {len(wanted_shell)} it wrote",
+        )
+    if green:
+        return "escaped", f"every scenario in {', '.join(green)} stayed green"
+    return "unproven", "no harness was run"
+
+
+def _combine(
+    output: str,
+    wanted: Sequence[str],
+    production: Sequence[str],
+    tests: Sequence[str],
+    shell_runs: Sequence[Tuple[str, int, str]],
+    wanted_shell: Sequence[str],
+) -> Tuple[str, str, int]:
+    """One verdict from the two kinds of test a diff can touch.
+
+    A catch on either side is a catch: the question is whether *any* test this
+    diff wrote can fail without it. An `unproven` harness is the one thing that
+    can only weaken -- it turns an otherwise-ESCAPED verdict into a WARN,
+    because "the diff's tests were shown not to depend on it" is a claim, and a
+    harness that stopped early did not establish it.
+    """
+    shell_kind, shell_message = (
+        _shell_verdict(shell_runs, wanted_shell) if shell_runs else ("", "")
+    )
+    if shell_kind == "caught":
+        return "CAUGHT", shell_message, 0
+
+    if tests:
+        verdict, message, code = _pytest_verdict(output, wanted, production, tests)
+        if verdict == "CAUGHT" or not shell_kind:
+            return verdict, message, code
+        if shell_kind == "unproven":
+            return "WARN", f"{message} And {shell_message}.", 0
+        return verdict, f"{message} And {shell_message}.", code
+
+    if shell_kind == "escaped":
+        return (
+            "ESCAPED",
+            f"Removing {', '.join(production[:6])} left the harness green: "
+            f"{shell_message}. If that is right -- a refactor, a revert, a "
+            "scenario written for behaviour that already existed -- say so with "
+            "a 'Mutation-Waiver: <reason>' trailer on any commit in the branch.",
+            1,
+        )
+    return "WARN", f"the diff was not verified by mutation: {shell_message}", 0
 
 
 def waiver_in(base: str, head: str, repo: Path) -> Optional[str]:
