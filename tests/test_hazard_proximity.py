@@ -245,9 +245,37 @@ class TestGrouping:
         assert nearest["kind"] == "cement_works"
         assert 150 <= nearest["bearing_deg"] <= 165
 
-    def test_a_facility_beyond_the_radius_is_not_reported(self, app, real_fetch):
-        """The block claims to have searched `SEARCH_RADIUS_M` and no further."""
-        measurement = _measure(app, real_fetch)
+    def test_a_qualifying_facility_past_the_radius_is_not_reported(
+        self, app, real_fetch
+    ):
+        """The block claims to have searched `SEARCH_RADIUS_M` and no further.
+
+        Overpass filters by radius itself, so this cannot arrive from a fresh
+        query -- it arrives from the cache, which is keyed on the coordinate
+        rounded to four decimals, so a neighbouring point's answer reaches a
+        little further than this one's own radius. The fixture holds nothing
+        qualifying past 6 km, so the element is synthetic on purpose: without
+        it the guard is untestable and the assertion is decoration.
+        """
+        far = {
+            "type": "way",
+            "id": 999_000_001,
+            "center": {"lat": XIVARES[0] + 0.063, "lon": XIVARES[1]},
+            "tags": {"landuse": "landfill", "name": "Vertedero Lejano"},
+        }
+        near = {
+            "type": "way",
+            "id": 999_000_002,
+            "center": {"lat": XIVARES[0] + 0.045, "lon": XIVARES[1]},
+            "tags": {"landuse": "landfill", "name": "Vertedero Cercano"},
+        }
+        service = HazardService(
+            enrichment_service=_FakeEnrichment(elements=[far, near])
+        )
+        measurement = service.measure(*XIVARES)
+        names = [item["name"] for item in measurement["items"]]
+        assert "Vertedero Cercano" in names
+        assert "Vertedero Lejano" not in names
         for item in measurement["items"]:
             assert item["origin_distance_m"] <= hazard_rules.SEARCH_RADIUS_M
 
