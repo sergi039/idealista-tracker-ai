@@ -128,7 +128,24 @@ class PropertyEnrichmentService:
         With `commit=False` (the Enrich flow) everything rides the caller's
         transaction, so a failed step must not roll back -- that would
         discard the caller's own pending work.
+
+        **The pass runs on a clock, and it opens one here rather than trusting
+        its caller to** (#434 review, reproduced 2026-08-20). `enrich_property`
+        opens a budget for the whole run, but ingestion calls this method
+        directly and had none at all: with all three Overpass instances
+        connecting and then saying nothing, one listing cost **640 s** -- a
+        120 s coastline read, eight 60 s requests and eight 5 s gate waits --
+        bounded only by each walk's own 210 s ceiling, which three independent
+        walks do not compose into a run budget. Opening it here gives every
+        caller the ceiling, including the free backfills. Nested inside
+        `enrich_property`'s it takes the *earlier* deadline
+        (`utils/http.lookup_budget`), so no caller gains time by having two.
         """
+        with lookup_budget(lookup_budget_seconds()):
+            self._free_sources(prop, commit=commit, use_ai=use_ai)
+
+    def _free_sources(self, prop: Property, *, commit: bool, use_ai: bool) -> None:
+        """The steps themselves, inside the budget `enrich_free_sources` opens."""
         try:
             self.enrichment_service.enrich_osm_amenities(prop, commit=commit)
         except Exception as e:
