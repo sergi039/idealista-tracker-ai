@@ -65,8 +65,21 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# Sources that really are a portal publishing a pin for its own advert. Written
+# by `services/fotocasa_import.py` and `utils/backfill_portal_coordinate.py`;
+# anything else in that field came from somewhere that is not the source site.
+PORTAL_PIN_SOURCES = frozenset(
+    {"fotocasa", "fotocasa payload", "idealista map pin", "portal"}
+)
+
+
 def _describe(prop) -> str:
-    from services.coordinate_quality import manual_coordinate, normalize_accuracy
+    from services.coordinate_quality import (
+        improves_on,
+        manual_coordinate,
+        normalize_accuracy,
+        portal_coordinate,
+    )
 
     hand = manual_coordinate(prop)
     lines = [
@@ -82,7 +95,50 @@ def _describe(prop) -> str:
             f"  geocode said  {record.get('accuracy')!r} for {record.get('query')!r}"
         )
     if hand is None:
-        lines.append("  hand-set      no -- a refresh may overwrite this row")
+        # "No hand-set block" is not the same fact as "a refresh will overwrite
+        # this row", and printing the second on the strength of the first is a
+        # claim about a guard nothing here consulted. Measured on production
+        # 2026-08-20, it was false for exactly the two rows this tool exists
+        # for: 161 and 792 carry a portal pin, and `_apply_geocode_outcome`
+        # refuses to trade a `precise` for anything a geocode can answer, so a
+        # refresh leaves them alone. So say which guard applies, or that none
+        # does.
+        pin = portal_coordinate(prop)
+        if pin is None:
+            lines.append("  hand-set      no -- nothing defends this row")
+            lines.append(
+                "  EXPOSED       a refresh would write whatever the geocoder "
+                "answers over this coordinate and its accuracy"
+            )
+        else:
+            _, _, pin_source = pin
+            defended = not improves_on("precise", prop.location_accuracy)
+            lines.append(
+                f"  hand-set      no -- but a {pin_source!r} pin is on the row"
+            )
+            if defended:
+                lines.append(
+                    "  defended by   enrichment.import.coordinate (#393): no "
+                    "geocode improves on this accuracy, so a refresh keeps it"
+                )
+            else:
+                lines.append(
+                    "  EXPOSED       the pin is kept only against a geocode that "
+                    "is no better; a `precise` answer would replace it"
+                )
+            if pin_source not in PORTAL_PIN_SOURCES:
+                # The field means "the coordinate the source portal published".
+                # A value from anywhere else works -- which is exactly why it
+                # is worth saying out loud rather than leaving to be discovered
+                # by whoever next reads the row as a portal's own claim.
+                lines.append(
+                    f"  MISFILED      {pin_source!r} is not a portal. That field "
+                    "means what the source site published; a conclusion stored "
+                    "there is indistinguishable from one. Move it here with "
+                    f"--lat {prop.location_lat} --lon {prop.location_lon} "
+                    f"--accuracy {normalize_accuracy(prop.location_accuracy)} "
+                    "--source <where it came from> --note '<what was checked>'"
+                )
     else:
         lines.append(
             f"  hand-set      {hand.source} at {hand.set_at}: {hand.note[:60]}"

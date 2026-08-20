@@ -930,3 +930,83 @@ class TestTheToolCanJustLook:
 
             assert code == 0
             assert "hand-set      no" in said
+
+
+class TestTheToolNamesTheGuardThatActuallyApplies:
+    """ "No hand-set block" and "a refresh will overwrite this row" are two
+    different facts, and the tool printed the second on the strength of the
+    first.
+
+    Measured on production 2026-08-20, the claim was false for exactly the two
+    rows this tool exists for. 161 and 792 carry an `enrichment["import"]
+    ["coordinate"]`, so `_apply_geocode_outcome` re-reads it under the lock and
+    `improves_on` refuses to trade a `precise` for anything a geocode can
+    answer -- a refresh leaves them alone. The report said they were about to
+    be overwritten.
+
+    It is the defect this whole change is about, in the change's own reporting:
+    a consequence asserted from a guard that was never consulted.
+    """
+
+    def _describe(self, prop):
+        from utils.set_property_location import _describe
+
+        return _describe(prop)
+
+    def _with_pin(self, source, accuracy="precise"):
+        from services.coordinate_quality import record_portal_coordinate
+
+        row = _row(location_accuracy=accuracy)
+        row.enrichment = record_portal_coordinate(
+            row.enrichment, source=source, lat=HAND_LAT, lon=HAND_LON
+        )
+        db.session.commit()
+        return row
+
+    def test_a_row_with_nothing_at_all_is_named_exposed(self, app):
+        with app.app_context():
+            said = self._describe(_row())
+
+            assert "nothing defends this row" in said
+            assert "EXPOSED" in said
+
+    def test_a_precise_row_behind_a_portal_pin_is_not_called_exposed(self, app):
+        with app.app_context():
+            said = self._describe(self._with_pin("fotocasa"))
+
+            assert "EXPOSED" not in said
+            assert "defended by" in said
+            assert "MISFILED" not in said
+
+    def test_an_approximate_row_behind_a_pin_is_still_exposed_to_a_precise_answer(
+        self, app
+    ):
+        """The pin is kept only against a geocode that is no better."""
+        with app.app_context():
+            said = self._describe(self._with_pin("fotocasa", accuracy="approximate"))
+
+            assert "EXPOSED" in said
+            assert "defended by" not in said
+
+    def test_a_pin_whose_source_is_not_a_portal_is_named(self, app):
+        """The production state of 161 and 792: a cadastre conclusion stored in
+        the field meaning "what the source site published"."""
+        with app.app_context():
+            said = self._describe(self._with_pin("cadastre_parcel"))
+
+            assert "MISFILED" in said
+            assert "cadastre_parcel" in said
+            # It still works, so the row is genuinely defended -- both facts.
+            assert "defended by" in said
+
+    def test_a_hand_set_row_says_none_of_this(self, app):
+        with app.app_context():
+            row = _row()
+            set_location_by_hand(
+                row, lat=HAND_LAT, lon=HAND_LON, accuracy="precise", note=NOTE
+            )
+
+            said = self._describe(row)
+
+            assert "EXPOSED" not in said and "MISFILED" not in said
+            assert "hand-set" in said and NOTE[:20] in said
