@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 import re
 import uuid
 from datetime import date, datetime, time, timezone
@@ -8,10 +9,12 @@ import hashlib
 
 from flask import (
     Blueprint,
+    abort,
     current_app,
     render_template,
     request,
     redirect,
+    send_from_directory,
     session,
     url_for,
     flash,
@@ -34,6 +37,7 @@ from services.hazard_service import (
     complete_expression as hazard_complete_expression,
     read_verdict as hazard_verdict,
 )
+from services import attachments as attachments_service
 from services import owner_review
 from services.listing_verification import (
     read_verdict as listing_verdict,
@@ -50,6 +54,7 @@ from services.profile_selection import (
     resolve_profile_selection,
 )
 from utils.i18n import t
+from utils.listing_filters import NON_FILTERS, FilterArgs, rebuilt_from
 from utils.listing_search import interpret_search, listing_search_clause
 from utils.listing_source import source_filter_clause
 from utils.listing_status_scope import resolve_hide_removed
@@ -492,25 +497,18 @@ def _map_focus_link(profile_id, keep_filters=True):
     is replaced; with `keep_filters=False` the narrowing filters go too, which
     is the only honest offer when one of *them* is what hid the listing.
     """
-    dropped = {"profile_id"}
-    if not keep_filters:
-        dropped |= {
-            "category",
-            "subtype",
-            "municipality",
-            "search",
-            "inv_metr",
-            "sea_view",
-            "favorites",
-        }
-    args = {
-        key: (values[0] if len(values) == 1 else values)
-        for key, values in request.args.lists()
-        # `url_for` reads `endpoint` and every `_`-prefixed name as its own
-        # argument, so a query string carrying one would raise here instead of
-        # travelling. They are not filters; dropping them costs nothing.
-        if key not in dropped and key != "endpoint" and not key.startswith("_")
-    }
+    # Clearing is expressed as "keep the non-filters", never as a list of the
+    # filters to remove. The list version named seven and had gone stale by
+    # four -- `source`, `advertiser`, `verdict`, `action` -- so the one link
+    # whose entire promise is that clearing works re-issued the filter that had
+    # hidden the listing and landed on the identical notice (#445). Inverted,
+    # a filter added tomorrow is unknown here and therefore dropped, which is
+    # the right answer without anyone maintaining anything.
+    args = rebuilt_from(
+        request.args,
+        drop={"profile_id"},
+        keep=None if keep_filters else NON_FILTERS - {"profile_id"},
+    )
     return url_for("main.map_view", profile_id=profile_id, **args)
 
 
@@ -1647,6 +1645,9 @@ def property_detail(property_id):
             # never asks for this.
             activity_timeline=owner_review.timeline(prop),
             activity_channels=owner_review.CHANNELS,
+            # Grouped by the entry they arrived with, in one query rather than
+            # one per timeline row.
+            attachments_by_entry=attachments_service.for_property(prop),
             sea_view_verdict=sea_view_service.read_verdict(prop),
             # One row, and only on this page: the list would run it per row.
             # It is evidence about the coordinate, next to the coordinate, and
@@ -2893,11 +2894,11 @@ def add_activity(property_id):
 
     try:
         if kind == owner_review_service.KIND_NOTE:
-            owner_review_service.add_note(
+            entry = owner_review_service.add_note(
                 prop, body=request.form.get("body"), happened_at=happened_at
             )
         elif kind == owner_review_service.KIND_CONTACT:
-            owner_review_service.add_contact(
+            entry = owner_review_service.add_contact(
                 prop,
                 channel=request.form.get("channel"),
                 counterpart=request.form.get("counterpart"),
@@ -2911,6 +2912,21 @@ def add_activity(property_id):
     except owner_review_service.ReviewError as exc:
         flash(str(exc), "error")
         return redirect(url_for("main.property_detail", property_id=property_id))
+
+    # The file rides on the entry it arrived with -- the ficha catastral
+    # belongs to the WhatsApp exchange that delivered it, not to the listing in
+    # general. Stored AFTER the entry exists, because the row it links to has
+    # to be there first; a refused file therefore leaves the note behind rather
+    # than losing what was typed with it.
+    upload = request.files.get("attachment")
+    if upload and upload.filename:
+        from services import attachments as attachments_service
+
+        try:
+            attachments_service.attach(prop, upload, activity=entry)
+        except attachments_service.AttachmentError as exc:
+            flash(f"Recorded, but the file was refused: {exc}", "error")
+            return redirect(url_for("main.property_detail", property_id=property_id))
 
     flash("Recorded.", "success")
     return redirect(url_for("main.property_detail", property_id=property_id))
@@ -2959,6 +2975,85 @@ def edit_activity(property_id, entry_id):
     except owner_review_service.ReviewError as exc:
         flash(str(exc), "error")
 
+    return redirect(url_for("main.property_detail", property_id=property_id))
+
+
+@main_bp.route(
+    "/properties/<int:property_id>/attachments/<int:attachment_id>", methods=["GET"]
+)
+@limiter.limit("10 per minute")
+def download_attachment(property_id, attachment_id):
+    """Serve one attachment, addressed by id and never by path.
+
+    The client names a row, not a file: the path comes from the database and
+    was written by us from a hash, so there is nothing here for a `..` to act
+    on. `send_from_directory` is still the primitive rather than `open()` --
+    it is built on Werkzeug's `safe_join` and it handles conditional and range
+    requests, which is what makes a 20 MB PDF resumable instead of restarting.
+
+    Three things about the response are the security of it:
+
+    * the `mimetype` is the **stored, sniffed** type. Left to Werkzeug it
+      would be guessed from `download_name`, which is the name the *client*
+      sent -- so a PDF uploaded as `photo.html` would be served as HTML;
+    * `X-Content-Type-Options: nosniff`, so a browser cannot decide for itself
+      that our declared type is wrong;
+    * `as_attachment` unless the sniffed type is one of the raster formats a
+      browser actually draws. SVG cannot arrive at all, so the question here
+      is never "is this payload safe" -- it is "is this one of five image
+      formats", which is a question with an answer.
+    """
+    from models import PropertyAttachment
+    from services import attachments as attachments_service
+
+    record = PropertyAttachment.query.filter_by(
+        id=attachment_id, property_id=property_id, deleted_at=None
+    ).first_or_404()
+
+    root = attachments_service.attachments_dir()
+    if not os.path.exists(os.path.join(root, record.storage_path)):
+        # The write-then-commit order means this should be impossible. If it
+        # happens anyway -- a restore from a database dump newer than the file
+        # backup -- it must be loud rather than a plain 404, which reads as
+        # "no such attachment".
+        logger.error(
+            "attachment %s has a row but no bytes at %s",
+            record.id,
+            record.storage_path,
+        )
+        abort(410)
+
+    response = send_from_directory(
+        root,
+        record.storage_path,
+        mimetype=record.content_type,
+        as_attachment=not attachments_service.may_render_inline(record.content_type),
+        download_name=record.original_filename or f"attachment-{record.id}",
+        conditional=True,
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+@main_bp.route(
+    "/properties/<int:property_id>/attachments/<int:attachment_id>/delete",
+    methods=["POST"],
+)
+def delete_attachment(property_id, attachment_id):
+    """Take an attachment off the page. Soft, like everything else here.
+
+    The bytes stay until `utils/sweep_attachments.py` finds that no live row
+    references that hash -- because one file can be linked from several rows,
+    and because a document somebody removed by mistake is not recomputable.
+    """
+    from models import PropertyAttachment
+
+    record = PropertyAttachment.query.filter_by(
+        id=attachment_id, property_id=property_id
+    ).first_or_404()
+    record.deleted_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.session.commit()
+    flash("Removed.", "success")
     return redirect(url_for("main.property_detail", property_id=property_id))
 
 
@@ -3297,23 +3392,35 @@ def map_view():
             Property.location_lon.isnot(None),
         )
 
-        category_filter = request.args.get("category", "")
-        subtype_filter = request.args.get("subtype", "")
-        municipality_filter = request.args.get("municipality", "")
-        source_filter = request.args.get("source", "")
-        advertiser_filter = request.args.get("advertiser", "")
-        verdict_filter = request.args.get("verdict", "")
-        action_filter = request.args.get("action", "")
+        # Read through `FilterArgs` rather than straight off `request.args`:
+        # this page has to hand its filters on to the List View link, and the
+        # hand-written list that did so went stale twice in one day (#445 --
+        # utils/listing_filters.py records which, and why naming the missing
+        # ones is the fix that keeps failing). What is read here is what that
+        # link carries; there is no second list to keep in step.
+        filters = FilterArgs(request.args)
+        category_filter = filters.get("category")
+        subtype_filter = filters.get("subtype")
+        municipality_filter = filters.get("municipality")
+        source_filter = filters.get("source")
+        advertiser_filter = filters.get("advertiser")
+        verdict_filter = filters.get("verdict")
+        action_filter = filters.get("action")
         # One date for the whole request. `overdue` is a due date compared
         # against today, and the badge, the filter, the count beside its option
         # and both serializers have to compare against the *same* today or they
         # disagree for the few minutes a day nobody is watching
         # (services/owner_review.py).
         review_today = owner_review.today()
-        search_query = request.args.get("search", "")
-        investment_metrics_filter = request.args.get("inv_metr", "")
-        favorites_filter = request.args.get("favorites", "") == "on"
-        sea_view_filter = request.args.get("sea_view", "")
+        search_query = filters.get("search")
+        investment_metrics_filter = filters.get("inv_metr")
+        favorites_filter = filters.flag("favorites")
+        sea_view_filter = filters.get("sea_view")
+        # #445. This page ignored `measured` while /properties applied it, so
+        # pressing Map on a narrowed list widened it again and said nothing:
+        # measured on production 2026-08-20, the list found 72 listings and the
+        # map plotted 470.
+        measured_filter = filters.get("measured")
 
         if category_filter:
             if category_filter == UNCLASSIFIED_FILTER:
@@ -3364,6 +3471,10 @@ def map_view():
             )
         if sea_view_filter:
             query = _filter_by_sea_view(query, Property, sea_view_filter)
+        # Same helper and same position as /properties, so one URL cannot
+        # describe two sets across the two surfaces (#445).
+        if measured_filter:
+            query = _filter_by_measured(query, Property, measured_filter)
 
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
@@ -3451,54 +3562,38 @@ def map_view():
                 )
 
         # "List View" has to land on the set this map is drawing. It carried
-        # `profile_id` alone, so every other filter was dropped on the way
-        # back: a map of the 70 listings sold by their owners had a button
-        # that opened a list of 470, with nothing saying the set had changed.
-        # That is #435's defect in the seam between the two surfaces rather
-        # than inside one of them -- the three links that lead *to* this page
-        # have carried the full set all along.
+        # `profile_id` alone until #444, so a map of the 52 listings sold by
+        # their owners had a button that opened a list of 144.
         #
-        # Built here, beside the filters themselves, rather than in the
-        # template: a filter added to this route and forgotten in the link is
-        # then one screenful away instead of one file away. The keys are in
-        # `current_filters`' order for the same reason /properties keeps them
-        # that way.
+        # It is no longer a list of keys. #444 wrote one, and it was stale
+        # within the hour -- `verdict` and `action` (#430) had reached
+        # /properties that same morning -- which is why the filters are now
+        # read through `FilterArgs` above and handed straight back here. What
+        # this page reads is what this link carries, and there is nothing to
+        # keep in step (utils/listing_filters.py).
         #
-        # Two of them are not simply copied from the request, and both would
-        # be wrong if they were:
+        # `hide_removed` is the one key that is *not* the record of a read, and
+        # it is stated rather than copied: the map excludes delisted listings
+        # unconditionally (the `notin_` above) whatever the caller asked, so
+        # 'on' is what this map is really showing, and reading the parameter
+        # would send the reader to a list holding rows the map refused to plot.
+        # Stating it also follows `utils/listing_status_scope.py` (#439) -- a
+        # link should say what it means rather than rely on the reading at the
+        # far end. Note what it is no longer: before #439 the value was load
+        # bearing, because an absent `hide_removed` beside any other filter
+        # read as an unticked box and widened the list. That mechanism is gone,
+        # and measured today the far end agrees either way. Keep the statement;
+        # do not restore the old reasoning for it.
         #
-        # * `hide_removed` is not read here at all. The map excludes delisted
-        #   listings unconditionally (the `notin_` above), whatever the caller
-        #   asked for, so 'on' is what this map is actually showing, and
-        #   reading the parameter would send the reader to a list holding rows
-        #   the map refused to plot.
-        #
-        #   It is *stated* rather than left absent for the reason
-        #   `utils/listing_status_scope.py` gives (#439, merged the same day
-        #   as this): a link should say what it means instead of relying on
-        #   the reading at the far end, which is why the Export CSV link
-        #   spells out `on` and `off` too. Note what this is no longer: until
-        #   #439 the value was load bearing, because an absent `hide_removed`
-        #   alongside any other filter read as an unticked box and widened the
-        #   list. That mechanism is gone -- a cross-page link like this one
-        #   carries neither form marker and now gets the default, which is
-        #   `on` -- so measured today the far end agrees either way. Keep the
-        #   statement; do not restore the old reasoning for it.
-        # * `measured` is absent on purpose. This page never applied it, and a
-        #   link that carries a filter its origin did not apply would narrow
-        #   the list below the map it came from -- an absence of filtering
-        #   rendered as filtering.
+        # `measured` used to be excluded here, deliberately, because this page
+        # did not apply it -- and a link carrying a filter its origin ignored
+        # opens a list narrower than the map it came from. #445 removed the
+        # premise by applying it above, so it now rides the link like any other
+        # filter. If a future filter is again read by /properties and not by
+        # this page, the answer is the same as it was: do not carry it.
         list_view_args = {
             "profile_id": list(profile_selection.link_values),
-            "category": category_filter or None,
-            "subtype": subtype_filter or None,
-            "municipality": municipality_filter or None,
-            "source": source_filter or None,
-            "advertiser": advertiser_filter or None,
-            "search": search_query or None,
-            "inv_metr": investment_metrics_filter or None,
-            "sea_view": sea_view_filter or None,
-            "favorites": "on" if favorites_filter else None,
+            **filters.link_args(),
             "hide_removed": "on",
         }
 

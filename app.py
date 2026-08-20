@@ -363,6 +363,10 @@ def create_app(testing: bool = False):
 
     app.jinja_env.globals["owner_review_was_edited"] = owner_review_was_edited
 
+    from services.attachments import human_size as attachment_size
+
+    app.jinja_env.globals["attachment_size"] = attachment_size
+
     # #379: how much of the enabled weight a score rests on, read off the
     # stored payload (derived for rows scored before it was recorded). The
     # list and the detail page show it; the score itself never contains it.

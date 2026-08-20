@@ -359,6 +359,18 @@ class Config:
     # Paths
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))
+    # Attached documents and photos (#430). Under DATA_DIR because that is the
+    # one directory docker-compose bind-mounts, so a file written here survives
+    # the `COPY . .` rebuild that takes the image -- and it is already covered
+    # by the `data/*` line in .gitignore, so nothing here is ever committed.
+    ATTACHMENTS_DIR = os.environ.get(
+        "ATTACHMENTS_DIR", os.path.join(DATA_DIR, "attachments")
+    )
+    # The whole request body. Werkzeug refuses past this with 413 rather than
+    # buffering it, which is the only place a limit can be applied before the
+    # bytes arrive; the per-file cap in services/attachments.py is counted as
+    # they stream, because this one cannot bound one part of a multipart body.
+    MAX_CONTENT_LENGTH = int(os.environ.get("MAX_CONTENT_LENGTH", 32 * 1024 * 1024))
     LAST_SEEN_UID_PATH = os.environ.get(
         "LAST_SEEN_UID_PATH", os.path.join(DATA_DIR, ".last_seen_uid")
     )
