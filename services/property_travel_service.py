@@ -66,6 +66,14 @@ TRAVEL_STATE_APPROXIMATE_ORIGIN = "approximate_origin"
 # geocode, which is what the Enrich button does first.
 TRAVEL_STATE_NOT_LOCATED = "not_located"
 
+# What produced a duration. Stored on the run so a row can say which engine
+# measured it: OSRM is measurably slower than Google on motorway runs (+26% to
+# +34% over five airport pairs, services/osrm_routing.py), so a table holding
+# both compares two things -- and until this was recorded, nothing on the page
+# or in the JSON could tell them apart.
+ENGINE_OSRM = "osrm"
+ENGINE_GOOGLE = "google_distance_matrix"
+
 # Bumped from v1 with #98: v1 entries can hold an all-None distance list
 # produced by a refused request, which would keep serving an empty result for
 # a week after the API is fixed.
@@ -266,6 +274,12 @@ class DistanceResult:
     duration_s: Optional[int] = None
     failure: Optional[GoogleApiFailure] = None
     estimated: bool = False
+    # Which engine produced this, recorded rather than inferred from the
+    # configuration at read time: a row measured last month was measured by
+    # whatever was configured *then*, and nothing about the row says so
+    # otherwise. Set on refusals too -- "OSRM was asked and would not answer"
+    # is as much a fact about the row as a duration is.
+    engine: Optional[str] = None
 
     @property
     def resolved(self) -> bool:
@@ -283,6 +297,7 @@ class _RunTally:
     unavailable: int = 0
     errors: Dict[str, int] = field(default_factory=dict)
     details: Dict[str, str] = field(default_factory=dict)
+    engines: set = field(default_factory=set)
 
     def record_failure(self, failure: GoogleApiFailure) -> None:
         self.total += 1
@@ -320,6 +335,18 @@ class _RunTally:
                 "unavailable": self.unavailable,
             },
             "errors": dict(self.errors),
+            # Absent when no routing call was made at all -- every target
+            # failed at the place-resolution stage, so claiming an engine
+            # would name one that never ran. Absent on the rows measured
+            # before 2026-08-20 too, which is what tells them apart from the
+            # ones measured since.
+            **(
+                {"routing_engine": sorted(self.engines)[0]}
+                if len(self.engines) == 1
+                else {"routing_engine": sorted(self.engines)}
+                if self.engines
+                else {}
+            ),
         }
 
     def error_report(self) -> str:
@@ -585,6 +612,12 @@ class PropertyTravelService:
             if not group:
                 continue
             results = self._get_distances(origin_lat, origin_lon, group, mode=mode)
+            for res in results:
+                # Collected from the results rather than read off the config:
+                # what a row records has to be what actually answered it, and
+                # the configuration can change between a run and a reading.
+                if res.engine:
+                    tally.engines.add(res.engine)
             for entry, res in zip(group, results):
                 key = entry["key"]
                 if key in beach_entries:
@@ -1287,7 +1320,13 @@ class PropertyTravelService:
             return []
 
         mode = (mode or "driving").lower()
-        estimated = not self.google_maps_key
+        # A haversine guess is the last resort, and "last" has to mean it:
+        # until 2026-08-20 this read `not self.google_maps_key` alone, so a
+        # deployment with a routing engine and no Google key -- which is the
+        # end state the engine exists to reach -- would have quietly served
+        # straight-line estimates instead of routing. Found by the test that
+        # walks the whole path rather than the pieces.
+        estimated = not self.google_maps_key and not osrm_routing.is_enabled()
 
         dest_sig = "|".join(
             f"{d.get('lat')},{d.get('lon')}:{mode}" for d in destinations
@@ -1439,11 +1478,15 @@ class PropertyTravelService:
                 (lat, lon), _parse_destinations(destinations), mode=mode
             )
             if failure is not None:
-                return [DistanceResult(failure=failure) for _ in destinations]
+                return [
+                    DistanceResult(failure=failure, engine=ENGINE_OSRM)
+                    for _ in destinations
+                ]
             return [
                 DistanceResult(
                     distance_m=leg.distance_m,
                     duration_s=leg.duration_s,
+                    engine=ENGINE_OSRM,
                 )
                 for leg in (legs or [])
             ]
@@ -1462,12 +1505,18 @@ class PropertyTravelService:
         except Exception as e:
             failure = failure_from_exception(e)
             logger.warning("Distance matrix failed: %s", failure.describe())
-            return [DistanceResult(failure=failure) for _ in destinations]
+            return [
+                DistanceResult(failure=failure, engine=ENGINE_GOOGLE)
+                for _ in destinations
+            ]
 
         payload, failure = read_api_payload(response)
         if failure is not None:
             logger.warning("Distance matrix refused: %s", failure.describe())
-            return [DistanceResult(failure=failure) for _ in destinations]
+            return [
+                DistanceResult(failure=failure, engine=ENGINE_GOOGLE)
+                for _ in destinations
+            ]
 
         rows = payload.get("rows")
         if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
@@ -1476,7 +1525,10 @@ class PropertyTravelService:
                 message="no rows in Distance Matrix reply",
             )
             logger.warning("Distance matrix malformed: %s", failure.describe())
-            return [DistanceResult(failure=failure) for _ in destinations]
+            return [
+                DistanceResult(failure=failure, engine=ENGINE_GOOGLE)
+                for _ in destinations
+            ]
 
         elements = rows[0].get("elements")
         if not isinstance(elements, list) or not elements:
@@ -1485,21 +1537,25 @@ class PropertyTravelService:
                 message="no elements in Distance Matrix reply",
             )
             logger.warning("Distance matrix malformed: %s", failure.describe())
-            return [DistanceResult(failure=failure) for _ in destinations]
+            return [
+                DistanceResult(failure=failure, engine=ENGINE_GOOGLE)
+                for _ in destinations
+            ]
 
         results: List[DistanceResult] = []
         for el in elements[: len(destinations)]:
             if not isinstance(el, dict) or el.get("status") != "OK":
                 # ZERO_RESULTS / NOT_FOUND / MAX_ROUTE_LENGTH_EXCEEDED are
                 # answers about that destination, not transport failures.
-                results.append(DistanceResult())
+                results.append(DistanceResult(engine=ENGINE_GOOGLE))
                 continue
             results.append(
                 DistanceResult(
+                    engine=ENGINE_GOOGLE,
                     distance_m=(el.get("distance") or {}).get("value"),
                     duration_s=(el.get("duration") or {}).get("value"),
                 )
             )
         while len(results) < len(destinations):
-            results.append(DistanceResult())
+            results.append(DistanceResult(engine=ENGINE_GOOGLE))
         return results
