@@ -2303,6 +2303,11 @@ function _pollJobPromise(jobId, timeoutMs, onUpdate) {
             },
             onError: (job) => resolve({
                 ok: false,
+                /* Not a failure: the poller gave up asking, the server never
+                   said the run failed. The caller reports it as information
+                   rather than an error (#434 review round 3 -- this was being
+                   shown as "Enrichment failed" for a run that was fine). */
+                stillRunning: !!(job && job.stillRunning),
                 result: {},
                 error: (job && job.error) ? job.error : null
             })
@@ -2355,7 +2360,14 @@ async function runGoogleEnrichment(propertyId) {
             const result = outcome.result || {};
             return {
                 ok: outcome.ok,
+                stillRunning: outcome.stillRunning === true,
                 status: resp.status,
+                /* The ids of the analyses the *server* queued for this press.
+                   The page attaches to them rather than POSTing for the same
+                   work: the dedupe key only holds while a job is live, so a
+                   server job that finished first would leave the key free and
+                   one press would pay for two analyses (#434 review). */
+                analysisJobs: result.analysis_jobs || {},
                 message: result.message || result.error || outcome.error || 'Enrichment finished'
             };
         }
@@ -2388,12 +2400,18 @@ async function runEnrichAndAnalyze(propertyId) {
 
     setBusy('Enriching…');
     const enrichment = await runGoogleEnrichment(propertyId);
-    _notify(enrichment.message, enrichment.ok ? 'success' : 'error');
+    _notify(
+        enrichment.message,
+        enrichment.ok ? 'success' : (enrichment.stillRunning ? 'info' : 'error'));
 
+    /* The server queued the analyses for this press; attach to those jobs.
+       Posting again would be a second paid run whenever the server's own
+       finished first, because the dedupe key only holds while a job is live. */
+    const queued = enrichment.analysisJobs || {};
     setBusy(window.__OPENAI_CONFIGURED__ ? 'Analyzing (Claude + ChatGPT)…' : 'Analyzing (Claude)…');
-    const analyses = [runClaudeAnalysis(propertyId)];
+    const analyses = [runClaudeAnalysis(propertyId, queued.claude)];
     if (window.__OPENAI_CONFIGURED__) {
-        analyses.push(generateChatGPTAnalysis(propertyId));
+        analyses.push(generateChatGPTAnalysis(propertyId, queued.openai));
     }
     const outcomes = await Promise.all(analyses);
 
@@ -2534,7 +2552,13 @@ function wireCopyButtons() {
 
 /* Runs one provider and reports the outcome to the Enrich pass; the button
    state belongs to that pass now, so nothing here touches it. */
-async function runClaudeAnalysis(propertyId) {
+/* `queuedJobId`, when given, is a `property_ai_analysis` job the *server*
+   already queued for this press. Attaching to it is not an optimisation: the
+   dedupe key only holds while a job is live, so a POST made after the server's
+   own job finished starts a second, paid run for the same pair (#434 review
+   round 3, reproduced). Called without one -- the standalone AI buttons -- it
+   posts exactly as before. */
+async function runClaudeAnalysis(propertyId, queuedJobId) {
     const targetId = 'ai-claude-structured-analysis';
     const placeholderId = 'ai-claude-placeholder';
     const alertsId = 'ai-claude-alerts';
@@ -2590,6 +2614,19 @@ async function runClaudeAnalysis(propertyId) {
     };
 
     try {
+        if (queuedJobId) {
+            _notify('Claude analysis queued', 'info');
+            const outcome = await _pollJobPromise(
+                queuedJobId, IdealistaApp.JOB_POLL_TIMEOUTS.aiAnalysis, _wireJobStatusText(statusTextId));
+            const attached = outcome.result || {};
+            if (attached.success) {
+                applyAnalysis(attached.analysis);
+                return { ok: true, status: 202 };
+            }
+            handleFailure(attached.error || outcome.error || 'Claude analysis failed', undefined, attached.failure_kind);
+            return { ok: false, status: 202 };
+        }
+
         const resp = await fetch(`/api/property/${propertyId}/analyze/structured`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2979,7 +3016,7 @@ async function refreshAiComparison() {
 
 /* Same contract as runClaudeAnalysis: render into its own tab, report the
    outcome, leave the Enrich button alone. */
-async function generateChatGPTAnalysis(propertyId) {
+async function generateChatGPTAnalysis(propertyId, queuedJobId) {
     try {
         const targetId = 'ai-chatgpt-structured-analysis';
         const placeholderId = 'ai-chatgpt-placeholder';
@@ -3002,12 +3039,16 @@ async function generateChatGPTAnalysis(propertyId) {
             `;
         }
 
-        const resp = await fetch(`/api/property/${propertyId}/analyze/structured`, {
+        /* No POST at all when the server already queued this pair for the
+           press: `applyAnalysis` and `handleFailure` are defined below, so the
+           attach branch has to sit after them, and a fetch fired here would
+           already have started the second paid run it exists to avoid. */
+        const resp = queuedJobId ? null : await fetch(`/api/property/${propertyId}/analyze/structured`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ provider: 'openai' })
         });
-        const data = await resp.json().catch(() => null);
+        const data = resp ? await resp.json().catch(() => null) : null;
 
         const applyAnalysis = (analysis) => {
             window.__EXISTING_OPENAI_ANALYSIS__ = analysis;
@@ -3034,6 +3075,19 @@ async function generateChatGPTAnalysis(propertyId) {
             const alertType = failureKind === 'failed' ? 'danger' : 'warning';
             showTransientAlert(alertsId, alertType, message || 'ChatGPT request failed.', 4500);
         };
+
+        if (queuedJobId) {
+            _notify('ChatGPT analysis queued', 'info');
+            const attachedOutcome = await _pollJobPromise(
+                queuedJobId, IdealistaApp.JOB_POLL_TIMEOUTS.aiAnalysis, _wireJobStatusText(statusTextId));
+            const attached = attachedOutcome.result || {};
+            if (attached.success) {
+                applyAnalysis(attached.analysis);
+                return { ok: true, status: 202 };
+            }
+            handleFailure(attached.error || attachedOutcome.error || 'ChatGPT analysis failed', undefined, attached.failure_kind);
+            return { ok: false, status: 202 };
+        }
 
         if (resp.status === 202 && data && data.job_id) {
             _notify(data.message || 'ChatGPT analysis queued', 'info');

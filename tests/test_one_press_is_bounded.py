@@ -1049,6 +1049,71 @@ class TestTheAnalysisDoesNotDependOnATabStayingOpen:
         app.test_client().post(f"/api/property/{prop_id}/enrich")
         assert queued == []
 
+    def test_the_ids_ride_back_so_the_page_attaches_instead_of_posting(
+        self, app, prop_id, queued, monkeypatch
+    ):
+        """The dedupe key only holds while a job is **live**.
+
+        Review round 3 reproduced the consequence: the server's claude job
+        finished before the browser got round to POSTing its own, the key was
+        free again, and one press paid for two analyses. So the enrichment's
+        answer carries the ids it queued and the page attaches to them --
+        `templates/property_detail.html`'s `runClaudeAnalysis(id, jobId)` makes
+        no request at all when it is given one.
+        """
+        monkeypatch.setattr(Config, "AI_BRIDGE_TOKEN", "present")
+        body = (
+            app.test_client()
+            .post(f"/api/property/{prop_id}/enrich", json={"analyze": True})
+            .get_json()
+        )
+        assert body["analysis_jobs"] == {"claude": "job-x", "openai": "job-x"}, body
+
+    def test_the_ids_ride_back_on_a_failed_enrichment_too(
+        self, app, prop_id, monkeypatch
+    ):
+        """A listing Google could not place still gets an opinion, and the
+        page still must not POST for it."""
+
+        class _Enrichment:
+            def enrich_property(self, prop, **kw):
+                return False
+
+        monkeypatch.setattr(
+            "services.property_enrichment_service.PropertyEnrichmentService",
+            _Enrichment,
+        )
+        monkeypatch.setattr(Config, "AI_BRIDGE_TOKEN", None)
+        monkeypatch.setattr("routes.api_routes._enqueue", lambda fn, **kw: "job-y")
+        body = (
+            app.test_client()
+            .post(f"/api/property/{prop_id}/enrich", json={"analyze": True})
+            .get_json()
+        )
+        assert body["success"] is False
+        assert body["analysis_jobs"] == {"claude": "job-y"}, body
+
+    def test_the_page_attaches_rather_than_posting(self):
+        """The other half of it, in the page. A test that only checked the
+        response would pass while the browser posted anyway."""
+        from pathlib import Path
+
+        detail = (
+            Path(__file__).resolve().parent.parent
+            / "templates"
+            / "property_detail.html"
+        ).read_text()
+
+        assert "async function runClaudeAnalysis(propertyId, queuedJobId)" in detail
+        assert (
+            "async function generateChatGPTAnalysis(propertyId, queuedJobId)" in detail
+        )
+        # Claude returns before its fetch; ChatGPT cannot (its handlers are
+        # defined below the fetch), so its request is skipped at the call.
+        assert "queuedJobId ? null : await fetch(" in detail
+        assert "runClaudeAnalysis(propertyId, queued.claude)" in detail
+        assert "generateChatGPTAnalysis(propertyId, queued.openai)" in detail
+
     def test_a_query_string_cannot_ask_for_the_spend(
         self, app, prop_id, queued, monkeypatch
     ):

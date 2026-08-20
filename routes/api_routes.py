@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone
+from typing import Dict
 from flask import Blueprint, Response, current_app, jsonify, request
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -978,23 +979,32 @@ def _property_analysis_providers():
     return providers
 
 
-def _enqueue_property_analyses(property_id: int) -> None:
+def _enqueue_property_analyses(property_id: int) -> Dict[str, str]:
     """Queue the AI analyses that follow an Enrich press (#434).
 
     Called from inside the enrichment job, so the sequel survives the tab that
     started it. Every failure is swallowed and logged: the enrichment has
     already run, and reporting it as failed because a follow-up could not be
     queued would send the owner to press it -- and pay for it -- again (#178).
+
+    **Returns the job ids, and the caller must hand them to the page.** The
+    dedupe key stops a second *live* run for the same pair -- it does not stop
+    a second run once the first has finished, and review round 3 reproduced
+    exactly that: the server's claude job completed before the browser got
+    round to POSTing its own, the key was free again, and one press paid for
+    two analyses. So the page attaches to these ids instead of asking for
+    work that is already done.
     """
+    queued: Dict[str, str] = {}
     for provider in _property_analysis_providers():
         try:
-            _enqueue(
+            queued[provider] = _enqueue(
                 _property_structured_analysis_runner(property_id, provider),
                 job_type="property_ai_analysis",
                 meta={"property_id": property_id, "provider": provider},
-                # The key the analysis endpoint already uses, so the page's own
-                # POST for the same pair returns this job's id and attaches to
-                # it instead of starting a second, paid run.
+                # The key the analysis endpoint already uses, so a *concurrent*
+                # POST for the same pair returns this job's id rather than
+                # starting a second, paid run.
                 dedupe_key=f"property_ai_analysis:{property_id}:{provider}",
             )
         except Exception:
@@ -1004,6 +1014,7 @@ def _enqueue_property_analyses(property_id: int) -> None:
                 property_id,
                 exc_info=True,
             )
+    return queued
 
 
 @api_bp.route("/property/<int:property_id>/analyze/structured", methods=["POST"])
@@ -2221,43 +2232,65 @@ def manual_property_enrichment(property_id: int):
             # Deliberately not conditional on `ok`: the page runs the analyses
             # either way, and a listing Google could not place is still worth
             # an opinion on.
-            if analyze:
-                _enqueue_property_analyses(property_id)
+            #
+            # The ids ride back in every answer this closure gives, including
+            # the failures below, because the page attaches to them rather
+            # than POSTing for the same work a second time.
+            analysis_jobs = _enqueue_property_analyses(property_id) if analyze else {}
+
+            def _answer(payload):
+                if analysis_jobs:
+                    payload = dict(payload)
+                    payload["analysis_jobs"] = analysis_jobs
+                return payload
 
             if ok:
-                return {
-                    "success": True,
-                    "message": "Property enriched successfully with Google API data",
-                }
+                return _answer(
+                    {
+                        "success": True,
+                        "message": "Property enriched successfully with Google API data",
+                    }
+                )
 
             # Neither a refused API nor a bad address: the address resolved,
             # to the middle of the locality. Pressing Enrich again buys
             # nothing, so the message names the repair instead of a retry.
             if travel_api_state(prop_local) == TRAVEL_STATE_APPROXIMATE_ORIGIN:
-                return {
-                    "success": False,
-                    "error": (
-                        "This listing's coordinate is a locality centroid, not its "
-                        "address, so travel times were not measured — they would "
-                        "describe that point, not the property. Re-geocode it "
-                        "first (utils/refresh_property_accuracy.py)."
-                    ),
-                }
+                return _answer(
+                    {
+                        "success": False,
+                        "error": (
+                            "This listing's coordinate is a locality centroid, not "
+                            "its address, so travel times were not measured — they "
+                            "would describe that point, not the property. "
+                            "Re-geocode it first "
+                            "(utils/refresh_property_accuracy.py)."
+                        ),
+                    }
+                )
 
             # A refused API is not a bad address: say which one it was (#98).
             if travel_api_state(prop_local) == TRAVEL_STATE_UNAVAILABLE:
-                return {
+                return _answer(
+                    {
+                        "success": False,
+                        "error": (
+                            "Google refused every travel request; no data was "
+                            "stored. Check the API keys, billing and enabled APIs, "
+                            "then retry."
+                        ),
+                    }
+                )
+
+            return _answer(
+                {
                     "success": False,
                     "error": (
-                        "Google refused every travel request; no data was stored. "
-                        "Check the API keys, billing and enabled APIs, then retry."
+                        "Geocoding failed; enrichment skipped. Check that the "
+                        "property has a valid location."
                     ),
                 }
-
-            return {
-                "success": False,
-                "error": "Geocoding failed; enrichment skipped. Check that the property has a valid location.",
-            }
+            )
 
         # `allow_request_override=False`, the way #136 closed the same hatch on
         # the two status endpoints below. This chain makes up to eleven Overpass
