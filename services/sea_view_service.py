@@ -48,6 +48,7 @@ from services.enrichment_origin import origin_of, origins_agree
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 from utils.http import (
     HTTP_USER_AGENT,
+    OVERPASS_BREAKERS,
     OVERPASS_GATE,
     RateGate,
     request_with_retries,
@@ -317,6 +318,40 @@ def fetch_coastline_points(
     if cached is not None:
         return [tuple(point) for point in cached]
 
+    # This client dials one instance -- it never adopted #415's fallback list --
+    # so a primary that is down costs its whole budget with no chance of
+    # success. Until that is fixed the breaker is what bounds it: three
+    # refusals and later calls answer immediately for five minutes, and the
+    # registry is shared with the amenity client, so whichever of the two
+    # learns the outage first spares the other from re-discovering it.
+    #
+    # A skip raises rather than returning `[]`, because this function's whole
+    # contract is that an empty list means "Overpass answered and there is no
+    # coastline in range". A refusal that read as an empty coastline is the
+    # #98 defect this module was built around.
+    breaker = OVERPASS_BREAKERS.for_url(Config.OSM_OVERPASS_URL)
+    if breaker.should_skip():
+        raise SeaViewSourceError(
+            f"{OVERPASS_BREAKERS.host_of(Config.OSM_OVERPASS_URL)} refused the "
+            f"last {OVERPASS_BREAKERS.threshold} attempts; not dialled"
+        )
+    try:
+        points = _coastline_round_trip(cell_lat, cell_lon, session)
+    except SeaViewSourceError:
+        breaker.record_refusal("coastline")
+        raise
+    breaker.record_success()
+
+    _cache_set(
+        cell_lat, cell_lon, cache_type, points, timeout=COASTLINE_CACHE_TIMEOUT_S
+    )
+    return points
+
+
+def _coastline_round_trip(
+    cell_lat: float, cell_lon: float, session: Optional[requests.Session] = None
+) -> List[Tuple[float, float]]:
+    """The trip itself. Every refusal here is observed by the caller above."""
     query = (
         "[out:json][timeout:90];"
         f"way(around:{COASTLINE_QUERY_RADIUS_M},{cell_lat:.4f},{cell_lon:.4f})"
@@ -339,7 +374,10 @@ def fetch_coastline_points(
             max_attempts=5,
             backoff_base=8.0,
             backoff_max=90.0,
-            timeout=120,
+            # Connect and read split for the reason the amenity transport
+            # gives; this one keeps its longer read budget, which a coastline
+            # query over a 25 km box genuinely needs.
+            timeout=(3.0, 120),
             # Streamed so the size ceiling is enforced as the body arrives,
             # not after it is already in memory.
             stream=True,
@@ -380,10 +418,6 @@ def fetch_coastline_points(
             # Cleanup must not replace the verdict-bearing exception (or a
             # successful return) with a close() failure of its own.
             logger.debug("Closing the Overpass response failed", exc_info=True)
-
-    _cache_set(
-        cell_lat, cell_lon, cache_type, points, timeout=COASTLINE_CACHE_TIMEOUT_S
-    )
     return points
 
 
