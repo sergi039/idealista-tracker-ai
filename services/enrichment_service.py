@@ -1485,6 +1485,14 @@ class EnrichmentService:
                 first_failure = failure
             if failure.reason not in self._OVERPASS_TRY_ELSEWHERE:
                 break
+            # A 406 arrives as `REASON_HTTP_ERROR` like any other status, so
+            # the reason alone could not express the rule the set above states
+            # in words: every instance runs the same software, and this is our
+            # User-Agent being refused. Measured as still fanning out to all
+            # three hosts (codex review, 2026-08-20), and the fallback test
+            # fabricated a reason production never emits, so nothing caught it.
+            if getattr(failure, "http_status", None) == 406:
+                break
         return None, first_failure
 
     def _overpass_elements_from(

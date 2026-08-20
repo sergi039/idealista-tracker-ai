@@ -9,6 +9,7 @@ from models import Property
 from services import advertiser, sea_view_service
 from services.enrich_budget import lookup_budget_seconds
 from services.enrichment_service import EnrichmentService
+from services.hazard_service import HazardService
 from services.property_location_service import PropertyLocationService
 from services.property_scoring_service import PropertyScoringService
 from services.pool_service import PoolService
@@ -46,6 +47,7 @@ class PropertyEnrichmentService:
         sea_distance_service: Optional[SeaDistanceService] = None,
         enrichment_service: Optional[EnrichmentService] = None,
         quality_of_life_service: Optional["QualityOfLifeService"] = None,
+        hazard_service: Optional["HazardService"] = None,
         pool_service: Optional["PoolService"] = None,
         sea_view_calculator=None,
     ):
@@ -59,6 +61,13 @@ class PropertyEnrichmentService:
         # Shares the amenity client's Overpass transport through the same
         # EnrichmentService instance, so one gate paces both lookups.
         self.quality_of_life_service = quality_of_life_service or QualityOfLifeService(
+            enrichment_service=self.enrichment_service
+        )
+        # And again for the hazard scan (#437): one EnrichmentService means
+        # one Overpass client and one 5 s gate across all three lookups, which
+        # is the whole reason this class holds the instance rather than each
+        # service building its own.
+        self.hazard_service = hazard_service or HazardService(
             enrichment_service=self.enrichment_service
         )
         # Same sharing for the pool lookup (Overpass) and its drive times
@@ -80,7 +89,7 @@ class PropertyEnrichmentService:
     def enrich_free_sources(
         self, prop: Property, *, commit: bool, use_ai: bool
     ) -> None:
-        """The free pass: OSM amenities, quality-of-life, sea view (#299).
+        """The free pass: OSM amenities, quality-of-life, hazards, sea view.
 
         One home for the three enrichers that reach no billed API -- the
         amenity counts (#152), the QoL block (#275) and the sea-view verdict
@@ -140,6 +149,25 @@ class PropertyEnrichmentService:
                 e,
             )
             if commit:
+                db.session.rollback()
+
+        # The hazard scan (#437) is one more Overpass round trip through the
+        # same client and gate, and it runs here **only when this pass owns
+        # its commits**. With `commit=False` the caller owns a transaction
+        # this cannot lock inside, and a scan written that way loses a
+        # concurrently committed measurement. Every caller that matters passes
+        # `commit=True`: ingestion, and the advisory pass of an Enrich press,
+        # which is where #434 put every score-neutral step for exactly this
+        # reason -- each one owning its own locked write.
+        if commit:
+            try:
+                self.hazard_service.enrich(prop, commit=True)
+            except Exception as e:
+                logger.warning(
+                    "Hazard scan failed for %s: %s",
+                    getattr(prop, "id", None),
+                    e,
+                )
                 db.session.rollback()
 
         # Sea view last: with commit=True its writer takes the row under

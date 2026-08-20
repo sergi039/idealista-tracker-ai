@@ -184,6 +184,37 @@
     {% endif %}
 {%- endmacro %}
 
+{# A badge only when something qualifies (#437). The rule the advertiser and
+   sea-view badges above already follow, for the reason they follow it: a badge
+   on ~100% of rows marks nothing. Here it also has to stay silent for the rows
+   nobody scanned, which is most of the table until the backfill has run -- and
+   "no badge" then means two different things, so the coverage line beside the
+   result count is where that distinction is disclosed rather than in a second
+   badge nobody could read. #}
+{% macro hazard_badge(p) -%}
+    {% set verdict = hazard_verdict_for(p) %}
+    {% if verdict.measured and not verdict.complete and not verdict.flagged %}
+        {# A scan that came back short and found nothing is not a clean
+           neighbourhood, and with no badge at all the row was indistinguishable
+           from one (codex review, 2026-08-20). It is the only case where this
+           badge speaks without a facility to name. #}
+        <span class="badge bg-warning text-dark fw-normal" title="{{ t('hazards_truncated') }}">
+            <i class="fas fa-industry me-1"></i>{{ t('hazards_incomplete_badge') }}
+        </span>
+    {% endif %}
+    {% if verdict.flagged and verdict.nearest %}
+        {# An approximate coordinate is a locality centroid, so "Industry
+           nearby" would be a claim about a parcel the scan never saw -- with
+           532 of 725 rows on a centroid, one scan would make that claim for
+           every listing in the village (codex review, 2026-08-20). The badge
+           says which it is; the card carries the band. #}
+        <span class="badge {{ 'bg-danger' if verdict.high_count else 'bg-secondary' }} fw-normal"
+              title="{{ t('hazards_badge_tooltip') }} — {{ verdict.nearest.name or t('hazard_kind_' ~ verdict.nearest.kind) }}{% if verdict.truncated %} — {{ t('hazards_truncated') }}{% endif %}">
+            <i class="fas fa-industry me-1"></i>{{ t('hazards_badge_centroid') if verdict.approximate_origin else t('hazards_badge') }}
+        </span>
+    {% endif %}
+{%- endmacro %}
+
 {# For a plot, distance to the shoreline is a verdict rather than a detail:
    POLA/PESC forbids a dwelling within 500 m of the Asturian coast -- in all
    three of its categories, and over the top of whatever the municipal PGOU
@@ -1024,6 +1055,18 @@
                             <i class="fas fa-circle-info me-1"></i>{{ t('listing_status_coverage')|format(listing_verified_count, pagination.total) }}
                         </span>
                     {% endif %}
+                    {# The same disclosure for the hazard scan (#437), and for the
+                       same reason: a row that was never scanned shows no badge,
+                       and without this line "no badge" reads as "nothing near
+                       it". Counted over the same filtered set as the total
+                       beside it, with the predicate `hazard_badge` reads
+                       (services/hazard_service.py). #}
+                    {% if hazard_scanned_count is defined and pagination %}
+                        <span id="hazard-scan-coverage" class="text-body-secondary small"
+                              title="{{ t('hazards_coverage_tooltip') }}">
+                            <i class="fas fa-circle-info me-1"></i>{{ t('hazards_coverage')|format(hazard_scanned_count, pagination.total) }}
+                        </span>
+                    {% endif %}
                     {# How many listings are waiting on something that is now
                        late. It is a link and not only a dropdown option,
                        because a reminder nobody opens a menu to find is not a
@@ -1204,6 +1247,7 @@
                                                     {{ advertiser_badge(p) }}
                                                     {{ owner_review_badges(p, review_today) }}
                                                     {{ sea_view_badge(p) }}
+                                                    {{ hazard_badge(p) }}
                                                     {{ plot_badges(p) }}
                                                 </div>
                                             </td>
@@ -1386,6 +1430,7 @@
                                     {{ advertiser_badge(p) }}
                                                     {{ owner_review_badges(p, review_today) }}
                                     {{ sea_view_badge(p) }}
+                                    {{ hazard_badge(p) }}
                                                     {{ plot_badges(p) }}
                                 </div>
 

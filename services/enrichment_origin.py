@@ -49,5 +49,10 @@ def origins_agree(
             and abs(float(stored_origin["lon"]) - float(new_origin["lon"]))
             <= ORIGIN_TOLERANCE_DEG
         )
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, OverflowError):
+        # `OverflowError` because a JSON integer has no width limit and
+        # PostgreSQL stores it happily: a 310-digit `lat` raises out of
+        # `float()` and out of every caller of this function (codex review,
+        # 2026-08-20). An origin nobody can read is "cannot tell", which is
+        # what this returns for every other unreadable shape.
         return None
