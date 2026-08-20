@@ -53,7 +53,7 @@ import math
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import or_
+from sqlalchemy import Float, and_, cast, func, or_
 from sqlalchemy.orm.attributes import flag_modified
 
 from services import hazard_rules
@@ -62,7 +62,7 @@ from services.coordinate_quality import (
     distance_bounds_m,
     normalize_accuracy,
 )
-from services.enrichment_origin import origin_of, origins_agree
+from services.enrichment_origin import ORIGIN_TOLERANCE_DEG, origin_of, origins_agree
 from services.enrichment_write import check_writable, locked_write
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 
@@ -692,9 +692,33 @@ def measured_expression(model):
     number rather than a disclosure. That is `listing_verification`'s rule,
     and `tests/test_hazard_proximity.py` runs one matrix through both readings
     for the same reason.
+
+    Which is why the origin check is here too, awkward as it is in SQL: the
+    moment `read_verdict` learned to answer `stale_origin`, a count that knew
+    only about `status` started disagreeing with the badges it sits above.
+    An unreadable origin on either side is *not* a move, exactly as
+    `origins_agree` has it -- the two sides of one rule, in two languages.
     """
-    status = model.enrichment[ENRICHMENT_KEY]["status"].as_string()
-    return or_(*[status == value for value in MEASURED_STATUSES])
+    block = model.enrichment[ENRICHMENT_KEY]
+    status = block["status"].as_string()
+    origin_lat = block["origin"]["lat"].as_float()
+    origin_lon = block["origin"]["lon"].as_float()
+    row_lat = cast(model.location_lat, Float)
+    row_lon = cast(model.location_lon, Float)
+    origin_unknown = or_(
+        origin_lat.is_(None),
+        origin_lon.is_(None),
+        model.location_lat.is_(None),
+        model.location_lon.is_(None),
+    )
+    origin_matches = and_(
+        func.abs(origin_lat - row_lat) <= ORIGIN_TOLERANCE_DEG,
+        func.abs(origin_lon - row_lon) <= ORIGIN_TOLERANCE_DEG,
+    )
+    return and_(
+        or_(*[status == value for value in MEASURED_STATUSES]),
+        or_(origin_unknown, origin_matches),
+    )
 
 
 def needs_hazards(prop: Any) -> bool:

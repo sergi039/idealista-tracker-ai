@@ -663,7 +663,17 @@ class TestApproximateOrigin:
 
 
 class TestOneAnswerInTwoLanguages:
-    """`read_verdict` and `measured_expression` must agree, row for row."""
+    """`read_verdict` and `measured_expression` must agree, row for row.
+
+    A coverage line that disagrees with the badges under it is a third wrong
+    number rather than a disclosure (`services/listing_verification.py` wrote
+    that rule down), so the same matrix goes through both readings -- and it
+    carries the origin cases, because the moment one side learned about a
+    moved coordinate the other had to as well.
+    """
+
+    _HERE = {"lat": XIVARES[0], "lon": XIVARES[1]}
+    _ELSEWHERE = {"lat": XIVARES[0] + 0.02, "lon": XIVARES[1]}
 
     @pytest.mark.parametrize(
         "stored,measured",
@@ -674,6 +684,21 @@ class TestOneAnswerInTwoLanguages:
             ({"status": hazard_service.STATUS_UNAVAILABLE}, False),
             ({"status": hazard_service.STATUS_NO_COORDINATES}, False),
             ({"nonsense": 1}, False),
+            # The origin the block was measured from, against the row's own.
+            ({"status": hazard_service.STATUS_OK, "items": [], "origin": _HERE}, True),
+            (
+                {
+                    "status": hazard_service.STATUS_OK,
+                    "items": [],
+                    "origin": _ELSEWHERE,
+                },
+                False,
+            ),
+            # Unreadable on either side is not a move, in both languages.
+            (
+                {"status": hazard_service.STATUS_OK, "items": [], "origin": "junk"},
+                True,
+            ),
         ],
     )
     def test_python_and_sql_read_the_same_matrix(self, app, stored, measured):
