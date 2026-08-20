@@ -2143,13 +2143,22 @@ def edit_profile(profile_id):
                     # the pool weight on, a listing whose other components
                     # were all unmeasured goes None → 100 (measured earlier
                     # by this very preview, which is what caught it).
-                    row_changed = False
-                    for old_value, new_value in zip(old, new):
-                        if (old_value is None) != (new_value is None):
-                            row_changed = True
-                        elif old_value is not None and new_value is not None:
-                            if abs(float(new_value) - float(old_value)) >= 0.05:
-                                row_changed = True
+                    #
+                    # And the comparison is at the precision the column keeps,
+                    # not a threshold over it. `abs(new - old) >= 0.05` stood
+                    # here and answered *"0 of 4 listings would change"* for a
+                    # save that then wrote 33.32 over 33.33 -- `score_total` is
+                    # `Numeric(5, 2)`, so a cent is a real difference in the
+                    # table, and a preview that under-reports is the thing this
+                    # gate exists to prevent (review of #453, 2026-08-20). It
+                    # did not even hold at its own boundary: on the Decimals it
+                    # is handed, `float(50.05) - float(50.0)` is 0.049999999999
+                    # and therefore not `>= 0.05`.
+                    stored_score = PropertyScoringService.stored_score
+                    row_changed = any(
+                        stored_score(old_value) != stored_score(new_value)
+                        for old_value, new_value in zip(old, new)
+                    )
                     if row_changed:
                         changed += 1
                         # The combined total is the number the owner reads on
@@ -2168,7 +2177,11 @@ def edit_profile(profile_id):
                 flash(
                     "Scoring criterion preview: "
                     f"{changed} of {len(before)} listings would change score "
-                    f"(mean total shift {mean_delta:+.1f}). Nothing is saved "
+                    # Two decimals, because the count beside it is now taken
+                    # at two: "4 of 4 would change (mean total shift +0.0)"
+                    # reads as a contradiction, and the shift is the smaller
+                    # of the two claims.
+                    f"(mean total shift {mean_delta:+.2f}). Nothing is saved "
                     "yet — press «Confirm pool scoring» below to apply.",
                     "warning",
                 )

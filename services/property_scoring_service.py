@@ -2,7 +2,7 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional, Tuple
 
 from app import db
@@ -1588,6 +1588,43 @@ class PropertyScoringService:
         if commit:
             db.session.commit()
         return True
+
+    @staticmethod
+    def stored_score(value: Any) -> Optional[Decimal]:
+        """The value as the database will keep it, or None.
+
+        `Property.score_*` are `Numeric(5, 2)`, so a score is stored to the
+        cent and a shift of 0.01 is a real difference in the table. Anything
+        asking "would this save change the score" has to ask it at that
+        precision -- `routes/main_routes.py`'s weight preview asked it with
+        `abs(new - old) >= 0.05` and answered *"0 of 4 listings would change"*
+        for a save that then wrote 33.32 over 33.33 (review of #453,
+        2026-08-20).
+
+        The precision is read off the column rather than written here again,
+        so a schema that changes it does not leave this rounding behind. And
+        the comparison stays in `Decimal`: both sides already are one -- the
+        column gives Decimals and `calculate_for_property` assigns
+        `Decimal(str(...))` -- and going through `float` is what defeated the
+        old threshold at its own boundary, where `float(50.05) - float(50.0)`
+        is 0.049999999999997 and therefore *not* `>= 0.05`.
+
+        `ROUND_HALF_UP` is **measured, not chosen**. This function claims to
+        say what the database keeps, so the tie-breaking has to be the
+        database's: asked on the deployment's own PostgreSQL, `0.005::numeric
+        (5,2)` is `0.01`, `0.025` is `0.03` and `-0.005` is `-0.01` -- half
+        away from zero. `Decimal`'s default is `ROUND_HALF_EVEN`, which makes
+        the first of those `0.00`; `round(float(...), 2)` gets that one right
+        and `0.015` wrong. A first version of this helper used the default and
+        was therefore describing a database nobody runs (found by pushing on a
+        mutation that escaped, 2026-08-20).
+        """
+        if value is None:
+            return None
+        scale = getattr(Property.__table__.c.score_total.type, "scale", 2) or 0
+        return Decimal(str(value)).quantize(
+            Decimal(1).scaleb(-scale), rounding=ROUND_HALF_UP
+        )
 
     def calculate_for_property_id(self, property_id: int, commit: bool = True) -> bool:
         prop = db.session.get(Property, property_id)
