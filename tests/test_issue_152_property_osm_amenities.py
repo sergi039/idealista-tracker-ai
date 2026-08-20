@@ -120,7 +120,7 @@ def _property(app, source_id="prop_osm_1", *, lat="39.4699", lon="-0.3763", **kw
 
 
 class _StubLocation:
-    def ensure_coordinates(self, prop, refresh=False):
+    def ensure_coordinates(self, prop, refresh=False, *, commit=False):
         return True
 
 
@@ -436,7 +436,7 @@ class TestNoCoordinatesIsNotNothingNearby:
         property_id = _property(app, "prop_osm_ungeocodable", lat=None, lon=None)
 
         class _FailedGeocoding:
-            def ensure_coordinates(self, prop, refresh=False):
+            def ensure_coordinates(self, prop, refresh=False, *, commit=False):
                 return False
 
         with app.app_context():

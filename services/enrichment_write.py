@@ -32,6 +32,17 @@ a transaction whose end this code cannot see, and holding a lock across it is
 worse than the race it would close. That is the mode
 `PropertyEnrichmentService.enrich_property` uses, where the steps share one
 commit.
+
+**Nothing here is about `enrichment`** except the name and the incident that
+prompted it. Neither function mentions a column: `check_writable` inspects
+session state and `locked_write` refreshes a row. #400 made that literal --
+`services/property_location_service.py` writes the scalar
+`location_lat`/`location_lon`/`location_accuracy` under the same rule, after
+the same kind of incident one column over. If a third kind of writer arrives,
+it belongs here too rather than in a second module; what would not belong is a
+caller that takes the lock itself, for the reason
+`services/sea_view_service.py:1294` gives — a lock at a call site protects that
+call site, and every future caller reopens the hole.
 """
 
 import logging

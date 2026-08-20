@@ -164,22 +164,42 @@ class PropertyEnrichmentService:
         if not prop:
             return False
 
-        # Who is selling: the owner, or an agency. First, because it is the one
-        # step here that needs no coordinate -- a listing the geocoder cannot
-        # place returns below, and this answer has nothing to do with where the
-        # plot is. Free: it reads the listing page the row already links to,
-        # and only when the row does not answer for itself already
-        # (`services/advertiser.py` refuses the fetch otherwise). Advisory --
-        # no score reads it, and a refusal must not fail the run.
+        # Coordinates first, and first of everything -- not only "before the
+        # travel step that needs them" (#400).
+        #
+        # `ensure_coordinates` now writes with the row held and commits its own
+        # transaction, because the alternative is holding a row lock across
+        # everything below it: Overpass, an AI-bridge call whose timeout is
+        # 600 s, and Distance Matrix. That is precisely the cost #196 refused,
+        # so the coordinate write is its own short transaction instead.
+        #
+        # Which is why it runs before the advertiser lookup rather than after.
+        # `check_writable` refuses a `commit=True` write on a session with
+        # anything pending (`services/enrichment_write.py`), and
+        # `advertiser.enrich(commit=False)` assigns `prop.enrichment` and calls
+        # `flag_modified` on a row whose seller nothing has established yet --
+        # which is every fresh fotocasa import, the rows most likely to need a
+        # coordinate. Left in the old order this raises on exactly them.
+        #
+        # The swap costs the advertiser step nothing: its early returns read
+        # the URL and the stored verdict, never a coordinate, and it still runs
+        # before the "no coordinates" return below, so a listing the geocoder
+        # cannot place still gets its seller answered.
+        self.location_service.ensure_coordinates(
+            prop, refresh=refresh_coords, commit=True
+        )
+
+        # Who is selling: the owner, or an agency. Free: it reads the listing
+        # page the row already links to, and only when the row does not answer
+        # for itself already (`services/advertiser.py` refuses the fetch
+        # otherwise). Advisory -- no score reads it, and a refusal must not
+        # fail the run.
         try:
             advertiser.enrich(prop, commit=False)
         except Exception as e:
             logger.warning(
                 "Advertiser lookup failed for %s: %s", getattr(prop, "id", None), e
             )
-
-        # Coordinates first (needed for travel).
-        self.location_service.ensure_coordinates(prop, refresh=refresh_coords)
 
         # `is None`, not truthiness: a coordinate of exactly 0 is a location,
         # and the amenity lookup below already treats it as one.
