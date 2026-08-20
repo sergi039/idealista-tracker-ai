@@ -802,6 +802,102 @@ class TestTheDecisiveStepsGetTheClockFirst:
         assert all(value is not None for _name, value in seen), seen
 
 
+class TestTheAdvisoryPassDoesNotEraseTheDecisiveOne:
+    """The commit boundary must not cost what it was added to protect.
+
+    Round 3 of the review reproduced a paid measurement disappearing behind
+    `EnrichmentService.enrich_osm_amenities`, which reads, modifies and commits
+    `enrichment` with no row lock (#352's open gap). Within one run it does
+    not: every commit in the decisive pass expires the session, so the advisory
+    writers read what is stored rather than a copy from before it. This is the
+    end-to-end assertion of that, with the **real** amenity writer rather than
+    a stub -- a stub is precisely what would not notice the day it changes.
+    """
+
+    @pytest.fixture
+    def app(self):
+        setup_test_environment()
+        app = create_app()
+        app.config["TESTING"] = True
+        with app.app_context():
+            db.create_all()
+            yield app
+            db.drop_all()
+
+    def test_every_key_the_run_wrote_is_stored(self, app, monkeypatch):
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from services import property_enrichment_service as module
+
+        def _write(prop, key, value):
+            enrichment = dict(prop.enrichment or {})
+            enrichment[key] = value
+            prop.enrichment = enrichment
+            flag_modified(prop, "enrichment")
+
+        class _Location:
+            def ensure_coordinates(self, prop, refresh=False, *, commit=False):
+                return True
+
+        class _Sea:
+            def update_property(self, prop, *, commit=False):
+                _write(prop, "sea", {"status": "ok", "distance_m": 700})
+                return None
+
+        class _Travel:
+            def calculate_for_property(self, prop, commit=False):
+                _write(prop, "travel", {"api_status": {"state": "ok"}})
+                return True
+
+        class _Pool:
+            def enrich(self, prop, commit=False):
+                return {}
+
+        service = module.PropertyEnrichmentService(
+            location_service=_Location(),
+            travel_service=_Travel(),
+            sea_distance_service=_Sea(),
+            pool_service=_Pool(),
+        )
+        # The real unlocked amenity writer, with Overpass answering.
+        monkeypatch.setattr(
+            service.enrichment_service,
+            "_fetch_osm_amenities",
+            lambda lat, lon: types.SimpleNamespace(
+                failure=None, counts={"cafe": 2}, measured_at="2026-08-20T00:00:00Z"
+            ),
+        )
+        monkeypatch.setattr(
+            service.quality_of_life_service, "enrich", lambda prop, commit=False: None
+        )
+        monkeypatch.setattr(
+            service, "sea_view_calculator", lambda prop, commit=False, use_ai=True: None
+        )
+        monkeypatch.setattr(
+            module.advertiser, "enrich", lambda prop, *, commit=False: {}
+        )
+
+        prop = Property(
+            source_email_id="survives",
+            title="Plot",
+            location_lat=43.5,
+            location_lon=-6.0,
+        )
+        db.session.add(prop)
+        db.session.commit()
+        service.enrich_property(prop, recalc_scoring=False)
+
+        db.session.expire_all()
+        stored = db.session.get(Property, prop.id).enrichment or {}
+        # The decisive pass's own keys, written and committed before any
+        # advisory step ran...
+        assert "travel" in stored, stored.keys()
+        assert "sea" in stored, stored.keys()
+        assert "travel_state" in stored["google"]
+        # ...and the advisory one's, added on top rather than instead.
+        assert "infrastructure_extended" in stored, stored.keys()
+
+
 class TestASecondPressJoinsTheFirst:
     """Fix 3: the one enqueue site with no `dedupe_key`."""
 
