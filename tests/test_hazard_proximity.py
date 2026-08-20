@@ -355,6 +355,19 @@ class TestTheRulesTable:
         )
         assert smelter is not None and smelter.kind == "smelter"
 
+        # A prefixed key whose bare form is still there says nothing at all:
+        # the bare one is the current state. El Musel's coal yard is mapped
+        # `landuse=quarry` and only its *name* says coal, so suppressing the
+        # name over a `was:landuse` would quietly demote it to a quarry.
+        coal = hazard_rules.classify(
+            {
+                "landuse": "quarry",
+                "name": "Parque de carbones",
+                "was:landuse": "industrial",
+            }
+        )
+        assert coal is not None and coal.kind == "coal_yard"
+
         # And the case the rule exists for still refuses: the name is all the
         # evidence there is, and the process behind it is under `disused:`.
         assert (
