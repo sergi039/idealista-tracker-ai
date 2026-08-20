@@ -465,6 +465,50 @@ class TestTruncationIsDisclosed:
         assert response_is_the_card(body)
         assert "element limit" in body
 
+    def test_a_hazard_osm_could_not_place_makes_the_scan_incomplete(
+        self, app, real_fetch
+    ):
+        """`out center` normally gives every way and relation a point.
+
+        A relation whose geometry does not resolve arrives without one, and
+        dropping it silently would be a hazard the scan never mentions
+        (codex review, 2026-08-20).
+        """
+        elements = [
+            {
+                "type": "relation",
+                "id": 50_001,
+                "tags": {"landuse": "landfill", "name": "Vertedero sin geometria"},
+            }
+        ]
+        prop = _prop(title="Unplaced")
+        HazardService(enrichment_service=_FakeEnrichment(elements=elements)).enrich(
+            prop, commit=True
+        )
+        stored = prop.enrichment["hazards"]
+        assert stored["unplaced"] == 1
+        assert stored["truncated"] is True
+        # And the score refuses rather than calling it a clean neighbourhood.
+        score, meta = HousingPropertyScorer()._hazard_score(
+            prop, near_m=1000.0, far_m=5000.0, moderate_factor=0.5
+        )
+        assert score is None
+        assert meta["status"] == "scan_truncated"
+
+    def test_a_tie_between_a_name_and_a_tag_goes_to_the_tag(self):
+        """`way/459067378` is `landuse=landfill` named *Escombrera central
+        térmica* -- the power station's own spoil tip, not the station."""
+        verdict = hazard_rules.classify(
+            {"landuse": "landfill", "name": "Escombrera central termica"}
+        )
+        assert verdict is not None and verdict.kind == "landfill"
+        # And a name that is *more* severe than the tag still wins: El Musel's
+        # coal yard is mapped `landuse=quarry`.
+        coal = hazard_rules.classify(
+            {"landuse": "quarry", "name": "Parque de carbones"}
+        )
+        assert coal is not None and coal.kind == "coal_yard"
+
     def test_an_element_with_no_readable_centre_does_not_shorten_the_count(
         self, app, real_fetch
     ):

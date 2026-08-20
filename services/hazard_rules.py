@@ -515,10 +515,19 @@ def classify(tags: Optional[Dict[str, Any]]) -> Optional[HazardVerdict]:
         return by_tag
     if by_tag is None:
         return by_name
+    # A tie goes to the **tag**, because a tag is a claim about the thing and
+    # a name is a claim about what somebody called it. `way/459067378` is the
+    # measured case: `landuse=landfill` named *Escombrera central térmica* --
+    # the power station's own spoil tip. Both readings are high, and letting
+    # the name win reported a coal-fired power station where there is a heap
+    # of ash (codex review, 2026-08-20). Nothing in the fixture changes: every
+    # tie there agrees with itself, and every case the name exists for -- the
+    # cement works with no `product`, the coal yard mapped as a quarry -- is
+    # decided on severity before it reaches here.
     return (
-        by_tag
-        if severity_rank(by_tag.severity) < severity_rank(by_name.severity)
-        else by_name
+        by_name
+        if severity_rank(by_name.severity) < severity_rank(by_tag.severity)
+        else by_tag
     )
 
 

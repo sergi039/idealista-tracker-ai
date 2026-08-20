@@ -233,16 +233,21 @@ def fetch_elements(
     for element in elements or []:
         if not isinstance(element, dict):
             continue
+        # An element with no readable centre is kept, with no point. Dropping
+        # it here would be silent: `out center` normally gives every way and
+        # relation one, but a relation whose geometry does not resolve arrives
+        # without, and if that element is a hazard the scan has missed
+        # something and has to say so rather than answering as if it had not
+        # (codex review, 2026-08-20). What to do about it is `measure`'s, which
+        # is where the rules live.
         point = _element_point(element)
-        if point is None:
-            continue
         tags = element.get("tags")
         trimmed.append(
             {
                 "type": element.get("type"),
                 "id": element.get("id"),
-                "lat": point[0],
-                "lon": point[1],
+                "lat": None if point is None else point[0],
+                "lon": None if point is None else point[1],
                 "tags": tags if isinstance(tags, dict) else {},
             }
         )
@@ -329,9 +334,17 @@ class HazardService:
         truncated = int(answer.get("returned") or 0) >= hazard_rules.ELEMENT_LIMIT
 
         qualifying: List[Dict[str, Any]] = []
+        unplaced = 0
         for element in elements:
             verdict = hazard_rules.classify(element.get("tags"))
             if verdict is None:
+                continue
+            if element.get("lat") is None or element.get("lon") is None:
+                # A hazard OSM could not put on the map. It cannot be measured
+                # and it cannot be ignored, so it is counted: the block reports
+                # an incomplete scan and the scorer abstains, exactly as it
+                # does when the element cap was reached.
+                unplaced += 1
                 continue
             distance = haversine_m(lat, lon, element["lat"], element["lon"])
             if distance > hazard_rules.SEARCH_RADIUS_M:
@@ -358,7 +371,8 @@ class HazardService:
         return {
             "status": STATUS_OK if items else STATUS_NONE,
             "searched_m": hazard_rules.SEARCH_RADIUS_M,
-            "truncated": truncated,
+            "truncated": truncated or bool(unplaced),
+            "unplaced": unplaced,
             "item_count": len(items),
             "items": items[:MAX_ITEMS],
             "candidates_seen": int(answer.get("returned") or 0),
