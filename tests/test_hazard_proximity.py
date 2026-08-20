@@ -204,24 +204,45 @@ class TestTheRulesTable:
         verdict = hazard_rules.classify({"power": "plant", "plant:source": "coal"})
         assert verdict is not None and verdict.severity == hazard_rules.SEVERITY_HIGH
 
-    def test_an_incidental_place_name_never_downgrades_a_tag(self):
-        """A name match must not outrank what the element's own tag states.
+    def test_a_name_never_downgrades_what_the_tag_states(self):
+        """The more severe of the two verdicts wins, and the tag can be it.
 
-        Reproduced in review: the same LPG tank came back `quarry`/moderate
-        instead of `lpg_storage`/high because its address happened to contain
-        *La Cantera*. Understating a real hazard is strictly worse than
-        reporting a spurious one.
+        A gas tank standing inside a sewage works is an ordinary thing to
+        find, and its name says *depuradora* -- a moderate nuisance -- while
+        its own `content=gas` says high. Reading the name first and stopping
+        there reported the moderate one; understating a real hazard is
+        strictly worse than reporting a spurious one (review, 2026-08-20).
         """
         tank = {
             "man_made": "storage_tank",
             "content": "gas",
-            "operator": "Repsol Butano",
-            "name": "Deposito GLP - Poligono La Cantera",
+            "name": "Deposito de la Depuradora Municipal",
         }
+        by_name_only = hazard_rules._name_verdict(tank)
+        assert by_name_only is not None
+        assert by_name_only.severity == hazard_rules.SEVERITY_MODERATE
+
         verdict = hazard_rules.classify(tank)
         assert verdict is not None
         assert verdict.kind == "lpg_storage"
         assert verdict.severity == hazard_rules.SEVERITY_HIGH
+
+    def test_the_ambiguous_quarry_name_is_gone(self):
+        """`cantera` is also the word for a club's youth academy.
+
+        It caught nothing on the measured data -- both quarries at property
+        793 are tagged `landuse=quarry` -- and misfired on an everyday word.
+        """
+        assert (
+            hazard_rules.classify(
+                {"landuse": "industrial", "name": "Poligono La Cantera"}
+            )
+            is None
+        )
+        by_tag = hazard_rules.classify(
+            {"landuse": "quarry", "name": "Cantera de Abono"}
+        )
+        assert by_tag is not None and by_tag.kind == "quarry"
 
     def test_a_name_is_read_as_words_and_not_as_a_substring(self):
         """`quimica` inside *Bioquímica* is a different word."""
