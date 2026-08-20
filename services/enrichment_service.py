@@ -13,6 +13,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from utils.geocoding import GeocodingService
 from utils.google_api import (
+    REASON_BUDGET_EXHAUSTED,
     REASON_HTTP_ERROR,
     REASON_NETWORK_ERROR,
     REASON_MALFORMED_RESPONSE,
@@ -23,6 +24,7 @@ from utils.google_api import (
 )
 from utils.http import (
     HTTP_USER_AGENT,
+    OVERPASS_BREAKERS,
     OVERPASS_GATE,
     earliest_deadline,
     lookup_deadline,
@@ -1452,14 +1454,13 @@ class EnrichmentService:
         and moving to a second instance because the first is loaded is not a
         reason to become less polite to the second.
 
-        Since #434 the walk is also **bounded in wall-clock time**. Three
-        unreachable instances used to cost 888 s -- four attempts each at a
-        60 s scalar timeout plus 8+16+32 s of backoff, per host, with not one
-        request completing -- and the pool step that spent them scores at
-        weight 0. The ceiling is `Config.OSM_OVERPASS_WALK_BUDGET_S`, or
-        whatever is left of the caller's own `lookup_budget(...)` if that is
-        sooner, and a walk that reaches it stops rather than paying a gate
-        wait to ask the next instance the same question.
+        Since #434 the walk is also **bounded in wall-clock time**, which the
+        breaker below does not do and cannot: it needs three refusals to learn
+        an outage, and the first of those three is exactly the 888 s this
+        ceiling is about. `Config.OSM_OVERPASS_WALK_BUDGET_S`, or whatever is
+        left of the caller's own `lookup_budget(...)` if that is sooner. A
+        walk that reaches it stops rather than paying a gate wait to ask the
+        next instance the same question.
         """
         deadline = earliest_deadline(
             lookup_deadline(),
@@ -1489,7 +1490,44 @@ class EnrichmentService:
     def _overpass_elements_from(
         self, url: str, overpass_query: str, deadline: Optional[float] = None
     ):
-        """One round trip to one instance, inside `deadline` if given."""
+        """One round trip to one instance, unless that instance is saying no.
+
+        The breaker wraps the trip rather than being threaded through it: the
+        body below has one success exit and six refusals, and instrumenting
+        each is how one of them comes to record nothing.
+
+        A skip is reported as `REASON_NETWORK_ERROR`, which is deliberate and
+        load bearing -- it is in `_OVERPASS_TRY_ELSEWHERE`, so `_overpass_elements`
+        keeps walking to the next instance. A reason outside that set would
+        stop the walk on the first open breaker and quietly reinstate the
+        single point of failure #415 removed.
+
+        A **budget refusal is not the host's** (#434). It is reported when the
+        caller's clock ran out, which says nothing about whether this instance
+        would have answered -- counting it towards the breaker would arm five
+        minutes of silence against a healthy host on the strength of somebody
+        else's slow run, so it is neither a refusal nor a success here.
+        """
+        breaker = OVERPASS_BREAKERS.for_url(url)
+        if breaker.should_skip():
+            return None, GoogleApiFailure(
+                reason=REASON_NETWORK_ERROR,
+                message=f"{OVERPASS_BREAKERS.host_of(url)} refused the last "
+                f"{OVERPASS_BREAKERS.threshold} attempts; not dialled",
+            )
+        elements, failure = self._overpass_round_trip(
+            url, overpass_query, deadline=deadline
+        )
+        if failure is None:
+            breaker.record_success()
+        elif failure.reason != REASON_BUDGET_EXHAUSTED:
+            breaker.record_refusal(failure.reason)
+        return elements, failure
+
+    def _overpass_round_trip(
+        self, url: str, overpass_query: str, deadline: Optional[float] = None
+    ):
+        """The trip itself. Every exit here is observed by the caller above."""
         try:
             response = request_with_retries(
                 requests.post,
@@ -1509,20 +1547,27 @@ class EnrichmentService:
                 max_attempts=4,
                 backoff_base=8.0,
                 backoff_max=90.0,
-                # `(connect, read)`, not a scalar: `requests` expands a scalar
-                # to both legs, so the 60 s an Overpass query needs to compute
-                # was also being spent learning that a host does not answer at
-                # all. See OSM_OVERPASS_CONNECT_TIMEOUT_S for the handshake
-                # measurements behind the connect leg.
+                # `(connect, read)`, not a scalar: `urllib3.Timeout.from_float(60)`
+                # gives `connect=60 read=60`, so sixty seconds were spent
+                # learning that a host is not answering. A healthy connect to
+                # all three instances measures 0.06-0.08 s (three samples each,
+                # 2026-08-20), so 3 s is a fiftyfold margin -- and it also has
+                # to cover the TLS handshake, which is why it is not tighter.
+                # The read leg is untouched: a busy-but-alive Overpass answering
+                # 504 has already completed its handshake, so this cannot
+                # reclassify the failure #144 measured. In Config since #434,
+                # where the walk's own ceiling is derived from these numbers.
                 timeout=(
-                    float(getattr(Config, "OSM_OVERPASS_CONNECT_TIMEOUT_S", 5.0)),
+                    float(getattr(Config, "OSM_OVERPASS_CONNECT_TIMEOUT_S", 3.0)),
                     float(getattr(Config, "OSM_OVERPASS_READ_TIMEOUT_S", 60.0)),
                 ),
                 # The patient budget above was measured against a `504` --
                 # this instance is alive and its two per-IP slots are busy, so
                 # waiting is the right move (#144). Silence is the opposite
                 # fact, and this caller has two more instances to ask: one
-                # attempt, then move on.
+                # attempt, then move on. Measured on the mini 2026-08-20, the
+                # instance that cost the most *connected* in 0.109 s and then
+                # said nothing for 30 s, so this cannot be a connect-only rule.
                 silence_max_attempts=1,
                 deadline=deadline,
                 logger=logger,

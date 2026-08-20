@@ -6,16 +6,22 @@ Periodically checks if listings are still active or have been removed.
 import logging
 import re
 import requests
-import threading
 import time
 import random
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple, Optional, Dict, Tuple
-from urllib.parse import urlsplit
 
 from models import Land, LandHistory, Property, SyncHistory
 from app import db
-from utils.http import request_with_retries
+
+#  moved to utils/http.py with  (#399) and is
+# re-exported here: it was this module's for months, and
+# tests/test_listing_status_backoff.py imports it from here.
+from utils.http import (  # noqa: F401  (re-export)
+    HostBreakers,
+    RefusalBreaker,
+    request_with_retries,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,172 +39,6 @@ class Observation(NamedTuple):
     status: str
     removed_date: Optional[str]
     refusal: Optional[str] = None
-
-
-class RefusalBreaker:
-    """Stop dialling a host that has already said no, and say so.
-
-    idealista answers this machine with DataDome bot protection -- measured
-    2026-08-15 over 76 consecutive properties, every one of them a captcha, not
-    one listing page reached. The service was right to record nothing, but it
-    kept spending a request per press to learn the same thing, and the reader
-    got a generic failure each time.
-
-    So refusals are counted across calls. After `threshold` in a row the
-    breaker opens and later checks return immediately, spending nothing, and
-    reporting the refusal as the standing condition it is. When the cooldown
-    expires exactly one request goes out -- the breaker does not heal on a
-    timer, it heals on evidence -- and a refusal re-arms it.
-
-    Deliberately process-local and in-memory. It paces outbound traffic, so it
-    must be cheap and must not need a table; each gunicorn worker keeping its
-    own count means at worst `workers x threshold` requests before everything
-    is quiet, which is a handful, not a sweep. It is a class attribute rather
-    than an instance one because every caller builds a fresh service.
-    """
-
-    def __init__(self, threshold: int, cooldown_s: int):
-        self.threshold = threshold
-        self.cooldown_s = cooldown_s
-        self._lock = threading.Lock()
-        self._consecutive = 0
-        self._blocked_until: Optional[datetime] = None
-        self._last_reason: Optional[str] = None
-        self._last_refusal_at: Optional[datetime] = None
-
-    def should_skip(self, now: Optional[datetime] = None) -> bool:
-        """May this caller dial? Answering False **claims** the probe.
-
-        Deliberately not a pure query, and named in `observe` as the gate it is.
-        A read-only version had a race an independent review found: with the
-        cooldown expiring at 12:30:00, two request threads calling at 12:30:01
-        both saw "not blocked" before either recorded a result, and both dialled
-        a host that is refusing us. Exactly the failure this class exists to
-        prevent, one level up -- and the docstring above promised "exactly one
-        request goes out", which the code did not deliver.
-
-        So the expiry is consumed inside the lock: the first caller through
-        re-arms the window and dials, and everyone behind it keeps skipping
-        until that probe reports. `record_success` clears the window if the
-        probe reached the listing; `record_refusal` re-arms it if it did not,
-        which is what it would have done anyway.
-        """
-        now = now or datetime.now(timezone.utc)
-        with self._lock:
-            if self._blocked_until is None:
-                return False
-            if now < self._blocked_until:
-                return True
-            # The cooldown has expired and this caller is the one probe.
-            self._blocked_until = now + timedelta(seconds=self.cooldown_s)
-            return False
-
-    def record_refusal(self, reason: str, now: Optional[datetime] = None) -> None:
-        now = now or datetime.now(timezone.utc)
-        with self._lock:
-            self._consecutive += 1
-            self._last_reason = reason
-            self._last_refusal_at = now
-            if self._consecutive >= self.threshold:
-                self._blocked_until = now + timedelta(seconds=self.cooldown_s)
-
-    def record_success(self, now: Optional[datetime] = None) -> None:
-        """A fetch reached the listing page: the host is answering us again."""
-        with self._lock:
-            self._consecutive = 0
-            self._blocked_until = None
-            self._last_reason = None
-
-    def state(self) -> Dict:
-        with self._lock:
-            return {
-                "open": self._blocked_until is not None,
-                "consecutive_refusals": self._consecutive,
-                "last_reason": self._last_reason,
-                "last_refusal_at": self._last_refusal_at.isoformat()
-                if self._last_refusal_at
-                else None,
-                "blocked_until": self._blocked_until.isoformat()
-                if self._blocked_until
-                else None,
-            }
-
-    def reset(self) -> None:
-        """For tests and for a deliberate retry after the owner changes the route."""
-        with self._lock:
-            self._consecutive = 0
-            self._blocked_until = None
-            self._last_reason = None
-            self._last_refusal_at = None
-
-
-class HostBreakers:
-    """One `RefusalBreaker` per host, because a refusal is about one host.
-
-    There used to be a single process-wide breaker, which was right while
-    every listing was on idealista.com and became wrong the moment a second
-    site arrived. idealista refuses this machine *permanently* -- measured
-    2026-08-15 over 76 consecutive properties, every one a DataDome block --
-    so its breaker is open essentially always. A shared breaker therefore does
-    not degrade fotocasa checks, it forbids them: three idealista refusals,
-    which arrive the moment anybody presses anything, and the next fotocasa
-    check returns `backing_off` for half an hour without a request going out.
-    One host's wall would have become every host's.
-
-    Keyed on the hostname rather than the full URL: the refusal is the site
-    saying no, and per-URL counting would need `threshold` refusals from each
-    listing before it stopped, which is the sweep the breaker exists to stop.
-    An unparseable URL keys on the empty string -- one bucket for the
-    malformed, which cannot be reached by a real fetch anyway.
-    """
-
-    def __init__(self, threshold: int, cooldown_s: int):
-        self.threshold = threshold
-        self.cooldown_s = cooldown_s
-        self._lock = threading.Lock()
-        self._by_host: Dict[str, RefusalBreaker] = {}
-
-    @staticmethod
-    def host_of(url: Optional[str]) -> str:
-        raw = (url or "").strip()
-        if not raw:
-            return ""
-        if "//" not in raw:
-            raw = "https://" + raw
-        try:
-            return (urlsplit(raw).hostname or "").lower()
-        except ValueError:
-            return ""
-
-    def for_url(self, url: Optional[str]) -> RefusalBreaker:
-        host = self.host_of(url)
-        with self._lock:
-            breaker = self._by_host.get(host)
-            if breaker is None:
-                breaker = RefusalBreaker(
-                    threshold=self.threshold, cooldown_s=self.cooldown_s
-                )
-                self._by_host[host] = breaker
-            return breaker
-
-    def state(self) -> Dict:
-        """Every host that has been dialled, and what it is saying.
-
-        A report over hosts rather than one aggregate: "the breaker is open"
-        was a true sentence about idealista and a false one about everything
-        else, and a reader cannot tell those apart from a single flag.
-        """
-        with self._lock:
-            hosts = dict(self._by_host)
-        return {host or "(no host)": breaker.state() for host, breaker in hosts.items()}
-
-    def reset(self) -> None:
-        """Forget every host. `tests/conftest.py` calls this between tests."""
-        with self._lock:
-            breakers = list(self._by_host.values())
-            self._by_host.clear()
-        for breaker in breakers:
-            breaker.reset()
 
 
 class ListingStatusService:

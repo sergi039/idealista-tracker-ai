@@ -243,17 +243,18 @@ class Config:
 
     # How long one Overpass lookup may wait, and on what.
     #
-    # Measured 2026-08-20 from this laptop, three samples per host: TCP connect
-    # 0.057 s and the TLS handshake complete at 0.128-0.132 s to both reachable
-    # instances, while overpass-api.de answered `No route to host` immediately.
-    # Five seconds is a fortyfold margin over a healthy handshake and still
-    # leaves a slow mobile or VPN path room; it is separate from the read
-    # allowance because `requests` expands a scalar timeout to
+    # The 3 s is #438's, measured, and moved into config here rather than
+    # rewritten: pure TCP connect to the reachable instances is 0.06-0.08 s
+    # (three samples each, 2026-08-20), and an independent measurement the same
+    # afternoon puts the *complete TLS handshake* at 0.128-0.132 s -- so 3 s is
+    # a twentyfold margin over the whole thing, not just the SYN, while
+    # overpass-api.de answered `No route to host` instantly. It is separate
+    # from the read allowance because `requests` expands a scalar timeout to
     # `connect=read=value`, so the 60 s an Overpass query genuinely needs to
-    # *compute* was also being granted to learn that a host does not answer its
-    # SYN -- twelve times per call site (#434).
+    # *compute* was also being granted to learn that a host does not answer.
+    # `tests/test_enrich_does_not_hold_a_slot.py` pins the pair as shipped.
     OSM_OVERPASS_CONNECT_TIMEOUT_S = float(
-        os.environ.get("OSM_OVERPASS_CONNECT_TIMEOUT_S") or "5"
+        os.environ.get("OSM_OVERPASS_CONNECT_TIMEOUT_S") or "3"
     )
     # Unchanged, and deliberately: this is Overpass's own query-computation
     # time, and shortening it would turn a slow answer into a manufactured

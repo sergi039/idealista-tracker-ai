@@ -984,7 +984,7 @@ def _enqueue_property_analyses(property_id: int) -> None:
     Called from inside the enrichment job, so the sequel survives the tab that
     started it. Every failure is swallowed and logged: the enrichment has
     already run, and reporting it as failed because a follow-up could not be
-    queued would send the owner to press it -- and pay for it -- again.
+    queued would send the owner to press it -- and pay for it -- again (#178).
     """
     for provider in _property_analysis_providers():
         try:
@@ -2214,9 +2214,7 @@ def manual_property_enrichment(property_id: int):
             # The sequel, queued by the server on the numbers it just wrote.
             # Deliberately not conditional on `ok`: the page runs the analyses
             # either way, and a listing Google could not place is still worth
-            # an opinion on. Each provider carries the dedupe key the analysis
-            # endpoint already uses, so the page's own POST joins these rather
-            # than paying for a second run.
+            # an opinion on.
             if analyze:
                 _enqueue_property_analyses(property_id)
 
@@ -2255,22 +2253,17 @@ def manual_property_enrichment(property_id: int):
                 "error": "Geocoding failed; enrichment skipped. Check that the property has a valid location.",
             }
 
-        # At most one live enrichment per property (#434). The machinery has
-        # been here since #190 -- the partial unique index
-        # `ux_background_jobs_active_dedupe_key`, the advisory locks, the
-        # documented "a second enqueue returns that job's id" -- and this was
-        # the one enqueue site that did not use it. Four presses on property
-        # 793 queued four identical runs, two of which still held two of the
-        # four `BACKGROUND_WORKERS` half an hour later.
-        #
-        # Keyed on the property **only**, not on `(property, refresh_coords)`:
-        # otherwise a `refresh=True` press would still race an ordinary one,
-        # and two concurrent writers of `enrichment` is precisely the #339
-        # incident. A second press therefore joins a run that may not have
-        # asked to re-geocode, which is the right trade for a re-click.
-        dedupe_key = f"property_enrich:{prop.id}"
-
-        if _should_run_sync():
+        # `allow_request_override=False`, the way #136 closed the same hatch on
+        # the two status endpoints below. This chain makes up to eleven Overpass
+        # round trips, and on 2026-08-17 -- when the endpoint stopped opening
+        # sockets at all -- each one cost four attempts against three instances
+        # at a 60 s connect timeout. `?sync=1` is the one path that still spends
+        # that inside the request, and the API is unauthenticated.
+        # #438 closed `?sync=1` at this call site; what is left of the inline
+        # path is `TESTING`, and it goes through the registry so it claims the
+        # same slot rather than running a second execution alongside a live
+        # async one (#190 review round 3, finding 4, in a second place).
+        if _should_run_sync(allow_request_override=False):
             from services.background_jobs import JobAlreadyActive
 
             try:
@@ -2282,7 +2275,7 @@ def manual_property_enrichment(property_id: int):
                         "refresh_coords": refresh_coords,
                         "analyze": analyze,
                     },
-                    dedupe_key=dedupe_key,
+                    dedupe_key=f"property_enrich:{prop.id}",
                 )
             except JobAlreadyActive as exc:
                 return _job_already_active_response(exc)
@@ -2309,7 +2302,13 @@ def manual_property_enrichment(property_id: int):
                 "refresh_coords": refresh_coords,
                 "analyze": analyze,
             },
-            dedupe_key=dedupe_key,
+            # An impatient second press joins the run already in flight instead
+            # of claiming another of the four executor slots -- the shape the
+            # fotocasa import already uses. Keyed on the property alone: a
+            # second press asking for `refresh_coords` joins a run that did not,
+            # which is the right trade for a re-click and is said out loud in
+            # the response rather than left to be discovered.
+            dedupe_key=f"property_enrich:{prop.id}",
         )
         return jsonify(
             {
