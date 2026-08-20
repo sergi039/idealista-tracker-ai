@@ -241,6 +241,45 @@ def is_hand_set(record: Any) -> bool:
     return manual_coordinate(record) is not None
 
 
+def validate_hand_set(
+    *, lat: Any, lon: Any, accuracy: Any, note: Any
+) -> Tuple[float, float, str, str]:
+    """Check a hand-set location, and raise rather than store half of one.
+
+    Separate from `record_manual_coordinate` so a caller can run it **before it
+    locks the row**. That is `services/enrichment_write.py`'s own rule applied
+    one argument further out: it validates the caller ahead of the measurement
+    so an impossible write costs a raise instead of a billed round of lookups,
+    and an argument that cannot be stored should likewise cost a raise instead
+    of a row lock and a rollback.
+
+    Returns the parsed `(lat, lon, accuracy, note)`, so the writer parses once.
+    """
+    text = str(note or "").strip()
+    if not text:
+        raise ValueError("a hand-set location needs a note saying what was checked")
+
+    # An empty accuracy is a missing argument, not a person saying `unknown`.
+    # `normalize_accuracy` maps silence to `unknown` because that is the honest
+    # *reading* of a column nobody filled; a writer being told what a finding
+    # supports has to have it spelled, and `unknown` is a word one can type.
+    if accuracy is None or not str(accuracy).strip():
+        raise ValueError("a hand-set location needs an accuracy, `unknown` included")
+    label = normalize_accuracy(accuracy)
+    if label not in KNOWN_ACCURACIES:
+        raise ValueError(f"not an accuracy this column carries: {accuracy!r}")
+
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+    except (TypeError, ValueError):
+        raise ValueError(f"not a coordinate: {lat!r}, {lon!r}")
+    if not (-90.0 <= lat_f <= 90.0) or not (-180.0 <= lon_f <= 180.0):
+        raise ValueError(f"coordinate out of range: {lat_f}, {lon_f}")
+
+    return lat_f, lon_f, label, text
+
+
 def record_manual_coordinate(
     enrichment: Optional[dict],
     *,
@@ -274,26 +313,9 @@ def record_manual_coordinate(
     coordinate columns are `Numeric(10, 7)` and a float round-trips through a
     JSON column with whatever precision the encoder feels like.
     """
-    text = str(note or "").strip()
-    if not text:
-        raise ValueError("a hand-set location needs a note saying what was checked")
-    # An empty accuracy is a missing argument, not a person saying `unknown`.
-    # `normalize_accuracy` maps silence to `unknown` because that is the honest
-    # *reading* of a column nobody filled; a writer being told what a finding
-    # supports has to have it spelled, and `unknown` is a word one can type.
-    if accuracy is None or not str(accuracy).strip():
-        raise ValueError("a hand-set location needs an accuracy, `unknown` included")
-    label = normalize_accuracy(accuracy)
-    if label not in KNOWN_ACCURACIES:
-        raise ValueError(f"not an accuracy this column carries: {accuracy!r}")
-    try:
-        lat_f = float(lat)
-        lon_f = float(lon)
-    except (TypeError, ValueError):
-        raise ValueError(f"not a coordinate: {lat!r}, {lon!r}")
-    if not (-90.0 <= lat_f <= 90.0) or not (-180.0 <= lon_f <= 180.0):
-        raise ValueError(f"coordinate out of range: {lat_f}, {lon_f}")
-
+    _lat, _lon, label, text = validate_hand_set(
+        lat=lat, lon=lon, accuracy=accuracy, note=note
+    )
     stamp = (now or datetime.now(timezone.utc)).isoformat()
     block = dict(enrichment or {})
     entry = {

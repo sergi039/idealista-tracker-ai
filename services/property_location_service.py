@@ -13,6 +13,7 @@ from services.coordinate_quality import (
     normalize_accuracy,
     portal_coordinate,
     record_manual_coordinate,
+    validate_hand_set,
 )
 
 from models import Property
@@ -878,7 +879,13 @@ def set_location_by_hand(
     if not prop:
         raise ValueError("no property")
 
+    # Both validations before the lock: the caller's ability to commit
+    # (`enrichment_write`'s own rule) and then the arguments themselves. An
+    # argument that cannot be stored should cost a raise, not a row lock and a
+    # rollback -- the same reason `check_writable` runs ahead of the geocode.
     locked = check_writable(prop, commit)
+    validate_hand_set(lat=lat, lon=lon, accuracy=accuracy, note=note)
+
     with locked_write(prop, locked=locked, commit=commit):
         displaced = None
         if prop.location_lat is not None and prop.location_lon is not None:

@@ -428,6 +428,25 @@ class TestTheWriterHonoursTheColumnContract:
                     commit=True,
                 )
 
+    def test_a_bad_argument_never_takes_the_lock(self, app, monkeypatch):
+        """An argument that cannot be stored costs a raise, not a lock and a
+        rollback -- the same reason `check_writable` runs ahead of the geocode."""
+        with app.app_context():
+            row = _row()
+            seen = self._spy(monkeypatch)
+
+            with pytest.raises(ValueError):
+                set_location_by_hand(
+                    row,
+                    lat=HAND_LAT,
+                    lon=HAND_LON,
+                    accuracy="precise",
+                    note="   ",
+                    commit=True,
+                )
+
+            assert True not in seen
+
     def test_clearing_is_locked_too(self, app, monkeypatch):
         with app.app_context():
             row = _row()
