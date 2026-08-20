@@ -319,16 +319,25 @@ class TestTheBudgetIsAWallClockCeiling:
                 status_code=504, close=lambda: None, json=lambda: {}
             )
 
+        # The budget has to survive the backoff and die in the *gate wait* of
+        # the next attempt -- that is the reproduced path, and a deadline that
+        # simply cannot fit the backoff exits one branch earlier through a
+        # return the fix did not touch. The gate is the deployment's own 5 s
+        # (set by the `clock` fixture).
         response = request_with_retries(
             _call,
             "https://overpass.example/api",
             max_attempts=4,
-            backoff_base=8.0,
+            backoff_base=0.01,
+            backoff_max=0.01,
             timeout=(5.0, 60.0),
             silence_max_attempts=1,
-            deadline=clock.monotonic() + 4.0,
+            gate=OVERPASS_GATE,
+            deadline=clock.monotonic() + 1.0,
         )
-        assert response.status_code == 504
+        assert response.status_code == 504, (
+            "the budget overwrote a refusal the server had already made"
+        )
         assert len(calls) == 1
 
     def test_it_bounds_the_next_attempt_and_not_a_dripping_body(self):
