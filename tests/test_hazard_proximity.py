@@ -319,19 +319,21 @@ class TestTheRulesTable:
         `plant:source` contradicts the name, and the name entry carries the
         words on its own for a plant with no power tag at all.
         """
+        # The tag alone: a plant whose name says nothing about the sun.
         assert (
             hazard_rules.classify(
                 {
                     "power": "plant",
                     "plant:source": "solar",
-                    "name": "Central Termica Solar Andasol",
+                    "name": "Central Termica Andasol",
                 }
             )
             is None
         )
+        # The name alone: no power tag to contradict it, so the words have to.
         assert (
             hazard_rules.classify(
-                {"landuse": "industrial", "name": "Central termosolar Gemasolar"}
+                {"landuse": "industrial", "name": "Central termica solar de Sevilla"}
             )
             is None
         )
