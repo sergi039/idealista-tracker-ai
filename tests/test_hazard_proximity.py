@@ -628,6 +628,20 @@ class TestHonestAbsence:
         assert payload["items"] == before
         assert payload["last_attempt_status"] == hazard_service.STATUS_NO_COORDINATES
 
+        # Kept in storage, and *not* asserted: a measurement of a place the
+        # listing may no longer be near says nothing about its parcel, and a
+        # `none_within_radius` block read this way would be a clean
+        # neighbourhood for a listing that is nowhere (codex review).
+        verdict = hazard_service.read_verdict(prop)
+        assert verdict["status"] == hazard_service.STATUS_STALE_ORIGIN
+        assert verdict["measured"] is False
+        counted = (
+            Property.query.filter(Property.id == prop.id)
+            .filter(hazard_service.measured_expression(Property))
+            .count()
+        )
+        assert counted == 0
+
     def test_a_half_read_block_still_renders(self, app, client):
         """The page must not raise on a shape an older run could have left.
 

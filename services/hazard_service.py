@@ -628,10 +628,19 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
     # and a `refresh=True` enrich both move the coordinate without touching
     # this block, and an approximate row upgraded to `precise` that way had
     # its centroid-measured distance printed as an exact one (review,
-    # 2026-08-20). `origins_agree` answers None when either side is
-    # unreadable, and None is not a move -- only an explicit disagreement is.
-    if origins_agree(stored.get("origin"), origin_of(prop)) is False:
-        return {**base, "status": STATUS_STALE_ORIGIN}
+    # 2026-08-20).
+    #
+    # A block that *records* an origin therefore has to match the row's own
+    # coordinate to be read at all -- including when the row now has none.
+    # That case arrives through this feature's own kindness: a row that loses
+    # its coordinate keeps its measurement rather than having it deleted, and
+    # a kept measurement of a place the listing may no longer be near is worth
+    # storing and not worth *asserting* (codex review, 2026-08-20). An
+    # unreadable stored origin is the only "cannot tell", and it restates.
+    stored_origin = stored.get("origin")
+    if isinstance(stored_origin, dict):
+        if origins_agree(stored_origin, origin_of(prop)) is not True:
+            return {**base, "status": STATUS_STALE_ORIGIN}
 
     status = stored.get("status")
     base["updated_at"] = stored.get("updated_at")
@@ -711,13 +720,13 @@ def measured_expression(model):
     origin_lon = block["origin"]["lon"].as_float()
     row_lat = cast(model.location_lat, Float)
     row_lon = cast(model.location_lon, Float)
-    origin_unknown = or_(
-        origin_lat.is_(None),
-        origin_lon.is_(None),
-        model.location_lat.is_(None),
-        model.location_lon.is_(None),
-    )
+    # Only an *unreadable stored origin* is "cannot tell". A row with no
+    # coordinate of its own is a mismatch, not an unknown: nothing can be
+    # asserted about the parcel of a listing that is nowhere.
+    origin_unknown = or_(origin_lat.is_(None), origin_lon.is_(None))
     origin_matches = and_(
+        model.location_lat.isnot(None),
+        model.location_lon.isnot(None),
         func.abs(origin_lat - row_lat) <= ORIGIN_TOLERANCE_DEG,
         func.abs(origin_lon - row_lon) <= ORIGIN_TOLERANCE_DEG,
     )
