@@ -13,6 +13,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from utils.geocoding import GeocodingService
 from utils.google_api import (
+    REASON_BUDGET_EXHAUSTED,
     REASON_HTTP_ERROR,
     REASON_NETWORK_ERROR,
     REASON_MALFORMED_RESPONSE,
@@ -25,6 +26,8 @@ from utils.http import (
     HTTP_USER_AGENT,
     OVERPASS_BREAKERS,
     OVERPASS_GATE,
+    earliest_deadline,
+    lookup_deadline,
     request_with_retries,
 )
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
@@ -1416,6 +1419,9 @@ class EnrichmentService:
     # every instance runs the same software, so moving hosts would repeat it
     # four more times for nothing (#144). A `remark` inside a 200 -- the
     # server-side timeout -- *is*, because it means that instance is loaded.
+    # Neither is REASON_BUDGET_EXHAUSTED (#434): a spent clock says nothing
+    # about the instance, and the next one would answer the same one gate wait
+    # later. Do not add it here.
     _OVERPASS_TRY_ELSEWHERE = frozenset(
         {
             REASON_NETWORK_ERROR,
@@ -1447,7 +1453,20 @@ class EnrichmentService:
         The shared gate is not per host on purpose. It paces *our* traffic,
         and moving to a second instance because the first is loaded is not a
         reason to become less polite to the second.
+
+        Since #434 the walk is also **bounded in wall-clock time**, which the
+        breaker below does not do and cannot: it needs three refusals to learn
+        an outage, and the first of those three is exactly the 888 s this
+        ceiling is about. `Config.OSM_OVERPASS_WALK_BUDGET_S`, or whatever is
+        left of the caller's own `lookup_budget(...)` if that is sooner. A
+        walk that reaches it stops rather than paying a gate wait to ask the
+        next instance the same question.
         """
+        deadline = earliest_deadline(
+            lookup_deadline(),
+            time.monotonic()
+            + float(getattr(Config, "OSM_OVERPASS_WALK_BUDGET_S", 120.0)),
+        )
         first_failure = None
         urls = [self.osm_overpass_url] + [
             url
@@ -1455,7 +1474,9 @@ class EnrichmentService:
             if url and url != self.osm_overpass_url
         ]
         for index, url in enumerate(urls):
-            elements, failure = self._overpass_elements_from(url, overpass_query)
+            elements, failure = self._overpass_elements_from(
+                url, overpass_query, deadline=deadline
+            )
             if failure is None:
                 if index:
                     logger.info("Overpass answered from the fallback %s", url)
@@ -1466,7 +1487,9 @@ class EnrichmentService:
                 break
         return None, first_failure
 
-    def _overpass_elements_from(self, url: str, overpass_query: str):
+    def _overpass_elements_from(
+        self, url: str, overpass_query: str, deadline: Optional[float] = None
+    ):
         """One round trip to one instance, unless that instance is saying no.
 
         The breaker wraps the trip rather than being threaded through it: the
@@ -1478,6 +1501,12 @@ class EnrichmentService:
         keeps walking to the next instance. A reason outside that set would
         stop the walk on the first open breaker and quietly reinstate the
         single point of failure #415 removed.
+
+        A **budget refusal is not the host's** (#434). It is reported when the
+        caller's clock ran out, which says nothing about whether this instance
+        would have answered -- counting it towards the breaker would arm five
+        minutes of silence against a healthy host on the strength of somebody
+        else's slow run, so it is neither a refusal nor a success here.
         """
         breaker = OVERPASS_BREAKERS.for_url(url)
         if breaker.should_skip():
@@ -1486,14 +1515,18 @@ class EnrichmentService:
                 message=f"{OVERPASS_BREAKERS.host_of(url)} refused the last "
                 f"{OVERPASS_BREAKERS.threshold} attempts; not dialled",
             )
-        elements, failure = self._overpass_round_trip(url, overpass_query)
+        elements, failure = self._overpass_round_trip(
+            url, overpass_query, deadline=deadline
+        )
         if failure is None:
             breaker.record_success()
-        else:
+        elif failure.reason != REASON_BUDGET_EXHAUSTED:
             breaker.record_refusal(failure.reason)
         return elements, failure
 
-    def _overpass_round_trip(self, url: str, overpass_query: str):
+    def _overpass_round_trip(
+        self, url: str, overpass_query: str, deadline: Optional[float] = None
+    ):
         """The trip itself. Every exit here is observed by the caller above."""
         try:
             response = request_with_retries(
@@ -1522,8 +1555,21 @@ class EnrichmentService:
                 # to cover the TLS handshake, which is why it is not tighter.
                 # The read leg is untouched: a busy-but-alive Overpass answering
                 # 504 has already completed its handshake, so this cannot
-                # reclassify the failure #144 measured.
-                timeout=(3.0, 60),
+                # reclassify the failure #144 measured. In Config since #434,
+                # where the walk's own ceiling is derived from these numbers.
+                timeout=(
+                    float(getattr(Config, "OSM_OVERPASS_CONNECT_TIMEOUT_S", 3.0)),
+                    float(getattr(Config, "OSM_OVERPASS_READ_TIMEOUT_S", 60.0)),
+                ),
+                # The patient budget above was measured against a `504` --
+                # this instance is alive and its two per-IP slots are busy, so
+                # waiting is the right move (#144). Silence is the opposite
+                # fact, and this caller has two more instances to ask: one
+                # attempt, then move on. Measured on the mini 2026-08-20, the
+                # instance that cost the most *connected* in 0.109 s and then
+                # said nothing for 30 s, so this cannot be a connect-only rule.
+                silence_max_attempts=1,
+                deadline=deadline,
                 logger=logger,
                 # Every Overpass caller in this process shares one gate, and
                 # it covers every attempt: the retries are what a bulk run

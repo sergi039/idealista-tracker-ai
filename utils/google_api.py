@@ -25,6 +25,13 @@ REASON_REQUEST_DENIED = "request_denied"
 REASON_OVER_QUERY_LIMIT = "over_query_limit"
 REASON_INVALID_REQUEST = "invalid_request"
 REASON_UNKNOWN_ERROR = "unknown_error"
+# The caller's wall-clock budget ran out before this lookup could finish
+# (#434). Distinct from `network_error` because it is the one refusal that
+# says nothing about the endpoint: the host may be perfectly healthy and the
+# clock simply spent by whatever ran before it. A caller walking a fallback
+# list must read it as "stop", never as "this instance is bad, try the next" --
+# the next one would answer the same, one gate wait later.
+REASON_BUDGET_EXHAUSTED = "budget_exhausted"
 
 # Top-level payload statuses that mean "Google answered". ZERO_RESULTS is an
 # answer: there really is nothing matching nearby. An absent status is treated
@@ -84,6 +91,13 @@ def failure_from_exception(exc: BaseException) -> GoogleApiFailure:
     # Imported lazily so this module stays importable without requests.
     import requests
 
+    from utils.http import LookupBudgetExceeded
+
+    if isinstance(exc, LookupBudgetExceeded):
+        # Checked first: it subclasses RequestException, so the branch below
+        # would otherwise call a spent clock a network error and send a
+        # fallback walk on to the next instance for nothing.
+        return GoogleApiFailure(reason=REASON_BUDGET_EXHAUSTED, message=str(exc))
     reason = (
         REASON_NETWORK_ERROR
         if isinstance(exc, requests.RequestException)

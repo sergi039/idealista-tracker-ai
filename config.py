@@ -250,6 +250,98 @@ class Config:
         if url.strip()
     ]
 
+    # How long one Overpass lookup may wait, and on what.
+    #
+    # The 3 s is #438's, measured, and moved into config here rather than
+    # rewritten: pure TCP connect to the reachable instances is 0.06-0.08 s
+    # (three samples each, 2026-08-20), and an independent measurement the same
+    # afternoon puts the *complete TLS handshake* at 0.128-0.132 s -- so 3 s is
+    # a twentyfold margin over the whole thing, not just the SYN, while
+    # overpass-api.de answered `No route to host` instantly. It is separate
+    # from the read allowance because `requests` expands a scalar timeout to
+    # `connect=read=value`, so the 60 s an Overpass query genuinely needs to
+    # *compute* was also being granted to learn that a host does not answer.
+    # `tests/test_enrich_does_not_hold_a_slot.py` pins the pair as shipped.
+    OSM_OVERPASS_CONNECT_TIMEOUT_S = float(
+        os.environ.get("OSM_OVERPASS_CONNECT_TIMEOUT_S") or "3"
+    )
+    # Unchanged, and deliberately: this is Overpass's own query-computation
+    # time, and shortening it would turn a slow answer into a manufactured
+    # absence.
+    OSM_OVERPASS_READ_TIMEOUT_S = float(
+        os.environ.get("OSM_OVERPASS_READ_TIMEOUT_S") or "60"
+    )
+    # The ceiling on one lookup's walk across every instance above.
+    #
+    # Derived from what a *prompt* refusal costs, which is what a `504` is:
+    #
+    #   #144's patient budget on the first instance -- both per-IP slots are
+    #   busy and one frees up in about a minute, so 8+16+32 s of backoff plus
+    #   four 5 s gate waits, ~76 s
+    # + one full attempt on each of the two fallbacks, 5 s gate + 60 s read
+    # = ~206 s, rounded to 210.
+    #
+    # What that does **not** guarantee, because review reproduced it: a
+    # primary whose four `504`s each take 30 s of the read allowance spends
+    # ~177 s legally, and the first fallback then gets a clamped 28 s read
+    # while the second is never dialled. The guarantee is therefore "a prompt
+    # refusal on the primary leaves a complete attempt for each fallback", not
+    # "every path does". Making it unconditional would mean 76 + 4x60 + 2x65
+    # -- seven and a half minutes for one lookup -- which is the cost this
+    # ticket exists to remove. A clamped attempt is reported as
+    # `budget_exhausted` and never held against the host it was cut short on
+    # (`utils/http.py`), so the price of the gap is a retry, not a wrong
+    # answer.
+    #
+    # A tighter number would clamp a real query's read leg, and the presets
+    # query asks Overpass for up to `[timeout:90]` of computation. That would
+    # not break #98 -- a spent budget is recorded as `budget_exhausted`, a
+    # refusal and never an absence -- but it would buy latency with retries
+    # nobody asked for. What actually bounds one Enrich press is
+    # ENRICH_LOOKUP_BUDGET_S below; this bounds the callers that have no run
+    # around them, which is every backfill.
+    OSM_OVERPASS_WALK_BUDGET_S = float(
+        os.environ.get("OSM_OVERPASS_WALK_BUDGET_S") or "210"
+    )
+    # The ceiling on *all* the free lookups one Enrich press may wait for --
+    # every Overpass walk and every elevation query in the run, together.
+    #
+    # The walk budget alone bounds one lookup; an enrichment run makes up to
+    # eleven, so without this the press is still bounded only by their sum. The
+    # decisive steps run first (services/property_enrichment_service.py), so
+    # what an outage costs the advisory ones is whatever is left -- which is
+    # the point: an advisory, score-neutral step must not hold a paid one
+    # hostage, and when the clock is gone it records `unavailable` and the run
+    # goes on.
+    #
+    # 240 s is a little over one full walk, so a total outage costs the press
+    # about four minutes: one lookup that learns the instances are down, a
+    # second that spends what is left, and every one after that refusing
+    # before it opens a socket. Measured on the mini 2026-08-20, one lookup
+    # alone cost 888 s and the run made eleven.
+    ENRICH_LOOKUP_BUDGET_S = float(os.environ.get("ENRICH_LOOKUP_BUDGET_S") or "240")
+    # What the rest of one run may take: the paid Google steps plus the one
+    # free HTTP fetch that is neither Google nor an OSM lookup. Not a deadline
+    # -- nothing enforces it, and nothing should, since abandoning a billed
+    # request is how a press pays for a measurement nobody receives (#178). It
+    # exists so `services/enrich_budget.py` can state the run's worst case
+    # instead of a client guessing at it.
+    #
+    # Added up from the transports rather than picked, and rounded up because
+    # the harmful direction is being *short*: a client that stops polling
+    # while the server is still working reports a running job as failed, and
+    # the obvious next move pays for it again.
+    #
+    #   geocoding      2 queries x 3 attempts x 10 s + backoff   ~70 s
+    #   Places         wide search, 3 attempts x 12 s + backoff  ~40 s
+    #   DistanceMatrix 3 attempts x 15 s + backoff                ~50 s
+    #   advertiser     3 attempts x 20 s behind a 3 s gate       ~70 s
+    #
+    # Those worst cases do not co-occur in any run anyone has observed; 240 s
+    # is roughly the sum of the two largest plus room, and being generous here
+    # costs a spinner that waits, not money.
+    ENRICH_PAID_ALLOWANCE_S = float(os.environ.get("ENRICH_PAID_ALLOWANCE_S") or "240")
+
     # Sea-view estimation. Both sources are free and keyless -- Google billing
     # is off (#98) and is not needed here: the coastline comes from
     # OpenStreetMap and the terrain from Copernicus EU-DEM (25 m).

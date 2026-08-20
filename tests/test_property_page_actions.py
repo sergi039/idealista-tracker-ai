@@ -162,11 +162,14 @@ class TestTheOneButtonRunsBothAiProviders:
         pass_body = body[body.index("async function runEnrichAndAnalyze") :]
         pass_body = pass_body[: pass_body.index("async function runClaudeAnalysis")]
         assert "runGoogleEnrichment(propertyId)" in pass_body
-        assert "runClaudeAnalysis(propertyId)" in pass_body
-        assert "generateChatGPTAnalysis(propertyId)" in pass_body
+        # Each analysis is handed the job the *server* queued for this press
+        # (#434): the dedupe key only holds while a job is live, so posting
+        # again once the server's own had finished paid for it twice.
+        assert "runClaudeAnalysis(propertyId, queued.claude)" in pass_body
+        assert "generateChatGPTAnalysis(propertyId, queued.openai)" in pass_body
         # Google first: the AI prompts read the scores and travel times it writes.
         assert pass_body.index("runGoogleEnrichment(propertyId)") < pass_body.index(
-            "runClaudeAnalysis(propertyId)"
+            "runClaudeAnalysis(propertyId,"
         )
 
     def test_chatgpt_is_skipped_rather_than_billed_when_unconfigured(

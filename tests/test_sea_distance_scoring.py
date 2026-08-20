@@ -630,9 +630,15 @@ def test_manual_enrichment_measures_before_it_scores(app, monkeypatch):
         db.session.expire_all()
         reloaded = db.session.get(Property, property_id)
 
-    # Measured first, on the shared commit, and the score saw the result.
-    # The free amenity lookup rides between them, also on the shared commit.
-    assert order == [("sea", False), ("amenities", False), ("scoring", STATUS_OK)]
+    # Measured first, and the score saw the result.
+    #
+    # The commit flags are the #434 boundary. Sea distance is a *scored*
+    # criterion, so it belongs to the decisive pass and rides that pass's own
+    # commit (`commit=False`, the caller owns the transaction). The amenity
+    # lookup is advisory and now runs *after* that commit, owning its write
+    # (`commit=True`) -- so a paid measurement is durable before any
+    # score-neutral step is allowed to spend a second of the clock.
+    assert order == [("sea", False), ("amenities", True), ("scoring", STATUS_OK)]
     assert reloaded.enrichment["sea"]["distance_m"] == 700.0
 
 
