@@ -108,9 +108,14 @@ def overpass_query(lat: float, lon: float) -> str:
     `PropertyTravelService._osm_specs` builds, and that is a decision rather
     than an oversight. The issue suggested it, on the grounds that the presets
     already cost one shared round trip and hazards could therefore cost none.
-    But the presets only run on the *paid* path -- `enrich_property` reaches
-    travel after `enrich_free_sources` -- while this scan runs on every
-    ingested listing, free. Sharing the spec set would drag a 100 km aerodrome
+    But the presets only run on the *paid* path, which this scan is not on:
+    since #434 `enrich_property` measures travel in its decisive pass and
+    reaches `enrich_free_sources` afterwards, so the presets run *before* this
+    scan on a press and not at all on an ingest, while this scan runs on every
+    ingested listing, free. (This paragraph said "travel after
+    `enrich_free_sources`" until that was checked -- the ordering flipped the
+    same day, and the conclusion survives the correction because it never
+    rested on which came first.) Sharing the spec set would drag a 100 km aerodrome
     query and a 30 km beach query into every ingest, where neither runs today,
     to save one round trip on an Enrich press that is already spending on
     Google; and it would invalidate every cached preset cell at a moment when

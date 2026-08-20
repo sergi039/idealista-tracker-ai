@@ -32,6 +32,7 @@ from utils.http import (
 )
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 from config import Config
+from services.enrichment_write import check_writable, locked_write
 from services.sea_view_service import haversine_m
 from services.place_rules import place_rules_from
 from services.scoring_service import ScoringService
@@ -1752,8 +1753,31 @@ class EnrichmentService:
         Lives here rather than in `PropertyEnrichmentService` because the
         Overpass client and its refusal handling do, and the issue asks for one
         client, not two. Returns the failure, or None when Overpass answered.
+
+        **This was the last unlocked writer of `enrichment`** (#352, closed
+        here). It read the column, spent seconds in Overpass, then committed
+        the whole blob from the copy it had loaded before the call -- so
+        anything another process committed inside that window was erased.
+        Reproduced 2026-08-20 against #437's new block: session B stored a
+        `hazards` measurement, session A finished its amenity count, and the
+        stored row came back holding `infrastructure_extended` and no
+        `hazards` at all. The three other advisory writers had taken the row
+        under `FOR UPDATE` since #339; this one made that guarantee a
+        three-quarters one, and CLAUDE.md said so rather than fixing it.
+
+        The shape is `services/enrichment_write.py`'s and not a fourth
+        variation: validate the caller **before** the measurement, take the
+        lock **after** it, and read the stored block inside the lock -- which
+        is what the two helpers below do, because they read `prop.enrichment`
+        at call time.
+
+        `commit=False` still takes no lock and makes no promise: the caller
+        owns a transaction whose end this cannot see. That is `enrich_property`
+        during its decisive pass, and the amenity step is not on it.
         """
-        from app import db
+        # Before the measurement: a caller that cannot commit here is told so
+        # for the price of a raise rather than a round trip to Overpass.
+        locked = check_writable(prop, commit)
 
         lat = _osm_coordinate(prop.location_lat, limit=90.0)
         lon = _osm_coordinate(prop.location_lon, limit=180.0)
@@ -1767,31 +1791,28 @@ class EnrichmentService:
                 "OSM amenities skipped for property %s: no usable coordinates",
                 prop.id,
             )
-            self._record_property_osm_status(prop, OSM_STATE_UNAVAILABLE, failure)
-            if commit:
-                db.session.commit()
+            with locked_write(prop, locked=locked, commit=commit):
+                self._record_property_osm_status(prop, OSM_STATE_UNAVAILABLE, failure)
             return failure
 
         reading = self._fetch_osm_amenities(lat, lon)
-        if reading.failure is not None:
-            logger.error(
-                "OSM amenities unavailable for property %s: %s",
-                prop.id,
-                reading.failure.describe(),
-            )
-            self._record_property_osm_status(
-                prop, OSM_STATE_UNAVAILABLE, reading.failure
-            )
-        else:
-            self._write_property_infrastructure_extended(
-                prop, osm_amenities=reading.counts
-            )
-            self._record_property_osm_status(
-                prop, OSM_STATE_OK, measured_at=reading.measured_at
-            )
-
-        if commit:
-            db.session.commit()
+        with locked_write(prop, locked=locked, commit=commit):
+            if reading.failure is not None:
+                logger.error(
+                    "OSM amenities unavailable for property %s: %s",
+                    prop.id,
+                    reading.failure.describe(),
+                )
+                self._record_property_osm_status(
+                    prop, OSM_STATE_UNAVAILABLE, reading.failure
+                )
+            else:
+                self._write_property_infrastructure_extended(
+                    prop, osm_amenities=reading.counts
+                )
+                self._record_property_osm_status(
+                    prop, OSM_STATE_OK, measured_at=reading.measured_at
+                )
         return reading.failure
 
     def _analyze_environment(self, land):

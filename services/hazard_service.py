@@ -196,9 +196,17 @@ def cardinal(bearing: Optional[float]) -> Optional[str]:
 
 
 def _coordinate(value: Any, limit: float) -> Optional[float]:
+    # `OverflowError` as well as the two obvious ones: OSM is user-edited and
+    # `float(10 ** 400)` raises it rather than returning `inf` (review,
+    # 2026-08-20). It escaped this function, was caught by the pass above, and
+    # left the row reading "not scanned yet" -- which is the honest words for
+    # the wrong fact, since the scan did run and one element was unreadable.
+    # Returning None puts that element on the `unreadable` count, where an
+    # incomplete answer is already refused the cache and stays in the
+    # backfill's scope.
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if math.isnan(number) or abs(number) > limit:
         return None
