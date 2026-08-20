@@ -502,6 +502,19 @@ check_health() {
 #
 # Output: one "<pid>\t<command>" line per matching job. Returns non-zero when
 # the process list could not be read at all - see the fail-open note below.
+# Prints one "<pid>\t<command>" row per job, and says *why* on failure through
+# its exit status, because its stdout is its data and `log()` writes to stdout
+# through `tee` (INFLIGHT-002 in #265):
+#
+#   1  `docker top` produced no readable process list
+#   2  `docker inspect` could not name the container's main process id
+#   3  the table does not show that pid, so it is not this container's
+#   4  the sentinel does not appear in the table
+#
+# The exit status was always the side channel this needed; nothing had to be
+# invented, only spent. Every one of these still blocks the deploy exactly as
+# before -- what changes is which of them the operator is told about, and the
+# four used to arrive as one sentence naming the wrong cause for three of them.
 inflight_processes() {
     local raw
     # Failure and emptiness are different answers and must not collapse. A
@@ -534,9 +547,9 @@ inflight_processes() {
     # no command line, so it survives the `sh -c` startup form, the venv form,
     # and whatever CMD becomes next.
     local main_pid
-    main_pid="$(docker inspect "$APP_CONTAINER" --format '{{.State.Pid}}' 2>/dev/null)" || return 1
+    main_pid="$(docker inspect "$APP_CONTAINER" --format '{{.State.Pid}}' 2>/dev/null)" || return 2
     case "$main_pid" in
-        "" | 0 | *[!0-9]*) return 1 ;;
+        "" | 0 | *[!0-9]*) return 2 ;;
     esac
 
     # The layout is read off the header, never assumed. `docker top` renders
@@ -580,20 +593,21 @@ inflight_processes() {
     # than against `raw`: check and parse have to describe the same table, the
     # lesson the header-driven parse above already records. A `grep` over the
     # raw text would match the number anywhere in any column.
-    printf '%s\n' "$rows" | awk -F'\t' -v want="$main_pid" '$1 == want { found = 1 } END { exit !found }' || return 1
+    printf '%s\n' "$rows" | awk -F'\t' -v want="$main_pid" '$1 == want { found = 1 } END { exit !found }' || return 3
     # The sentinel stays, and what changed is what it can be trusted *for*. A
     # substring can no longer make a table look truthful, because the pid
     # corroboration above runs first and does not read a command line at all.
-    # It can still make a truthful table look unreadable: this is a plain
-    # `return 1`, so a sentinel that stops appearing -- a server renamed away
-    # from gunicorn, or `AUTOPILOT_CONTAINER_SENTINEL` left pointing at the old
-    # name -- refuses every table from then on. Unreachable today (every real
-    # row carries the token, the migration form included) and deliberately not
-    # fixed here: telling that failure apart from an unreadable table in the
-    # log needs a side channel out of a function whose stdout *is* its data,
-    # since `log()` writes to stdout through `tee`. Named rather than silent.
+    # It can still make a truthful table look unreadable: a sentinel that stops
+    # appearing -- a server renamed away from gunicorn, or
+    # `AUTOPILOT_CONTAINER_SENTINEL` left pointing at the old name -- refuses
+    # every table from then on. That refusal stays, because refusing is the
+    # safe direction and this survey exists to stop a deploy landing on live
+    # work; what it must not do is arrive in the log as "docker gave no
+    # readable process list", which sends an operator to docker when the table
+    # was readable and already proven to be this container's one line above.
+    # So it exits 4 and the caller names the sentinel and its variable.
     if [ -n "$CONTAINER_SENTINEL" ]; then
-        printf '%s\n' "$raw" | awk 'NR > 1' | grep -qF -- "$CONTAINER_SENTINEL" || return 1
+        printf '%s\n' "$raw" | awk 'NR > 1' | grep -qF -- "$CONTAINER_SENTINEL" || return 4
     fi
 
     printf '%s\n' "$rows" \
@@ -861,10 +875,35 @@ survey_inflight() {
         return 0
     fi
 
-    local procs line command marker resumable ledger
-    if ! procs="$(inflight_processes)"; then
+    local procs line command marker resumable ledger probe_status
+    # `$?` and not `if ! procs=...`: the `!` swallows the status the branch
+    # needs, so the whole point of the four codes would be lost between the
+    # function and the message about it.
+    probe_status=0
+    procs="$(inflight_processes)" || probe_status=$?
+    if [ "$probe_status" -ne 0 ]; then
+        # Every cause below is UNKNOWN and blocks identically -- the verdict is
+        # not what INFLIGHT-002 is about. What differs is where it sends the
+        # operator, and three of the four used to send them to docker.
         inflight_unknown=1
-        log "WARNING: 'docker top ${APP_CONTAINER}' gave no readable process list."
+        case "$probe_status" in
+            2)
+                log "WARNING: 'docker inspect ${APP_CONTAINER}' could not name the container's main process id."
+                log "  the process table may be fine; what is missing is the second source that attributes it."
+                ;;
+            3)
+                log "WARNING: the process list does not show ${APP_CONTAINER}'s own main process id."
+                log "  the table was readable, and it is not this container's - do not read it as an idle app."
+                ;;
+            4)
+                log "WARNING: ${APP_CONTAINER}'s process list carries no '${CONTAINER_SENTINEL}' row."
+                log "  the table was readable and is this container's; it is the sentinel that does not match."
+                log "  a renamed app server, or AUTOPILOT_CONTAINER_SENTINEL left on the old name - look there, not at docker."
+                ;;
+            *)
+                log "WARNING: 'docker top ${APP_CONTAINER}' gave no readable process list."
+                ;;
+        esac
         log "  that is UNKNOWN, not empty - a long job may be running right now."
         return 0
     fi
