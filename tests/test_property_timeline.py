@@ -228,6 +228,20 @@ class TestTheRoutes:
         assert entry.channel == "whatsapp"
         assert entry.happened_at.date().isoformat() == "2026-08-20"
 
+    def test_an_entry_type_nobody_defined_writes_nothing(self, app, client, prop):
+        """Not silently filed as a note.
+
+        The form offers two kinds, so anything else arrived from something
+        other than the form -- and guessing which of the two it meant would
+        store an exchange as a note, or a note under a channel nobody chose.
+        """
+        response = client.post(
+            f"/properties/{prop.id}/activity",
+            data={"kind": "memo", "body": "real text", "channel": "whatsapp"},
+        )
+        assert response.status_code == 302
+        assert owner_review.timeline(prop) == []
+
     def test_an_unreadable_date_writes_nothing(self, app, client, prop):
         client.post(
             f"/properties/{prop.id}/activity",
