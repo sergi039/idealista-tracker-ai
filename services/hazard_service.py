@@ -709,6 +709,21 @@ class HazardService:
 # ---------------------------------------------------------------------------
 
 
+def _unreadable(base: Dict[str, Any]) -> Dict[str, Any]:
+    """A block this reader had to reject, in the shape every surface reads.
+
+    `complete` goes with it. It used to be left as stored, on the grounds that
+    the SQL predicate cannot see an item's shape and the two readings must not
+    diverge -- but the visible surfaces then disagreed with each other, which
+    is worse: the card said "not scanned yet" while the export beside it said
+    the scan was complete (codex review, 2026-08-20). The card, the badge and
+    the CSV all read this verdict and now agree; the coverage count is the one
+    number that cannot see it, and it over-counts by one for a row somebody
+    hand-edited, which is the direction that discloses rather than hides.
+    """
+    return {**base, "status": STATUS_MISSING, "complete": False}
+
+
 def read_verdict(prop: Any) -> Dict[str, Any]:
     """The stored scan, restated as a claim about *this parcel*.
 
@@ -756,7 +771,7 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
     }
 
     if not isinstance(stored, dict):
-        return {**base, "status": STATUS_MISSING}
+        return _unreadable(base)
 
     # `complete` is a fact about the *scan* -- did the query see everything it
     # asked for -- and `measured` is a fact about *this point*. They are two
@@ -824,8 +839,12 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
     # A measurement nobody can read is not a radius, and a block claiming one
     # it cannot support is not a measurement at all.
     searched = _safe_float(stored.get("searched_m"))
-    if searched is None or searched <= 0:
-        return {**base, "status": STATUS_MISSING}
+    if searched is None or searched <= 0 or searched > hazard_rules.SEARCH_RADIUS_M:
+        # Bounded above as well as below: the writer can only ever store
+        # `SEARCH_RADIUS_M` less the cache cell, and a stored `1e300` cleared
+        # every horizon the scorer checks and turned an empty scan into a
+        # clean 100 (codex review, 2026-08-20).
+        return _unreadable(base)
     base["searched_m"] = searched
     base["guaranteed_m"] = max(0.0, searched - slack)
 
@@ -840,7 +859,7 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
         or counted < 0
         or counted > hazard_rules.ELEMENT_LIMIT
     ):
-        return {**base, "status": STATUS_MISSING}
+        return _unreadable(base)
     # The writer stores every facility it found, up to `MAX_ITEMS`. So there
     # are exactly two shapes it can produce, and anything else is a block
     # nobody can read: `item_count == len(items)`, or a count past the cap
@@ -851,15 +870,15 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
     if counted != len(stored_items) and not (
         counted > MAX_ITEMS and len(stored_items) == MAX_ITEMS
     ):
-        return {**base, "status": STATUS_MISSING}
+        return _unreadable(base)
     if status == STATUS_NONE and (counted or stored_items):
-        return {**base, "status": STATUS_MISSING}
+        return _unreadable(base)
     # `ok` means something qualified, so the block holds at least one item:
     # the writer stores the nearest `MAX_ITEMS` and `MAX_ITEMS` is not zero.
     # A count of one over an empty list rendered "Nothing recognised" beside
     # an exported facility count of 1 (codex review, 2026-08-20).
     if status == STATUS_OK and (not counted or not stored_items):
-        return {**base, "status": STATUS_MISSING}
+        return _unreadable(base)
     for stored_item in stored_items:
         if not isinstance(stored_item, dict):
             # A stored shape nobody can read is not an item that can be walked
@@ -868,9 +887,8 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
             # review, 2026-08-20). Nothing this writer produces looks like
             # that, so the block is a hand-edit or a shape from some future
             # version, and the honest reading of a block nobody can read is
-            # that nobody has read it. `complete` is left as stored, because
-            # it is what SQL counts and SQL cannot see this.
-            return {**base, "status": STATUS_MISSING}
+            # that nobody has read it.
+            return _unreadable(base)
         # An `ok` block's items are measurements, and each one has to be a
         # finite distance and one of the two severities. A missing distance
         # rendered a facility with no distance beside it and left the row out
@@ -878,12 +896,12 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
         # scores 0 (codex review, 2026-08-20).
         measured = _safe_float(stored_item.get("origin_distance_m"))
         if measured is None or measured < 0:
-            return {**base, "status": STATUS_MISSING}
+            return _unreadable(base)
         if stored_item.get("severity") not in (
             hazard_rules.SEVERITY_HIGH,
             hazard_rules.SEVERITY_MODERATE,
         ):
-            return {**base, "status": STATUS_MISSING}
+            return _unreadable(base)
         lower, upper = distance_bounds_m(measured, slack)
         item = {
             **stored_item,

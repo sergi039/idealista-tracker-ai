@@ -1676,10 +1676,11 @@ class TestOneAnswerInTwoLanguages:
         assert verdict["measured"] is False
         assert verdict["flagged"] is False
         assert verdict["items"] == []
-        # `complete` is left as stored on purpose -- SQL cannot see an item's
-        # shape, and the two readings must not diverge over something one of
-        # them is blind to.
-        assert verdict["complete"] is True
+        # And it is not a complete scan either: the card, the badge and the
+        # CSV all read this verdict, and they have to agree with each other
+        # before they agree with a count that cannot see an item's shape
+        # (codex review, 2026-08-20).
+        assert verdict["complete"] is False
         score, meta = HousingPropertyScorer()._hazard_score(
             prop, near_m=1000.0, far_m=5000.0, moderate_factor=0.5
         )
@@ -1977,6 +1978,31 @@ class TestTheComponent:
         )
         score, meta = self._score(prop)
         assert score is None
+        # The scan was long enough; the slack is what eats the difference, and
+        # that is the reason the owner can act on.
+        assert meta["status"] == "approximate_origin"
+
+    def test_a_scan_shorter_than_far_m_cannot_answer_even_with_items(
+        self, app, real_fetch
+    ):
+        """The horizon check used to cover only an empty scan.
+
+        `far_m` is configurable per subscription, so a scan that covered less
+        than it cannot answer for the ground past its edge: a moderate quarry
+        at 5 km scored 72 while an unseen high-severity facility at 6 km would
+        have scored 55 and decided the component (codex review, 2026-08-20).
+        """
+        prop = _prop(title="ShortHorizonWithItems")
+        HazardService(
+            enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
+        ).enrich(prop, commit=True)
+        assert hazard_service.read_verdict(prop)["items"]
+
+        # Inside the scan's own horizon it answers...
+        assert self._score(prop, far_m=5000.0)[0] is not None
+        # ...and past it, it does not.
+        score, meta = self._score(prop, far_m=10000.0)
+        assert score is None
         assert meta["status"] == "searched_radius_too_small"
 
     def test_a_measured_hazard_scores_and_a_banded_one_abstains(self, app, real_fetch):
@@ -2001,6 +2027,36 @@ class TestTheComponent:
         resolved, error = _resolve_hazard_config({"far_m": 100.0}, defaults)
         assert resolved == dict(defaults)
         assert "far_m" in error
+
+    def test_the_weight_really_reaches_the_average_and_the_page(
+        self, app, client, real_fetch, profile
+    ):
+        """Dropping `hazard_score` from the weighted average left every test
+        green, and the score breakdown on the card never listed it at all
+        (codex review, 2026-08-20)."""
+        profile.scoring_config = {
+            "categories": {"land": {"lifestyle": {"hazard_score": 1.0}}}
+        }
+        db.session.commit()
+        prop = _prop(
+            title="WeightMoves", search_profile_id=profile.id, price=100000, area=1000
+        )
+        HazardService(
+            enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
+        ).enrich(prop, commit=True)
+        PropertyScoringService().calculate_for_property(prop, commit=True)
+
+        lifestyle = prop.scoring["profiles"]["lifestyle"]
+        component = lifestyle["components"]["hazard_score"]
+        assert component is not None
+        # The whole lifestyle branch is this one criterion, so the branch score
+        # *is* the component -- which is what fails if it never reaches
+        # `_weighted_average`.
+        assert lifestyle["score"] == pytest.approx(component)
+
+        body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
+        assert "Industrial neighbours" in body
+        assert "component_hazard" not in body, "the label must be translated"
 
     def test_the_override_reaches_the_scorer(self, app, real_fetch, profile):
         """A subscription that turns the weight on gets the weight applied."""
@@ -2170,6 +2226,31 @@ class TestTheSurfaces:
         assert by_name["Hazards"] == "none_within_radius"
         assert by_name["Hazard Scan Complete"] == "False"
 
+    def test_the_csv_never_turns_an_unreadable_block_into_a_measurement(
+        self, app, client, real_fetch, profile
+    ):
+        """Exporting the stored status rather than the verdict's turned a
+        block nobody can read into a measured `none_within_radius` (codex
+        review, 2026-08-20)."""
+        prop = _prop(title="CsvUnreadable", search_profile_id=profile.id)
+        prop.enrichment = {
+            "hazards": {
+                "status": hazard_service.STATUS_NONE,
+                "items": "not a list",
+                "item_count": 0,
+                "truncated": False,
+                "searched_m": 5984.0,
+                "origin": {"lat": XIVARES[0], "lon": XIVARES[1]},
+            }
+        }
+        db.session.commit()
+        body = client.get("/properties/export.csv").get_data(as_text=True)
+        header, *rows = list(csv.reader(io.StringIO(body)))
+        by_name = dict(zip(header, rows[0]))
+        assert by_name["Hazards"] == hazard_service.STATUS_MISSING
+        assert by_name["Hazard Scan Complete"] == "False"
+        assert by_name["Hazard Facilities"] == ""
+
     def test_the_csv_says_a_moved_row_still_holds_a_complete_scan(
         self, app, client, real_fetch, profile
     ):
@@ -2310,15 +2391,19 @@ class TestOneHomePerRule:
             "refresh",
             lambda obj, **kwargs: (
                 refreshes.append(kwargs.get("with_for_update")),
+                order.append("refresh"),
                 real_refresh(obj, **kwargs),
-            )[1],
+            )[2],
         )
 
         prop = _prop(title="LockOrder")
         HazardService(enrichment_service=_FakeEnrichment(elements=[])).enrich(
             prop, commit=True
         )
-        assert order == ["check_writable", "fetch"]
+        # The lock comes *after* the measurement, which is the half of #339
+        # that a list of two names could not see: moving the refresh in front
+        # of the network call left this green (codex review, 2026-08-20).
+        assert order == ["check_writable", "fetch", "refresh"]
         assert refreshes == [True]
 
         # ...and on the path that never reaches the network at all.
@@ -2328,7 +2413,7 @@ class TestOneHomePerRule:
         HazardService(enrichment_service=_FakeEnrichment(elements=[])).enrich(
             nowhere, commit=True
         )
-        assert order == ["check_writable"]
+        assert order == ["check_writable", "refresh"]
         assert refreshes == [True]
 
     def test_the_free_pass_really_scans(self, app, real_fetch):

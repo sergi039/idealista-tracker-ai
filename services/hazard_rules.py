@@ -262,13 +262,24 @@ _NON_COMBUSTION_PLANT_SOURCES: Dict[str, Tuple[str, str]] = {
 # much as the accepts: `laboratory` (Alskin Cosmetics), `warehouse` (Moeve),
 # `metal_fabrication` (INDRA) and `shipyard` (Astilleros Armón) are all
 # present in the measured data and none of them is here.
-_INDUSTRIAL_EVIDENCE: Dict[str, Tuple[str, str]] = {
+# Words that say an `industrial=oil` works presses olives rather than storing
+# petroleum.
+_EDIBLE_OIL = ("almazara", "aceite", "aceitera", "oliva", "olivar", "orujo")
+
+_INDUSTRIAL_EVIDENCE: Dict[str, Tuple] = {
     "steelmaking": ("steelworks", SEVERITY_HIGH),
     "steel": ("steelworks", SEVERITY_HIGH),
     "smelting": ("foundry", SEVERITY_HIGH),
     "foundry": ("foundry", SEVERITY_HIGH),
     "refinery": ("refinery", SEVERITY_HIGH),
-    "oil": ("fuel_depot", SEVERITY_HIGH),
+    # In Spanish, *aceite* is oil too. `way/591673652` is *Almazara Molino de
+    # las Torres*, an olive-oil mill tagged `industrial=oil`, and it came back
+    # a high-severity fuel depot (codex review, 2026-08-20) -- while the same
+    # tag on El Musel is Exolum's petroleum terminals, which is why the entry
+    # stays and carries the words that say which sense is meant. The same
+    # ambiguity took `product=oil` out of the table entirely; here the tag has
+    # two measured true positives to lose.
+    "oil": ("fuel_depot", SEVERITY_HIGH, _EDIBLE_OIL),
     "oil_tank_farm": ("fuel_depot", SEVERITY_HIGH),
     "gas": ("fuel_depot", SEVERITY_HIGH),
     "chemical": ("chemical_works", SEVERITY_HIGH),
@@ -280,6 +291,10 @@ _INDUSTRIAL_EVIDENCE: Dict[str, Tuple[str, str]] = {
     "slaughterhouse": ("slaughterhouse", SEVERITY_MODERATE),
     "asphalt": ("asphalt_plant", SEVERITY_HIGH),
     "concrete": ("concrete_plant", SEVERITY_MODERATE),
+    # The tag CEMEX's own objects carry (`way/1221635493`), refused because
+    # only the bare word was listed (codex review, 2026-08-20).
+    "concrete_plant": ("concrete_plant", SEVERITY_MODERATE),
+    "cement_plant": ("cement_works", SEVERITY_HIGH),
     "mine": ("mine", SEVERITY_MODERATE),
     "quarry": ("quarry", SEVERITY_MODERATE),
 }
@@ -680,7 +695,12 @@ def _tag_verdict(tags: Dict[str, Any]) -> Optional[HazardVerdict]:
 
     industrial = fold(tags.get("industrial"))
     if industrial in _INDUSTRIAL_EVIDENCE:
-        kind, severity = _INDUSTRIAL_EVIDENCE[industrial]
+        entry = _INDUSTRIAL_EVIDENCE[industrial]
+        kind, severity = entry[0], entry[1]
+        unless = entry[2] if len(entry) > 2 else ()
+        tokens = _name_tokens(fold(tags.get("name")))
+        if any(_name_says(tokens, word) for word in unless):
+            return None
         return HazardVerdict(
             kind=kind, severity=severity, evidence=f"industrial={industrial}"
         )

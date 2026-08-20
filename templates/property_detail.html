@@ -789,6 +789,7 @@
                         ('travel_score', t('component_travel')),
                         ('sea_score', t('component_sea')),
                         ('pool_score', t('component_pool')),
+                        ('hazard_score', t('component_hazard')),
                     ] %}
                     {% for _prof_key, _prof_label in [('investment', t('investment_score')), ('lifestyle', t('lifestyle_score'))] %}
                         {% set _prof = _profiles.get(_prof_key) if _profiles.get(_prof_key) is mapping else {} %}

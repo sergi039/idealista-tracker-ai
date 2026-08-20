@@ -1105,15 +1105,35 @@ class HousingPropertyScorer(BasePropertyScorer):
             # it; the number must not answer over it.
             return None, {**bounds, "status": "scan_truncated"}
 
+        # The horizon check is asked of every scan, not only an empty one.
+        # `far_m` is configurable per subscription, and a scan that covered
+        # less than it cannot answer for the ground past its edge: a moderate
+        # quarry at 5 km scored 72 while an unseen high-severity facility at
+        # 6 km would have scored 55 and decided the component (codex review,
+        # 2026-08-20). This is why an approximate row does not score the
+        # criterion at all -- 6 km around a centroid guarantees 1 km around
+        # the parcel, which is the #358 rule and not a special case.
+        guaranteed = verdict.get("guaranteed_m")
+        if guaranteed is None or guaranteed < far_m:
+            # Two different reasons wear this shape, and the meta names the
+            # one the owner can act on: a scan that really was too short, and
+            # a scan long enough whose *slack* eats the difference. The second
+            # is a re-geocode away; the first is not.
+            searched = verdict.get("searched_m")
+            shortfall = (
+                STATUS_APPROXIMATE_ORIGIN
+                if searched is not None and searched >= far_m
+                else "searched_radius_too_small"
+            )
+            return None, {
+                **bounds,
+                "status": shortfall,
+                "guaranteed_m": guaranteed,
+                "origin_accuracy": verdict.get("origin_accuracy"),
+            }
+
         items = verdict.get("items") or []
         if not items:
-            guaranteed = verdict.get("guaranteed_m")
-            if guaranteed is None or guaranteed < far_m:
-                return None, {
-                    **bounds,
-                    "status": "searched_radius_too_small",
-                    "guaranteed_m": guaranteed,
-                }
             return 100.0, {
                 **bounds,
                 "status": status,
