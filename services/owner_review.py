@@ -485,13 +485,16 @@ def _apply_review_locked(
 
     snapshot = dict(current)
     snapshot["previous"] = previous
+    stamped = datetime.now(timezone.utc).replace(tzinfo=None)
     db.session.add(
         PropertyActivity(
             property_id=prop.id,
             kind=KIND_VERDICT,
-            happened_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            happened_at=stamped,
             body=None,
             snapshot=snapshot,
+            created_at=stamped,
+            updated_at=stamped,
         )
     )
     return {"changed": True, "snapshot": current}
@@ -529,3 +532,176 @@ def history_out_of_sync(prop: Any) -> bool:
     # the comparison is the same one the writer uses to decide "nothing
     # changed" -- two readings of "is this the state that was recorded".
     return not _same_review(recorded, current)
+
+
+# --- the timeline -----------------------------------------------------------
+
+
+def timeline(prop: Any, *, include_deleted: bool = False) -> List[Any]:
+    """One property's entries, newest first. The reverse-chronological feed.
+
+    Ordered by `happened_at` and not by `created_at`: an answer given on the
+    phone yesterday is typed today, and a feed ordered by when somebody sat
+    down to record things tells the story in the wrong order. `id` breaks ties
+    so two entries stamped the same minute keep a stable order.
+
+    Soft-deleted entries are out by default. They are *kept* rather than
+    removed because a sentence the owner typed is the one thing in this
+    application nothing can recompute.
+    """
+    from models import PropertyActivity
+
+    query = PropertyActivity.query.filter(PropertyActivity.property_id == prop.id)
+    if not include_deleted:
+        query = query.filter(PropertyActivity.deleted_at.is_(None))
+    return query.order_by(
+        PropertyActivity.happened_at.desc(), PropertyActivity.id.desc()
+    ).all()
+
+
+def add_note(prop: Any, *, body: str, happened_at: Optional[datetime] = None) -> Any:
+    """Record a note. The text is the entry; a blank one is refused."""
+    from app import db
+    from models import PropertyActivity
+
+    if _blank(body):
+        raise ReviewError("a note is its text")
+
+    # `created_at` and `updated_at` are set from ONE value rather than left to
+    # two separate column defaults: `was_edited` compares them exactly, and two
+    # `utcnow()` calls on the same insert land microseconds apart. A tolerance
+    # instead of this would have to be wide enough to cover that and narrow
+    # enough to notice a correction typed three seconds later, and there is no
+    # such number.
+    stamped = datetime.now(timezone.utc).replace(tzinfo=None)
+    entry = PropertyActivity(
+        property_id=prop.id,
+        kind=KIND_NOTE,
+        happened_at=happened_at or stamped,
+        body=body.strip(),
+        created_at=stamped,
+        updated_at=stamped,
+    )
+    db.session.add(entry)
+    db.session.commit()
+    return entry
+
+
+def add_contact(
+    prop: Any,
+    *,
+    channel: str,
+    counterpart: Optional[str] = None,
+    asked: Optional[str] = None,
+    body: Optional[str] = None,
+    happened_at: Optional[datetime] = None,
+) -> Any:
+    """Record one exchange.
+
+    A channel is required, and something has to have been exchanged or
+    somebody named -- a visit with nothing written down is a real entry as
+    long as it says who was met, and an entirely empty row is not. The
+    database says the same thing (migration 021); this says it in a sentence
+    that names the field.
+    """
+    from app import db
+    from models import PropertyActivity
+
+    wanted = (channel or "").strip().lower()
+    if wanted not in CHANNELS:
+        raise ReviewError(f"unknown channel: {channel!r}")
+    if _blank(counterpart) and _blank(asked) and _blank(body):
+        raise ReviewError("a contact entry needs who was spoken to, or what was said")
+
+    stamped = datetime.now(timezone.utc).replace(tzinfo=None)
+    entry = PropertyActivity(
+        property_id=prop.id,
+        kind=KIND_CONTACT,
+        happened_at=happened_at or stamped,
+        channel=wanted,
+        counterpart=None if _blank(counterpart) else counterpart.strip(),
+        asked=None if _blank(asked) else asked.strip(),
+        body=None if _blank(body) else body.strip(),
+        created_at=stamped,
+        updated_at=stamped,
+    )
+    db.session.add(entry)
+    db.session.commit()
+    return entry
+
+
+# The kinds a person may edit or delete. `verdict` is not among them: those
+# entries are the history of the decision, written by `set_review` in the same
+# transaction as the columns, and letting the note controls reach them would
+# let the log be edited into disagreement with the state it describes.
+EDITABLE_KINDS: Tuple[str, ...] = (KIND_NOTE, KIND_CONTACT)
+
+
+def edit_entry(entry: Any, **fields: Any) -> Any:
+    """Change what an entry says. Notes and contacts only."""
+    from app import db
+
+    if entry.kind not in EDITABLE_KINDS:
+        raise ReviewError("a verdict entry is the record of a decision, not a note")
+
+    if "body" in fields:
+        body = fields["body"]
+        if entry.kind == KIND_NOTE and _blank(body):
+            raise ReviewError("a note is its text")
+        entry.body = None if _blank(body) else body.strip()
+    if "asked" in fields and entry.kind == KIND_CONTACT:
+        entry.asked = None if _blank(fields["asked"]) else fields["asked"].strip()
+    if "counterpart" in fields and entry.kind == KIND_CONTACT:
+        entry.counterpart = (
+            None if _blank(fields["counterpart"]) else fields["counterpart"].strip()
+        )
+    if "channel" in fields and entry.kind == KIND_CONTACT:
+        wanted = (fields["channel"] or "").strip().lower()
+        if wanted not in CHANNELS:
+            raise ReviewError(f"unknown channel: {fields['channel']!r}")
+        entry.channel = wanted
+    if "happened_at" in fields and fields["happened_at"]:
+        entry.happened_at = fields["happened_at"]
+
+    if entry.kind == KIND_CONTACT and (
+        _blank(entry.counterpart) and _blank(entry.asked) and _blank(entry.body)
+    ):
+        raise ReviewError("a contact entry needs who was spoken to, or what was said")
+
+    entry.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.session.commit()
+    return entry
+
+
+def soft_delete_entry(entry: Any) -> Any:
+    """Take an entry off the feed without destroying it.
+
+    Everything else this application holds can be recomputed -- a drive time,
+    a score, a parcel outline. A sentence somebody typed cannot, so a mis-tap
+    must not be the end of it, and `deleted_at` is one nullable column against
+    that.
+    """
+    from app import db
+
+    if entry.kind not in EDITABLE_KINDS:
+        raise ReviewError("a verdict entry is the record of a decision, not a note")
+
+    entry.deleted_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.session.commit()
+    return entry
+
+
+def was_edited(entry: Any) -> bool:
+    """Whether to show the "(edited)" marker, the Slack/GitHub convention.
+
+    An exact comparison, which is only honest because both writers above stamp
+    the two columns from one value. A tolerance was tried first and is the
+    wrong shape: it has to be wide enough to swallow the microseconds between
+    two column defaults and narrow enough to notice a typo corrected three
+    seconds later, and no number is both.
+    """
+    created = getattr(entry, "created_at", None)
+    updated = getattr(entry, "updated_at", None)
+    if not created or not updated:
+        return False
+    return updated != created
