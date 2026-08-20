@@ -2,7 +2,7 @@ import logging
 import math
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 import hashlib
 
@@ -30,6 +30,7 @@ from app import db
 from services import sea_view_service
 from services.coordinate_quality import shared_coordinate_peers
 from services import advertiser
+from services import owner_review
 from services.listing_verification import (
     read_verdict as listing_verdict,
     verified_expression,
@@ -991,6 +992,63 @@ def _advertiser_choices(profile_selection, applied=""):
     return choices
 
 
+def _owner_verdict_choices(profile_selection, applied=""):
+    """How many listings the owner decided what about.
+
+    `undecided` is offered whenever it holds anything, and on this table it
+    holds nearly everything. That is the point rather than noise: without it
+    the three decided counts read as a tally of the whole page, and "nobody
+    decided yet" is exactly the fact #98 says must not be folded into
+    "rejected".
+    """
+    state = owner_review.decision_expression(Property)
+    rows = apply_profile_filter(
+        db.session.query(state, func.count()),
+        Property.search_profile_id,
+        profile_selection,
+    ).group_by(state)
+    counts = {key: total for key, total in rows.all() if key}
+
+    choices = owner_review.decision_options(counts)
+    if applied and applied not in {choice["value"] for choice in choices}:
+        choices.append(
+            {
+                "value": applied,
+                "label_key": owner_review.decision_label_key(applied),
+                "count": 0,
+            }
+        )
+    return choices
+
+
+def _next_action_choices(profile_selection, applied="", on_date=None):
+    """How many listings carry an outstanding action, and how many are late.
+
+    `none` is not offered: it is most of the table, and an option that selects
+    everything selects nothing anyone is looking for. The date is the caller's
+    -- the same one the filter and the badges use, so the count cannot describe
+    a different day from the rows under it.
+    """
+    state = owner_review.action_expression_portable(Property, on_date)
+    rows = apply_profile_filter(
+        db.session.query(state, func.count()),
+        Property.search_profile_id,
+        profile_selection,
+    ).group_by(state)
+    counts = {key: total for key, total in rows.all() if key}
+
+    choices = owner_review.action_options(counts)
+    if applied and applied not in {choice["value"] for choice in choices}:
+        choices.append(
+            {
+                "value": applied,
+                "label_key": owner_review.action_label_key(applied),
+                "count": 0,
+            }
+        )
+    return choices
+
+
 def _property_filter_options(
     profile_selection,
     category_filter="",
@@ -998,6 +1056,9 @@ def _property_filter_options(
     municipality_filter="",
     source_filter="",
     advertiser_filter="",
+    verdict_filter="",
+    action_filter="",
+    review_today=None,
 ):
     """Type / Subtype / Municipality choices for the subscriptions on screen.
 
@@ -1033,6 +1094,8 @@ def _property_filter_options(
         "municipalities": _municipality_choices(profile_selection, municipality_filter),
         "sources": _source_choices(profile_selection, source_filter),
         "advertisers": _advertiser_choices(profile_selection, advertiser_filter),
+        "verdicts": _owner_verdict_choices(profile_selection, verdict_filter),
+        "actions": _next_action_choices(profile_selection, action_filter, review_today),
         "has_unclassified_category": _selection_has_unclassified(
             Property.property_category, profile_selection
         ),
@@ -1106,6 +1169,14 @@ def properties():
         municipality_filter = request.args.get("municipality", "")
         source_filter = request.args.get("source", "")
         advertiser_filter = request.args.get("advertiser", "")
+        verdict_filter = request.args.get("verdict", "")
+        action_filter = request.args.get("action", "")
+        # One date for the whole request. `overdue` is a due date compared
+        # against today, and the badge, the filter, the count beside its option
+        # and both serializers have to compare against the *same* today or they
+        # disagree for the few minutes a day nobody is watching
+        # (services/owner_review.py).
+        review_today = owner_review.today()
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
@@ -1187,6 +1258,21 @@ def properties():
         advertiser_clause = advertiser.filter_clause(Property, advertiser_filter)
         if advertiser_clause is not None:
             query = query.filter(advertiser_clause)
+        # What the owner decided, and what is still outstanding.
+        # services/owner_review.py owns both readings, so the badge, these two
+        # filters and the counts beside their options are one answer rather
+        # than several. Both filters are applied here rather than one of them
+        # here and the other elsewhere: a surface that keeps one parameter and
+        # drops the other is the regression these two are tested against
+        # together.
+        verdict_clause = owner_review.decision_filter_clause(Property, verdict_filter)
+        if verdict_clause is not None:
+            query = query.filter(verdict_clause)
+        action_clause = owner_review.action_filter_clause(
+            Property, action_filter, review_today
+        )
+        if action_clause is not None:
+            query = query.filter(action_clause)
         # A pasted listing URL, or a bare listing id, is a search too --
         # utils/listing_search.py owns what the box accepts.
         search_clause = listing_search_clause(Property, search_query)
@@ -1328,6 +1414,9 @@ def properties():
             municipality_filter=municipality_filter,
             source_filter=source_filter,
             advertiser_filter=advertiser_filter,
+            verdict_filter=verdict_filter,
+            action_filter=action_filter,
+            review_today=review_today,
         )
 
         return render_template(
@@ -1352,6 +1441,10 @@ def properties():
             # what it looked for instead of leaving "0 properties found" to
             # mean both "no such listing" and "not understood as you typed it".
             search_interpretation=interpret_search(search_query),
+            # The page's one date. Every badge that asks whether an action is
+            # late is handed this value; a template calling `date.today()` per
+            # row would disagree with the query that selected the rows.
+            review_today=review_today,
             **filter_options,
             current_filters={
                 # A list, so `url_for` repeats the parameter instead of
@@ -1362,6 +1455,8 @@ def properties():
                 "municipality": municipality_filter,
                 "source": source_filter,
                 "advertiser": advertiser_filter,
+                "verdict": verdict_filter,
+                "action": action_filter,
                 "search": search_query,
                 "inv_metr": investment_metrics_filter,
                 "sea_view": sea_view_filter,
@@ -1544,6 +1639,12 @@ def property_detail(property_id):
                 else None
             ),
             travel_display_targets=travel_display_targets,
+            # One row, one query, and only on this page: whether the stored
+            # decision still matches the newest entry in its own log. The list
+            # must never ask this -- it would be a query per row -- which is
+            # why `owner_review.read_decision` stays a pure reader and this is
+            # a separate call (services/owner_review.py).
+            review_history_out_of_sync=owner_review.history_out_of_sync(prop),
             sea_view_verdict=sea_view_service.read_verdict(prop),
             # One row, and only on this page: the list would run it per row.
             # It is evidence about the coordinate, next to the coordinate, and
@@ -2682,6 +2783,64 @@ def set_advertiser(property_id):
     return redirect(url_for("main.property_detail", property_id=property_id))
 
 
+@main_bp.route("/properties/<int:property_id>/review", methods=["POST"])
+def set_review(property_id):
+    """Record what the owner decided, and what is still outstanding.
+
+    One dedicated route validating a small closed set, flashing a result and
+    redirecting -- the `set_advertiser` / `set_pool_absence` idiom, and on
+    `main_bp`, so the form carries a CSRF token. There is no JSON twin: every
+    endpoint on `api_bp` is CSRF-exempt, and this writes the one thing in the
+    application a person typed rather than a measurement.
+
+    Both fields are submitted together because they are edited together, and
+    because `services.owner_review.set_review` records one event describing the
+    state it left the row in. Two routes would produce two events for one press
+    and a timeline that reads like two decisions.
+
+    A blank decision clears it, which is not the same as rejecting: the row
+    goes back to `undecided`, the state a listing nobody has judged is in.
+    """
+    from services import owner_review as owner_review_service
+
+    prop = db.get_or_404(Property, property_id)
+
+    decision = (request.form.get("verdict") or "").strip().lower()
+    if decision and decision not in owner_review_service.DECIDED_STATES:
+        flash("Unknown verdict.", "error")
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    raw_due = (request.form.get("due_on") or "").strip()
+    due_on = None
+    if raw_due:
+        try:
+            due_on = date.fromisoformat(raw_due)
+        except ValueError:
+            flash("The due date is not a date.", "error")
+            return redirect(url_for("main.property_detail", property_id=property_id))
+
+    try:
+        result = owner_review_service.set_review(
+            prop,
+            decision=decision or None,
+            reason=request.form.get("reason"),
+            action=request.form.get("next_action"),
+            due_on=due_on,
+        )
+    except owner_review_service.ReviewError as exc:
+        # A rejected write, not a crash: the message names the field.
+        flash(str(exc), "error")
+        return redirect(url_for("main.property_detail", property_id=property_id))
+
+    if not result["changed"]:
+        flash("Nothing changed.", "success")
+    elif decision:
+        flash("Recorded.", "success")
+    else:
+        flash("Cleared: this listing is undecided again.", "success")
+    return redirect(url_for("main.property_detail", property_id=property_id))
+
+
 @main_bp.route("/properties/<int:property_id>/pool-absence", methods=["POST"])
 def set_pool_absence(property_id):
     """The owner's hand-set 'no pool here' verdict (proposal D17).
@@ -2953,6 +3112,14 @@ def map_view():
         municipality_filter = request.args.get("municipality", "")
         source_filter = request.args.get("source", "")
         advertiser_filter = request.args.get("advertiser", "")
+        verdict_filter = request.args.get("verdict", "")
+        action_filter = request.args.get("action", "")
+        # One date for the whole request. `overdue` is a due date compared
+        # against today, and the badge, the filter, the count beside its option
+        # and both serializers have to compare against the *same* today or they
+        # disagree for the few minutes a day nobody is watching
+        # (services/owner_review.py).
+        review_today = owner_review.today()
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
@@ -2981,6 +3148,21 @@ def map_view():
         advertiser_clause = advertiser.filter_clause(Property, advertiser_filter)
         if advertiser_clause is not None:
             query = query.filter(advertiser_clause)
+        # What the owner decided, and what is still outstanding.
+        # services/owner_review.py owns both readings, so the badge, these two
+        # filters and the counts beside their options are one answer rather
+        # than several. Both filters are applied here rather than one of them
+        # here and the other elsewhere: a surface that keeps one parameter and
+        # drops the other is the regression these two are tested against
+        # together.
+        verdict_clause = owner_review.decision_filter_clause(Property, verdict_filter)
+        if verdict_clause is not None:
+            query = query.filter(verdict_clause)
+        action_clause = owner_review.action_filter_clause(
+            Property, action_filter, review_today
+        )
+        if action_clause is not None:
+            query = query.filter(action_clause)
         # A pasted listing URL, or a bare listing id, is a search too --
         # utils/listing_search.py owns what the box accepts.
         search_clause = listing_search_clause(Property, search_query)
@@ -4037,6 +4219,14 @@ def export_properties_csv():
         municipality_filter = request.args.get("municipality", "")
         source_filter = request.args.get("source", "")
         advertiser_filter = request.args.get("advertiser", "")
+        verdict_filter = request.args.get("verdict", "")
+        action_filter = request.args.get("action", "")
+        # One date for the whole request. `overdue` is a due date compared
+        # against today, and the badge, the filter, the count beside its option
+        # and both serializers have to compare against the *same* today or they
+        # disagree for the few minutes a day nobody is watching
+        # (services/owner_review.py).
+        review_today = owner_review.today()
         search_query = request.args.get("search", "")
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
@@ -4100,6 +4290,21 @@ def export_properties_csv():
         advertiser_clause = advertiser.filter_clause(Property, advertiser_filter)
         if advertiser_clause is not None:
             query = query.filter(advertiser_clause)
+        # What the owner decided, and what is still outstanding.
+        # services/owner_review.py owns both readings, so the badge, these two
+        # filters and the counts beside their options are one answer rather
+        # than several. Both filters are applied here rather than one of them
+        # here and the other elsewhere: a surface that keeps one parameter and
+        # drops the other is the regression these two are tested against
+        # together.
+        verdict_clause = owner_review.decision_filter_clause(Property, verdict_filter)
+        if verdict_clause is not None:
+            query = query.filter(verdict_clause)
+        action_clause = owner_review.action_filter_clause(
+            Property, action_filter, review_today
+        )
+        if action_clause is not None:
+            query = query.filter(action_clause)
         # A pasted listing URL, or a bare listing id, is a search too --
         # utils/listing_search.py owns what the box accepts.
         search_clause = listing_search_clause(Property, search_query)
@@ -4252,6 +4457,16 @@ def export_properties_csv():
             # durations are routes from the village, not from the parcel --
             # and a spreadsheet sorting on them cannot tell without this.
             "Location Accuracy",
+            # What the owner decided and what is still outstanding. The
+            # decision column says `undecided` where nobody has judged the
+            # listing -- never blank and never `rejected`, because a report
+            # built off a blank cell reads "nobody looked" as "looked and said
+            # no" (services/owner_review.py).
+            "Owner Verdict",
+            "Owner Verdict Reason",
+            "Next Action",
+            "Next Action Due",
+            "Next Action State",
             "Created At",
         ]
 
@@ -4282,6 +4497,9 @@ def export_properties_csv():
             sea_view_target = sea_view_verdict["target"]
             listing_verdict_row = listing_verdict(prop)
             advertiser_verdict = advertiser.read_verdict(prop)
+            # The request's one date, so a row exported at 23:59 Madrid is
+            # described against the same day the filter selected it on.
+            review_action = owner_review.read_action(prop, review_today)
 
             row = [
                 prop.id,
@@ -4313,6 +4531,11 @@ def export_properties_csv():
                 float(prop.location_lat) if prop.location_lat else None,
                 float(prop.location_lon) if prop.location_lon else None,
                 prop.location_accuracy or "unknown",
+                owner_review.read_decision(prop)["state"],
+                prop.owner_verdict_reason or "",
+                prop.next_action or "",
+                prop.next_action_due_on.isoformat() if prop.next_action_due_on else "",
+                review_action["state"],
                 prop.created_at.isoformat() if prop.created_at else "",
             ]
 

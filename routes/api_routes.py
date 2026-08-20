@@ -14,6 +14,7 @@ from services.listing_verification import read_verdict as listing_verdict
 from utils.api_errors import json_http_error
 from utils.listing_search import listing_search_clause
 from services import advertiser
+from services import owner_review
 from utils.listing_source import source_filter_clause
 from utils.municipality_grouping import municipality_filter_clause
 from app import db
@@ -1721,6 +1722,22 @@ def get_properties():
         )
         if advertiser_clause is not None:
             query = query.filter(advertiser_clause)
+        # What the owner decided, and what is still outstanding. One Madrid
+        # date for the whole request, threaded into the filter AND into both
+        # serializers below -- a payload describing a row against a different
+        # day from the query that selected it disagrees with itself once a day
+        # (services/owner_review.py).
+        review_today = owner_review.today()
+        verdict_clause = owner_review.decision_filter_clause(
+            Property, request.args.get("verdict", "")
+        )
+        if verdict_clause is not None:
+            query = query.filter(verdict_clause)
+        action_clause = owner_review.action_filter_clause(
+            Property, request.args.get("action", ""), review_today
+        )
+        if action_clause is not None:
+            query = query.filter(action_clause)
         # A pasted listing URL, or a bare listing id, is a search too --
         # utils/listing_search.py owns what the box accepts.
         search_clause = listing_search_clause(Property, search_query)
@@ -1770,7 +1787,7 @@ def get_properties():
         props = query.offset(offset).limit(limit).all()
 
         if full:
-            properties_data = [p.to_dict() for p in props]
+            properties_data = [p.to_dict(review_today=review_today) for p in props]
         else:
             properties_data = []
             for p in props:
@@ -1799,6 +1816,13 @@ def get_properties():
                         # live listing from a never-checked one.
                         "listing_status": p.listing_status or "active",
                         "listing_status_verdict": listing_verdict(p)["state"],
+                        # This response is assembled by hand rather than from
+                        # `to_dict`, so a field added there does not appear
+                        # here -- and the compact payload is the default one.
+                        "owner_verdict": owner_review.read_decision(p)["state"],
+                        "next_action_state": owner_review.read_action(p, review_today)[
+                            "state"
+                        ],
                         "created_at": p.created_at.isoformat()
                         if p.created_at
                         else None,

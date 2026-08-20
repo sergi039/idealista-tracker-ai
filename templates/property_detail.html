@@ -383,6 +383,115 @@
 
 <div class="row" data-property-id="{{ property.id }}">
     <div class="col-lg-8">
+        {# What the owner decided, and what is still outstanding (#430).
+           A section rather than a tab: this is the story of the listing, and
+           the six entries a real thread carries do not earn a click to reach.
+           It sits above Overview because it is what the page is opened to find
+           out, and because a rejected listing should say so before its score
+           does. #}
+        {% set _decision = owner_decision_for(property) %}
+        {% set _action = owner_action_for(property) %}
+        {% set _decision_class = {'interested': 'success', 'waiting': 'warning', 'rejected': 'danger'} %}
+        <div class="card mb-4" id="owner-review">
+            <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
+                <h2 class="h6 mb-0">
+                    <i class="fas fa-gavel me-2"></i>{{ t('review_section_title') }}
+                </h2>
+                <span class="d-inline-flex align-items-center gap-2">
+                    {# The decided states are badged in colour; `undecided` is
+                       badged too, but neutrally -- it is a real state, not an
+                       empty space, and the one thing it must never look like
+                       is a rejection. #}
+                    <span class="badge bg-{{ _decision_class.get(_decision.state, 'body-tertiary text-body-secondary') }}">
+                        {{ t(owner_decision_label_key(_decision.state)) }}
+                    </span>
+                    {% if _action.state != 'none' %}
+                        <span class="badge bg-{{ 'danger' if _action.state == 'overdue' else 'info' }}">
+                            {{ t(owner_action_label_key(_action.state)) }}
+                        </span>
+                    {% endif %}
+                </span>
+            </div>
+            <div class="card-body">
+                {% if review_history_out_of_sync %}
+                    {# A disclosure, not a guarantee: direct SQL is a supported
+                       workflow here, and a column written that way leaves no
+                       entry behind. This can see that the newest entry no
+                       longer describes the row; it cannot see a transition
+                       nobody recorded, and it does not claim to. #}
+                    <div class="alert alert-warning py-2 px-3 small mb-3">
+                        <i class="fas fa-triangle-exclamation me-1"></i>
+                        {{ t('review_history_out_of_sync') }}
+                    </div>
+                {% endif %}
+
+                {% if _decision.decided %}
+                    {% if _decision.reason %}
+                        <p class="mb-2">{{ _decision.reason }}</p>
+                    {% endif %}
+                    {% if _decision.decided_at %}
+                        <p class="text-muted small mb-3">
+                            {{ t('review_decided_at') }}: {{ _decision.decided_at.strftime('%Y-%m-%d') }}
+                        </p>
+                    {% endif %}
+                {% else %}
+                    <p class="text-muted mb-3">{{ t('review_no_verdict') }}</p>
+                {% endif %}
+
+                {% if _action.action %}
+                    <p class="mb-3">
+                        <i class="fas fa-hourglass-half me-1 text-muted"></i>
+                        {{ _action.action }}
+                        {% if _action.due_on %}
+                            <span class="text-muted">
+                                — {{ t('next_action_due') }} {{ _action.due_on.strftime('%Y-%m-%d') }}
+                            </span>
+                        {% endif %}
+                    </p>
+                {% endif %}
+
+                <form method="POST" action="{{ url_for('main.set_review', property_id=property.id) }}"
+                      class="row g-2 align-items-end">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <div class="col-12 col-md-4">
+                        <label class="form-label small mb-1" for="review-verdict">{{ t('owner_verdict') }}</label>
+                        <select class="form-select form-select-sm" id="review-verdict" name="verdict">
+                            {# The empty option clears the decision. It is not
+                               "rejected" and it is not a blank: it is the state
+                               a listing nobody has judged is in, and the only
+                               way back to it. #}
+                            <option value="" {{ 'selected' if not _decision.decided }}>{{ t('review_clear_verdict') }}</option>
+                            {% for _state in ['interested', 'waiting', 'rejected'] %}
+                                <option value="{{ _state }}" {{ 'selected' if _decision.state == _state }}>
+                                    {{ t(owner_decision_label_key(_state)) }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-12 col-md-8">
+                        <label class="form-label small mb-1" for="review-reason">{{ t('review_reason') }}</label>
+                        <input type="text" class="form-control form-control-sm" id="review-reason"
+                               name="reason" value="{{ property.owner_verdict_reason or '' }}"
+                               placeholder="{{ t('review_reason_placeholder') }}"/>
+                    </div>
+                    <div class="col-12 col-md-8">
+                        <label class="form-label small mb-1" for="review-next-action">{{ t('next_action') }}</label>
+                        <input type="text" class="form-control form-control-sm" id="review-next-action"
+                               name="next_action" value="{{ property.next_action or '' }}"
+                               placeholder="{{ t('review_next_action_placeholder') }}"/>
+                    </div>
+                    <div class="col-8 col-md-3">
+                        <label class="form-label small mb-1" for="review-due">{{ t('next_action_due_on') }}</label>
+                        <input type="date" class="form-control form-control-sm" id="review-due"
+                               name="due_on" value="{{ property.next_action_due_on.isoformat() if property.next_action_due_on else '' }}"/>
+                    </div>
+                    <div class="col-4 col-md-1">
+                        <button type="submit" class="btn btn-sm btn-primary w-100">{{ t('review_save') }}</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <div class="card mb-4">
             <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
                 <h2 class="h6 mb-0">

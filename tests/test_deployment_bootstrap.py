@@ -155,6 +155,28 @@ def _create_historical_schema(engine):
         # existing table, create_all() has nothing to trim it down from, so
         # drop it outright.
         connection.execute(text("DROP TABLE background_jobs"))
+        # Migration 021 (issue #430) added the owner's decision and the
+        # outstanding action to `properties`, plus `property_activity` for the
+        # log behind them. Same treatment as the columns above; the table goes
+        # outright, like background_jobs.
+        # The indexes go first: SQLite refuses to drop a column any index
+        # still mentions, exactly as it refuses one a CHECK mentions.
+        for index in (
+            "ix_properties_owner_verdict",
+            "ix_properties_next_action_due_on",
+        ):
+            connection.execute(text(f"DROP INDEX {index}"))  # noqa: S608
+        for column in (
+            "owner_verdict",
+            "owner_verdict_reason",
+            "owner_verdict_at",
+            "next_action",
+            "next_action_due_on",
+        ):
+            connection.execute(
+                text(f"ALTER TABLE properties DROP COLUMN {column}")  # noqa: S608
+            )
+        connection.execute(text("DROP TABLE property_activity"))
 
 
 def test_the_stated_historical_table_matches_the_runners_fingerprint(tmp_path):
