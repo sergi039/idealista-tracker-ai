@@ -47,6 +47,7 @@ from services.profile_selection import (
 from utils.i18n import t
 from utils.listing_search import interpret_search, listing_search_clause
 from utils.listing_source import source_filter_clause
+from utils.listing_status_scope import resolve_hide_removed
 from utils.municipality_grouping import (
     group_key,
     group_municipalities,
@@ -1112,29 +1113,12 @@ def properties():
         sea_view_filter = request.args.get("sea_view", "")
         measured_filter = request.args.get("measured", "")
 
-        # Hide removed: ON by default (similar to /lands)
-        hide_removed_param = request.args.get("hide_removed", None)
-        form_submitted = any(
-            request.args.get(p)
-            for p in [
-                "profile_id",
-                "category",
-                "subtype",
-                "municipality",
-                "search",
-                "inv_metr",
-                "sea_view",
-                "measured",
-                "sort",
-                "order",
-                "favorites",
-                "hide_removed",
-            ]
-        )
-        if form_submitted:
-            hide_removed_filter = hide_removed_param == "on"
-        else:
-            hide_removed_filter = True
+        # Hide removed: ON by default (similar to /lands), unless this request
+        # came from the filter form with the box unticked.
+        # utils/listing_status_scope.py owns that reading -- it used to be a
+        # hand-written list of filter parameter names here and a second,
+        # differently stale one in export_properties_csv() below.
+        hide_removed_filter = resolve_hide_removed(request.args)
 
         # View state carried over from /lands (issue #105): cards vs table,
         # and the combined / investment / lifestyle scoring modes.
@@ -4041,28 +4025,18 @@ def export_properties_csv():
         investment_metrics_filter = request.args.get("inv_metr", "")
         favorites_filter = request.args.get("favorites", "") == "on"
         sea_view_filter = request.args.get("sea_view", "")
+        # The export did not read this one at all, so the Export CSV button on
+        # a `measured=full` page exported the whole subscription: measured
+        # against production 2026-08-20, the page found 72 listings and its own
+        # export returned 471 rows.
+        measured_filter = request.args.get("measured", "")
 
-        hide_removed_param = request.args.get("hide_removed", None)
-        form_submitted = any(
-            request.args.get(p)
-            for p in [
-                "profile_id",
-                "category",
-                "subtype",
-                "municipality",
-                "search",
-                "inv_metr",
-                "sea_view",
-                "sort",
-                "order",
-                "favorites",
-                "hide_removed",
-            ]
-        )
-        if form_submitted:
-            hide_removed_filter = hide_removed_param == "on"
-        else:
-            hide_removed_filter = True
+        # The same reading as /properties, from the same module, so an export
+        # and the page it was taken from cannot disagree about which listings
+        # are in scope. The Export CSV link states `hide_removed` outright in
+        # both directions, so for a page-drawn export the default below is
+        # never consulted.
+        hide_removed_filter = resolve_hide_removed(request.args)
 
         sort_by = request.args.get("sort", "created_at")
         sort_order = request.args.get("order", "desc")
@@ -4113,6 +4087,9 @@ def export_properties_csv():
 
         if sea_view_filter:
             query = _filter_by_sea_view(query, Property, sea_view_filter)
+
+        if measured_filter:
+            query = _filter_by_measured(query, Property, measured_filter)
 
         if favorites_filter:
             query = query.filter(Property.is_favorite.is_(True))
