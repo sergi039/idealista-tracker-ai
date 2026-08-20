@@ -12,12 +12,20 @@
 {% block content %}
 {# Every in-page link has to carry the whole view state -- filters, scoring
    mode and cards/list choice -- or clicking a column header silently throws
-   half of it away. #}
+   half of it away. Every filter the route applies belongs here, and the order
+   is `current_filters`' own so the two can be read side by side: a key that
+   exists there and not here is a filter the page drops the moment anything is
+   clicked. Measured 2026-08-20 against production, before `source` and
+   `advertiser` were added: `?advertiser=owner` found 70 listings and the Next
+   link it drew found 470, while the Export CSV button on that same page
+   carried the filter and exported the 70. Nothing said the set had changed. #}
 {% set base_args = {
     'profile_id': current_filters.profile_id,
     'category': current_filters.category or None,
     'subtype': current_filters.subtype or None,
     'municipality': current_filters.municipality or None,
+    'source': current_filters.source or None,
+    'advertiser': current_filters.advertiser or None,
     'search': current_filters.search or None,
     'inv_metr': current_filters.inv_metr or None,
     'sea_view': current_filters.sea_view or None,
