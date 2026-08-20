@@ -207,8 +207,11 @@ _NAME_EVIDENCE: Tuple[Tuple, ...] = (
     # and qualify on the tag alone. A name entry that catches nothing the tags
     # miss and misfires on an everyday word is a cost with no measurement
     # behind it (review, 2026-08-20).
+    # `carbonera` is deliberately absent for the reason `cantera` is: it
+    # matches *Carboneras*, an Almerían municipality whose name is on every
+    # industrial estate in it, and it caught nothing the entry below misses --
+    # both coal yards in the fixture are *Parque de Carbones*.
     ("carbones", "coal_yard", SEVERITY_HIGH),
-    ("carbonera", "coal_yard", SEVERITY_HIGH),
     ("coal yard", "coal_yard", SEVERITY_HIGH),
     ("incinerad", "incinerator", SEVERITY_HIGH),
     ("papelera", "paper_mill", SEVERITY_HIGH),
@@ -398,17 +401,13 @@ _LIFECYCLE_PREFIXES = (
 
 # The keys a prefix has to be attached to for the prefix to mean the hazard is
 # gone. `name` is deliberately absent -- that is the `was:name` case above.
+# Only the keys a *hazard* is established by. `amenity` and `content` are
+# gone: `disused:amenity=fuel` is a closed petrol station, and on a refinery
+# whose only evidence is its name it suppressed that name and dropped the
+# refinery entirely (found in review, 2026-08-20). A retired thing silences
+# the name when the retired thing is the kind of thing the name is about.
 _EVIDENCE_KEYS = frozenset(
-    {
-        "power",
-        "man_made",
-        "landuse",
-        "industrial",
-        "amenity",
-        "product",
-        "plant",
-        "content",
-    }
+    {"power", "man_made", "landuse", "industrial", "product", "plant"}
 )
 
 _DISUSED_KEYS = ("disused", "abandoned", "ruins", "demolished", "razed")

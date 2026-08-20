@@ -6,9 +6,19 @@ the per-property Enrich button, which runs the same service.
 
 Free by construction: one Overpass query per listing, through the shared
 client and its 5 s gate, so a full pass is paced by the transport rather than
-by this loop. No Google API is touched and no score reads the block at weight
-0, so there is no score snapshot to write; the block is additive JSON and
+by this loop. No Google API is touched. The block itself is additive JSON and
 removable without a migration.
+
+It **does** rewrite scores, one row at a time, and that is a change from what
+this docstring said first. The criterion ships at weight 0, so today every
+recomputation lands on the same numbers; the moment the owner raises it, a row
+this run measured would otherwise keep the score it had before anybody looked.
+There is still no snapshot, and that is a real gap rather than an argument:
+the score write is a second transaction after the block's own, so a run killed
+between them leaves a measured row with its previous score, and
+`needs_hazards` -- which reads the block -- will not bring it back. Nothing is
+lost that a rescore does not restore, but a run over a live weight should be
+followed by one.
 
 **Announce it before running it on the mini**, and run `tools/
 backfill_status.sh` first: `busy` and `unknown` are a stop, not an input to a

@@ -84,7 +84,7 @@ class PropertyEnrichmentService:
         )
 
     def enrich_free_sources(
-        self, prop: Property, *, commit: bool, use_ai: bool, scan_hazards: bool = True
+        self, prop: Property, *, commit: bool, use_ai: bool
     ) -> None:
         """The free pass: OSM amenities, quality-of-life, hazards, sea view.
 
@@ -159,7 +159,7 @@ class PropertyEnrichmentService:
         # Enrich path runs the scan on its own, under its own lock, before its
         # shared transaction opens; `enrich_property` does that and this skips
         # it rather than doing it twice.
-        if commit and scan_hazards:
+        if commit:
             try:
                 self.hazard_service.enrich(prop, commit=True)
             except Exception as e:
@@ -249,10 +249,15 @@ class PropertyEnrichmentService:
             # `use_ai=True` because this method is the Enrich button: the
             # text signal runs before the coordinate check, so it is the one
             # part of the pass a coordinate-less row still gets in full.
-            # `scan_hazards=False`: `enrich_property` already ran it above,
-            # under its own lock, and a second call would take the row twice
-            # for an answer that cannot have changed.
-            self.enrich_free_sources(prop, commit=True, use_ai=True, scan_hazards=False)
+            # This branch returns before the scan at the end of the method,
+            # so the free pass is the only thing that can record the row's
+            # own `no_coordinates` block here. It carried
+            # `scan_hazards=False` while the scan ran *before* this point;
+            # moving the scan behind the shared commit left that argument
+            # behind, and a row with no coordinate stopped getting a hazard
+            # block at all -- an absence on the page where the block exists
+            # to say "nobody could look" (found in review, 2026-08-20).
+            self.enrich_free_sources(prop, commit=True, use_ai=True)
             return False
 
         # Enrichment does not touch `search_profile_id` (owner decision,

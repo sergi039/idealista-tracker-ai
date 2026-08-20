@@ -1023,7 +1023,7 @@ class TestHonestAbsence:
         assert "re-located" not in body
 
     def test_losing_the_coordinate_does_not_delete_the_measurement(
-        self, app, real_fetch
+        self, app, client, real_fetch
     ):
         """`refresh=True` clears the coordinate before geocoding (#393).
 
@@ -1053,13 +1053,22 @@ class TestHonestAbsence:
         # `none_within_radius` block read this way would be a clean
         # neighbourhood for a listing that is nowhere (codex review).
         verdict = hazard_service.read_verdict(prop)
-        assert verdict["status"] == hazard_service.STATUS_STALE_ORIGIN
+        # `no_coordinates`, and not `stale_origin`: a row that lost its
+        # coordinate has not been *re-located*, and saying so put this card in
+        # direct contradiction with the travel card beside it, which correctly
+        # says the listing has no coordinate (found in review, 2026-08-20).
+        assert verdict["status"] == hazard_service.STATUS_NO_COORDINATES
         assert verdict["measured"] is False
         assert verdict["nearest"] is None
         # It still *carries* a complete scan, which is all the coverage line
         # claims; that the scan is not about this listing any more is what the
         # card says, and no badge is drawn either way.
         assert verdict["complete"] is True
+
+        body = client.get(f"/properties/{prop.id}").get_data(as_text=True)
+        assert response_is_the_card(body)
+        assert "no coordinate" in body
+        assert "re-located" not in body
 
     def test_a_half_read_block_still_renders(self, app, client):
         """The page must not raise on a shape an older run could have left.
@@ -1479,6 +1488,59 @@ class TestOneAnswerInTwoLanguages:
             prop, near_m=1000.0, far_m=5000.0, moderate_factor=0.5
         )
         assert score is None, why
+
+    def test_a_radius_of_zero_is_not_a_radius(self, app):
+        """Dropping the positivity check rendered "Scanned 0.0 km around the
+        stored coordinate" from a block the writer never produces (found in
+        review, 2026-08-20)."""
+        prop = _prop(title="ZeroRadius")
+        prop.enrichment = {
+            "hazards": {
+                "status": hazard_service.STATUS_NONE,
+                "items": [],
+                "item_count": 0,
+                "truncated": False,
+                "searched_m": 0,
+                "origin": {"lat": XIVARES[0], "lon": XIVARES[1]},
+            }
+        }
+        db.session.commit()
+        verdict = hazard_service.read_verdict(prop)
+        assert verdict["status"] == hazard_service.STATUS_MISSING
+        assert verdict["measured"] is False
+
+    def test_an_element_a_template_cannot_link_is_dropped(self, app, client):
+        """`element.type[:1]` on an integer raised, and the route turned that
+        into a redirect nobody sees (found in review, 2026-08-20)."""
+        prop = _prop(title="UnlinkableElement")
+        prop.enrichment = {
+            "hazards": {
+                "status": hazard_service.STATUS_OK,
+                "item_count": 1,
+                "truncated": False,
+                "searched_m": 5984.0,
+                "origin": {"lat": XIVARES[0], "lon": XIVARES[1]},
+                "items": [
+                    {
+                        **_ITEM,
+                        "elements": [
+                            {"type": 42, "id": "abc"},
+                            {"type": "way", "id": True},
+                            {"type": "way", "id": 7},
+                        ],
+                    }
+                ],
+            }
+        }
+        db.session.commit()
+        assert hazard_service.read_verdict(prop)["items"][0]["elements"] == [
+            {"type": "way", "id": 7}
+        ]
+        response = client.get(f"/properties/{prop.id}")
+        assert response.status_code == 200
+        body = response.get_data(as_text=True)
+        assert response_is_the_card(body)
+        assert "openstreetmap.org/way/7" in body
 
     def test_a_number_too_wide_to_parse_is_not_a_measurement(self, app):
         """A JSON integer has no width limit and PostgreSQL stores it: a
@@ -2384,6 +2446,37 @@ class TestOneHomePerRule:
             "scoring",
         ]
 
+    def test_a_row_with_no_coordinate_still_gets_a_block(self, app, real_fetch):
+        """`enrich_property` returns early for a coordinate-less row, before
+        the scan at the end of the method -- so the free pass is the only
+        thing that can record its `no_coordinates` block, and it stopped doing
+        so when the scan moved (found in review, 2026-08-20)."""
+        from services.property_enrichment_service import PropertyEnrichmentService
+
+        prop = _prop(title="EnrichNoCoords", location_lat=None, location_lon=None)
+        scans = []
+
+        class _CountingHazards(HazardService):
+            def enrich(self, prop, commit=False):
+                scans.append(commit)
+                return super().enrich(prop, commit=commit)
+
+        service = PropertyEnrichmentService(
+            enrichment_service=_FakeEnrichment(failure="stubbed"),
+            hazard_service=_CountingHazards(
+                enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
+            ),
+            sea_view_calculator=lambda prop, commit, use_ai: None,
+            location_service=SimpleNamespace(
+                ensure_coordinates=lambda prop, refresh, commit: None
+            ),
+        )
+        assert service.enrich_property(prop) is False
+        assert scans == [True], "once, and under its own lock"
+        assert (
+            prop.enrichment["hazards"]["status"] == hazard_service.STATUS_NO_COORDINATES
+        )
+
     def test_the_default_service_scans_without_being_handed_one(self, app, monkeypatch):
         """A test that injects its own hazard service passes when the default
         construction is broken (codex review, 2026-08-20). This one builds the
@@ -2437,3 +2530,83 @@ class TestOneHomePerRule:
         # One EnrichmentService means one Overpass client and one 5 s gate
         # across the amenity, quality-of-life, pool and hazard lookups.
         assert service.hazard_service.enrichment_service is service.enrichment_service
+
+
+class TestTheBackfill:
+    """`utils/backfill_hazards.py` had no test at all, so both of its rules
+    could be deleted and the whole suite stayed green (found in review,
+    2026-08-20). `utils/backfill_pool.py`'s CLI is exercised the same way in
+    `tests/test_surfaces_name_their_population.py`."""
+
+    def _run(self, app, monkeypatch, argv):
+        import logging
+        from contextlib import nullcontext
+
+        from utils import backfill_hazards as tool
+
+        class _CurrentApp:
+            def app_context(self):
+                return nullcontext()
+
+        monkeypatch.setattr(tool, "create_app", lambda: _CurrentApp())
+        monkeypatch.setattr("sys.argv", argv)
+        return tool, logging
+
+    def test_a_dry_run_names_the_scope_and_writes_nothing(
+        self, app, real_fetch, monkeypatch, caplog
+    ):
+        scanned = _prop(title="BackfillScanned")
+        HazardService(
+            enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
+        ).enrich(scanned, commit=True)
+        _prop(title="BackfillPending")
+
+        tool, logging = self._run(app, monkeypatch, ["backfill", "--all", "--dry-run"])
+        with caplog.at_level(logging.INFO):
+            tool.main()
+
+        # The scope is the rows without a complete current answer, and the
+        # disclosure says which window it used.
+        assert "hazard_backfill_queue" in caplog.text
+        assert "--all" in caplog.text
+        assert "last 30 days" not in caplog.text
+        assert "BackfillPending" not in scanned.enrichment["hazards"]
+
+    def test_it_writes_under_a_lock_and_scores_what_it_wrote(
+        self, app, real_fetch, monkeypatch
+    ):
+        prop = _prop(title="BackfillRow", property_category="housing")
+        scored = []
+        locked = []
+        real_refresh = db.session.refresh
+        monkeypatch.setattr(
+            db.session,
+            "refresh",
+            lambda obj, **kwargs: (
+                locked.append(kwargs.get("with_for_update")),
+                real_refresh(obj, **kwargs),
+            )[1],
+        )
+
+        tool, logging = self._run(app, monkeypatch, ["backfill", "--all"])
+        monkeypatch.setattr(
+            tool,
+            "HazardService",
+            lambda: HazardService(
+                enrichment_service=_FakeEnrichment(elements=FIXTURE["elements"])
+            ),
+        )
+        monkeypatch.setattr(
+            tool,
+            "PropertyScoringService",
+            lambda: SimpleNamespace(
+                calculate_for_property=lambda prop, commit: scored.append(prop.id)
+            ),
+        )
+        tool.main()
+
+        assert prop.enrichment["hazards"]["status"] == hazard_service.STATUS_OK
+        assert True in locked, "the write must take the row under FOR UPDATE"
+        # A no-op at the shipped weight of 0, and the difference between a
+        # fresh measurement and a stale score the day it is not.
+        assert scored == [prop.id]

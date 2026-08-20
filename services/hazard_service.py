@@ -803,7 +803,18 @@ def read_verdict(prop: Any) -> Dict[str, Any]:
     # And a measured block has to say where it was measured from. Treating an
     # unreadable origin as "cannot tell" let a moved precise row keep
     # asserting its old distances (codex review, 2026-08-20).
-    if origins_agree(stored.get("origin"), origin_of(prop)) is not True:
+    #
+    # The two ways that can fail are different facts and get different words.
+    # A row that *lost* its coordinate has not been re-located -- it is
+    # nowhere, and saying "the listing has been re-located since the scan"
+    # there put this card in direct contradiction with the travel card beside
+    # it, which correctly says the listing has no coordinate (found in review,
+    # 2026-08-20). The stored measurement is still kept; only the wording of
+    # why it cannot be read changes.
+    current_origin = origin_of(prop)
+    if current_origin is None:
+        return {**base, "status": STATUS_NO_COORDINATES}
+    if origins_agree(stored.get("origin"), current_origin) is not True:
         return {**base, "status": STATUS_STALE_ORIGIN}
 
     # What the scan guarantees about the *parcel*: the radius it covered
