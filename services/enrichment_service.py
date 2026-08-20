@@ -21,7 +21,12 @@ from utils.google_api import (
     failure_from_exception,
     read_api_payload,
 )
-from utils.http import HTTP_USER_AGENT, OVERPASS_GATE, request_with_retries
+from utils.http import (
+    HTTP_USER_AGENT,
+    OVERPASS_BREAKERS,
+    OVERPASS_GATE,
+    request_with_retries,
+)
 from utils.cache import cache_enrichment_data, get_cached_enrichment_data
 from config import Config
 from services.sea_view_service import haversine_m
@@ -1462,7 +1467,34 @@ class EnrichmentService:
         return None, first_failure
 
     def _overpass_elements_from(self, url: str, overpass_query: str):
-        """One round trip to one instance."""
+        """One round trip to one instance, unless that instance is saying no.
+
+        The breaker wraps the trip rather than being threaded through it: the
+        body below has one success exit and six refusals, and instrumenting
+        each is how one of them comes to record nothing.
+
+        A skip is reported as `REASON_NETWORK_ERROR`, which is deliberate and
+        load bearing -- it is in `_OVERPASS_TRY_ELSEWHERE`, so `_overpass_elements`
+        keeps walking to the next instance. A reason outside that set would
+        stop the walk on the first open breaker and quietly reinstate the
+        single point of failure #415 removed.
+        """
+        breaker = OVERPASS_BREAKERS.for_url(url)
+        if breaker.should_skip():
+            return None, GoogleApiFailure(
+                reason=REASON_NETWORK_ERROR,
+                message=f"{OVERPASS_BREAKERS.host_of(url)} refused the last "
+                f"{OVERPASS_BREAKERS.threshold} attempts; not dialled",
+            )
+        elements, failure = self._overpass_round_trip(url, overpass_query)
+        if failure is None:
+            breaker.record_success()
+        else:
+            breaker.record_refusal(failure.reason)
+        return elements, failure
+
+    def _overpass_round_trip(self, url: str, overpass_query: str):
+        """The trip itself. Every exit here is observed by the caller above."""
         try:
             response = request_with_retries(
                 requests.post,
@@ -1482,7 +1514,16 @@ class EnrichmentService:
                 max_attempts=4,
                 backoff_base=8.0,
                 backoff_max=90.0,
-                timeout=60,
+                # `(connect, read)`, not a scalar: `urllib3.Timeout.from_float(60)`
+                # gives `connect=60 read=60`, so sixty seconds were spent
+                # learning that a host is not answering. A healthy connect to
+                # all three instances measures 0.06-0.08 s (three samples each,
+                # 2026-08-20), so 3 s is a fiftyfold margin -- and it also has
+                # to cover the TLS handshake, which is why it is not tighter.
+                # The read leg is untouched: a busy-but-alive Overpass answering
+                # 504 has already completed its handshake, so this cannot
+                # reclassify the failure #144 measured.
+                timeout=(3.0, 60),
                 logger=logger,
                 # Every Overpass caller in this process shares one gate, and
                 # it covers every attempt: the retries are what a bulk run
