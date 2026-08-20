@@ -20,9 +20,14 @@ import, so a test can move one and see the total move:
 
 * `ENRICH_LOOKUP_BUDGET_S` -- the free lookups, Overpass and elevation. This
   one is a real deadline: `utils/http.lookup_budget` enforces it.
-* `AI_ANALYSIS_TIMEOUT_SECONDS` + `AI_BRIDGE_SOCKET_MARGIN_SECONDS` -- the one
-  subscription call an Enrich press can make, the sea-view text signal
-  (`enrich_free_sources(use_ai=True)`). It is a single call, not one per step.
+* `subscription_transport.DEFAULT_TIMEOUT_SECONDS` +
+  `AI_BRIDGE_SOCKET_MARGIN_SECONDS` -- the one subscription call an Enrich
+  press can make, the sea-view text signal (`enrich_free_sources(use_ai=True)`).
+  A single call, not one per step. **Read from the transport's own default and
+  not from `AI_ANALYSIS_TIMEOUT_SECONDS`**: `classify_text_with_ai` passes no
+  `timeout=` at all, so it gets 300 s and not the analysis endpoint's 180 --
+  found in review, and understating a term by 120 s is precisely the shape
+  this module exists to stop.
 * `ENRICH_PAID_ALLOWANCE_S` -- geocoding, the Places wide search and one
   Distance Matrix request. An allowance and not a deadline, deliberately:
   abandoning a billed request mid-flight is how a press comes to pay for a
@@ -51,13 +56,41 @@ def lookup_budget_seconds() -> float:
     return float(getattr(Config, "ENRICH_LOOKUP_BUDGET_S", 240.0))
 
 
-def worst_case_seconds() -> float:
-    """The longest one enrichment run may legitimately take, end to end."""
-    ai = float(getattr(Config, "AI_ANALYSIS_TIMEOUT_SECONDS", 180)) + float(
+def ai_allowance_seconds() -> float:
+    """The one subscription call an Enrich press can make.
+
+    The transport's default, because the caller takes it: `sea_view_service.
+    classify_text_with_ai` calls `subscription_transport.complete()` with no
+    `timeout=`.
+    """
+    from services.subscription_transport import DEFAULT_TIMEOUT_SECONDS
+
+    return float(DEFAULT_TIMEOUT_SECONDS) + float(
         getattr(Config, "AI_BRIDGE_SOCKET_MARGIN_SECONDS", 25)
     )
+
+
+def worst_case_seconds() -> float:
+    """The allowance one enrichment run is given, in seconds.
+
+    **Not a proof of a maximum, and the difference matters.** Three of the
+    waits a run contains have no ceiling anywhere in this system: the queue is
+    unbounded (`BACKGROUND_WORKERS` is 4 and `_EXECUTOR`'s queue is not
+    capped), a `FOR UPDATE` refresh can wait on PostgreSQL with no statement
+    timeout configured, and `requests` measures its read timeout *between*
+    reads, so a body that keeps arriving keeps its socket. Adding a bigger
+    constant does not change that -- which is why the client's use of this
+    number is a budget for **silence** rather than for duration
+    (`static/js/main.js::pollJob`): every poll that finds the job alive resets
+    it, so this only has to cover the gap between two pieces of evidence, and
+    a queue deeper than expected extends the wait instead of ending it.
+
+    What it does have to be is *generous*, because the harmful direction is
+    short: a client that gives up while the server is working sends the owner
+    to press again (#178).
+    """
     paid = float(getattr(Config, "ENRICH_PAID_ALLOWANCE_S", 120.0))
-    return QUEUE_ALLOWANCE_S + lookup_budget_seconds() + ai + paid
+    return QUEUE_ALLOWANCE_S + lookup_budget_seconds() + ai_allowance_seconds() + paid
 
 
 def poll_timeout_ms() -> int:

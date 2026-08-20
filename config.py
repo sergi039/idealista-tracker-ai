@@ -264,14 +264,25 @@ class Config:
     )
     # The ceiling on one lookup's walk across every instance above.
     #
-    # Derived, and the derivation is "no instance is ever denied a complete
-    # attempt because an earlier one was busy":
+    # Derived from what a *prompt* refusal costs, which is what a `504` is:
     #
-    #   #144's patient budget on the first instance -- a `504` means both
-    #   per-IP slots are busy and one frees up in about a minute, so
-    #   8+16+32 s of backoff plus four 5 s gate waits, ~76 s
+    #   #144's patient budget on the first instance -- both per-IP slots are
+    #   busy and one frees up in about a minute, so 8+16+32 s of backoff plus
+    #   four 5 s gate waits, ~76 s
     # + one full attempt on each of the two fallbacks, 5 s gate + 60 s read
     # = ~206 s, rounded to 210.
+    #
+    # What that does **not** guarantee, because review reproduced it: a
+    # primary whose four `504`s each take 30 s of the read allowance spends
+    # ~177 s legally, and the first fallback then gets a clamped 28 s read
+    # while the second is never dialled. The guarantee is therefore "a prompt
+    # refusal on the primary leaves a complete attempt for each fallback", not
+    # "every path does". Making it unconditional would mean 76 + 4x60 + 2x65
+    # -- seven and a half minutes for one lookup -- which is the cost this
+    # ticket exists to remove. A clamped attempt is reported as
+    # `budget_exhausted` and never held against the host it was cut short on
+    # (`utils/http.py`), so the price of the gap is a retry, not a wrong
+    # answer.
     #
     # A tighter number would clamp a real query's read leg, and the presets
     # query asks Overpass for up to `[timeout:90]` of computation. That would

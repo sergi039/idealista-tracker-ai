@@ -484,12 +484,31 @@ def request_with_retries(
     # ran close to the deadline cannot shrink the budget of a retry made after
     # a backoff that the deadline still had room for.
     stated_timeout = kwargs.get("timeout")
+    # Whether the deadline shortened the attempt about to be made, and the last
+    # response the server actually produced. Both exist for the same reason
+    # (#434 review round 2): a caller reading the failure decides from it
+    # whether *the host* is refusing -- `HostBreakers` opens after three -- and
+    # a budget must not be able to put words in a host's mouth in either
+    # direction.
+    clamped = False
+    last_retryable_response = None
 
     def _budget_left():
         """Seconds until the deadline, or None when there is no deadline."""
         return None if deadline is None else deadline - time.monotonic()
 
     def _out_of_budget(left):
+        """Give up on the budget -- unless the server has already spoken.
+
+        A `504` observed on an earlier attempt is a fact about the instance,
+        and the caller uses it to decide whether to try a different one and
+        whether to hold the refusal against this host. Replacing it with a
+        budget error because the *retry's* gate wait crossed the deadline
+        loses that fact, which review round 2 reproduced: one real 504, a 10 s
+        budget, two reserved gate slots, and the breaker recorded nothing.
+        """
+        if last_retryable_response is not None:
+            return last_retryable_response
         raise LookupBudgetExceeded(
             f"lookup budget exhausted with {left:.1f}s to spare"
             if left is not None and left > 0
@@ -502,14 +521,15 @@ def request_with_retries(
         # of those per remaining instance to learn something it already knew.
         left = _budget_left()
         if left is not None and left <= 0:
-            _out_of_budget(left)
+            return _out_of_budget(left)
         if gate is not None:
             gate.wait()
         left = _budget_left()
         if left is not None:
             if left <= 0:
-                _out_of_budget(left)
+                return _out_of_budget(left)
             kwargs["timeout"] = _clamped_timeout(stated_timeout, left)
+            clamped = kwargs["timeout"] != stated_timeout
         try:
             # The inner `finally` marks the moment the attempt is over, however
             # it ended: `request_fn` is an arbitrary callable, so a session
@@ -531,6 +551,14 @@ def request_with_retries(
             if silence_max_attempts is not None and _is_silence(exc):
                 allowed = min(max_attempts, max(1, silence_max_attempts))
             if attempt >= allowed:
+                if clamped and _is_silence(exc):
+                    # The budget cut this attempt short, so the silence is
+                    # ours and not the host's. Reported as a budget refusal so
+                    # a breaker does not open against an instance that was
+                    # never given the timeout it is configured for -- measured
+                    # in review, three calls with a 0.1 s clamped read arming
+                    # `OVERPASS_BREAKERS` against a healthy host.
+                    return _out_of_budget(_budget_left())
                 raise
             delay = _compute_backoff(attempt, backoff_base, backoff_max)
             left = _budget_left()
@@ -564,6 +592,11 @@ def request_with_retries(
                 # caller tries somewhere else (#144), and a budget error would
                 # erase that.
                 return response
+            # Kept so a deadline reached *during the retry* still reports what
+            # the server said rather than a budget error (see `_out_of_budget`).
+            # Safe to hand back after `close()`: a buffered body is already
+            # read, and every caller of a non-200 reads only its status.
+            last_retryable_response = response
             # A discarded response has to release its connection. Buffered bodies
             # are already read, so this is a no-op for them, but a stream=True
             # caller would otherwise leak the socket on every retry.

@@ -976,15 +976,34 @@ window.IdealistaApp = {
         if (!jobId) return () => {};
 
         const intervalMs = options.intervalMs || 2000;
-        // Backstop only. Every caller passes its own budget; a job that has no
-        // stated budget is still not polled for ever.
+        // How long to keep asking with no answer about the job. Every caller
+        // passes its own; a job that has no stated budget is still not polled
+        // for ever. Since #434 this is measured from the last poll the server
+        // answered, not from the start -- see `lastAliveAt` below.
         const timeoutMs = options.timeoutMs || 120000;
         const onUpdate = typeof options.onUpdate === 'function' ? options.onUpdate : null;
         const onSuccess = typeof options.onSuccess === 'function' ? options.onSuccess : null;
         const onError = typeof options.onError === 'function' ? options.onError : null;
 
         let stopped = false;
+        /* The budget is for **silence**, not for duration (#434 review).
+           Every poll that finds the job alive -- queued or running -- is the
+           server saying the work continues, so it moves this forward. A finite
+           total-duration budget could never be right: the executor's queue is
+           unbounded, a `FOR UPDATE` can wait on the database, and `requests`
+           measures its read timeout between reads, so "the longest legitimate
+           run" is not a number anybody can write down. Giving up while the
+           server is working is what sends the owner to press again (#178). */
+        let lastAliveAt = Date.now();
+        /* And a backstop, because "the server keeps saying running" is not the
+           same as "the server will finish". A job that hangs while its
+           heartbeat renews its lease would otherwise leave this spinning for
+           ever, and a promise the page cannot keep is worse than an honest
+           give-up: both paths report the same "still running on the server"
+           and neither calls the run failed. Four budgets, not one, so the
+           silence rule above governs every ordinary slow run. */
         const startedAt = Date.now();
+        const hardCeilingMs = timeoutMs * 4;
         let timerId = null;
         /* A poll that could not be answered says nothing about the job: it runs
            server-side, and a network blip or a transient 5xx is not a failed
@@ -1010,11 +1029,14 @@ window.IdealistaApp = {
 
         const pollOnce = async () => {
             if (stopped) return;
-            if (Date.now() - startedAt > timeoutMs) {
+            const now = Date.now();
+            if (now - lastAliveAt > timeoutMs || now - startedAt > hardCeilingMs) {
                 stop();
-                // Our budget ran out; the server was never told to stop and is
-                // most likely still writing the result. Report that, not a
-                // failure the server never declared.
+                // Nothing has answered about this job for a whole budget --
+                // not "it took too long", which is no longer how this ends.
+                // The server was never told to stop and is most likely still
+                // writing the result. Report that, not a failure the server
+                // never declared.
                 if (onError) onError({
                     status: 'timeout',
                     stillRunning: true,
@@ -1035,6 +1057,9 @@ window.IdealistaApp = {
                 }
                 consecutivePollFailures = 0;
                 const job = data.job || {};
+                // The server answered about this job, so it exists and has not
+                // been reaped. That is the evidence the budget above is for.
+                lastAliveAt = Date.now();
                 if (onUpdate) onUpdate(job);
                 if (job.status === 'success') {
                     stop();

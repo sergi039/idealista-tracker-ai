@@ -303,10 +303,21 @@ class PropertyEnrichmentService:
 
         They commit for themselves rather than riding a shared transaction at
         the end of the run, so nothing decisive waits behind them and a step
-        that fails costs only itself. `commit=True` also means each takes its
-        row under `FOR UPDATE` for the length of its own write
-        (`services/enrichment_write.py`), which is the #339 guarantee the
-        shared-transaction form could not make.
+        that fails costs only itself.
+
+        **Three of the four take the row under `FOR UPDATE` for the length of
+        their own write** (`services/enrichment_write.py`): the advertiser, the
+        quality-of-life block and the pool. The exception is
+        `EnrichmentService.enrich_osm_amenities`, which reads, modifies and
+        commits `enrichment` with no lock at all -- the #352 gap, named there
+        and still open. It is not made worse here: under the old shape this
+        step staged into a transaction committed at the end of the run from the
+        same stale copy, so a block another process wrote mid-run was lost
+        either way, and each writer's staleness window is now shorter rather
+        than longer. It is not fixed here either, and deliberately: that writer
+        is also ingestion's, `check_writable` refuses a `commit=True` write on
+        a session with anything pending, and converting it means proving the
+        ingestion path is clean at that point -- which is a ticket, not a line.
         """
         # Who is selling: the owner, or an agency. Free: it reads the listing
         # page the row already links to, and only when the row does not answer

@@ -257,7 +257,12 @@ class TestTheBudgetIsAWallClockCeiling:
             clock.sleep(kwargs["timeout"][1])
             raise requests.ReadTimeout("read timed out")
 
-        with pytest.raises(requests.ReadTimeout):
+        # And the failure is reported as the budget's, not the host's: this
+        # host was never given the 60 s it is configured for, so a breaker
+        # opening against it would be this fix arming the very thing it exists
+        # to prevent (review round 2 reproduced exactly that with a 0.1 s
+        # clamped read).
+        with pytest.raises(LookupBudgetExceeded):
             request_with_retries(
                 _call,
                 "https://overpass.example/api",
@@ -267,6 +272,64 @@ class TestTheBudgetIsAWallClockCeiling:
             )
         assert seen == [(5.0, 12.0)]
         assert clock.elapsed == pytest.approx(12.0)
+
+    def test_a_clamped_silence_is_the_budget_and_an_unclamped_one_is_the_host(
+        self, clock
+    ):
+        """The control for the assertion above. Same exception from the same
+        transport: what changes the attribution is whether the deadline is
+        what shortened the attempt."""
+
+        def _call(*args, **kwargs):
+            clock.sleep(kwargs["timeout"][1])
+            raise requests.ReadTimeout("read timed out")
+
+        # No deadline at all: nothing clamped it, so the host owns the silence.
+        with pytest.raises(requests.ReadTimeout):
+            request_with_retries(
+                _call,
+                "https://overpass.example/api",
+                max_attempts=1,
+                timeout=(5.0, 1.0),
+            )
+
+        # A deadline with room to spare does not clamp either.
+        with pytest.raises(requests.ReadTimeout):
+            request_with_retries(
+                _call,
+                "https://overpass.example/api",
+                max_attempts=1,
+                timeout=(5.0, 1.0),
+                deadline=clock.monotonic() + 600.0,
+            )
+
+    def test_a_server_that_already_spoke_is_not_overwritten_by_the_budget(self, clock):
+        """One real 504, then the retry's wait crosses the deadline.
+
+        Reproduced in review: the budget error replaced the 504 and the
+        breaker recorded nothing, so a host that had demonstrably answered
+        went unlearned. The server's own refusal is what comes back.
+        """
+        calls = []
+
+        def _call(*args, **kwargs):
+            calls.append(1)
+            clock.sleep(0.2)
+            return types.SimpleNamespace(
+                status_code=504, close=lambda: None, json=lambda: {}
+            )
+
+        response = request_with_retries(
+            _call,
+            "https://overpass.example/api",
+            max_attempts=4,
+            backoff_base=8.0,
+            timeout=(5.0, 60.0),
+            silence_max_attempts=1,
+            deadline=clock.monotonic() + 4.0,
+        )
+        assert response.status_code == 504
+        assert len(calls) == 1
 
     def test_it_bounds_the_next_attempt_and_not_a_dripping_body(self):
         """The boundary of the guarantee, measured rather than claimed.
@@ -318,6 +381,30 @@ class TestTheBudgetIsAWallClockCeiling:
             elapsed = real_time.monotonic() - started
             assert response.status_code == 200
             assert elapsed > 0.1, "the drip did not outlive the deadline"
+
+            # A *retrying* caller does not get a second attempt after one that
+            # overran: the deadline is checked before the next one starts.
+            attempts = []
+
+            def _count(*args, **kwargs):
+                attempts.append(1)
+                return requests.post(*args, **kwargs)
+
+            retried = request_with_retries(
+                _count,
+                url,
+                data="x",
+                max_attempts=4,
+                backoff_base=0.01,
+                retryable_statuses=(200,),
+                timeout=(3.0, 60.0),
+                deadline=real_time.monotonic() + 0.1,
+            )
+            assert len(attempts) == 1, attempts
+            # And what comes back is what the server said, not a budget error:
+            # a response the host produced outranks a clock this caller ran out
+            # of, because it is the thing the caller classifies the host by.
+            assert retried.status_code == 200
 
             # What it does guarantee: nothing else starts.
             with pytest.raises(LookupBudgetExceeded):
@@ -473,10 +560,10 @@ class TestTheWalkAcrossInstancesHasACeiling:
                 assert elements is None
 
         assert clock.elapsed <= 241.0, f"the press waited {clock.elapsed:.0f}s"
-        # Before #434 this shape cost 888 s for *one* of those eleven lookups.
-        assert clock.elapsed < 888.0
         # And the tail of the run stopped opening sockets rather than paying a
-        # gate wait per instance to be told the same thing.
+        # gate wait per instance to be told the same thing. Eleven lookups
+        # across three instances would be 33 without the budget; before #434
+        # each of those cost 888 s.
         assert len(sockets) <= 6, sockets
 
     def test_a_spent_run_budget_stops_the_walk_without_a_request(
@@ -933,6 +1020,19 @@ class TestTheClientIsToldTheCeilingRatherThanGuessingIt:
         body = app.test_client().post(f"/api/property/{prop_id}/enrich").get_json()
         assert body["poll_timeout_ms"] == poll_timeout_ms()
 
+    def test_the_ai_term_is_the_transport_default_the_caller_reaches(self):
+        """`classify_text_with_ai` passes no `timeout=`, so it gets the
+        transport's 300 s and not the analysis endpoint's 180 -- understating
+        that term by 120 s is the defect this module exists to stop, and it was
+        in the first version of it."""
+        from services import enrich_budget
+        from services.subscription_transport import DEFAULT_TIMEOUT_SECONDS
+
+        assert enrich_budget.ai_allowance_seconds() >= float(DEFAULT_TIMEOUT_SECONDS)
+        assert enrich_budget.ai_allowance_seconds() > float(
+            Config.AI_ANALYSIS_TIMEOUT_SECONDS
+        )
+
     def test_it_is_derived_and_not_a_constant(self, monkeypatch):
         """Move a budget the server enforces and the client's ceiling moves
         with it. That is the whole point: the next fallback instance must not
@@ -944,8 +1044,15 @@ class TestTheClientIsToldTheCeilingRatherThanGuessingIt:
         monkeypatch.setattr(Config, "ENRICH_LOOKUP_BUDGET_S", 400.0)
         assert enrich_budget.worst_case_seconds() == before + 160.0
 
-        monkeypatch.setattr(Config, "AI_ANALYSIS_TIMEOUT_SECONDS", 300)
+        monkeypatch.setattr(Config, "ENRICH_PAID_ALLOWANCE_S", 400.0)
         assert enrich_budget.worst_case_seconds() > before + 160.0
+
+        # And moving the *analysis endpoint's* timeout must not move it: this
+        # sum is about the sea-view text signal, which takes the transport's
+        # own default because it passes no timeout at all.
+        unchanged = enrich_budget.worst_case_seconds()
+        monkeypatch.setattr(Config, "AI_ANALYSIS_TIMEOUT_SECONDS", 900)
+        assert enrich_budget.worst_case_seconds() == unchanged
 
     def test_it_is_never_shorter_than_the_run_it_describes(self):
         """The harmful direction is *short*.
@@ -958,11 +1065,37 @@ class TestTheClientIsToldTheCeilingRatherThanGuessingIt:
         from services import enrich_budget
 
         lookups = float(Config.ENRICH_LOOKUP_BUDGET_S)
-        ai = float(Config.AI_ANALYSIS_TIMEOUT_SECONDS) + float(
-            Config.AI_BRIDGE_SOCKET_MARGIN_SECONDS
-        )
+        ai = enrich_budget.ai_allowance_seconds()
         paid = float(Config.ENRICH_PAID_ALLOWANCE_S)
         assert enrich_budget.worst_case_seconds() >= lookups + ai + paid
+        # And the queue allowance is a term, not decoration: a job waits for
+        # one of four workers before its own run begins.
+        assert enrich_budget.QUEUE_ALLOWANCE_S > 0
+        assert enrich_budget.worst_case_seconds() == pytest.approx(
+            lookups + ai + paid + enrich_budget.QUEUE_ALLOWANCE_S
+        )
+
+    def test_the_shipped_walk_ceiling_satisfies_its_own_derivation(self):
+        """The mechanism tests below monkeypatch the ceiling, so none of them
+        would notice the shipped number moving. This one reads it.
+
+        The derivation in `config.py` is #144's patient budget on the first
+        instance plus one complete attempt on each fallback.
+        """
+        from utils.http import OVERPASS_MIN_INTERVAL_S
+
+        instances = 1 + len(Config.OSM_OVERPASS_FALLBACK_URLS)
+        patient = 8 + 16 + 32 + 4 * OVERPASS_MIN_INTERVAL_S
+        per_fallback = OVERPASS_MIN_INTERVAL_S + Config.OSM_OVERPASS_READ_TIMEOUT_S
+        assert Config.OSM_OVERPASS_WALK_BUDGET_S >= patient + (instances - 1) * (
+            per_fallback
+        )
+
+    def test_the_run_budget_leaves_room_for_more_than_one_walk(self):
+        """A run makes several lookups. If the run budget were one walk, the
+        second would be starved on a merely-degraded day rather than an
+        outage."""
+        assert Config.ENRICH_LOOKUP_BUDGET_S > Config.OSM_OVERPASS_WALK_BUDGET_S
 
     def test_it_covers_the_budget_the_server_actually_enforces(self):
         from services import enrich_budget
@@ -983,6 +1116,22 @@ class TestTheClientIsToldTheCeilingRatherThanGuessingIt:
 
         assert "response.poll_timeout_ms" in main_js
         assert "data.poll_timeout_ms" in detail
+
+        # And the budget is spent on *silence*, not on duration: a poll the
+        # server answers moves it forward. A finite total-duration ceiling
+        # could never be right -- the executor's queue is unbounded, a
+        # `FOR UPDATE` can wait on the database, and `requests` measures its
+        # read timeout between reads -- so a constant that claimed to be the
+        # longest legitimate run would go stale the way the 300 000 ms one did.
+        assert "lastAliveAt = Date.now()" in main_js
+        assert "now - lastAliveAt > timeoutMs" in main_js
+        assert "Date.now() - startedAt > timeoutMs" not in main_js
+        # With a backstop, because "the server keeps saying running" is not
+        # "the server will finish", and an endless spinner is a promise the
+        # page cannot keep. Both paths report the same "still running", so
+        # neither calls a live run failed -- which is the contract
+        # tests/test_job_poll_budgets.py already holds this poller to.
+        assert "hardCeilingMs" in main_js
         # And the sequel is declared once, up front, rather than driven from
         # the tab step by step.
         assert "analyze: true" in detail
