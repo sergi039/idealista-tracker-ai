@@ -862,3 +862,74 @@ class TestARowWithNoCoordinateKeepsWhatWasMeasured:
 
         service.enrich_property(prop, recalc_scoring=False)
         assert ran == ["pool"]
+
+
+class TestASpentClockIsNotTheHostSayingNo:
+    """The seam between this ticket's deadline and #438's breaker.
+
+    `OVERPASS_BREAKERS` opens after three refusals and then answers from what
+    is already known for five minutes. A budget refusal says nothing about
+    whether the instance would have answered -- so counting it would arm those
+    five minutes against a healthy host on the strength of somebody else's
+    slow run, and the *next* press, with a full budget, would find every
+    instance pre-refused.
+    """
+
+    def test_the_amenity_walk_does_not_arm_the_breaker(self, monkeypatch):
+        from utils.http import OVERPASS_BREAKERS
+
+        monkeypatch.setattr(
+            Config,
+            "OSM_OVERPASS_FALLBACK_URLS",
+            ["https://overpass.kumi.systems/api/interpreter"],
+        )
+        service = EnrichmentService.__new__(EnrichmentService)
+        service.osm_overpass_url = "https://overpass-api.de/api/interpreter"
+
+        for _ in range(OVERPASS_BREAKERS.threshold + 1):
+            with lookup_budget(0.0):
+                _elements, failure = service._overpass_elements("[out:json];out;")
+            assert failure.reason == REASON_BUDGET_EXHAUSTED
+
+        for url in (service.osm_overpass_url, *Config.OSM_OVERPASS_FALLBACK_URLS):
+            breaker = OVERPASS_BREAKERS.for_url(url)
+            assert breaker.state()["consecutive_refusals"] == 0, url
+            assert breaker.should_skip() is False, url
+
+    def test_the_coastline_client_does_not_arm_it_either(self, monkeypatch):
+        import services.sea_view_service as sea_view
+        from utils.http import OVERPASS_BREAKERS
+
+        monkeypatch.setattr(sea_view, "_cache_get", lambda *a, **kw: None)
+        monkeypatch.setattr(sea_view, "_cache_set", lambda *a, **kw: None)
+
+        for _ in range(OVERPASS_BREAKERS.threshold + 1):
+            with lookup_budget(0.0):
+                with pytest.raises(sea_view.SeaViewBudgetExceeded):
+                    sea_view.fetch_coastline_points(43.5, -6.0)
+
+        breaker = OVERPASS_BREAKERS.for_url(Config.OSM_OVERPASS_URL)
+        assert breaker.state()["consecutive_refusals"] == 0
+        assert breaker.should_skip() is False
+
+    def test_a_real_refusal_still_arms_it(self, monkeypatch):
+        """The control. Without it both assertions above would pass on a
+        breaker that had simply stopped counting anything."""
+        import services.enrichment_service as enrichment_module
+        from utils.http import OVERPASS_BREAKERS
+
+        monkeypatch.setattr(Config, "OSM_OVERPASS_FALLBACK_URLS", [])
+        service = EnrichmentService.__new__(EnrichmentService)
+        service.osm_overpass_url = "https://overpass-api.de/api/interpreter"
+
+        def _refuse(fn, *a, **kw):
+            raise requests.ConnectionError("refused")
+
+        monkeypatch.setattr(enrichment_module, "request_with_retries", _refuse)
+        service._overpass_elements("[out:json];out;")
+        assert (
+            OVERPASS_BREAKERS.for_url(service.osm_overpass_url).state()[
+                "consecutive_refusals"
+            ]
+            == 1
+        )
