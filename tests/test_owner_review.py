@@ -14,6 +14,7 @@ with.
 """
 
 from datetime import date, datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 
@@ -350,6 +351,45 @@ class TestTheWriter:
         with pytest.raises(owner_review.ReviewError):
             owner_review.set_review(row, decision="waiting")
         db.session.rollback()
+
+    def test_it_takes_the_row_before_it_reads_the_old_state(self, app, profile):
+        """`FOR UPDATE`, and before the read -- not after it.
+
+        Two presses on four gunicorn threads would otherwise read the same old
+        decision and append two contradictory transitions, each atomic and both
+        wrong: the shape of #339, one column over.
+
+        This asserts the call rather than the effect, and that limit is worth
+        stating: SQLite has no row lock to observe, so what a two-session
+        PostgreSQL test would prove -- that the second writer really waits --
+        is not proven here. What is proven is that the lock is taken, and taken
+        *before* the snapshot the new state is diffed against is read; removing
+        the line makes this red, which a behavioural assertion on SQLite could
+        not.
+        """
+        row = _prop(profile, "locked")
+        order = []
+
+        real_refresh = db.session.refresh
+
+        def watched_refresh(instance, *args, **kwargs):
+            order.append(("refresh", kwargs.get("with_for_update")))
+            return real_refresh(instance, *args, **kwargs)
+
+        real_snapshot = owner_review.review_snapshot
+
+        def watched_snapshot(record):
+            order.append(("read", None))
+            return real_snapshot(record)
+
+        with (
+            patch.object(db.session, "refresh", watched_refresh),
+            patch.object(owner_review, "review_snapshot", watched_snapshot),
+        ):
+            owner_review.set_review(row, decision="rejected", reason="irregular")
+
+        assert ("refresh", True) in order, order
+        assert order.index(("refresh", True)) < order.index(("read", None)), order
 
     def test_there_is_no_public_way_to_hold_the_lock_past_the_call(self):
         import inspect
