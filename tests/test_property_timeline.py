@@ -106,13 +106,18 @@ class TestTheOrder:
         """The reason `happened_at` exists at all."""
         today = datetime(2026, 8, 20, 9, 0)
 
-        # Typed second, but it happened first.
+        # The recent exchange is typed FIRST and the older one second, so the
+        # two orders disagree: by `created_at` the last-typed row leads, by
+        # `happened_at` the recent exchange does. A fixture typed in
+        # chronological order cannot tell the two apart -- measured, a mutation
+        # swapping the sort column left this test green until the inserts were
+        # reversed.
+        owner_review.add_note(prop, body="the agent sent the ficha", happened_at=today)
         owner_review.add_note(
             prop,
             body="phoned the town hall last week",
             happened_at=today - timedelta(days=7),
         )
-        owner_review.add_note(prop, body="the agent sent the ficha", happened_at=today)
 
         bodies = [entry.body for entry in owner_review.timeline(prop)]
         assert bodies == ["the agent sent the ficha", "phoned the town hall last week"]
