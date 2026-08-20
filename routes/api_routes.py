@@ -2158,7 +2158,13 @@ def manual_property_enrichment(property_id: int):
                 "error": "Geocoding failed; enrichment skipped. Check that the property has a valid location.",
             }
 
-        if _should_run_sync():
+        # `allow_request_override=False`, the way #136 closed the same hatch on
+        # the two status endpoints below. This chain makes up to eleven Overpass
+        # round trips, and on 2026-08-17 -- when the endpoint stopped opening
+        # sockets at all -- each one cost four attempts against three instances
+        # at a 60 s connect timeout. `?sync=1` is the one path that still spends
+        # that inside the request, and the API is unauthenticated.
+        if _should_run_sync(allow_request_override=False):
             result = _run()
             return jsonify(result), 200
 
@@ -2166,6 +2172,13 @@ def manual_property_enrichment(property_id: int):
             _run,
             job_type="property_enrich",
             meta={"property_id": prop.id, "refresh_coords": refresh_coords},
+            # An impatient second press joins the run already in flight instead
+            # of claiming another of the four executor slots -- the shape the
+            # fotocasa import already uses. Keyed on the property alone: a
+            # second press asking for `refresh_coords` joins a run that did not,
+            # which is the right trade for a re-click and is said out loud in
+            # the response rather than left to be discovered.
+            dedupe_key=f"property_enrich:{prop.id}",
         )
         return jsonify(
             {
