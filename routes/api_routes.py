@@ -2194,11 +2194,17 @@ def manual_property_enrichment(property_id: int):
         # meaning exactly what it says for anything that only wants the
         # enrichment. The page says so once, up front, instead of driving the
         # sequence step by step.
-        analyze = False
-        if isinstance(payload, dict):
-            analyze = bool(payload.get("analyze"))
-        if request.args.get("analyze") in ("1", "true", "yes", "on"):
-            analyze = True
+        #
+        # **Read from the JSON body only, unlike `refresh_coords` above.** The
+        # JSON API blueprints are CSRF-exempt and there is no authentication
+        # (owner decision 2026-08-08), so the only thing standing between a
+        # page on another origin and this endpoint is that a simple form POST
+        # cannot set `Content-Type: application/json` and anything that can
+        # takes a CORS preflight this app does not answer. A `?analyze=1` in
+        # the query string would hand that page the AI spend as well, which is
+        # a wider surface than the ticket asked for and buys nothing: the one
+        # caller posts JSON.
+        analyze = bool(payload.get("analyze")) if isinstance(payload, dict) else False
 
         def _run():
             prop_local = db.session.get(Property, property_id)

@@ -714,6 +714,27 @@ class TestTheAnalysisDoesNotDependOnATabStayingOpen:
         app.test_client().post(f"/api/property/{prop_id}/enrich")
         assert queued == []
 
+    def test_a_query_string_cannot_ask_for_the_spend(
+        self, app, prop_id, queued, monkeypatch
+    ):
+        """`?analyze=1` would be reachable by a simple cross-origin form POST.
+
+        These blueprints are CSRF-exempt and unauthenticated (owner decision
+        2026-08-08); what keeps another origin out is that a form POST cannot
+        set `Content-Type: application/json`. Reading the flag from the body
+        only keeps the AI spend behind that, and costs the one real caller
+        nothing.
+        """
+        monkeypatch.setattr(Config, "AI_BRIDGE_TOKEN", "present")
+        app.test_client().post(f"/api/property/{prop_id}/enrich?analyze=1")
+        assert queued == []
+
+        # A form-encoded body is not JSON either, so it cannot carry it.
+        app.test_client().post(
+            f"/api/property/{prop_id}/enrich", data={"analyze": "true"}
+        )
+        assert queued == []
+
     def test_a_failed_enqueue_does_not_fail_the_enrichment(
         self, app, prop_id, monkeypatch
     ):
