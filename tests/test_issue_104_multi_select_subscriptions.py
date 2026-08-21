@@ -695,7 +695,8 @@ class TestFilterBarKeepsOneControl:
         """
         body = client.get("/properties?profile_id=all").get_data(as_text=True)
         chip = re.search(
-            r'<a[^>]*href="[^"]*profile_id=all[^"]*"[^>]*>\s*All subscriptions',
+            r'<a[^>]*href="[^"]*profile_id=all[^"]*"[^>]*>\s*(?:<span[^>]*>\s*)?'
+            r"All subscriptions",
             _switcher(body),
         )
         assert chip, "the All subscriptions chip is missing from the toolbar"
