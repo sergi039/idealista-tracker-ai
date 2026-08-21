@@ -277,14 +277,54 @@ def _resolve_pool_config(
     return resolved, None
 
 
-# Criteria that ship at weight 0 and re-score every listing in a subscription
-# the moment somebody raises them. `routes/main_routes.py` reads this to decide
-# which save needs the dry-run preview instead of applying straight away, and
-# it lives here rather than there so a criterion cannot be added to the scorer
-# and forgotten by the gate — which would be a silent mass rescore that
-# `git log` cannot explain (the pool criterion, D17/#278, and the hazard
-# criterion, #437).
-WEIGHTLESS_SCORE_KEYS = ("pool_score", "hazard_score")
+def _weightless_score_keys() -> Tuple[str, ...]:
+    """Criteria that ship at weight 0 in every category, read off the scorers.
+
+    `routes/main_routes.py` reads this to decide which save needs the dry-run
+    preview instead of applying straight away: raising one of these re-scores
+    every listing in the subscription, which is a silent mass rescore that
+    `git log` cannot explain (the pool criterion, D17/#278; the hazard
+    criterion, #437).
+
+    **Derived rather than listed**, because the claim this makes is that a
+    criterion cannot be added to the scorer and forgotten by the gate — and a
+    hand-maintained tuple is exactly a thing that can be forgotten (review,
+    #453). It was `("pool_score", "hazard_score")` written out, and the
+    sentence above it promised what the tuple could not keep.
+
+    "In every category" is the load-bearing half. `sea_score` is 0.0 in both
+    of `GaragePropertyScorer`'s weight sets and non-zero elsewhere: that is a
+    statement about garages, not a criterion shipped off, and a rule reading
+    one scorer would have dragged it in and demanded a preview for a save
+    that changes nothing.
+    """
+    scorers = [
+        value
+        for value in globals().values()
+        if isinstance(value, type)
+        and issubclass(value, BasePropertyScorer)
+        and value is not BasePropertyScorer
+        and getattr(value, "DEFAULT_INVESTMENT_WEIGHTS", None)
+    ]
+    if not scorers:
+        return ()
+    keys = {
+        key
+        for scorer in scorers
+        for key in list(scorer.DEFAULT_INVESTMENT_WEIGHTS)
+        + list(scorer.DEFAULT_LIFESTYLE_WEIGHTS)
+    }
+    return tuple(
+        sorted(
+            key
+            for key in keys
+            if all(
+                float(scorer.DEFAULT_INVESTMENT_WEIGHTS.get(key, 0.0) or 0.0) == 0.0
+                and float(scorer.DEFAULT_LIFESTYLE_WEIGHTS.get(key, 0.0) or 0.0) == 0.0
+                for scorer in scorers
+            )
+        )
+    )
 
 
 def _resolve_hazard_config(
@@ -450,13 +490,19 @@ class HousingPropertyScorer(BasePropertyScorer):
     DEFAULT_POOL = {"best_min": 10.0, "worst_min": 40.0, "require_indoor": 1.0}
     # Straight-line metres to the nearest hazardous neighbour (#437). At or
     # inside `near_m` the criterion scores 0; at or beyond `far_m` it scores
-    # 100. Both numbers come from the coordinate that prompted the ticket:
-    # property 793 has a cement works at 1.12 km and a coal-fired power
-    # station at 2.13 km, and 5 km is where the last facility in that
-    # measurement (ArcelorMittal, 5.34 km) falls outside. `moderate_factor`
-    # halves the penalty for the `moderate` severity band -- a quarry and a
-    # sewage works are a nuisance, not an emitter -- and is the one knob that
-    # is a judgement rather than a measurement.
+    # 100.
+    #
+    # **The distances behind them are measured; the thresholds are chosen**,
+    # and the difference is worth keeping (review, #453). What was measured is
+    # where the facilities are: at property 793 a cement works at 1.12 km, a
+    # coal-fired station at 2.13 km, ArcelorMittal at 5.34 km. That 1 km
+    # should score 0 and 5 km should score 100 is a judgement fitted to that
+    # one coordinate, and a second industrial estuary may well move it. So is
+    # `moderate_factor`, which halves the penalty for the `moderate` band on
+    # the view that a quarry and a sewage works are a nuisance rather than an
+    # emitter. Three numbers from one place is why the criterion ships
+    # weightless: nobody is scored on them until the owner decides they are
+    # right.
     # Weightless (0.0) in every category until the owner turns it on.
     DEFAULT_HAZARD = {"near_m": 1000.0, "far_m": 5000.0, "moderate_factor": 0.5}
 
@@ -1452,6 +1498,9 @@ class DefaultPropertyScorer(BasePropertyScorer):
         return PropertyScoreResult(
             investment=None, lifestyle=None, combined=None, scoring_payload=payload
         )
+
+
+WEIGHTLESS_SCORE_KEYS = _weightless_score_keys()
 
 
 class PropertyScoringService:
