@@ -98,6 +98,17 @@
                             <i class="fas fa-city me-1"></i>{{ t('municipalities') }}
                         </a>
                     </li>
+                    {# The building-rules reference (/construccion): a
+                       READER's page, not a listing surface — the one-surface
+                       rule of 2026-08-09 is about listings and stays intact.
+                       The concejo overlay is an explicit human choice; no
+                       listing is ever auto-bound to a concejo here (design
+                       decision after seven review rounds, 2026-08-21). #}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('main.construccion') }}">
+                            <i class="fas fa-file-signature me-1"></i>{{ t('construccion') }}
+                        </a>
+                    </li>
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.criteria') }}">
                             <i class="fas fa-sliders-h me-1"></i>{{ t('scoring_criteria') }}
