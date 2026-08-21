@@ -595,17 +595,37 @@ def _map_focus_notice(focus_id, focus_property, props, query_without_profile):
 
 
 def _listing_counts_by_profile():
-    """How many listings each subscription holds, `None` keyed for the rest.
+    """How many *live* listings each subscription holds, `None` keyed for the
+    rest.
 
     One group-by shared by the menu and by the hidden-subscription note, which
     used to ask the same table twice per render of /properties -- once for the
     options and once, through a join, for the disclosure line.
+
+    Withdrawn and sold listings are out of the count (owner decision,
+    2026-08-21, #470): the badge sits beside a result count whose default
+    scope hides them, and a chip saying 4 over a page saying 3 was the
+    narrower survivor of the confusion #469 fixed. The exclusion is the same
+    expression the Hide removed switch applies, so the two agree row for row
+    -- including on a NULL status, which `notin_` drops from both. It is
+    deliberately unconditional: the badge answers "how many live listings
+    does this subscription hold", the way the portal's own saved search
+    would, and does not follow the switch -- with Hide removed off the page
+    can show more rows than the badge, which the switch's own pressed state
+    already explains. /map's hidden-subscription note reads this helper too,
+    and that surface excludes delisted listings unconditionally, so the live
+    count is the matching one there. /profiles keeps its own raw inventory
+    count on purpose, and /municipalities keeps its "what picking it would
+    show" count -- three different questions, each answered where it is
+    asked.
     """
     return {
         profile_id: count
         for profile_id, count in db.session.query(
             Property.search_profile_id, func.count(Property.id)
-        ).group_by(Property.search_profile_id)
+        )
+        .filter(Property.listing_status.notin_(DELISTED_LISTING_STATUSES))
+        .group_by(Property.search_profile_id)
     }
 
 
