@@ -701,18 +701,26 @@ class TestABackfillSaysWhatItIsAboutToCover:
             "a second, older spelling of the window this run does not have"
         )
 
-    def test_the_travel_recalc_can_be_asked_before_it_spends(
-        self, app, monkeypatch, caplog
-    ):
-        """The most expensive run in the repository had no way to ask.
+    def _travel_recalc_dry_run(self, monkeypatch, caplog, osrm_url):
+        """Run the recalc's dry run against a deployment with this OSRM_URL.
 
-        ~$0.36 a listing over every located row, and `--snapshot` was required
-        before anyone could even see the scope.
+        The estimate branches on `osrm_routing.is_enabled()`, so the config is
+        patched rather than the predicate — a stubbed `is_enabled` would keep
+        this green while the tool read some other switch. Patched through
+        `osrm_routing`'s own `Config` reference, not a fresh
+        `from config import Config`: `test_subscription_assignment_is_
+        automatic.py` reloads `config`, which rebinds `config.Config` to a new
+        class while the services keep the old one, and a patch on the fresh
+        class is invisible to `is_enabled()` — the documented trap in
+        `tests/test_osrm_routing.py`, reproduced here as an order-dependent
+        failure (any app-importing file + that reload + this one).
         """
         import logging
         from contextlib import nullcontext
 
         from utils import recalc_property_travel as tool
+
+        Config = tool.osrm_routing.Config
 
         live, retired, _ = _profiles()
         rows = [
@@ -737,6 +745,7 @@ class TestABackfillSaysWhatItIsAboutToCover:
         def _explode(*args, **kwargs):
             raise AssertionError("a dry run must not build the travel service")
 
+        monkeypatch.setattr(Config, "OSRM_URL", osrm_url, raising=False)
         monkeypatch.setattr(tool, "create_app", lambda: _CurrentApp())
         monkeypatch.setattr(tool, "PropertyTravelService", _explode)
         monkeypatch.setattr("sys.argv", ["recalc", "--dry-run"])
@@ -745,11 +754,39 @@ class TestABackfillSaysWhatItIsAboutToCover:
             tool.main()
 
         assert "1 live (1 listing), 1 retired (1 listing)" in caplog.text
-        # The arithmetic, not just the label: two located rows at the recorded
-        # ~$0.36 a listing, 7 Places calls and 26 Distance Matrix elements each.
-        assert "<=14 Places calls" in caplog.text
-        assert "<=52 Distance Matrix elements" in caplog.text
-        assert "$0.72" in caplog.text
         db.session.expire_all()
         for row in rows:
             assert db.session.get(Property, row.id).travel is None
+
+    def test_the_travel_recalc_can_be_asked_before_it_spends(
+        self, app, monkeypatch, caplog
+    ):
+        """Without OSRM the bill is the Distance Matrix leg, and only that.
+
+        The presets stopped billing on 2026-08-18 (OSM and the hospital
+        register answer them), so the old "7 Places calls, ~$0.36 a listing"
+        would state a price the run no longer pays.
+        """
+        self._travel_recalc_dry_run(monkeypatch, caplog, osrm_url="")
+        # The arithmetic, not just the label: two located rows at ~26 Distance
+        # Matrix elements and ~$0.13 each, with no Places call resurrected.
+        assert "<=52 Distance Matrix elements" in caplog.text
+        assert "$0.26" in caplog.text
+        assert "Places calls" not in caplog.text
+        assert "$0.36" not in caplog.text
+
+    def test_the_estimate_reads_the_deployments_own_routing(
+        self, app, monkeypatch, caplog
+    ):
+        """With OSRM routing the durations (#416), a run bills nothing.
+
+        The estimate must read the predicate the transport branches on —
+        `osrm_routing.is_enabled()` — not restate Google's price to a
+        deployment that never calls Google.
+        """
+        self._travel_recalc_dry_run(
+            monkeypatch, caplog, osrm_url="http://host.docker.internal:5055"
+        )
+        assert "no billed call" in caplog.text
+        assert "Distance Matrix" not in caplog.text
+        assert "$" not in caplog.text

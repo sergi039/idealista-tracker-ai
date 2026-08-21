@@ -3410,6 +3410,14 @@ def construccion():
     from services import concejo_legal
     from services.buildability_catalog import TOPICS, topics_for_chapter
 
+    if request.args.get("view") == "full":
+        body = concejo_legal.load_full_dossier()
+        # ?concejo= is deliberately ignored here: the full document has no
+        # per-concejo machinery, so no municipal context may exist on it.
+        return render_template("construccion_full.html", body=body), (
+            200 if body else 503
+        )
+
     try:
         snapshot = concejo_legal.load_snapshot()
     except concejo_legal.SnapshotUnavailable:

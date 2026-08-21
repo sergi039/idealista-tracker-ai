@@ -1,13 +1,19 @@
-"""Recalculate `Property.travel` (and the scores that read it) with Google.
+"""Recalculate `Property.travel` (and the scores that read it) in bulk.
 
 `utils/recalc_travel_times.py` only knows the legacy `Land`. Universal
 properties -- every listing ingested since `INGESTION_TARGET` became
 `properties` -- had no bulk path at all, only the per-listing Enrich button.
 
-**This run spends real money.** Places Nearby Search resolves each preset
-target and Distance Matrix measures the route to it, so a full pass over the
-owner's listings is thousands of billable calls. Never run it without the
-owner asking for it in as many words (CLAUDE.md, "Hard rules").
+**What a run bills depends on the deployment, and the estimate says which.**
+The presets stopped billing on 2026-08-18 -- OpenStreetMap and the national
+hospital register answer them, and a refusal never falls through to the paid
+search -- so the one billed leg left is Distance Matrix, ~26 elements a
+listing (~$0.13). With `OSRM_URL` set (#416) the local routing engine answers
+that leg too, and a run bills nothing at all. The estimate reads
+`osrm_routing.is_enabled()`, the same predicate the transport branches on,
+rather than restating a price this deployment may not pay. A free run still
+overwrites `travel` and every score column, so it still needs the owner's
+say-so (CLAUDE.md, "Hard rules").
 
 It exists because #171 taught the airport preset to refuse helipads and
 businesses that merely carry Google's `airport` tag: the code no longer picks
@@ -41,6 +47,7 @@ from typing import Any, Dict, List, Optional
 
 from app import create_app, db
 from models import Property
+from services import osrm_routing
 from services.property_scoring_service import PropertyScoringService
 from services.property_travel_service import (
     PropertyTravelService,
@@ -161,8 +168,9 @@ def _clear_orphaned(snapshot_path: Optional[str], ids: Optional[str]) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Recalculate travel targets for universal properties. "
-            "Spends Google Places and Distance Matrix quota."
+            "Recalculate travel targets for universal properties. Bills "
+            "Distance Matrix (~$0.13 a listing) unless OSRM answers the "
+            "routing; the presets are free (OSM and the hospital register)."
         )
     )
     parser.add_argument(
@@ -203,9 +211,9 @@ def main() -> None:
         action="store_true",
         help=(
             "Report the scope, its subscription composition and the worst-case "
-            "billed work, then exit without calling any API. This is the most "
-            "expensive run in the repository -- ~$0.36 a listing -- and it was "
-            "the only backfill with no way to ask what it was about to spend."
+            "billed work, then exit without calling any API. The estimate is "
+            "this deployment's own: the Distance Matrix leg (~$0.13 a listing) "
+            "when Google routes, no billed call at all when OSRM does."
         ),
     )
     args = parser.parse_args()
@@ -242,6 +250,26 @@ def main() -> None:
         # covers and what it is worth. 307 of production's 769 located rows
         # sit in retired subscriptions, and a bare count cannot say so
         # (UNIVERSE-001).
+        # The cost note reads the predicate the transport itself branches on
+        # (`_distance_matrix_batch` in services/property_travel_service.py):
+        # since 2026-08-18 the presets are answered by OSM and the hospital
+        # register and bill nothing, and with OSRM routing the durations
+        # (#416) there is no billed call left in a run at all. An estimate
+        # that ignored the deployment's own routing engine would state a
+        # price this run is not going to pay.
+        if osrm_routing.is_enabled():
+            cost_note = (
+                "worst case: no billed call -- the presets are answered by "
+                "OpenStreetMap and the hospital register, and OSRM routes "
+                "the durations locally (OSRM_URL is set)"
+            )
+        else:
+            cost_note = (
+                f"worst case: <={len(properties) * 26} Distance Matrix "
+                f"elements, about ${len(properties) * 0.13:,.2f} at ~$0.13 "
+                "a listing; the presets bill nothing (OSM and the hospital "
+                "register answer them)"
+            )
         log_scope(
             logger,
             properties,
@@ -249,9 +277,7 @@ def main() -> None:
             notes=(
                 "every located row unless narrowed by --ids or --limit",
                 "profile-agnostic on purpose (#410)",
-                f"worst case: <={len(properties) * 7} Places calls + "
-                f"<={len(properties) * 26} Distance Matrix elements, about "
-                f"${len(properties) * 0.36:,.2f} at ~$0.36 a listing",
+                cost_note,
             ),
         )
         if args.dry_run:
@@ -270,10 +296,11 @@ def main() -> None:
         changed_places: List[Dict[str, Any]] = []
 
         # Never resumable: the scope is every matching property on each run,
-        # with no "already answered" filter, so an interrupted run re-bills
-        # Places and Distance Matrix for everything it finished - and the
-        # --report file is only written at the end, so that is lost outright.
-        # Narrow a restart with --ids by hand (#283).
+        # with no "already answered" filter, so an interrupted run repeats
+        # every lookup it finished -- re-billing Distance Matrix where Google
+        # still routes -- and the --report file is only written at the end,
+        # so that is lost outright. Narrow a restart with --ids by hand
+        # (#283).
         with inflight("recalc_property_travel", resumable=False):
             for prop in properties:
                 before = _target_places(prop.travel)
